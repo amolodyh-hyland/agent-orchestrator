@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
 	coerceMulticaSettings,
 	DEFAULT_MULTICA_SETTINGS,
-	isMulticaOrigin,
 	MULTICA_DEFAULT_URL,
+	multicaRuntimeConfig,
+	parseMulticaDeepLink,
 	parseMulticaUrl,
 } from "./multica";
 
@@ -49,20 +50,38 @@ describe("parseMulticaUrl", () => {
 	});
 });
 
-describe("isMulticaOrigin", () => {
-	const origin = "http://localhost:3000";
-
-	it("matches only the exact origin", () => {
-		expect(isMulticaOrigin("http://localhost:3000/issues/1?x=1", origin)).toBe(true);
-		expect(isMulticaOrigin("http://localhost:3001/", origin)).toBe(false);
-		expect(isMulticaOrigin("https://localhost:3000/", origin)).toBe(false);
-		expect(isMulticaOrigin("http://localhost.evil.test/", origin)).toBe(false);
-		expect(isMulticaOrigin("http://localhost:3000@evil.test/", origin)).toBe(false);
+describe("multicaRuntimeConfig", () => {
+	it("points a local web app at the API on port 8080 of the same host", () => {
+		expect(multicaRuntimeConfig("http://localhost:3000")).toEqual({
+			ok: true,
+			config: {
+				schemaVersion: 1,
+				apiUrl: "http://localhost:8080",
+				wsUrl: "ws://localhost:8080/ws",
+				appUrl: "http://localhost:3000",
+			},
+		});
+		expect(multicaRuntimeConfig("http://192.168.1.5:3000/issues")).toMatchObject({
+			ok: true,
+			config: { apiUrl: "http://192.168.1.5:8080", appUrl: "http://192.168.1.5:3000" },
+		});
 	});
 
-	it("rejects strings that are not URLs", () => {
-		expect(isMulticaOrigin("not a url", origin)).toBe(false);
-		expect(isMulticaOrigin("", origin)).toBe(false);
+	it("uses the api.<host> convention for hosted deployments", () => {
+		expect(multicaRuntimeConfig("https://multica.ai")).toEqual({
+			ok: true,
+			config: {
+				schemaVersion: 1,
+				apiUrl: "https://api.multica.ai",
+				wsUrl: "wss://api.multica.ai/ws",
+				appUrl: "https://multica.ai",
+			},
+		});
+	});
+
+	it("reports a blocking error when the URL is unusable", () => {
+		expect(multicaRuntimeConfig("")).toEqual({ ok: false, error: { message: "Multica URL is not set" } });
+		expect(multicaRuntimeConfig("ftp://example.com")).toMatchObject({ ok: false });
 	});
 });
 
@@ -81,5 +100,27 @@ describe("coerceMulticaSettings", () => {
 	it("normalizes a valid URL and treats an invalid stored one as unset", () => {
 		expect(coerceMulticaSettings({ url: "localhost:3000" })).toEqual({ url: "http://localhost:3000/" });
 		expect(coerceMulticaSettings({ url: "ftp://example.com" })).toEqual({ url: "" });
+	});
+});
+
+describe("parseMulticaDeepLink", () => {
+	it("extracts the sign-in token and the invitation id", () => {
+		expect(parseMulticaDeepLink("multica://auth/callback?token=abc.def")).toEqual({ channel: "auth:token", payload: "abc.def" });
+		expect(parseMulticaDeepLink("multica://invite/9f1c-2")).toEqual({ channel: "invite:open", payload: "9f1c-2" });
+	});
+
+	it("ignores other schemes, hosts, paths and empty or oversized values", () => {
+		for (const input of [
+			"https://auth/callback?token=abc",
+			"ao-app://auth/callback?token=abc",
+			"multica://auth/callback",
+			"multica://auth/callback?token=",
+			"multica://auth/elsewhere?token=abc",
+			"multica://invite/",
+			`multica://auth/callback?token=${"a".repeat(9000)}`,
+			"not a url",
+		]) {
+			expect(parseMulticaDeepLink(input)).toBeNull();
+		}
 	});
 });
