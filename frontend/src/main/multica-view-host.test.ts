@@ -22,8 +22,6 @@ class FakeWebContents extends EventEmitter {
 	private static nextId = 100;
 	id = FakeWebContents.nextId++;
 	destroyed = false;
-	url = "http://localhost:3000/";
-	getURL = () => this.url;
 	loadURL = vi.fn(async (_url: string) => undefined);
 	focus = vi.fn();
 	close = vi.fn(() => {
@@ -324,15 +322,40 @@ describe("multica view host: load state", () => {
 		expect(t.view().setVisible).toHaveBeenLastCalledWith(false);
 	});
 
-	it("does not mistake Chromium's own error page for a ready app", async () => {
+	it("keeps the error when Chromium's error page finishes loading, as real Electron reports it", async () => {
+		const t = await setup();
+		t.host.setActive(true);
+
+		// Observed sequence for an unreachable server: loading, fail, then finish for the error page.
+		t.view().webContents.emit("did-fail-load", {}, -102, "ERR_CONNECTION_REFUSED", URL, true);
+		t.view().webContents.emit("did-finish-load");
+
+		expect(t.host.getState()).toEqual({ active: true, status: "error", url: URL, error: "ERR_CONNECTION_REFUSED" });
+		expect(t.stateChannelPayloads().map((state) => state.status)).toEqual(["idle", "loading", "error"]);
+	});
+
+	it("becomes ready after a retry that loads, even though an earlier load failed", async () => {
 		const t = await setup();
 		t.host.setActive(true);
 		t.view().webContents.emit("did-fail-load", {}, -102, "ERR_CONNECTION_REFUSED", URL, true);
-
-		t.view().webContents.url = "chrome-error://chromewebdata/";
 		t.view().webContents.emit("did-finish-load");
 
-		expect(t.host.getState().status).toBe("error");
+		t.ipc.invoke(MULTICA_RELOAD_CHANNEL, t.shellEvent);
+		t.view().webContents.emit("did-finish-load");
+
+		expect(t.host.getState()).toEqual({ active: true, status: "ready", url: URL });
+	});
+
+	it("recovers when the URL is changed after a failure", async () => {
+		const t = await setup();
+		t.host.setActive(true);
+		t.view().webContents.emit("did-fail-load", {}, -102, "ERR_CONNECTION_REFUSED", URL, true);
+		t.view().webContents.emit("did-finish-load");
+
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "http://localhost:3100");
+		t.view().webContents.emit("did-finish-load");
+
+		expect(t.host.getState()).toEqual({ active: true, status: "ready", url: "http://localhost:3100/" });
 	});
 
 	it("ignores aborted loads and subframe failures", async () => {
