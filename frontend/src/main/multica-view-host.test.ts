@@ -20,6 +20,7 @@ const BUNDLE = { rendererUrl: "file:///multica/out/renderer/index.html", preload
 
 class FakeWebContents extends EventEmitter {
 	private static nextId = 100;
+	static lastHeaderHandler: ((details: unknown, callback: (response: unknown) => void) => void) | undefined;
 	id = FakeWebContents.nextId++;
 	destroyed = false;
 	loadURL = vi.fn(async (_url: string) => undefined);
@@ -46,6 +47,11 @@ class FakeWebContents extends EventEmitter {
 			this.permissionCheckHandler = handler;
 		}),
 		setPreloads: vi.fn(),
+		webRequest: {
+			onBeforeSendHeaders: vi.fn((_filter: unknown, handler: (details: unknown, callback: (response: unknown) => void) => void) => {
+				FakeWebContents.lastHeaderHandler = handler;
+			}),
+		},
 	};
 }
 
@@ -256,6 +262,16 @@ describe("multica view host: lockdown", () => {
 			expect(t.view().webContents.ipc.handlers.has(channel) || t.view().webContents.ipc.listeners.has(channel)).toBe(true);
 			expect(t.ipc.handlers.has(channel) || t.ipc.listeners.has(channel)).toBe(false);
 		}
+	});
+
+	it("presents the Multica app origin on WebSocket handshakes to the API, since the file:// page sends a null origin", async () => {
+		const t = await setup();
+		t.host.setActive(true);
+		const callback = vi.fn();
+
+		FakeWebContents.lastHeaderHandler?.({ url: "ws://localhost:8080/ws", requestHeaders: { Origin: "null" } }, callback);
+
+		expect(callback).toHaveBeenCalledExactlyOnceWith({ requestHeaders: { Origin: "http://localhost:3000" } });
 	});
 
 	it("denies every permission request and check", async () => {

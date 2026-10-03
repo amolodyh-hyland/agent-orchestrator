@@ -4,6 +4,7 @@ import {
 	DEFAULT_MULTICA_SETTINGS,
 	MULTICA_DEFAULT_URL,
 	multicaRuntimeConfig,
+	multicaWebSocketHeaders,
 	parseMulticaDeepLink,
 	parseMulticaUrl,
 } from "./multica";
@@ -122,5 +123,29 @@ describe("parseMulticaDeepLink", () => {
 		]) {
 			expect(parseMulticaDeepLink(input)).toBeNull();
 		}
+	});
+});
+
+describe("multicaWebSocketHeaders", () => {
+	const APP = "http://localhost:3000";
+
+	it("presents the app origin for a handshake to the configured API", () => {
+		expect(multicaWebSocketHeaders("ws://localhost:8080/ws?workspace_slug=x", { Origin: "null", Cookie: "a=b" }, APP)).toEqual({
+			Origin: APP,
+			Cookie: "a=b",
+		});
+		expect(multicaWebSocketHeaders("ws://localhost:8080/ws", { Origin: "file://" }, APP)).toEqual({ Origin: APP });
+		expect(multicaWebSocketHeaders("wss://api.multica.ai/ws", { origin: "null" }, "https://multica.ai")).toEqual({
+			origin: "https://multica.ai",
+		});
+	});
+
+	it("leaves other requests alone", () => {
+		const headers = { Origin: "null" };
+		expect(multicaWebSocketHeaders("ws://evil.example.com/ws", headers, APP)).toBe(headers);
+		expect(multicaWebSocketHeaders("http://localhost:8080/api/me", headers, APP)).toBe(headers);
+		expect(multicaWebSocketHeaders("ws://localhost:8080/ws", headers, "")).toBe(headers);
+		const real = { Origin: "http://other.example" };
+		expect(multicaWebSocketHeaders("ws://localhost:8080/ws", real, APP)).toBe(real);
 	});
 });
