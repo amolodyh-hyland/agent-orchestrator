@@ -58,11 +58,9 @@ import {
 	MULTICA_GET_STATE_CHANNEL,
 	MULTICA_RELOAD_CHANNEL,
 	MULTICA_SET_ACTIVE_CHANNEL,
-	MULTICA_SET_BOUNDS_CHANNEL,
 	MULTICA_SET_SETTINGS_CHANNEL,
 	MULTICA_STATE_CHANNEL,
 	TOGGLE_MULTICA_SHORTCUT_CHANNEL,
-	type MulticaBoundsInput,
 	type MulticaSettings,
 	type MulticaViewState,
 } from "./shared/multica";
@@ -658,7 +656,6 @@ const api = {
 		getState: () => ipcRenderer.invoke(MULTICA_GET_STATE_CHANNEL) as Promise<MulticaViewState>,
 		setActive: (active: boolean) => ipcRenderer.invoke(MULTICA_SET_ACTIVE_CHANNEL, active) as Promise<MulticaViewState>,
 		reload: () => ipcRenderer.invoke(MULTICA_RELOAD_CHANNEL) as Promise<MulticaViewState>,
-		setBounds: (input: MulticaBoundsInput) => ipcRenderer.send(MULTICA_SET_BOUNDS_CHANNEL, input),
 		getSettings: () => ipcRenderer.invoke(MULTICA_GET_SETTINGS_CHANNEL) as Promise<MulticaSettings>,
 		setSettings: (url: string) => ipcRenderer.invoke(MULTICA_SET_SETTINGS_CHANNEL, url) as Promise<MulticaSettings>,
 		onState: (listener: (state: MulticaViewState) => void) => {

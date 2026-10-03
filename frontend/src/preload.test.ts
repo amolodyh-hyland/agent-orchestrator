@@ -6,7 +6,6 @@ import {
 	MULTICA_GET_STATE_CHANNEL,
 	MULTICA_RELOAD_CHANNEL,
 	MULTICA_SET_ACTIVE_CHANNEL,
-	MULTICA_SET_BOUNDS_CHANNEL,
 	MULTICA_SET_SETTINGS_CHANNEL,
 	MULTICA_STATE_CHANNEL,
 	TOGGLE_MULTICA_SHORTCUT_CHANNEL,
@@ -454,14 +453,6 @@ describe("preload multica bridge", () => {
 			[MULTICA_GET_SETTINGS_CHANNEL],
 			[MULTICA_SET_SETTINGS_CHANNEL, "http://localhost:3000"],
 		]);
-	});
-
-	it("sends the slot geometry as a one-way message", () => {
-		const input = { revision: 3, rect: { x: 1, y: 2, width: 3, height: 4 } };
-
-		exposedBridge().multica.setBounds(input);
-
-		expect(electronMocks.send).toHaveBeenCalledWith(MULTICA_SET_BOUNDS_CHANNEL, input);
 	});
 
 	it("delivers pushed state without the IPC event and disposes the listener", () => {
