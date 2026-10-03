@@ -181,6 +181,8 @@ import {
 	toastSilent,
 } from "./main/notification-signals";
 import { buildLinuxAppMenuTemplate, buildMacAppMenuTemplate, buildWindowsAppMenuTemplate } from "./main/menu";
+import { readMulticaSettings, writeMulticaUrl } from "./main/multica-settings";
+import { createMulticaViewHost, type MulticaViewHost } from "./main/multica-view-host";
 import { ancestorRepositorySetupWarning, resolveCheckedOutBranch, scanImportFolder } from "./main/import-folder-scan";
 import { parseOpenFolderPathArg } from "./main/open-folder-arg";
 import { registerRemotesIpc, remotesFilePath } from "./main/remotes-main";
@@ -326,6 +328,7 @@ let daemonStatus: DaemonStatus = { state: "stopped" };
 let daemonAttachmentGeneration = 0;
 let daemonOutput = "";
 let browserViewHost: BrowserViewHost | null = null;
+let multicaViewHost: MulticaViewHost | null = null;
 let browserProfileIpc: BrowserProfileIpc | null = null;
 let browserProfileImporter: BrowserProfileImportService | null = null;
 let windowComposition: WindowComposition | null = null;
@@ -664,7 +667,7 @@ function buildWindowsAppMenu(): Menu {
 			void browserViewHost?.toggleDevToolsForLastFocused().then((state) => {
 				if (!state) fallback();
 			}).catch(fallback);
-		}),
+		}, () => multicaViewHost?.toggle()),
 	);
 }
 
@@ -675,7 +678,7 @@ function buildLinuxAppMenu(): Menu {
 	return Menu.buildFromTemplate(
 		buildLinuxAppMenuTemplate(() => {
 			void toggleAppDevTools(browserViewHost, getShellWebContents);
-		}),
+		}, () => multicaViewHost?.toggle()),
 	);
 }
 
@@ -828,7 +831,7 @@ async function createWindowInternal(): Promise<void> {
 					void host.toggleDevToolsForLastFocused().then((state) => {
 						if (!state) fallback();
 					}).catch(fallback);
-				}),
+				}, () => multicaViewHost?.toggle()),
 			),
 		);
 	} else if (process.platform === "linux") {
@@ -1010,6 +1013,24 @@ async function createWindowInternal(): Promise<void> {
 	if (daemonStatus.state === "ready") establishBrowserRuntimeLink();
 
 	showWhenRendererLoaded(mainWindow, shellWebContents);
+	// Registered before the renderer loads: the shell queries its state on mount.
+	multicaViewHost = await createMulticaViewHost({
+		mainWindow,
+		shellWebContents,
+		ipcMain,
+		shell,
+		WebContentsView,
+		isMac,
+		getKeybindingOverrides: () => keybindingOverrides,
+		isKeybindingRecording: () => keybindingRecordingActive,
+		restackShell: () => {
+			composition.setOverlayOpen(false);
+			composition.setOverlayOpen(true);
+		},
+		readSettings: () => readMulticaSettings(browserProfileStateDir()),
+		writeUrl: (url) => writeMulticaUrl(browserProfileStateDir(), url),
+	});
+
 	void shellWebContents.loadURL(rendererUrl());
 
 	if (isDev && process.env.AO_OPEN_DEVTOOLS === "1") {
@@ -1071,6 +1092,8 @@ async function createWindowInternal(): Promise<void> {
 		// Vibrancy belongs to the closed window. The shell of a recreated window
 		// (macOS Quit keeps the process, then Dock reopen) asks for it again.
 		windowTranslucent = false;
+		multicaViewHost?.dispose();
+		multicaViewHost = null;
 		void disposeBrowserViewHost()
 			.finally(() => {
 				composition.dispose();
