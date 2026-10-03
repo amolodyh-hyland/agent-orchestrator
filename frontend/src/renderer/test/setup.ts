@@ -345,7 +345,6 @@ if (typeof window !== "undefined") {
 			getState: async () => ({ active: false, status: "unconfigured", url: "" }),
 			setActive: async () => ({ active: false, status: "unconfigured", url: "" }),
 			reload: async () => ({ active: false, status: "unconfigured", url: "" }),
-			setBounds: () => undefined,
 			getSettings: async () => ({ ...DEFAULT_MULTICA_SETTINGS }),
 			setSettings: async (url: string) => ({ url }),
 			onState: () => () => undefined,
