@@ -9,6 +9,7 @@ import {
 	MULTICA_STATE_CHANNEL,
 	TOGGLE_MULTICA_SHORTCUT_CHANNEL,
 	multicaRuntimeConfig,
+	multicaWebSocketHeaders,
 	parseMulticaDeepLink,
 	parseMulticaUrl,
 	type MulticaSettings,
@@ -28,7 +29,7 @@ type MulticaWebContents = Pick<
 	WebContents,
 	"id" | "on" | "loadURL" | "focus" | "close" | "isDestroyed" | "setWindowOpenHandler" | "send" | "ipc"
 > & {
-	session: Pick<Session, "setPermissionRequestHandler" | "setPermissionCheckHandler" | "setPreloads">;
+	session: Pick<Session, "setPermissionRequestHandler" | "setPermissionCheckHandler" | "setPreloads" | "webRequest">;
 };
 
 type MulticaViewLike = Pick<WebContentsView, "setBounds" | "setVisible"> & { webContents: MulticaWebContents };
@@ -165,6 +166,11 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 		// Session-level preloads run just before the view's own preload. This
 		// partition is used by the Multica view alone.
 		contents.session.setPreloads([options.ipcJailPreload]);
+		// The file:// renderer's WebSocket handshake carries `Origin: null`, which a
+		// Multica server rejects (403) unless its allowlist names it.
+		contents.session.webRequest.onBeforeSendHeaders({ urls: ["ws://*/*", "wss://*/*"] }, (details, callback) => {
+			callback({ requestHeaders: multicaWebSocketHeaders(details.url, details.requestHeaders, url) });
+		});
 
 		bridge = createMulticaDesktopBridge({
 			ipc: contents.ipc,
