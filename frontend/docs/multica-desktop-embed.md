@@ -40,10 +40,12 @@ Multica's preload also exposes a generic `window.electron.ipcRenderer`, and seve
 - The bridge registers on the view's own `webContents.ipc`, which Electron consults before the global `ipcMain`, so the Multica view reaches the bridge's stubs and never AO's handlers. Every handler also checks the sender.
 - `src/main/multica-ipc-jail.ts` writes a small preload that runs before Multica's own and limits every outbound `ipcRenderer` method to the bridge's channel list.
 
-`webSecurity` stays on (`MULTICA_WEB_SECURITY` in `src/shared/multica.ts`). Multica's cloud API accepts calls from the `file://` renderer. A self-hosted server with an explicit `FRONTEND_ORIGIN`/`CORS_ALLOWED_ORIGINS` allowlist may not (the page's origin is `null`); if that is needed, add `null` there before turning `webSecurity` off, and if it is turned off, it must stay confined to this view.
+`webSecurity` stays on (`MULTICA_WEB_SECURITY` in `src/shared/multica.ts`). Multica's cloud API and a default local self-host both accept REST calls from the `file://` renderer.
+
+The WebSocket is different: the handshake carries `Origin: file://`, and a Multica server checks it by exact match against `FRONTEND_ORIGIN`/`CORS_ALLOWED_ORIGINS`, so it answers 403. The view's session therefore replaces `file://`/`null` with the configured Multica app origin on WebSocket handshakes to the configured API origin only (`multicaWebSocketHeaders`). Normal requests are not touched, so no server config is needed.
 
 ## Known gaps
 
 - Windows: AO's frameless window has no native controls under the Multica view.
-- Not verified: macOS traffic-light placement and drag regions with real mouse input, Electron 33 against Multica's renderer beyond the login page, WebSocket origin checks after sign-in.
+- Not verified: macOS traffic-light placement and drag regions with real mouse input, and Electron 33 against Multica's screens beyond sign-in, onboarding and the empty workspace.
 - No daemon management and no issue windows.

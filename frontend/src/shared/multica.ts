@@ -158,3 +158,30 @@ export function parseMulticaDeepLink(raw: string): MulticaDeepLink | null {
 	}
 	return null;
 }
+
+/**
+ * The built renderer is a file:// page, so its WebSocket handshake carries
+ * `Origin: file://` (or `null`), which a Multica server only accepts if its
+ * allowlist says so.
+ * For a handshake to the configured API origin, presents the Multica app origin
+ * (which the server already trusts) instead. Everything else is left alone.
+ */
+export function multicaWebSocketHeaders(
+	requestUrl: string,
+	headers: Record<string, string>,
+	appUrl: string,
+): Record<string, string> {
+	const originKey = Object.keys(headers).find((key) => key.toLowerCase() === "origin");
+	if (!originKey || (headers[originKey] !== "null" && headers[originKey] !== "file://")) return headers;
+	const config = multicaRuntimeConfig(appUrl);
+	if (!config.ok) return headers;
+	try {
+		const target = new URL(requestUrl);
+		if (target.protocol !== "ws:" && target.protocol !== "wss:") return headers;
+		target.protocol = target.protocol === "wss:" ? "https:" : "http:";
+		if (target.origin !== new URL(config.config.apiUrl).origin) return headers;
+	} catch {
+		return headers;
+	}
+	return { ...headers, [originKey]: config.config.appUrl };
+}
