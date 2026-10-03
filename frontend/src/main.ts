@@ -69,6 +69,7 @@ import { promisify } from "node:util";
 import { type DaemonLaunchSpec, bundledDaemonIdentityError, resolveDaemonLaunch } from "./shared/daemon-launch";
 import { createListenPortScanner, defaultRunFilePath, parseRunFile } from "./shared/daemon-discovery";
 import type { DaemonStatus } from "./shared/daemon-status";
+import { MULTICA_DEEP_LINK_PROTOCOL, MULTICA_WEB_SECURITY } from "./shared/multica";
 import {
 	refreshSlowDaemonStartupDetails,
 	slowDaemonStartupStatus,
@@ -167,6 +168,9 @@ import {
 } from "./main/notification-signals";
 import { buildLinuxAppMenuTemplate, buildMacAppMenuTemplate, buildWindowsAppMenuTemplate } from "./main/menu";
 import { readMulticaSettings, writeMulticaUrl } from "./main/multica-settings";
+import { multicaBridgeChannels } from "./main/multica-desktop-bridge";
+import { resolveMulticaDesktopBundle } from "./main/multica-desktop-bundle";
+import { writeMulticaIpcJail } from "./main/multica-ipc-jail";
 import { createMulticaViewHost, type MulticaViewHost } from "./main/multica-view-host";
 import { ancestorRepositorySetupWarning, resolveCheckedOutBranch, scanImportFolder } from "./main/import-folder-scan";
 import { parseOpenFolderPathArg } from "./main/open-folder-arg";
@@ -364,6 +368,9 @@ const DEV_STATE_SUBDIR = "dev"; // ~/.ao/dev/
 // natural macOS titlebar band (TitlebarNav is h-traffic-light-clearance).
 const MAC_WINDOW_BUTTON_X = 14;
 const MAC_WINDOW_BUTTON_Y = 12;
+// Where Multica's own desktop window places the traffic lights (its header
+// reserves room for them there).
+const MULTICA_MAC_WINDOW_BUTTON_POSITION = { x: 16, y: 17 };
 
 const RENDERER_SCHEME = "app";
 const RENDERER_HOST = "renderer";
@@ -827,12 +834,29 @@ async function createWindowInternal(): Promise<void> {
 		isMac,
 		getKeybindingOverrides: () => keybindingOverrides,
 		isKeybindingRecording: () => keybindingRecordingActive,
-		restackShell: () => {
-			composition.setOverlayOpen(false);
-			composition.setOverlayOpen(true);
-		},
 		readSettings: () => readMulticaSettings(browserProfileStateDir()),
 		writeUrl: (url) => writeMulticaUrl(browserProfileStateDir(), url),
+		// Packaged builds only trust the bundle shipped in resources; the env
+		// override is for development runs against a local Multica checkout.
+		resolveBundle: () =>
+			resolveMulticaDesktopBundle(
+				app.isPackaged ? path.join(process.resourcesPath, "multica-desktop") : process.env.AO_MULTICA_DESKTOP_OUT,
+			),
+		ipcJailPreload: writeMulticaIpcJail(path.join(app.getPath("userData"), "multica"), multicaBridgeChannels()),
+		webSecurity: MULTICA_WEB_SECURITY,
+		locale: app.getLocale(),
+		appInfo: {
+			version: app.getVersion(),
+			os: process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : process.platform === "linux" ? "linux" : "unknown",
+		},
+		hostName: () => os.hostname(),
+		// Multica's header is laid out around its own traffic-light position.
+		onTakeover: (takenOver) => {
+			if (!isMac || !mainWindow || mainWindow.isDestroyed()) return;
+			mainWindow.setWindowButtonPosition(
+				takenOver ? MULTICA_MAC_WINDOW_BUTTON_POSITION : { x: MAC_WINDOW_BUTTON_X, y: MAC_WINDOW_BUTTON_Y },
+			);
+		},
 	});
 
 	void shellWebContents.loadURL(rendererUrl());
@@ -2660,15 +2684,27 @@ async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 	}
 }
 
+// Routes a multica:// deep link (sign-in token, invite) to the embedded Multica
+// view. AO never registers itself as the OS handler for multica://, so these only
+// arrive when the OS or a second launch hands one over explicitly.
+function handleMulticaDeepLinkAndFocus(url: string): boolean {
+	if (!url.startsWith(MULTICA_DEEP_LINK_PROTOCOL) || !multicaViewHost?.handleDeepLink(url)) return false;
+	focusMainWindow();
+	return true;
+}
+
 // macOS: the OS sends the ao-app:// URL via the open-url event when the app is
 // already running. If the app is not running, the URL is passed in process.argv
 // on first launch (handled in app.whenReady below).
 app.on("open-url", (event, url) => {
 	event.preventDefault();
+	if (handleMulticaDeepLinkAndFocus(url)) return;
 	void handleCloudDeepLinkAndFocus(url);
 });
 
 app.on("second-instance", (_event, argv) => {
+	const multicaLink = argv.find((value) => value.startsWith(MULTICA_DEEP_LINK_PROTOCOL));
+	if (multicaLink && handleMulticaDeepLinkAndFocus(multicaLink)) return;
 	const deepLink = argv.find((value) => value.startsWith("ao-app://"));
 	if (deepLink) {
 		void handleCloudDeepLinkAndFocus(deepLink);
@@ -2919,6 +2955,8 @@ app.whenReady().then(async () => {
 	if (deepLinkArg) {
 		void handleCloudDeepLinkAndFocus(deepLinkArg);
 	}
+	const multicaLinkArg = process.argv.find((a) => a.startsWith(MULTICA_DEEP_LINK_PROTOCOL));
+	if (multicaLinkArg) handleMulticaDeepLinkAndFocus(multicaLinkArg);
 
 	// Windows/Linux: a folder dropped on the taskbar icon/shortcut while the
 	// app was not running launches it with the folder's path in argv. The
