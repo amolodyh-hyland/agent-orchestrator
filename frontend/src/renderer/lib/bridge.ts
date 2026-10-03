@@ -1,5 +1,6 @@
 import type { AoBridge } from "../../preload";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
+import { DEFAULT_MULTICA_SETTINGS } from "../../shared/multica";
 export type { FeatureBuild } from "../../main/feature-builds";
 
 
@@ -236,6 +237,16 @@ export const aoBridge: AoBridge =
 		uiSettings: {
 			get: async () => ({ ...DEFAULT_UI_SETTINGS }),
 			set: async (settings) => coerceUiSettings({ ...DEFAULT_UI_SETTINGS, ...settings }),
+		},
+		multica: {
+			getState: async () => ({ active: false, status: "unconfigured", url: "" }),
+			setActive: async () => ({ active: false, status: "unconfigured", url: "" }),
+			reload: async () => ({ active: false, status: "unconfigured", url: "" }),
+			setBounds: () => undefined,
+			getSettings: async () => ({ ...DEFAULT_MULTICA_SETTINGS }),
+			setSettings: async (url) => ({ url }),
+			onState: () => () => undefined,
+			onToggleShortcut: () => () => undefined,
 		},
 		keybindings: {
 			get: async () => ({}),

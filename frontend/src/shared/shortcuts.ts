@@ -30,7 +30,7 @@ export function terminalFontSizeDelta(chord: ShortcutChord, isMac: boolean): -1 
 }
 
 export type AppShortcutId =
-	"new-session" | "new-shell-terminal" | "close-shell-terminal" | "keyboard-shortcuts" | "toggle-sidebar" | "open-project" | "toggle-inspector" | "command-palette" | "open-settings" | "previous-session" | "next-session" | "previous-tab" | "next-tab" | "focus-terminal" | "toggle-browser-devtools";
+	"new-session" | "new-shell-terminal" | "close-shell-terminal" | "keyboard-shortcuts" | "toggle-sidebar" | "open-project" | "toggle-inspector" | "command-palette" | "open-settings" | "previous-session" | "next-session" | "previous-tab" | "next-tab" | "focus-terminal" | "toggle-browser-devtools" | "toggle-multica";
 
 export type ShortcutCategory = "General" | "Navigation" | "Session";
 
@@ -134,6 +134,11 @@ export const APP_SHORTCUTS: readonly ShortcutDefinition[] = [
 		label: "Toggle browser DevTools",
 		category: "Session",
 	},
+	{
+		id: "toggle-multica",
+		label: "Switch between AO and Multica",
+		category: "General",
+	},
 ];
 
 const binding = (
@@ -180,6 +185,8 @@ export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): read
 			return [isMac ? binding("t", { meta: true, shift: true }) : binding("t", { ctrl: true, shift: true })];
 		case "toggle-browser-devtools":
 			return [isMac ? binding("i", { meta: true, alt: true }) : binding("i", { ctrl: true, shift: true })];
+		case "toggle-multica":
+			return [isMac ? binding("e", { meta: true, shift: true }) : binding("e", { ctrl: true, shift: true })];
 	}
 }
 

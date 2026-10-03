@@ -48,6 +48,19 @@ import type {
 } from "./main/cloud-cp-proxy";
 import type { UpdateOutcome } from "./shared/update-telemetry";
 import type { UiSettings } from "./main/ui-settings";
+import {
+	MULTICA_GET_SETTINGS_CHANNEL,
+	MULTICA_GET_STATE_CHANNEL,
+	MULTICA_RELOAD_CHANNEL,
+	MULTICA_SET_ACTIVE_CHANNEL,
+	MULTICA_SET_BOUNDS_CHANNEL,
+	MULTICA_SET_SETTINGS_CHANNEL,
+	MULTICA_STATE_CHANNEL,
+	TOGGLE_MULTICA_SHORTCUT_CHANNEL,
+	type MulticaBoundsInput,
+	type MulticaSettings,
+	type MulticaViewState,
+} from "./shared/multica";
 import type { UpdateCheckOptions } from "./main/auto-updater";
 import type { FeatureBuild } from "./main/feature-builds";
 import {
@@ -600,6 +613,28 @@ const api = {
 	uiSettings: {
 		get: () => ipcRenderer.invoke("uiSettings:get") as Promise<UiSettings>,
 		set: (settings: Partial<UiSettings>) => ipcRenderer.invoke("uiSettings:set", settings) as Promise<UiSettings>,
+	},
+	multica: {
+		getState: () => ipcRenderer.invoke(MULTICA_GET_STATE_CHANNEL) as Promise<MulticaViewState>,
+		setActive: (active: boolean) => ipcRenderer.invoke(MULTICA_SET_ACTIVE_CHANNEL, active) as Promise<MulticaViewState>,
+		reload: () => ipcRenderer.invoke(MULTICA_RELOAD_CHANNEL) as Promise<MulticaViewState>,
+		setBounds: (input: MulticaBoundsInput) => ipcRenderer.send(MULTICA_SET_BOUNDS_CHANNEL, input),
+		getSettings: () => ipcRenderer.invoke(MULTICA_GET_SETTINGS_CHANNEL) as Promise<MulticaSettings>,
+		setSettings: (url: string) => ipcRenderer.invoke(MULTICA_SET_SETTINGS_CHANNEL, url) as Promise<MulticaSettings>,
+		onState: (listener: (state: MulticaViewState) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, state: MulticaViewState) => listener(state);
+			ipcRenderer.on(MULTICA_STATE_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(MULTICA_STATE_CHANNEL, wrapped);
+			};
+		},
+		onToggleShortcut: (listener: () => void) => {
+			const wrapped = () => listener();
+			ipcRenderer.on(TOGGLE_MULTICA_SHORTCUT_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(TOGGLE_MULTICA_SHORTCUT_CHANNEL, wrapped);
+			};
+		},
 	},
 	keybindings: {
 		get: () => ipcRenderer.invoke("keybindings:get") as Promise<KeybindingOverrides>,

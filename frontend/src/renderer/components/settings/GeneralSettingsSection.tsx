@@ -9,6 +9,7 @@ import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
+import { MulticaSettingsSection } from "./MulticaSettingsSection";
 import { SettingsInputRow, SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 import { Switch } from "../ui/switch";
@@ -240,6 +241,8 @@ export function GeneralSettingsSection({
 					</p>
 				) : null}
 			</SettingsSection>
+
+			<MulticaSettingsSection />
 
 			<SettingsSection title={t("settings.privacy")} grouped>
 				<TelemetryEventsRow />

@@ -16,6 +16,7 @@ import {
 	type KeybindingOverrides,
 	type ShortcutChord,
 } from "../shared/shortcuts";
+import { TOGGLE_MULTICA_SHORTCUT_CHANNEL } from "../shared/multica";
 
 // The slice of Electron's Input we read, plus the emitter shape. Declared
 // locally so tests can supply a plain fake while WebContents still satisfies it.
@@ -56,6 +57,7 @@ const mainShortcutChannels: readonly [AppShortcutId, string][] = [
 	["previous-tab", PREVIOUS_TAB_SHORTCUT_CHANNEL],
 	["next-tab", NEXT_TAB_SHORTCUT_CHANNEL],
 	["focus-terminal", FOCUS_TERMINAL_SHORTCUT_CHANNEL],
+	["toggle-multica", TOGGLE_MULTICA_SHORTCUT_CHANNEL],
 ];
 
 const appShortcutChannel = (
