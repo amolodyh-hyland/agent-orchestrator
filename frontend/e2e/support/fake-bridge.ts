@@ -297,6 +297,16 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					get: async () => ({ ...DEFAULT_UI_SETTINGS }),
 					set: async (settings) => coerceUiSettings({ ...DEFAULT_UI_SETTINGS, ...settings }),
 				},
+				multica: {
+					getState: async () => ({ active: false, status: "unconfigured", url: "" }),
+					setActive: async () => ({ active: false, status: "unconfigured", url: "" }),
+					reload: async () => ({ active: false, status: "unconfigured", url: "" }),
+					setBounds: () => undefined,
+					getSettings: async () => ({ url: "http://localhost:3000" }),
+					setSettings: async (url) => ({ url }),
+					onState: () => unsubscribe,
+					onToggleShortcut: () => unsubscribe,
+				},
 				keybindings: {
 					get: async () => ({}),
 					set: async (overrides) => overrides,
@@ -905,6 +915,16 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				uiSettings: {
 					get: async () => ({ ...DEFAULT_UI_SETTINGS }),
 					set: async (settings) => coerceUiSettings({ ...DEFAULT_UI_SETTINGS, ...settings }),
+				},
+				multica: {
+					getState: async () => ({ active: false, status: "unconfigured", url: "" }),
+					setActive: async () => ({ active: false, status: "unconfigured", url: "" }),
+					reload: async () => ({ active: false, status: "unconfigured", url: "" }),
+					setBounds: () => undefined,
+					getSettings: async () => ({ url: "http://localhost:3000" }),
+					setSettings: async (url) => ({ url }),
+					onState: () => unsubscribe,
+					onToggleShortcut: () => unsubscribe,
 				},
 				keybindings: {
 					get: async () => ({}),
