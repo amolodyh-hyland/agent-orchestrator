@@ -30,6 +30,7 @@ export const shortcutLabelKeys: Record<AppShortcutId, MessageKey> = {
 	"copy-session-path": "shortcut.copy-session-path",
 	"model-picker": "shortcut.model-picker",
 	"toggle-browser-devtools": "titlebar.devtools",
+	"toggle-multica": "shortcut.toggle-multica",
 };
 
 export const shortcutCategoryLabelKeys: Record<ShortcutCategory, MessageKey> = {
