@@ -22,7 +22,7 @@ import { isAllowedAppExternalURL } from "./external-open";
 
 type MulticaWebContents = Pick<
 	WebContents,
-	"id" | "on" | "loadURL" | "getURL" | "focus" | "close" | "isDestroyed" | "setWindowOpenHandler"
+	"id" | "on" | "loadURL" | "focus" | "close" | "isDestroyed" | "setWindowOpenHandler"
 > & {
 	session: Pick<Session, "setPermissionRequestHandler" | "setPermissionCheckHandler">;
 };
@@ -91,6 +91,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 	let zoomFactor = 1;
 	let boundsRevision = 0;
 	let overlayOpen = false;
+	let loadFailed = false;
 
 	const getState = (): MulticaViewState => ({ active, status, url, ...(error ? { error } : {}) });
 
@@ -134,6 +135,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 
 	const load = (): void => {
 		if (!view || !url) return;
+		loadFailed = false;
 		setStatus("loading");
 		// A failed load surfaces through did-fail-load; the rejection carries nothing new.
 		void view.webContents.loadURL(url).catch(() => undefined);
@@ -169,14 +171,16 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 			return { action: "deny" };
 		});
 
+		// A failed navigation commits Chromium's own error page and then fires
+		// did-finish-load for it (observed order: fail, then finish), so a failure
+		// has to veto the next did-finish-load. Only an explicit load() (retry or a
+		// URL change) clears it; the error state offers no other way forward.
 		contents.on("did-finish-load", () => {
-			// A failed navigation commits Chromium's own error page, which also
-			// finishes loading; that must not read as the Multica app being ready.
-			if (contents.getURL().startsWith("chrome-error:")) return;
-			setStatus("ready");
+			if (!loadFailed) setStatus("ready");
 		});
 		contents.on("did-fail-load", (_event, errorCode, errorDescription, _validatedURL, isMainFrame) => {
 			if (!isMainFrame || errorCode === -3) return;
+			loadFailed = true;
 			setStatus("error", errorDescription || "Unable to load page");
 		});
 		contents.on("render-process-gone", () => setStatus("error", "The Multica view stopped unexpectedly"));

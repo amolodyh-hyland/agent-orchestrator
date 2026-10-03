@@ -53,7 +53,7 @@ keeping both sides:
 
 - `frontend/src/main.ts`: host creation before the renderer loads, disposal on window close, menu callbacks.
 - `frontend/src/main/menu.ts`, `frontend/src/main/app-shortcuts.ts`, `frontend/src/shared/shortcuts.ts`: menu item, shortcut channel, `toggle-multica` catalog entry.
-- `frontend/src/preload.ts`, `frontend/src/renderer/lib/bridge.ts`, `frontend/src/renderer/test/setup.ts`: the `multica` bridge namespace and its two stubs. Tests that replace the bridge wholesale and render the shell or General settings (`GlobalSettingsForm.test.tsx`, `test/shell-new-session-shortcut.test.tsx`) also carry a small `multica` stub.
+- `frontend/src/preload.ts`, `frontend/src/renderer/lib/bridge.ts`, `frontend/src/renderer/test/setup.ts`, `frontend/e2e/support/fake-bridge.ts`: the `multica` bridge namespace and its stubs. Tests that replace the bridge wholesale and render the shell or General settings (`GlobalSettingsForm.test.tsx`, `test/shell-new-session-shortcut.test.tsx`, the latter also mocking `useRouterState`) also carry a small stub.
 - `frontend/src/renderer/routes/_shell.tsx`, `components/Sidebar.tsx`, `components/settings/GeneralSettingsSection.tsx`: one mount or insert each.
 - `frontend/src/renderer/styles.css`: one appended block that keeps the shell transparent over a live page, mirroring the Browser panel's native-composition rules.
 - `frontend/src/renderer/i18n/*.json`, `i18n/key-maps.ts`: `multica.*` and `shortcut.toggle-multica` keys in every locale (a parity test requires all eight).
