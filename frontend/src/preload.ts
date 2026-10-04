@@ -64,6 +64,20 @@ import {
 	type MulticaSettings,
 	type MulticaViewState,
 } from "./shared/multica";
+import {
+	MULTICA_LINKS_ADD_CHANNEL,
+	MULTICA_LINKS_CHANGED_CHANNEL,
+	MULTICA_LINKS_LIST_CHANNEL,
+	MULTICA_LINKS_OPEN_ISSUE_CHANNEL,
+	MULTICA_LINKS_OPEN_SESSION_CHANNEL,
+	MULTICA_LINKS_REMOVE_CHANNEL,
+	type MulticaIssueLink,
+	type MulticaIssueLinkAddRequest,
+	type MulticaIssueLinkAddResult,
+	type MulticaIssueLinkOpenRequest,
+	type MulticaIssueLinkRemoveRequest,
+	type MulticaOpenSessionTarget,
+} from "./shared/multica-issue-links";
 import type { UpdateCheckOptions } from "./main/auto-updater";
 import type { FeatureBuild } from "./main/feature-builds";
 import {
@@ -677,6 +691,26 @@ const api = {
 			ipcRenderer.on(TOGGLE_MULTICA_SHORTCUT_CHANNEL, wrapped);
 			return () => {
 				ipcRenderer.off(TOGGLE_MULTICA_SHORTCUT_CHANNEL, wrapped);
+			};
+		},
+	},
+	multicaLinks: {
+		list: () => ipcRenderer.invoke(MULTICA_LINKS_LIST_CHANNEL) as Promise<MulticaIssueLink[]>,
+		add: (request: MulticaIssueLinkAddRequest) => ipcRenderer.invoke(MULTICA_LINKS_ADD_CHANNEL, request) as Promise<MulticaIssueLinkAddResult>,
+		remove: (request: MulticaIssueLinkRemoveRequest) => ipcRenderer.invoke(MULTICA_LINKS_REMOVE_CHANNEL, request) as Promise<MulticaIssueLink[]>,
+		openIssue: (request: MulticaIssueLinkOpenRequest) => ipcRenderer.invoke(MULTICA_LINKS_OPEN_ISSUE_CHANNEL, request) as Promise<boolean>,
+		onChanged: (listener: (links: MulticaIssueLink[]) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, links: MulticaIssueLink[]) => listener(links);
+			ipcRenderer.on(MULTICA_LINKS_CHANGED_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(MULTICA_LINKS_CHANGED_CHANNEL, wrapped);
+			};
+		},
+		onOpenSession: (listener: (target: MulticaOpenSessionTarget) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, target: MulticaOpenSessionTarget) => listener(target);
+			ipcRenderer.on(MULTICA_LINKS_OPEN_SESSION_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(MULTICA_LINKS_OPEN_SESSION_CHANNEL, wrapped);
 			};
 		},
 	},

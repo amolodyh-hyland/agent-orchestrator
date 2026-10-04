@@ -306,6 +306,14 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onState: () => unsubscribe,
 					onToggleShortcut: () => unsubscribe,
 				},
+				multicaLinks: {
+					list: async () => [],
+					add: async () => ({ ok: false, reason: "save_failed" }),
+					remove: async () => [],
+					openIssue: async () => false,
+					onChanged: () => unsubscribe,
+					onOpenSession: () => unsubscribe,
+				},
 				keybindings: {
 					get: async () => ({}),
 					set: async (overrides) => overrides,
@@ -923,6 +931,14 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					setSettings: async (url) => ({ url }),
 					onState: () => unsubscribe,
 					onToggleShortcut: () => unsubscribe,
+				},
+				multicaLinks: {
+					list: async () => [],
+					add: async () => ({ ok: false, reason: "save_failed" }),
+					remove: async () => [],
+					openIssue: async () => false,
+					onChanged: () => unsubscribe,
+					onOpenSession: () => unsubscribe,
 				},
 				keybindings: {
 					get: async () => ({}),
