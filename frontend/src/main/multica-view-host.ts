@@ -76,6 +76,7 @@ export type MulticaViewHost = {
 	navigatePath: (path: string) => boolean;
 	/** Runs a script in the Multica page's main world. Does nothing without a live view. */
 	runInPage: (script: string) => void;
+	evaluateInPage: (script: string) => Promise<unknown>;
 	dispose: () => void;
 };
 
@@ -118,6 +119,10 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 	const runInPage = (script: string): void => {
 		if (!view || view.webContents.isDestroyed()) return;
 		void view.webContents.executeJavaScript(script).catch(() => undefined);
+	};
+	const evaluateInPage = async (script: string): Promise<unknown> => {
+		if (!view || view.webContents.isDestroyed()) return undefined;
+		return await view.webContents.executeJavaScript(script).catch(() => undefined);
 	};
 
 	let bridge: MulticaDesktopBridge | undefined;
@@ -387,6 +392,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 			return true;
 		},
 		runInPage,
+		evaluateInPage,
 		dispose: () => {
 			for (const [channel] of handlers) options.ipcMain.removeHandler(channel);
 			try {

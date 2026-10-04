@@ -838,6 +838,7 @@ async function createWindowInternal(): Promise<void> {
 		shellWebContents,
 		store: createMulticaIssueLinkStore(browserProfileStateDir()),
 		getHost: () => multicaViewHost ?? undefined,
+		readSettings: () => readMulticaSettings(browserProfileStateDir()),
 	});
 	multicaViewHost = await createMulticaViewHost({
 		mainWindow,

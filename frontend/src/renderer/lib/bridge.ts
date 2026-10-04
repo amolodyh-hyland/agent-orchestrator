@@ -287,6 +287,7 @@ export const aoBridge: AoBridge =
 			onChanged: () => () => undefined,
 			onOpenSession: () => () => undefined,
 		},
+		multicaSend: { onRequest: () => () => undefined },
 		keybindings: {
 			get: async () => ({}),
 			set: async (overrides) => overrides,

@@ -1,4 +1,5 @@
 import type { IpcMain, IpcMainInvokeEvent, WebContents } from "electron";
+import type { MulticaSettings } from "../shared/multica";
 import {
 	MULTICA_LINKS_ADD_CHANNEL,
 	MULTICA_LINKS_CHANGED_CHANNEL,
@@ -11,12 +12,13 @@ import {
 	multicaIssuePath,
 	parseAoSessionUrl,
 	parseMulticaIssueRef,
-	parseMulticaIssueTitle,
 	type MulticaIssueLink,
 	type MulticaIssueRef,
 } from "../shared/multica-issue-links";
+import { AO_SEND_ISSUE_URL, parseMulticaIssueTitleParts } from "../shared/multica-send-to-ao";
 import type { MulticaIssueLinkStore } from "./multica-issue-links";
 import { buildLinkedSessionsPillScript } from "./multica-linked-sessions-pill";
+import { createMulticaSendToAo } from "./multica-send-to-ao";
 import type { MulticaViewHost } from "./multica-view-host";
 
 export type MulticaIssueLinkServiceOptions = {
@@ -24,7 +26,8 @@ export type MulticaIssueLinkServiceOptions = {
 	shellWebContents: Pick<WebContents, "id" | "isDestroyed" | "send">;
 	store: MulticaIssueLinkStore;
 	/** The Multica view host is created after this service, so it is looked up lazily. */
-	getHost: () => Pick<MulticaViewHost, "navigatePath" | "runInPage" | "setActive"> | undefined;
+	getHost: () => Pick<MulticaViewHost, "navigatePath" | "runInPage" | "setActive" | "evaluateInPage"> | undefined;
+	readSettings: () => Promise<MulticaSettings>;
 };
 
 export type MulticaIssueLinkService = {
@@ -49,7 +52,14 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 	let links: MulticaIssueLink[] = [];
 	let cacheVersion = 0;
 	let currentIssue: string | null = null;
+	let currentTitle: string | null = null;
 	let disposed = false;
+	const sendToAo = createMulticaSendToAo({
+		shellWebContents: options.shellWebContents,
+		getHost: options.getHost,
+		getCurrentIssue: () => (currentIssue ? { identifier: currentIssue, title: currentTitle ?? "" } : null),
+		readSettings: options.readSettings,
+	});
 	const isTrustedShell = (event: IpcMainInvokeEvent): boolean => event.sender.id === options.shellWebContents.id;
 
 	try {
@@ -82,7 +92,7 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 					.filter((link) => link.issueIdentifier === currentIssue)
 					.map((link) => ({ label: link.sessionId, url: aoSessionUrl(link.projectId, link.sessionId) }))
 			: [];
-		options.getHost()?.runInPage(buildLinkedSessionsPillScript(entries));
+		options.getHost()?.runInPage(buildLinkedSessionsPillScript(entries, { sendUrl: currentIssue ? AO_SEND_ISSUE_URL : undefined }));
 	};
 
 	const handlers: Array<[string, IpcHandler]> = [
@@ -168,11 +178,17 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 	return {
 		handlePageTitle: (title) => {
 			if (disposed) return;
-			currentIssue = parseMulticaIssueTitle(title);
+			const parts = parseMulticaIssueTitleParts(title);
+			currentIssue = parts?.identifier ?? null;
+			currentTitle = parts?.title ?? null;
 			refreshPill();
 		},
 		handleAoSessionLink: (url) => {
 			if (disposed) return false;
+			if (url === AO_SEND_ISSUE_URL) {
+				sendToAo.request();
+				return true;
+			}
 			const target = parseAoSessionUrl(url);
 			if (!target) return false;
 			if (links.some((link) => link.projectId === target.projectId && link.sessionId === target.sessionId)) {
@@ -184,6 +200,7 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 		dispose: () => {
 			if (disposed) return;
 			disposed = true;
+			sendToAo.dispose();
 			for (const [channel] of handlers) options.ipcMain.removeHandler(channel);
 		},
 	};
