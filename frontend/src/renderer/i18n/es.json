@@ -810,6 +810,8 @@
 	"multica.error.retry": "Reintentar",
 	"multica.error.title": "No se puede acceder a Multica",
 	"multica.loading": "Cargando Multica…",
+	"multica.notBundled.body": "Esta versión de Agent Orchestrator se creó sin la interfaz de escritorio de Multica. Instala una compilación que la incluya o ejecútala desde el código fuente con AO_MULTICA_DESKTOP_OUT apuntando a una compilación de escritorio de Multica.",
+	"multica.notBundled.title": "Multica no está incluido en esta compilación",
 	"multica.settings.invalidUrl": "Introduce una dirección http:// o https:// válida.",
 	"multica.settings.notSet": "Sin configurar",
 	"multica.settings.saveFailed": "No se pudo guardar la URL de Multica.",
