@@ -60,17 +60,21 @@ function escapeScriptJson(value: unknown): string {
 }
 
 /** Source for webContents.executeJavaScript: replaces (or, with no entries, removes) the AO pill in the page. */
-export function buildLinkedSessionsPillScript(entries: readonly LinkedSessionPillEntry[]): string {
+export function buildLinkedSessionsPillScript(
+	entries: readonly LinkedSessionPillEntry[],
+	options?: { sendUrl?: string },
+): string {
 	const payload = escapeScriptJson({
 		entries: entries.slice(0, MAX_PILL_ENTRIES),
 		overflow: Math.max(0, entries.length - MAX_PILL_ENTRIES),
+		sendUrl: options?.sendUrl || null,
 	});
 	const styles = JSON.stringify(PILL_STYLES) ?? "\"\"";
 
 	return `(function () {
 	document.querySelectorAll("#${MULTICA_LINKED_SESSIONS_PILL_ID}").forEach((element) => element.remove());
 	const payload = ${payload};
-	if (payload.entries.length === 0) return;
+	if (payload.entries.length === 0 && !payload.sendUrl) return;
 	const pill = document.createElement("div");
 	pill.setAttribute("id", "${MULTICA_LINKED_SESSIONS_PILL_ID}");
 	pill.setAttribute("style", "position:fixed;right:16px;bottom:16px;z-index:2147483647;pointer-events:none");
@@ -80,6 +84,18 @@ export function buildLinkedSessionsPillScript(entries: readonly LinkedSessionPil
 	shadow.appendChild(style);
 	const column = document.createElement("div");
 	column.setAttribute("class", "ao-linked-sessions-column");
+	if (payload.sendUrl) {
+		const button = document.createElement("button");
+		button.setAttribute("type", "button");
+		button.setAttribute("title", "Create an AO session for this issue");
+		button.setAttribute("class", "ao-send-to-ao");
+		button.textContent = "Send to AO";
+		button.addEventListener("click", (event) => {
+			event.preventDefault();
+			window.open(payload.sendUrl);
+		});
+		column.appendChild(button);
+	}
 	for (const entry of payload.entries) {
 		const button = document.createElement("button");
 		button.setAttribute("type", "button");

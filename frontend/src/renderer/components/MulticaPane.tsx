@@ -8,6 +8,7 @@ import { useNavigateToSession } from "../lib/navigate-to-session";
 import { useMulticaStore } from "../stores/multica-store";
 import { useUiStore } from "../stores/ui-store";
 import { CenterPanelShell } from "./CenterPanelShell";
+import { MulticaSendToAoDialog } from "./MulticaSendToAoDialog";
 import { Button } from "./ui/button";
 
 function MulticaMessage({ title, body, detail, action }: { title: ReactNode; body?: string; detail?: string; action?: ReactNode }) {
@@ -97,5 +98,10 @@ export function MulticaPane() {
 		if (store.view.active) store.setActive(false);
 	}, [pathname]);
 
-	return view.active ? <MulticaSurface view={view} /> : null;
+	return (
+		<>
+			<MulticaSendToAoDialog />
+			{view.active ? <MulticaSurface view={view} /> : null}
+		</>
+	);
 }

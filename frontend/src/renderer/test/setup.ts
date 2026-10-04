@@ -359,6 +359,7 @@ if (typeof window !== "undefined") {
 			onChanged: () => () => undefined,
 			onOpenSession: () => () => undefined,
 		},
+		multicaSend: { onRequest: vi.fn(() => () => undefined) },
 		keybindings: {
 			get: async () => ({}),
 			set: async (overrides) => overrides,

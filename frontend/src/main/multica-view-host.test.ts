@@ -24,7 +24,7 @@ class FakeWebContents extends EventEmitter {
 	id = FakeWebContents.nextId++;
 	destroyed = false;
 	loadURL = vi.fn(async (_url: string) => undefined);
-	executeJavaScript = vi.fn(async (_script: string) => undefined);
+	executeJavaScript = vi.fn(async (_script: string): Promise<unknown> => undefined);
 	focus = vi.fn();
 	send = vi.fn();
 	ipc = fakeIpc();
@@ -481,6 +481,45 @@ describe("multica view host: page hooks", () => {
 		t.host.dispose();
 		t.host.runInPage("window.test = false;");
 		expect(t.view().webContents.executeJavaScript).toHaveBeenCalledOnce();
+	});
+
+	it("returns the value from an evaluated page script", async () => {
+		const t = await setup();
+		t.host.setActive(true);
+		t.view().webContents.executeJavaScript.mockResolvedValue({ identifier: "MUL-1" });
+
+		await expect(t.host.evaluateInPage("Promise.resolve({ identifier: 'MUL-1' })")).resolves.toEqual({ identifier: "MUL-1" });
+	});
+
+	it("resolves undefined when an evaluated page script rejects", async () => {
+		const t = await setup();
+		t.host.setActive(true);
+		t.view().webContents.executeJavaScript.mockRejectedValue(new Error("page unavailable"));
+
+		await expect(t.host.evaluateInPage("window.test")).resolves.toBeUndefined();
+	});
+
+	it("resolves undefined when evaluated without a view", async () => {
+		const t = await setup();
+
+		await expect(t.host.evaluateInPage("window.test")).resolves.toBeUndefined();
+	});
+
+	it("resolves undefined after the host is disposed", async () => {
+		const t = await setup();
+		t.host.setActive(true);
+		t.host.dispose();
+
+		await expect(t.host.evaluateInPage("window.test")).resolves.toBeUndefined();
+	});
+
+	it("resolves undefined when the view is destroyed", async () => {
+		const t = await setup();
+		t.host.setActive(true);
+		t.view().webContents.destroyed = true;
+
+		await expect(t.host.evaluateInPage("window.test")).resolves.toBeUndefined();
+		expect(t.view().webContents.executeJavaScript).not.toHaveBeenCalled();
 	});
 });
 
