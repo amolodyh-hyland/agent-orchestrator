@@ -4,6 +4,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { MulticaViewState } from "../../shared/multica";
 import { aoBridge } from "../lib/bridge";
+import { useNavigateToSession } from "../lib/navigate-to-session";
 import { useMulticaStore } from "../stores/multica-store";
 import { useUiStore } from "../stores/ui-store";
 import { CenterPanelShell } from "./CenterPanelShell";
@@ -76,6 +77,7 @@ export function MulticaPane() {
 	const view = useMulticaStore((state) => state.view);
 	const load = useMulticaStore((state) => state.load);
 	const toggle = useMulticaStore((state) => state.toggle);
+	const navigateToSession = useNavigateToSession();
 	const pathname = useRouterState({ select: (state) => state.location.pathname });
 
 	useEffect(() => {
@@ -83,6 +85,7 @@ export function MulticaPane() {
 	}, [load]);
 
 	useEffect(() => aoBridge.multica.onToggleShortcut(toggle), [toggle]);
+	useEffect(() => aoBridge.multicaLinks.onOpenSession((target) => navigateToSession(target.projectId, target.sessionId)), [navigateToSession]);
 
 	// Choosing something inside AO (a project or session in the sidebar) means the
 	// user wants AO back.
