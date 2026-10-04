@@ -49,16 +49,20 @@ function MulticaSurface({ view }: { view: MulticaViewState }) {
 						/>
 					) : null}
 					{view.status === "error" ? (
-						<MulticaMessage
-							action={
-								<Button onClick={() => useMulticaStore.getState().reload()} size="sm" variant="secondary">
-									{t("multica.error.retry")}
-								</Button>
-							}
-							body={t("multica.error.body", { url: view.url })}
-							detail={view.error}
-							title={t("multica.error.title")}
-						/>
+						view.errorKind === "bundle-missing" ? (
+							<MulticaMessage body={t("multica.notBundled.body")} title={t("multica.notBundled.title")} />
+						) : (
+							<MulticaMessage
+								action={
+									<Button onClick={() => useMulticaStore.getState().reload()} size="sm" variant="secondary">
+										{t("multica.error.retry")}
+									</Button>
+								}
+								body={t("multica.error.body", { url: view.url })}
+								detail={view.error}
+								title={t("multica.error.title")}
+							/>
+						)
 					) : null}
 				</div>
 			</CenterPanelShell>

@@ -16,6 +16,16 @@ describe("resolveMulticaDesktopBundle", () => {
 		expect(bundle?.rendererUrl).toBe(`file://${renderer}`);
 	});
 
+	it("finds the CommonJS preload when it uses the .cjs extension", () => {
+		const renderer = path.join(OUT, "renderer", "index.html");
+		const preload = path.join(OUT, "preload", "index.cjs");
+
+		const bundle = resolveMulticaDesktopBundle(OUT, has(renderer, preload));
+
+		expect(bundle?.preloadPath).toBe(preload);
+		expect(bundle?.rendererUrl).toBe(`file://${renderer}`);
+	});
+
 	it("reports nothing when the directory is unset or either half is missing", () => {
 		const renderer = path.join(OUT, "renderer", "index.html");
 		const preload = path.join(OUT, "preload", "index.js");

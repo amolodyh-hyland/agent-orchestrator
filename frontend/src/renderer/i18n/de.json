@@ -682,6 +682,8 @@
 	"multica.error.retry": "Erneut versuchen",
 	"multica.error.title": "Multica ist nicht erreichbar",
 	"multica.loading": "Multica wird geladen …",
+	"multica.notBundled.body": "Diese Version von Agent Orchestrator wurde ohne Multicas Desktopoberfläche erstellt. Installieren Sie einen Build, der sie enthält, oder führen Sie die Anwendung aus dem Quellcode aus und setzen Sie AO_MULTICA_DESKTOP_OUT auf einen Multica-Desktop-Build.",
+	"multica.notBundled.title": "Multica ist in diesem Build nicht enthalten",
 	"multica.settings.invalidUrl": "Geben Sie eine gültige http://- oder https://-Adresse ein.",
 	"multica.settings.notSet": "Nicht festgelegt",
 	"multica.settings.saveFailed": "Die Multica-URL konnte nicht gespeichert werden.",
