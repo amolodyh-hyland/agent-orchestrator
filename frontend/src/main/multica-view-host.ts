@@ -19,6 +19,7 @@ import {
 import type { KeybindingOverrides } from "../shared/shortcuts";
 import { attachAppShortcuts } from "./app-shortcuts";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./external-open";
+import type { MulticaDaemonService } from "./multica-daemon-cli";
 import { createMulticaDesktopBridge, type MulticaAppInfo, type MulticaDesktopBridge } from "./multica-desktop-bridge";
 import type { MulticaDesktopBundle } from "./multica-desktop-bundle";
 
@@ -54,6 +55,8 @@ export type MulticaViewHostOptions = {
 	locale: string;
 	appInfo: MulticaAppInfo;
 	hostName: () => string;
+	/** Builds the daemon service for a new view; `emit` pushes messages to that view. */
+	createDaemonService: (emit: (channel: string, payload: unknown) => void) => MulticaDaemonService;
 	/** Called when the Multica view takes over the whole window or gives it back. */
 	onTakeover?: (takenOver: boolean) => void;
 };
@@ -178,6 +181,9 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 			getAppInfo: () => options.appInfo,
 			getRuntimeConfig: () => multicaRuntimeConfig(url),
 			getHostName: options.hostName,
+			daemon: options.createDaemonService((channel, payload) => {
+				if (!contents.isDestroyed()) contents.send(channel, payload);
+			}),
 			openExternal: (target) => openAllowedAppExternalURL(target, options.shell),
 			send: (channel, payload) => {
 				if (!contents.isDestroyed()) contents.send(channel, payload);

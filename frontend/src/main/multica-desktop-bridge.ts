@@ -1,5 +1,6 @@
 import type { IpcMain, IpcMainEvent, IpcMainInvokeEvent } from "electron";
 import type { MulticaRuntimeConfigResult } from "../shared/multica";
+import type { MulticaDaemonService } from "./multica-daemon-cli";
 
 // AO's main process stands in for Multica's main process for the embedded
 // desktop renderer. Multica's own preload (attached to the Multica view only)
@@ -14,8 +15,9 @@ import type { MulticaRuntimeConfigResult } from "../shared/multica";
 // Every handler still checks the sender as a second line of defence.
 //
 // What is real: app info, locale, runtime config, freeze breadcrumb, external
-// links, and deep-link delivery (auth token, invite). Everything else is a safe
-// stub. Multica's daemon is not managed by AO; the user runs it from the CLI.
+// links, deep-link delivery (auth token, invite), and a minimal daemon surface
+// backed by the installed multica CLI (multica-daemon-cli.ts). Everything else is
+// a safe stub.
 
 const CHANNEL_STATE_CHANNEL = "main-renderer:channel-state";
 
@@ -25,7 +27,7 @@ const MAIN_RENDERER_CHANNELS = new Set(["auth:token", "invite:open", "inbox:open
 
 const MAX_PENDING_PER_CHANNEL = 8;
 
-const DAEMON_UNAVAILABLE = "The Multica daemon is not managed by AO. Run it from the multica CLI.";
+const DAEMON_UNAVAILABLE = "Not managed by AO: the multica CLI keeps its own login and server config.";
 const NOT_AVAILABLE = "Not available in AO";
 
 export type MulticaAppInfo = { version: string; os: "macos" | "windows" | "linux" | "unknown" };
@@ -37,6 +39,8 @@ export type MulticaDesktopBridgeOptions = {
 	getAppInfo: () => MulticaAppInfo;
 	getRuntimeConfig: () => MulticaRuntimeConfigResult;
 	getHostName: () => string;
+	/** Controls the daemon through the multica CLI. The bridge starts its polling and disposes it. */
+	daemon: MulticaDaemonService;
 	/** Must already enforce AO's external-URL allowlist. */
 	openExternal: (url: string) => Promise<void>;
 	/** Delivers a main-to-renderer message to the Multica view. */
@@ -58,8 +62,10 @@ type SyncReplies = Record<string, () => unknown>;
 // Invoke channels the renderer awaits. Unsupported features answer with a value
 // shaped like Multica's own failure/empty result so the UI degrades instead of
 // throwing.
-function invokeStubs(getHostName: () => string): Record<string, (...args: unknown[]) => unknown> {
+function invokeStubs(getHostName: () => string, daemon: MulticaDaemonService): Record<string, (...args: unknown[]) => unknown> {
 	const daemonFailure = { success: false, error: DAEMON_UNAVAILABLE };
+	// Nothing here ever starts or stops the daemon on its own: that is always an
+	// explicit action in the UI.
 	const prefs = { autoStart: false, autoStop: false };
 	const updaterPrefs = { automaticUpdates: false };
 	const none = () => undefined;
@@ -69,21 +75,25 @@ function invokeStubs(getHostName: () => string): Record<string, (...args: unknow
 		"window:open-issue": () => ({ ok: false, reason: "invalid_request" }),
 		"local-directory:pick": () => ({ ok: false, reason: "error", error: NOT_AVAILABLE }),
 		"local-directory:validate": () => ({ ok: false, reason: "error", error: NOT_AVAILABLE }),
-		"daemon:start": () => daemonFailure,
-		"daemon:stop": () => daemonFailure,
-		"daemon:restart": () => daemonFailure,
-		"daemon:get-status": () => ({ state: "stopped" }),
-		"daemon:probe-runtimes": () => ({ probeResult: "error" }),
+		"daemon:start": () => daemon.start(),
+		"daemon:stop": () => daemon.stop(),
+		"daemon:restart": () => daemon.restart(),
+		"daemon:get-status": () => daemon.getStatus(),
+		"daemon:probe-runtimes": () => daemon.probeRuntimes(),
 		"daemon:get-host-name": () => getHostName(),
+		// The CLI owns its login and server config; the page must never overwrite
+		// them, so token and target sync are deliberate no-ops.
 		"daemon:set-target-api-url": none,
 		"daemon:sync-token": none,
 		"daemon:clear-token": none,
 		"daemon:reauthenticate": () => ({ ok: false, reason: "transient", message: DAEMON_UNAVAILABLE }),
-		"daemon:is-cli-installed": () => true,
+		"daemon:is-cli-installed": () => daemon.isInstalled(),
 		"daemon:get-prefs": () => prefs,
+		// Auto-start and stop-on-quit are not implemented, so the stored values stay
+		// off and a change is refused by answering with them (the toggle reverts).
 		"daemon:set-prefs": () => prefs,
 		"daemon:auto-start": none,
-		"daemon:retry-install": none,
+		"daemon:retry-install": () => daemon.refreshBinary(),
 		"daemon:open-log-file": () => daemonFailure,
 		"updater:download": none,
 		"updater:install": none,
@@ -96,6 +106,8 @@ function invokeStubs(getHostName: () => string): Record<string, (...args: unknow
 // Fire-and-forget channels with nothing to do, so they need no sender check.
 // `window:close` is deliberately a no-op: an embedded view closing "its window"
 // must never close AO's window.
+const LOG_STREAM_CHANNELS = ["daemon:start-log-stream", "daemon:stop-log-stream"] as const;
+
 const NOOP_SEND_CHANNELS = [
 	"freeze:ack",
 	"auth:session-state",
@@ -103,8 +115,6 @@ const NOOP_SEND_CHANNELS = [
 	"notification:show",
 	"badge:set",
 	"window:close",
-	"daemon:start-log-stream",
-	"daemon:stop-log-stream",
 ] as const;
 
 /**
@@ -120,7 +130,8 @@ export function multicaBridgeChannels(): string[] {
 		CHANNEL_STATE_CHANNEL,
 		"shell:openExternal",
 		...NOOP_SEND_CHANNELS,
-		...Object.keys(invokeStubs(() => "")),
+		...LOG_STREAM_CHANNELS,
+		...Object.keys(invokeStubs(() => "", {} as MulticaDaemonService)),
 	];
 }
 
@@ -154,6 +165,21 @@ export function createMulticaDesktopBridge(options: MulticaDesktopBridgeOptions)
 		() => undefined,
 	]);
 
+	const logStreamListeners: Array<[string, (event: IpcMainEvent) => void]> = [
+		[
+			"daemon:start-log-stream",
+			(event) => {
+				if (options.isMulticaSender(event.sender)) options.daemon.startLogStream();
+			},
+		],
+		[
+			"daemon:stop-log-stream",
+			(event) => {
+				if (options.isMulticaSender(event.sender)) options.daemon.stopLogStream();
+			},
+		],
+	];
+
 	const onChannelState = (event: IpcMainEvent, input: unknown): void => {
 		if (!options.isMulticaSender(event.sender) || !input || typeof input !== "object") return;
 		const { channel, ready: isReady } = input as { channel?: unknown; ready?: unknown };
@@ -176,7 +202,7 @@ export function createMulticaDesktopBridge(options: MulticaDesktopBridgeOptions)
 				return undefined;
 			},
 		],
-		...Object.entries(invokeStubs(options.getHostName)).map(
+		...Object.entries(invokeStubs(options.getHostName, options.daemon)).map(
 			([channel, stub]): [string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown] => [
 				channel,
 				(event, ...args) => (options.isMulticaSender(event.sender) ? stub(...args) : undefined),
@@ -184,9 +210,10 @@ export function createMulticaDesktopBridge(options: MulticaDesktopBridgeOptions)
 		),
 	];
 
-	for (const [channel, listener] of [...syncListeners, ...noopListeners]) options.ipc.on(channel, listener);
+	for (const [channel, listener] of [...syncListeners, ...noopListeners, ...logStreamListeners]) options.ipc.on(channel, listener);
 	options.ipc.on(CHANNEL_STATE_CHANNEL, onChannelState);
 	for (const [channel, handler] of handlers) options.ipc.handle(channel, handler);
+	options.daemon.startPolling();
 
 	return {
 		dispatch: (channel, payload) => {
@@ -200,9 +227,10 @@ export function createMulticaDesktopBridge(options: MulticaDesktopBridgeOptions)
 		},
 		resetReadiness: () => ready.clear(),
 		dispose: () => {
-			for (const [channel, listener] of [...syncListeners, ...noopListeners]) {
+			for (const [channel, listener] of [...syncListeners, ...noopListeners, ...logStreamListeners]) {
 				options.ipc.removeListener(channel, listener);
 			}
+			options.daemon.dispose();
 			options.ipc.removeListener(CHANNEL_STATE_CHANNEL, onChannelState);
 			for (const [channel] of handlers) options.ipc.removeHandler(channel);
 			ready.clear();
