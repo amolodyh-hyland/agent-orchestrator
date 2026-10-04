@@ -5,6 +5,7 @@ import { Archive, CalendarClock, Folder, LayoutDashboard, Plus } from "lucide-re
 import { useEffect, useState, type ReactNode } from "react";
 import { animate, LayoutGroup, motion, useMotionValue, useReducedMotion } from "motion/react";
 import { NotificationCenter } from "./NotificationCenter";
+import { MulticaIssueLinkChip } from "./MulticaIssueLinkChip";
 import { ProjectBoardActions } from "./ProjectBoardActions";
 import { useBoardPresentation } from "../hooks/useBoardPresentation";
 import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
@@ -191,6 +192,7 @@ export function ShellTopbar({
 						)}
 						<span aria-hidden="true" className="workspace-topbar__identity-separator" />
 						<SessionStatusPill session={session} />
+						{!isOrchestrator ? <MulticaIssueLinkChip projectId={session.workspaceId} sessionId={session.id} /> : null}
 					</div>
 				) : isAutomationsRoute ? (
 					<div className="inline-flex min-w-0 items-center gap-1.5" data-testid="automations-topbar-label">

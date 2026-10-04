@@ -160,6 +160,9 @@ vi.mock("../lib/bridge", () => ({
 			onState: () => () => undefined,
 			onToggleShortcut: () => () => undefined,
 		},
+		multicaLinks: {
+			onOpenSession: () => () => undefined,
+		},
 		window: {},
 		tray: {
 			setAttentionState: () => undefined,
