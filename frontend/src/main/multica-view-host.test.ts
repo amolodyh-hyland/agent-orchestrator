@@ -116,6 +116,7 @@ async function setup(initial: MulticaSettings = { url: URL }, overrides: Partial
 		}),
 	};
 	const onTakeover = vi.fn();
+	const daemonDispose = vi.fn();
 	const ipc = fakeIpc();
 	const openExternal = vi.fn(async (_url: string) => undefined);
 	const writeUrl = vi.fn(async (url: string) => coerceMulticaSettings({ url }));
@@ -136,6 +137,19 @@ async function setup(initial: MulticaSettings = { url: URL }, overrides: Partial
 		locale: "en-US",
 		appInfo: { version: "1.2.3", os: "macos" },
 		hostName: () => "dev-box",
+		createDaemonService: () => ({
+			getStatus: vi.fn(async () => ({ state: "stopped" })),
+			start: vi.fn(),
+			stop: vi.fn(),
+			restart: vi.fn(),
+			isInstalled: vi.fn(),
+			refreshBinary: vi.fn(),
+			probeRuntimes: vi.fn(),
+			startLogStream: vi.fn(),
+			stopLogStream: vi.fn(),
+			startPolling: vi.fn(),
+			dispose: daemonDispose,
+		}),
 		onTakeover,
 		...overrides,
 	} as unknown as MulticaViewHostOptions);
@@ -148,6 +162,7 @@ async function setup(initial: MulticaSettings = { url: URL }, overrides: Partial
 		contentViewListeners,
 		contentBounds,
 		onTakeover,
+		daemonDispose,
 		ipc,
 		openExternal,
 		writeUrl,
@@ -625,5 +640,15 @@ describe("multica view host: dispose", () => {
 		expect(t.contentViewListeners.size).toBe(0);
 		expect(t.contentView.removeChildView).toHaveBeenCalledWith(t.view());
 		expect(t.view().webContents.close).toHaveBeenCalledOnce();
+		expect(t.daemonDispose).toHaveBeenCalledOnce();
+	});
+
+	it("stops the daemon polling when the view is torn down by clearing the URL", async () => {
+		const t = await setup();
+		t.host.setActive(true);
+
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "");
+
+		expect(t.daemonDispose).toHaveBeenCalledOnce();
 	});
 });

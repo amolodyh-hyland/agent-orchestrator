@@ -37,11 +37,29 @@ function fakeIpc() {
 	};
 }
 
+function fakeDaemon() {
+	return {
+		getStatus: vi.fn(async () => ({ state: "running", pid: 7 })),
+		start: vi.fn(async () => ({ success: true })),
+		stop: vi.fn(async () => ({ success: true })),
+		restart: vi.fn(async () => ({ success: true })),
+		isInstalled: vi.fn(async () => true),
+		refreshBinary: vi.fn(),
+		probeRuntimes: vi.fn(async () => ({ probeResult: "error" })),
+		startLogStream: vi.fn(),
+		stopLogStream: vi.fn(),
+		startPolling: vi.fn(),
+		dispose: vi.fn(),
+	};
+}
+
 function setup(overrides: Partial<MulticaDesktopBridgeOptions> = {}) {
 	const ipc = fakeIpc();
 	const openExternal = vi.fn(async (_url: string) => undefined);
 	const send = vi.fn();
+	const daemon = fakeDaemon();
 	const bridge = createMulticaDesktopBridge({
+		daemon,
 		ipc,
 		isMulticaSender: (sender: { id: number }) => sender.id === MULTICA.id,
 		getAppInfo: () => ({ version: "1.2.3", os: "macos" }),
@@ -54,7 +72,7 @@ function setup(overrides: Partial<MulticaDesktopBridgeOptions> = {}) {
 		send,
 		...overrides,
 	} as unknown as MulticaDesktopBridgeOptions);
-	return { bridge, ipc, openExternal, send };
+	return { bridge, ipc, openExternal, send, daemon };
 }
 
 describe("multica desktop bridge: synchronous channels", () => {
@@ -92,6 +110,61 @@ describe("multica desktop bridge: synchronous channels", () => {
 	});
 });
 
+describe("multica desktop bridge: daemon", () => {
+	it("never lets another sender reach the daemon service", async () => {
+		const { ipc, daemon } = setup();
+
+		for (const channel of ["daemon:start", "daemon:stop", "daemon:restart", "daemon:get-status", "daemon:probe-runtimes", "daemon:is-cli-installed", "daemon:retry-install"]) {
+			await ipc.invoke(channel, STRANGER);
+		}
+		ipc.send("daemon:start-log-stream", STRANGER);
+		ipc.send("daemon:stop-log-stream", STRANGER);
+
+		for (const method of [daemon.start, daemon.stop, daemon.restart, daemon.getStatus, daemon.probeRuntimes, daemon.isInstalled, daemon.refreshBinary, daemon.startLogStream, daemon.stopLogStream]) {
+			expect(method).not.toHaveBeenCalled();
+		}
+	});
+
+	it("drives the log stream for the Multica view", () => {
+		const { ipc, daemon } = setup();
+
+		ipc.send("daemon:start-log-stream", MULTICA);
+		ipc.send("daemon:stop-log-stream", MULTICA);
+
+		expect(daemon.startLogStream).toHaveBeenCalledOnce();
+		expect(daemon.stopLogStream).toHaveBeenCalledOnce();
+	});
+
+	it("never touches the CLI's login or server config: token and target sync do not reach the service", async () => {
+		const { ipc, daemon } = setup();
+
+		await ipc.invoke("daemon:sync-token", MULTICA, "secret", "user");
+		await ipc.invoke("daemon:clear-token", MULTICA);
+		await ipc.invoke("daemon:set-target-api-url", MULTICA, "http://elsewhere");
+		await ipc.invoke("daemon:auto-start", MULTICA);
+
+		for (const [name, method] of Object.entries(daemon)) {
+			if (name !== "startPolling") expect(method).not.toHaveBeenCalled();
+		}
+	});
+
+	it("does not pretend to support auto-start or stop-on-quit: preferences stay off", async () => {
+		const { ipc } = setup();
+
+		expect(await ipc.invoke("daemon:set-prefs", MULTICA, { autoStart: true, autoStop: true })).toEqual({ autoStart: false, autoStop: false });
+		expect(await ipc.invoke("daemon:get-prefs", MULTICA)).toEqual({ autoStart: false, autoStop: false });
+	});
+
+	it("starts polling when created and disposes the service with the bridge", () => {
+		const { bridge, daemon } = setup();
+		expect(daemon.startPolling).toHaveBeenCalledOnce();
+
+		bridge.dispose();
+
+		expect(daemon.dispose).toHaveBeenCalledOnce();
+	});
+});
+
 describe("multica desktop bridge: stubs and sender scoping", () => {
 	const stubs: Array<[string, unknown[], unknown]> = [
 		["file:download-url", ["https://x"], undefined],
@@ -99,10 +172,10 @@ describe("multica desktop bridge: stubs and sender scoping", () => {
 		["window:open-issue", [{}], { ok: false, reason: "invalid_request" }],
 		["local-directory:pick", [], { ok: false, reason: "error", error: "Not available in AO" }],
 		["local-directory:validate", ["/tmp"], { ok: false, reason: "error", error: "Not available in AO" }],
-		["daemon:start", [], { success: false, error: expect.stringContaining("not managed by AO") }],
-		["daemon:stop", [], { success: false, error: expect.any(String) }],
-		["daemon:restart", [], { success: false, error: expect.any(String) }],
-		["daemon:get-status", [], { state: "stopped" }],
+		["daemon:start", [], { success: true }],
+		["daemon:stop", [], { success: true }],
+		["daemon:restart", [], { success: true }],
+		["daemon:get-status", [], { state: "running", pid: 7 }],
 		["daemon:probe-runtimes", [], { probeResult: "error" }],
 		["daemon:get-host-name", [], "dev-box"],
 		["daemon:set-target-api-url", ["http://x"], undefined],
