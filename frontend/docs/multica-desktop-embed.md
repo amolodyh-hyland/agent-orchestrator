@@ -19,9 +19,61 @@ Point AO at the output and start it (use isolated data for experiments, see `AGE
 AO_MULTICA_DESKTOP_OUT=/path/to/multica/apps/desktop/out npm run dev
 ```
 
-Packaged builds read the bundle from `<resources>/multica-desktop` and ignore the env var. Packaging that directory is not wired yet.
+For packaged builds, see [Package it](#package-it). Packaged apps read `<resources>/multica-desktop` and ignore `AO_MULTICA_DESKTOP_OUT` at run time.
 
 The Multica URL in Settings (default `http://localhost:3000`) feeds Multica's runtime config: a local or IP-address host uses its API on `:8080`, any other host uses `api.<host>`. Changing it reloads the Multica view.
+
+## Package it
+
+1. Build Multica's desktop output first with Node 24 and pnpm 10.28.2, from the Multica checkout:
+
+   ```bash
+   pnpm install --frozen-lockfile
+   pnpm --filter @multica/desktop exec electron-vite build
+   ```
+
+   Only `apps/desktop/out/renderer/` and `apps/desktop/out/preload/` are used. Do not use the full `build` script; it also bundles a CLI.
+
+2. From `frontend/`, package AO with the output path set at package time:
+
+   ```bash
+   AO_MULTICA_DESKTOP_OUT=/path/to/multica/apps/desktop/out npm run package -- --arch=arm64
+   ```
+
+   - Without Apple signing variables (`APPLE_SIGNING_IDENTITY`, `CSC_LINK`, `AO_NOTARY_PROFILE`, `APPLE_API_KEY`, and related settings), the app is unsigned.
+   - `npm run package` first runs the prepackage steps: Go 1.27.1+ daemon build, tmux built from source, agent-browser download, and ACP runtime. The Forge `prePackage` hook compiles the macOS update helper with `swiftc`. A cold cache therefore needs a Go toolchain, Xcode command line tools, and network access.
+   - The result is `frontend/out/Agent Orchestrator-darwin-arm64/Agent Orchestrator.app`.
+
+   - When `AO_MULTICA_DESKTOP_OUT` is set, Forge stages only `renderer/` and `preload/` into the git-ignored `frontend/multica-desktop/` directory, dereferences symlinks, excludes `.map` files, and ships the bundle as `Resources/multica-desktop`. Packaging fails with a clear error if `renderer/index.html` is missing or neither `preload/index.js` nor `preload/index.cjs` exists. `postPackage` re-checks the packaged resources on macOS and Linux. Without the variable, packaging is unchanged and the app has no Multica bundle.
+
+   - The same variable also adds an empty `Resources/ao-updates-disabled` marker before signing, so it is sealed into the app. A build with this marker never self-updates: it skips startup and periodic update checks; manual check and download answer `Updates are turned off in this build.`; install is a silent no-op and update-retry relaunch does nothing; update settings are not applied; the feature-build list is empty; and the startup desktop-version-floor check is skipped. This prevents the app from updating itself to the official release and losing the Multica UI.
+
+   - If the bundle folder is missing, or `renderer/index.html` or the preload entry (`preload/index.js` or `preload/index.cjs`) is missing, switching to Multica shows `Multica isn't bundled with this build` with no retry button instead of a generic connection error; other missing assets are not detected.
+
+   - On macOS only, a packaged AO started outside an Applications folder compares itself with `/Applications/<same app name>` ([`frontend/src/main/relocation.ts`](../src/main/relocation.ts)); `~/Applications` counts as an Applications folder, so there is no hand-off. If the installed copy is the same version or newer, AO opens that copy and quits. If there is no installed copy or it is older, AO offers to move itself into `/Applications`. If the installed version is unreadable or invalid, AO stays where it is and does nothing. Do not double-click the build output while an official AO is installed. The build version is read from `frontend/package.json` in the checkout it is packaged from.
+
+### Test it isolated
+
+1. Launch the executable inside the `.app` with a clean environment (`env -i`) so variables such as `AO_APP_RUN_ID`, `AO_RUN_FILE`, and `AO_DATA_DIR` from a calling AO session do not leak. **Required:** explicitly set `HOME`, `AO_RUN_FILE`, and a free `AO_PORT`; their defaults target the real AO. Replace the example paths with fresh, short temporary directories for this run.
+
+   ```bash
+   env -i \
+     HOME=/tmp/ao-multica-home \
+     AO_DATA_DIR=/tmp/ao-multica-home/data \
+     AO_RUN_FILE=/tmp/ao-multica-home/run/ao.json \
+     AO_PORT=43127 \
+     AO_TELEMETRY_EVENTS=off \
+     AO_TELEMETRY_REMOTE=off \
+     AO_SENTRY_DSN= \
+     TMUX_TMPDIR=/tmp/ao-multica-tmp \
+     TMPDIR=/tmp/ao-multica-tmp \
+     "/path/to/Agent Orchestrator.app/Contents/MacOS/agent-orchestrator" \
+     --remote-debugging-port=9222
+   ```
+
+2. Choose a free `AO_PORT` other than the default daemon port 3001, which could otherwise be probed and cause the real daemon to be shut down and replaced. `HOME` moves Electron `userData` (`~/.ao/electron`), `~/.ao`, and `~/.multica`; `TMUX_TMPDIR` is needed because the tmux socket name is fixed. The remote debugging port is optional. Create no terminal sessions and do not sign in to AO Cloud during this run.
+
+3. The relocation hand-off described above also applies to this run. This launch recipe, without a way around that hand-off, has only been verified up to the hand-off.
 
 ## What is real and what is a stub
 
@@ -48,6 +100,9 @@ The WebSocket is different: the handshake carries `Origin: file://`, and a Multi
 
 ## Known gaps
 
+- No updater for this build, by design.
+- Windows packaging of the Multica bundle is not verified; the `postPackage` resource check runs on macOS and Linux only.
+- A build is only as new as the AO base it was packaged from.
 - Windows: AO's frameless window has no native controls under the Multica view.
 - Not verified: macOS traffic-light placement and drag regions with real mouse input, and Electron 33 against Multica's screens beyond sign-in, onboarding and the empty workspace.
 - No CLI install or update, no auto-start, and no issue windows.
