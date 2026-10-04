@@ -793,6 +793,8 @@
 	"multica.error.retry": "다시 시도",
 	"multica.error.title": "Multica에 연결할 수 없습니다",
 	"multica.loading": "Multica 불러오는 중…",
+	"multica.notBundled.body": "이 Agent Orchestrator 빌드에는 Multica 데스크톱 UI가 포함되어 있지 않습니다. Multica가 포함된 빌드를 설치하거나 소스에서 실행하고 AO_MULTICA_DESKTOP_OUT을 Multica 데스크톱 빌드 경로로 설정하세요.",
+	"multica.notBundled.title": "이 빌드에는 Multica가 포함되어 있지 않습니다",
 	"multica.settings.invalidUrl": "올바른 http:// 또는 https:// 주소를 입력하세요.",
 	"multica.settings.notSet": "설정 안 됨",
 	"multica.settings.saveFailed": "Multica URL을 저장하지 못했습니다.",

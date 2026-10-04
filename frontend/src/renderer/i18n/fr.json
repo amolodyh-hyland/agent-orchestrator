@@ -800,6 +800,8 @@
 	"multica.error.retry": "Réessayer",
 	"multica.error.title": "Impossible de joindre Multica",
 	"multica.loading": "Chargement de Multica…",
+	"multica.notBundled.body": "Cette version d’Agent Orchestrator a été compilée sans l’interface de bureau de Multica. Installez une version qui l’inclut, ou lancez l’application depuis les sources en faisant pointer AO_MULTICA_DESKTOP_OUT vers une version de bureau de Multica.",
+	"multica.notBundled.title": "Multica n’est pas inclus dans cette version",
 	"multica.settings.invalidUrl": "Saisissez une adresse http:// ou https:// valide.",
 	"multica.settings.notSet": "Non défini",
 	"multica.settings.saveFailed": "Impossible d'enregistrer l'URL de Multica.",
