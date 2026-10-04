@@ -22,6 +22,7 @@ import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./external-o
 import type { MulticaDaemonService } from "./multica-daemon-cli";
 import { createMulticaDesktopBridge, type MulticaAppInfo, type MulticaDesktopBridge } from "./multica-desktop-bridge";
 import type { MulticaDesktopBundle } from "./multica-desktop-bundle";
+import type { MulticaInboxTarget, MulticaNotifications } from "./multica-notifications";
 
 const CLOSE_ACTIVE_TAB_CHANNEL = "tab:close-active";
 const BUNDLE_MISSING_MESSAGE = "Multica desktop bundle not found. Build it and set AO_MULTICA_DESKTOP_OUT.";
@@ -54,6 +55,8 @@ export type MulticaViewHostOptions = {
 	/** BCP 47 locale handed to the renderer (its `desktopAPI.systemLocale`). */
 	locale: string;
 	appInfo: MulticaAppInfo;
+	/** Handles Multica's notification, auth-session and badge messages; the host resets it when the view is torn down. */
+	notifications: MulticaNotifications;
 	hostName: () => string;
 	/** Builds the daemon service for a new view; `emit` pushes messages to that view. */
 	createDaemonService: (emit: (channel: string, payload: unknown) => void) => MulticaDaemonService;
@@ -63,10 +66,14 @@ export type MulticaViewHostOptions = {
 
 export type MulticaViewHost = {
 	getState: () => MulticaViewState;
+	/** True while the Multica view covers the AO window. */
+	isShown: () => boolean;
 	setActive: (active: boolean) => void;
 	toggle: () => void;
 	/** Routes a `multica://` deep link to the view and surfaces it. False when ignored. */
 	handleDeepLink: (url: string) => boolean;
+	/** Surfaces Multica and asks its renderer to open an inbox item. False when ignored (no Multica URL, no view). */
+	openInboxItem: (target: MulticaInboxTarget) => boolean;
 	dispose: () => void;
 };
 
@@ -181,6 +188,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 			getAppInfo: () => options.appInfo,
 			getRuntimeConfig: () => multicaRuntimeConfig(url),
 			getHostName: options.hostName,
+			notifications: options.notifications,
 			daemon: options.createDaemonService((channel, payload) => {
 				if (!contents.isDestroyed()) contents.send(channel, payload);
 			}),
@@ -263,6 +271,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 		bridge?.dispose();
 		bridge = undefined;
 		if (!current) return;
+		options.notifications.reset();
 		try {
 			mainWindow.contentView.removeChildView(current as unknown as WebContentsView);
 		} catch {
@@ -295,6 +304,9 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 			destroyView();
 			setStatus("unconfigured");
 		} else if (view || active) {
+			// The old server's banners and queued navigation must not reach the new server's renderer.
+			options.notifications.reset();
+			bridge?.clearPending("inbox:open");
 			// The runtime config is read when the page's preload runs, so a URL
 			// change needs a fresh page load.
 			load();
@@ -350,6 +362,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 
 	return {
 		getState,
+		isShown: () => shown,
 		setActive,
 		toggle: () => setActive(!active),
 		handleDeepLink: (rawUrl) => {
@@ -359,6 +372,13 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 			setActive(true);
 			if (!bridge) return false;
 			bridge.dispatch(link.channel, link.payload);
+			return true;
+		},
+		openInboxItem: (target) => {
+			if (!url) return false;
+			setActive(true);
+			if (!bridge) return false;
+			bridge.dispatch("inbox:open", target);
 			return true;
 		},
 		dispose: () => {

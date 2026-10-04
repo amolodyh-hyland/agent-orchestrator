@@ -58,6 +58,12 @@ function setup(overrides: Partial<MulticaDesktopBridgeOptions> = {}) {
 	const openExternal = vi.fn(async (_url: string) => undefined);
 	const send = vi.fn();
 	const daemon = fakeDaemon();
+	const notificationFakes = {
+		showNotification: vi.fn(),
+		reportAuthSession: vi.fn(() => false),
+		setBadge: vi.fn(),
+	};
+	const notifications = overrides.notifications ?? notificationFakes;
 	const bridge = createMulticaDesktopBridge({
 		daemon,
 		ipc,
@@ -70,9 +76,10 @@ function setup(overrides: Partial<MulticaDesktopBridgeOptions> = {}) {
 		getHostName: () => "dev-box",
 		openExternal,
 		send,
+		notifications,
 		...overrides,
 	} as unknown as MulticaDesktopBridgeOptions);
-	return { bridge, ipc, openExternal, send, daemon };
+	return { bridge, ipc, openExternal, send, daemon, notifications, notificationFakes };
 }
 
 describe("multica desktop bridge: synchronous channels", () => {
@@ -165,6 +172,44 @@ describe("multica desktop bridge: daemon", () => {
 	});
 });
 
+describe("multica desktop bridge: notifications", () => {
+	const messages = [
+		{ channel: "notification:show", method: "showNotification", value: { itemId: "i1" } },
+		{ channel: "auth:session-state", method: "reportAuthSession", value: "user-1" },
+		{ channel: "badge:set", method: "setBadge", value: 4 },
+	] as const;
+
+	it.each(messages)("forwards $channel from the Multica view", ({ channel, method, value }) => {
+		const { ipc, notifications } = setup();
+
+		ipc.send(channel, MULTICA, value);
+
+		expect(notifications[method]).toHaveBeenCalledExactlyOnceWith(value);
+	});
+
+	it.each(messages)("ignores $channel from any other sender", ({ channel, method, value }) => {
+		const { ipc, notifications } = setup();
+
+		ipc.send(channel, STRANGER, value);
+
+		expect(notifications[method]).not.toHaveBeenCalled();
+	});
+
+	it.each(messages)("removes the $channel listener when disposed", ({ channel, method, value }) => {
+		const { bridge, ipc, notifications } = setup();
+
+		bridge.dispose();
+		ipc.send(channel, MULTICA, value);
+
+		expect(ipc.listeners.get(channel)?.size).toBe(0);
+		expect(notifications[method]).not.toHaveBeenCalled();
+	});
+
+	it("keeps notification channels in the Multica allowlist", () => {
+		expect(multicaBridgeChannels()).toEqual(expect.arrayContaining(["auth:session-state", "notification:show", "badge:set"]));
+	});
+});
+
 describe("multica desktop bridge: stubs and sender scoping", () => {
 	const stubs: Array<[string, unknown[], unknown]> = [
 		["file:download-url", ["https://x"], undefined],
@@ -225,6 +270,68 @@ describe("multica desktop bridge: stubs and sender scoping", () => {
 });
 
 describe("multica desktop bridge: main-to-renderer messages", () => {
+	it("drops a queued inbox click after the auth report invalidates the session", () => {
+		const { bridge, ipc, send, notificationFakes } = setup();
+		notificationFakes.reportAuthSession.mockReturnValue(true);
+
+		bridge.dispatch("inbox:open", { itemId: "i1" });
+		ipc.send("auth:session-state", MULTICA, "user-1");
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "inbox:open", ready: true });
+
+		expect(notificationFakes.reportAuthSession).toHaveBeenCalledExactlyOnceWith("user-1");
+		expect(send).not.toHaveBeenCalled();
+	});
+
+	it("delivers a queued inbox click when the auth report keeps the session valid", () => {
+		const { bridge, ipc, send, notificationFakes } = setup();
+
+		bridge.dispatch("inbox:open", { itemId: "i1" });
+		ipc.send("auth:session-state", MULTICA, "user-1");
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "inbox:open", ready: true });
+
+		expect(notificationFakes.reportAuthSession).toHaveBeenCalledExactlyOnceWith("user-1");
+		expect(send).toHaveBeenCalledExactlyOnceWith("inbox:open", { itemId: "i1" });
+	});
+
+	it("clears only the queued inbox click when the auth report invalidates the session", () => {
+		const { bridge, ipc, send, notificationFakes } = setup();
+		notificationFakes.reportAuthSession.mockReturnValue(true);
+
+		bridge.dispatch("inbox:open", { itemId: "i1" });
+		bridge.dispatch("auth:token", "token-1");
+		ipc.send("auth:session-state", MULTICA, "user-1");
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "inbox:open", ready: true });
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "auth:token", ready: true });
+
+		expect(send).toHaveBeenCalledExactlyOnceWith("auth:token", "token-1");
+	});
+
+	it("clears pending messages for only the requested channel", () => {
+		const { bridge, ipc, send } = setup();
+
+		bridge.dispatch("inbox:open", { itemId: "i1" });
+		bridge.dispatch("auth:token", "token-1");
+		bridge.clearPending("inbox:open");
+
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "inbox:open", ready: true });
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "auth:token", ready: true });
+
+		expect(send).toHaveBeenCalledExactlyOnceWith("auth:token", "token-1");
+		expect(() => bridge.clearPending("unknown:channel")).not.toThrow();
+	});
+
+	it("keeps a queued inbox click when another sender reports auth state", () => {
+		const { bridge, ipc, send, notificationFakes } = setup();
+		notificationFakes.reportAuthSession.mockReturnValue(true);
+
+		bridge.dispatch("inbox:open", { itemId: "i1" });
+		ipc.send("auth:session-state", STRANGER, "user-1");
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "inbox:open", ready: true });
+
+		expect(notificationFakes.reportAuthSession).not.toHaveBeenCalled();
+		expect(send).toHaveBeenCalledExactlyOnceWith("inbox:open", { itemId: "i1" });
+	});
+
 	it("holds a message until the renderer announces its listener, then delivers it once", () => {
 		const { bridge, ipc, send } = setup();
 
