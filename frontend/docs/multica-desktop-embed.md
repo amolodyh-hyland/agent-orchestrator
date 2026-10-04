@@ -45,6 +45,36 @@ An AO session can be linked to Multica issues. Nothing changes in the Multica re
 - Not verified: behavior against a signed-in Multica server and the pill's position over Multica's UI. Verified in an Electron 33 probe: title events for page-initiated changes, `executeJavaScript` in the page main world, the pill rendering, and a click reaching the window-open handler.
 - Limits: lookups from the Multica page match on the identifier alone, so two workspaces with the same prefix would share links; the pill label is English only.
 
+## Send to AO
+
+The AO pill on every Multica issue page has a "Send to AO" button. It opens a dialog in AO's shell
+where the user chooses an AO project and optionally an agent (the project's worker agent is the
+default). AO creates a worker session seeded with the issue, links it to the issue, and opens it.
+
+- Reading: main runs one async script in the Multica page with `webContents.executeJavaScript`
+  (`main/multica-issue-reader.ts`). The script reads `localStorage.multica_token` and
+  `multica_tabs.state.activeWorkspaceSlug`, then calls `GET <apiOrigin>/api/issues/<IDENT>` with
+  `Authorization: Bearer` and `X-Workspace-Slug`. Only issue JSON fields return to main; the token
+  stays in the page. As with issue links, the identifier comes from the page title.
+- Multica internals that can change: `multica_token`, `multica_tabs` (zustand persist,
+  `state.activeWorkspaceSlug`), `/api/issues/<IDENT>`, and the issue page title format.
+- Request: `ao://multica/send-issue` carries no data and is handled by
+  `multica-issue-link-service.ts`. Any page script can trigger it, but it only opens the dialog;
+  session creation always requires a click in AO.
+- Creation: the renderer sends `POST /api/v1/sessions` with `kind: worker`, `projectId`, optional
+  `harness`, `prompt`, and `displayName`. It does not send `issueId`; that field is for GitHub and
+  GitLab trackers.
+- The prompt in `shared/multica-send-to-ao.ts` holds the title, identifier, link, and description
+  in an escaped JSON block marked untrusted. It is limited to 16000 bytes; AO rejects prompts
+  above 16 KiB.
+- The dialog reports signed out, no issue open, or could not read the issue (including unknown
+  workspace, network, and timeout errors). There is no title-only fallback because the workspace
+  slug is required to link the issue.
+- Live linked sessions for the same issue are listed as duplicates; the user can still choose
+  "Send anyway".
+- Not verified: behavior against a signed-in live Multica server, pill placement, and localization
+  of the pill label (main uses English literals).
+
 ## Security model
 
 Multica's preload is attached to the Multica view only, in its own persistent partition (`persist:ao-multica`), with sandbox and context isolation on, every web permission denied, and main-frame navigation pinned to the built bundle (anything else goes to the system browser).

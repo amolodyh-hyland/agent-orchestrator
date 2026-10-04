@@ -7,8 +7,8 @@ import {
 
 const originalHtmlChildren = Array.from(document.documentElement.children);
 
-function evaluatePill(entries: { label: string; url: string }[]): unknown {
-	return new Function(buildLinkedSessionsPillScript(entries))();
+function evaluatePill(entries: { label: string; url: string }[], options?: { sendUrl?: string }): unknown {
+	return new Function(buildLinkedSessionsPillScript(entries, options))();
 }
 
 afterEach(() => {
@@ -36,6 +36,112 @@ describe("multica linked sessions pill", () => {
 		expect(pill?.parentElement).not.toBe(document.body);
 		expect(buttons).toHaveLength(2);
 		expect(Array.from(buttons ?? [], (button) => button.textContent)).toEqual(["AO · Build API", "AO · Fix tests"]);
+	});
+
+	it("renders and opens Send to AO when there are no linked sessions", () => {
+		const open = vi.spyOn(window, "open").mockImplementation(() => null);
+		const sendUrl = "ao://multica/send-issue";
+		evaluatePill([], { sendUrl });
+
+		const pills = document.querySelectorAll(`#${MULTICA_LINKED_SESSIONS_PILL_ID}`);
+		const shadow = pills[0]?.shadowRoot;
+		const buttons = shadow?.querySelectorAll("button");
+		const button = buttons?.[0];
+		expect(pills).toHaveLength(1);
+		expect(shadow).not.toBeNull();
+		expect(buttons).toHaveLength(1);
+		expect(button?.textContent).toBe("Send to AO");
+		expect(button?.getAttribute("title")).toBe("Create an AO session for this issue");
+		expect(button?.getAttribute("class")).toBe("ao-send-to-ao");
+
+		button?.click();
+
+		expect(open).toHaveBeenCalledExactlyOnceWith(sendUrl);
+	});
+
+	it("renders Send to AO before linked sessions without changing their URLs", () => {
+		const open = vi.spyOn(window, "open").mockImplementation(() => null);
+		evaluatePill(
+			[
+				{ label: "Build API", url: "ao://sessions/project/build-api" },
+				{ label: "Fix tests", url: "ao://sessions/project/fix-tests" },
+			],
+			{ sendUrl: "ao://multica/send-issue" },
+		);
+
+		const shadow = document.getElementById(MULTICA_LINKED_SESSIONS_PILL_ID)?.shadowRoot;
+		const buttons = Array.from(shadow?.querySelectorAll("button") ?? []);
+		expect(buttons).toHaveLength(3);
+		expect(buttons.map((button) => button.textContent)).toEqual([
+			"Send to AO",
+			"AO · Build API",
+			"AO · Fix tests",
+		]);
+		expect(shadow?.querySelector(".ao-linked-sessions-more")).toBeNull();
+
+		buttons.forEach((button) => button.click());
+
+		expect(open.mock.calls).toEqual([
+			["ao://multica/send-issue"],
+			["ao://sessions/project/build-api"],
+			["ao://sessions/project/fix-tests"],
+		]);
+	});
+
+	it("keeps the session cap and overflow count independent of Send to AO", () => {
+		const entries = Array.from({ length: MAX_PILL_ENTRIES + 2 }, (_, index) => ({
+			label: `Session ${index + 1}`,
+			url: `ao://sessions/project/session-${index + 1}`,
+		}));
+		evaluatePill(entries, { sendUrl: "ao://multica/send-issue" });
+
+		const shadow = document.getElementById(MULTICA_LINKED_SESSIONS_PILL_ID)?.shadowRoot;
+		const buttons = shadow?.querySelectorAll("button");
+		expect(buttons).toHaveLength(MAX_PILL_ENTRIES + 1);
+		expect(buttons?.[0]?.textContent).toBe("Send to AO");
+		expect(shadow?.querySelector(".ao-linked-sessions-more")?.textContent).toBe("+2");
+	});
+
+	it("does not render Send to AO without a non-empty send URL", () => {
+		evaluatePill([{ label: "Build API", url: "ao://sessions/project/build-api" }], { sendUrl: "" });
+
+		const buttons = document
+			.getElementById(MULTICA_LINKED_SESSIONS_PILL_ID)
+			?.shadowRoot?.querySelectorAll("button");
+		expect(buttons).toHaveLength(1);
+		expect(buttons?.[0]?.classList.contains("ao-send-to-ao")).toBe(false);
+	});
+
+	it("replaces an existing pill when evaluated with Send to AO", () => {
+		evaluatePill([{ label: "Original", url: "ao://sessions/project/original" }]);
+		const originalPill = document.getElementById(MULTICA_LINKED_SESSIONS_PILL_ID);
+
+		evaluatePill([], { sendUrl: "ao://multica/send-issue" });
+
+		const pills = document.querySelectorAll(`#${MULTICA_LINKED_SESSIONS_PILL_ID}`);
+		expect(pills).toHaveLength(1);
+		expect(pills[0]).not.toBe(originalPill);
+		expect(pills[0]?.shadowRoot?.querySelector("button")?.textContent).toBe("Send to AO");
+	});
+
+	it("keeps script-like send URLs and labels inert", () => {
+		const open = vi.spyOn(window, "open").mockImplementation(() => null);
+		const label = '<img src=x onerror=alert(1)> "quoted"';
+		const sendUrl = 'ao://multica/send-issue/<img src=x onerror=alert(1)>?value="quoted"';
+		evaluatePill([{ label, url: "ao://sessions/project/session" }], { sendUrl });
+
+		const shadow = document.getElementById(MULTICA_LINKED_SESSIONS_PILL_ID)?.shadowRoot;
+		const buttons = shadow?.querySelectorAll("button");
+		expect(Array.from(buttons ?? [], (button) => button.textContent)).toEqual([
+			"Send to AO",
+			`AO · ${label}`,
+		]);
+		expect(buttons?.[1]?.getAttribute("title")).toBe(`Open AO session ${label}`);
+		expect(shadow?.querySelector("img")).toBeNull();
+
+		buttons?.[0]?.click();
+
+		expect(open).toHaveBeenCalledExactlyOnceWith(sendUrl);
 	});
 
 	it("replaces an existing pill when evaluated again", () => {

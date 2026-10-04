@@ -326,6 +326,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onChanged: () => unsubscribe,
 					onOpenSession: () => unsubscribe,
 				},
+				multicaSend: { onRequest: () => unsubscribe },
 				keybindings: {
 					get: async () => ({}),
 					set: async (overrides) => overrides,
@@ -1206,6 +1207,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onChanged: () => unsubscribe,
 					onOpenSession: () => unsubscribe,
 				},
+				multicaSend: { onRequest: () => unsubscribe },
 				keybindings: {
 					get: async () => ({}),
 					set: async (overrides) => overrides,
