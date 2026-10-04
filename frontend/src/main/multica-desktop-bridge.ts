@@ -50,6 +50,8 @@ export type MulticaDesktopBridgeOptions = {
 export type MulticaDesktopBridge = {
 	/** Sends now when the renderer subscribed to the channel, otherwise holds it until it does. */
 	dispatch: (channel: string, payload: unknown) => void;
+	/** Runs `callback` now when the renderer already subscribed to `channel`, otherwise once it does (once only). */
+	whenReady: (channel: string, callback: () => void) => void;
 	/** A page load drops every renderer subscription, so readiness must be re-announced. */
 	resetReadiness: () => void;
 	dispose: () => void;
@@ -138,6 +140,7 @@ export function multicaBridgeChannels(): string[] {
 export function createMulticaDesktopBridge(options: MulticaDesktopBridgeOptions): MulticaDesktopBridge {
 	const ready = new Set<string>();
 	const pending = new Map<string, unknown[]>();
+	const waiting = new Map<string, Array<() => void>>();
 
 	const syncReplies: SyncReplies = {
 		"app:get-info": options.getAppInfo,
@@ -191,6 +194,14 @@ export function createMulticaDesktopBridge(options: MulticaDesktopBridgeOptions)
 		ready.add(channel);
 		for (const payload of pending.get(channel) ?? []) options.send(channel, payload);
 		pending.delete(channel);
+		for (const callback of waiting.get(channel) ?? []) {
+			try {
+				callback();
+			} catch {
+				// Ignore one callback failure so the rest can run.
+			}
+		}
+		waiting.delete(channel);
 	};
 
 	const handlers: Array<[string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown]> = [
@@ -225,6 +236,15 @@ export function createMulticaDesktopBridge(options: MulticaDesktopBridgeOptions)
 			queue.push(payload);
 			pending.set(channel, queue.slice(-MAX_PENDING_PER_CHANNEL));
 		},
+		whenReady: (channel, callback) => {
+			if (ready.has(channel)) {
+				callback();
+				return;
+			}
+			const queue = waiting.get(channel) ?? [];
+			queue.push(callback);
+			waiting.set(channel, queue.slice(-MAX_PENDING_PER_CHANNEL));
+		},
 		resetReadiness: () => ready.clear(),
 		dispose: () => {
 			for (const [channel, listener] of [...syncListeners, ...noopListeners, ...logStreamListeners]) {
@@ -235,6 +255,7 @@ export function createMulticaDesktopBridge(options: MulticaDesktopBridgeOptions)
 			for (const [channel] of handlers) options.ipc.removeHandler(channel);
 			ready.clear();
 			pending.clear();
+			waiting.clear();
 		},
 	};
 }

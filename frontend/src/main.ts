@@ -175,6 +175,8 @@ import { readMulticaSettings, writeMulticaUrl } from "./main/multica-settings";
 import { createMulticaDaemonService, findMulticaBinary } from "./main/multica-daemon-cli";
 import { multicaBridgeChannels } from "./main/multica-desktop-bridge";
 import { resolveMulticaDesktopBundle } from "./main/multica-desktop-bundle";
+import { createMulticaIssueLinkService, type MulticaIssueLinkService } from "./main/multica-issue-link-service";
+import { createMulticaIssueLinkStore } from "./main/multica-issue-links";
 import { writeMulticaIpcJail } from "./main/multica-ipc-jail";
 import { createMulticaViewHost, type MulticaViewHost } from "./main/multica-view-host";
 import { ancestorRepositorySetupWarning, resolveCheckedOutBranch, scanImportFolder } from "./main/import-folder-scan";
@@ -317,6 +319,7 @@ let daemonStatus: DaemonStatus = { state: "stopped" };
 let daemonOutput = "";
 let browserViewHost: BrowserViewHost | null = null;
 let multicaViewHost: MulticaViewHost | null = null;
+let multicaIssueLinkService: MulticaIssueLinkService | null = null;
 let browserProfileIpc: BrowserProfileIpc | null = null;
 let browserProfileImporter: BrowserProfileImportService | null = null;
 let windowComposition: WindowComposition | null = null;
@@ -829,6 +832,12 @@ async function createWindowInternal(): Promise<void> {
 	if (daemonStatus.state === "ready") establishBrowserRuntimeLink();
 
 	// Registered before the renderer loads: the shell queries its state on mount.
+	multicaIssueLinkService = createMulticaIssueLinkService({
+		ipcMain,
+		shellWebContents,
+		store: createMulticaIssueLinkStore(browserProfileStateDir()),
+		getHost: () => multicaViewHost ?? undefined,
+	});
 	multicaViewHost = await createMulticaViewHost({
 		mainWindow,
 		shellWebContents,
@@ -868,6 +877,8 @@ async function createWindowInternal(): Promise<void> {
 					}),
 				logPath: path.join(os.homedir(), ".multica", "daemon.log"),
 			}),
+		onPageTitleChange: (title) => multicaIssueLinkService?.handlePageTitle(title),
+		onAoSessionLink: (url) => multicaIssueLinkService?.handleAoSessionLink(url) ?? false,
 		// Multica's header is laid out around its own traffic-light position.
 		onTakeover: (takenOver) => {
 			multicaTakenOver = takenOver;
@@ -935,6 +946,8 @@ async function createWindowInternal(): Promise<void> {
 		if (windowComposition === composition) windowComposition = null;
 		multicaViewHost?.dispose();
 		multicaViewHost = null;
+		multicaIssueLinkService?.dispose();
+		multicaIssueLinkService = null;
 		void disposeBrowserViewHost()
 			.finally(() => {
 				composition.dispose();

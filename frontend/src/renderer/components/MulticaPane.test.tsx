@@ -7,6 +7,7 @@ import { useUiStore } from "../stores/ui-store";
 import { MulticaPane } from "./MulticaPane";
 
 const router = vi.hoisted(() => ({ pathname: "/" }));
+const navigation = vi.hoisted(() => ({ navigateToSession: vi.fn() }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@tanstack/react-router")>();
@@ -17,13 +18,18 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 	};
 });
 
+vi.mock("../lib/navigate-to-session", () => ({ useNavigateToSession: () => navigation.navigateToSession }));
+
 const URL = "http://localhost:3000/";
 type Bridge = NonNullable<typeof window.ao>;
 
 describe("MulticaPane", () => {
 	let originalMultica: Bridge["multica"];
+	let originalMulticaLinks: Bridge["multicaLinks"];
 	let toggleListener: (() => void) | undefined;
 	let removeToggleListener: ReturnType<typeof vi.fn>;
+	let openSessionListener: ((target: { projectId: string; sessionId: string }) => void) | undefined;
+	let removeOpenSessionListener: ReturnType<typeof vi.fn>;
 	let current: MulticaViewState;
 
 	function showView(view: MulticaViewState) {
@@ -34,7 +40,11 @@ describe("MulticaPane", () => {
 	beforeEach(() => {
 		router.pathname = "/";
 		originalMultica = { ...window.ao!.multica };
+		originalMulticaLinks = { ...window.ao!.multicaLinks };
 		removeToggleListener = vi.fn();
+		removeOpenSessionListener = vi.fn();
+		openSessionListener = undefined;
+		navigation.navigateToSession.mockReset();
 		toggleListener = undefined;
 		current = { active: false, status: "unconfigured", url: "" };
 		window.ao!.multica.getState = vi.fn(async () => current);
@@ -44,11 +54,16 @@ describe("MulticaPane", () => {
 			toggleListener = listener;
 			return removeToggleListener as unknown as () => void;
 		});
+		window.ao!.multicaLinks.onOpenSession = vi.fn((listener: (target: { projectId: string; sessionId: string }) => void) => {
+			openSessionListener = listener;
+			return removeOpenSessionListener as unknown as () => void;
+		});
 		showView(current);
 	});
 
 	afterEach(() => {
 		Object.assign(window.ao!.multica, originalMultica);
+		Object.assign(window.ao!.multicaLinks, originalMulticaLinks);
 		useUiStore.getState().closeSettings();
 	});
 
@@ -115,6 +130,15 @@ describe("MulticaPane", () => {
 		const { unmount } = render(<MulticaPane />);
 		unmount();
 		expect(removeToggleListener).toHaveBeenCalledOnce();
+	});
+
+	it("navigates to sessions opened from Multica and unsubscribes on unmount", () => {
+		const { unmount } = render(<MulticaPane />);
+		act(() => openSessionListener?.({ projectId: "p", sessionId: "s" }));
+
+		expect(navigation.navigateToSession).toHaveBeenCalledExactlyOnceWith("p", "s");
+		unmount();
+		expect(removeOpenSessionListener).toHaveBeenCalledOnce();
 	});
 
 	it("returns to AO when the user navigates inside AO", () => {
