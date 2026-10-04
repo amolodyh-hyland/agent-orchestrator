@@ -1,13 +1,16 @@
 import { act, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MulticaViewState } from "../../shared/multica";
+import type { MulticaSendRequest } from "../../shared/multica-send-to-ao";
 import { useMulticaStore } from "../stores/multica-store";
 import { useUiStore } from "../stores/ui-store";
 import { MulticaPane } from "./MulticaPane";
 
 const router = vi.hoisted(() => ({ pathname: "/" }));
 const navigation = vi.hoisted(() => ({ navigateToSession: vi.fn() }));
+let sendRequestListener: ((request: MulticaSendRequest) => void) | undefined;
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@tanstack/react-router")>();
@@ -19,6 +22,8 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 });
 
 vi.mock("../lib/navigate-to-session", () => ({ useNavigateToSession: () => navigation.navigateToSession }));
+vi.mock("../hooks/useWorkspaceQuery", () => ({ useWorkspaceQuery: () => ({ data: [] }), workspaceQueryKey: ["workspaces"] }));
+vi.mock("../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: [] } }) }));
 
 const URL = "http://localhost:3000/";
 type Bridge = NonNullable<typeof window.ao>;
@@ -26,11 +31,18 @@ type Bridge = NonNullable<typeof window.ao>;
 describe("MulticaPane", () => {
 	let originalMultica: Bridge["multica"];
 	let originalMulticaLinks: Bridge["multicaLinks"];
+	let originalMulticaSend: Bridge["multicaSend"];
 	let toggleListener: (() => void) | undefined;
 	let removeToggleListener: ReturnType<typeof vi.fn>;
 	let openSessionListener: ((target: { projectId: string; sessionId: string }) => void) | undefined;
 	let removeOpenSessionListener: ReturnType<typeof vi.fn>;
+	let removeSendListener: ReturnType<typeof vi.fn>;
 	let current: MulticaViewState;
+
+	function renderPane() {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		return { ...render(<QueryClientProvider client={queryClient}><MulticaPane /></QueryClientProvider>), queryClient };
+	}
 
 	function showView(view: MulticaViewState) {
 		current = view;
@@ -41,8 +53,11 @@ describe("MulticaPane", () => {
 		router.pathname = "/";
 		originalMultica = { ...window.ao!.multica };
 		originalMulticaLinks = { ...window.ao!.multicaLinks };
+		originalMulticaSend = { ...window.ao!.multicaSend };
 		removeToggleListener = vi.fn();
 		removeOpenSessionListener = vi.fn();
+		removeSendListener = vi.fn();
+		sendRequestListener = undefined;
 		openSessionListener = undefined;
 		navigation.navigateToSession.mockReset();
 		toggleListener = undefined;
@@ -58,24 +73,29 @@ describe("MulticaPane", () => {
 			openSessionListener = listener;
 			return removeOpenSessionListener as unknown as () => void;
 		});
+		window.ao!.multicaSend.onRequest = vi.fn((listener) => {
+			sendRequestListener = listener;
+			return removeSendListener as unknown as () => void;
+		});
 		showView(current);
 	});
 
 	afterEach(() => {
 		Object.assign(window.ao!.multica, originalMultica);
 		Object.assign(window.ao!.multicaLinks, originalMulticaLinks);
+		Object.assign(window.ao!.multicaSend, originalMulticaSend);
 		useUiStore.getState().closeSettings();
 	});
 
 	it("renders nothing while AO is the active view", () => {
 		showView({ active: false, status: "ready", url: URL });
-		render(<MulticaPane />);
+		renderPane();
 		expect(screen.queryByTestId("multica-pane")).not.toBeInTheDocument();
 	});
 
 	it("shows a clear empty state with a way to settings when no URL is set", async () => {
 		showView({ active: true, status: "unconfigured", url: "" });
-		render(<MulticaPane />);
+		renderPane();
 
 		expect(screen.getByText("Multica URL is not set")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Open settings" }));
@@ -85,13 +105,13 @@ describe("MulticaPane", () => {
 
 	it("shows a loading state while the page loads", () => {
 		showView({ active: true, status: "loading", url: URL });
-		render(<MulticaPane />);
+		renderPane();
 		expect(screen.getByText("Loading Multica…")).toBeInTheDocument();
 	});
 
 	it("shows the unreachable server and lets the user retry", async () => {
 		showView({ active: true, status: "error", url: URL, error: "ERR_CONNECTION_REFUSED" });
-		render(<MulticaPane />);
+		renderPane();
 
 		expect(screen.getByText("Can't reach Multica")).toBeInTheDocument();
 		expect(screen.getByText(`Check that the Multica server is running at ${URL}, then try again.`)).toBeInTheDocument();
@@ -102,7 +122,7 @@ describe("MulticaPane", () => {
 
 	it("renders no status message while the page is live, since the view covers the window", () => {
 		showView({ active: true, status: "ready", url: URL });
-		render(<MulticaPane />);
+		renderPane();
 
 		expect(screen.queryByText("Can't reach Multica")).not.toBeInTheDocument();
 		expect(screen.queryByText("Loading Multica…")).not.toBeInTheDocument();
@@ -110,12 +130,12 @@ describe("MulticaPane", () => {
 
 	it("shows why the page could not be loaded", () => {
 		showView({ active: true, status: "error", url: URL, error: "Multica desktop bundle not found." });
-		render(<MulticaPane />);
+		renderPane();
 		expect(screen.getByText("Multica desktop bundle not found.")).toBeInTheDocument();
 	});
 
 	it("switches with the keyboard shortcut, in both directions", () => {
-		render(<MulticaPane />);
+		renderPane();
 		expect(toggleListener).toBeDefined();
 
 		act(() => toggleListener?.());
@@ -127,13 +147,13 @@ describe("MulticaPane", () => {
 	});
 
 	it("stops listening for the shortcut when unmounted", () => {
-		const { unmount } = render(<MulticaPane />);
+		const { unmount } = renderPane();
 		unmount();
 		expect(removeToggleListener).toHaveBeenCalledOnce();
 	});
 
 	it("navigates to sessions opened from Multica and unsubscribes on unmount", () => {
-		const { unmount } = render(<MulticaPane />);
+		const { unmount } = renderPane();
 		act(() => openSessionListener?.({ projectId: "p", sessionId: "s" }));
 
 		expect(navigation.navigateToSession).toHaveBeenCalledExactlyOnceWith("p", "s");
@@ -143,21 +163,29 @@ describe("MulticaPane", () => {
 
 	it("returns to AO when the user navigates inside AO", () => {
 		showView({ active: true, status: "ready", url: URL });
-		const { rerender } = render(<MulticaPane />);
+		const { rerender, queryClient } = renderPane();
 		expect(window.ao!.multica.setActive).not.toHaveBeenCalled();
 
 		router.pathname = "/sessions/abc";
-		rerender(<MulticaPane />);
+		rerender(<QueryClientProvider client={queryClient}><MulticaPane /></QueryClientProvider>);
 
 		expect(window.ao!.multica.setActive).toHaveBeenCalledExactlyOnceWith(false);
 	});
 
 	it("does not message the main process on navigation while AO is showing", () => {
-		const { rerender } = render(<MulticaPane />);
+		const { rerender, queryClient } = renderPane();
 
 		router.pathname = "/sessions/abc";
-		rerender(<MulticaPane />);
+		rerender(<QueryClientProvider client={queryClient}><MulticaPane /></QueryClientProvider>);
 
 		expect(window.ao!.multica.setActive).not.toHaveBeenCalled();
+	});
+
+	it("mounts the Send to AO dialog and displays a request from the bridge", () => {
+		renderPane();
+		act(() => sendRequestListener?.({ ok: false, reason: "no_issue" }));
+
+		expect(screen.getByRole("heading", { name: "Send to AO" })).toBeInTheDocument();
+		expect(screen.getByRole("alert")).toHaveTextContent("Open a Multica issue, then try again.");
 	});
 });

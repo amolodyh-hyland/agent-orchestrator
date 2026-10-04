@@ -80,6 +80,11 @@ import {
 	type MulticaIssueLinkRemoveRequest,
 	type MulticaOpenSessionTarget,
 } from "./shared/multica-issue-links";
+import {
+	MULTICA_SEND_REQUEST_CHANNEL,
+	isMulticaSendRequest,
+	type AoMulticaSendBridge,
+} from "./shared/multica-send-to-ao";
 import type { UpdateCheckOptions } from "./main/auto-updater";
 import type { FeatureBuild } from "./main/feature-builds";
 import {
@@ -740,6 +745,17 @@ const api = {
 			};
 		},
 	},
+	multicaSend: {
+		onRequest: (listener) => {
+			const wrapped = (_event: unknown, request: unknown) => {
+				if (isMulticaSendRequest(request)) listener(request);
+			};
+			ipcRenderer.on(MULTICA_SEND_REQUEST_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(MULTICA_SEND_REQUEST_CHANNEL, wrapped);
+			};
+		},
+	} satisfies AoMulticaSendBridge,
 	keybindings: {
 		get: () => ipcRenderer.invoke("keybindings:get") as Promise<KeybindingOverrides>,
 		set: (overrides: KeybindingOverrides) =>

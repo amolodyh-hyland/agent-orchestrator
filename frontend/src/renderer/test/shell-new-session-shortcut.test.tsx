@@ -170,6 +170,7 @@ vi.mock("../lib/bridge", () => ({
 		multicaLinks: {
 			onOpenSession: () => () => undefined,
 		},
+		multicaSend: { onRequest: () => () => undefined },
 		window: {},
 		tray: {
 			setAttentionState: () => undefined,

@@ -9,6 +9,7 @@ import {
 	MULTICA_LINKS_REMOVE_CHANNEL,
 	type MulticaIssueLink,
 } from "../shared/multica-issue-links";
+import { AO_SEND_ISSUE_URL, MULTICA_SEND_REQUEST_CHANNEL } from "../shared/multica-send-to-ao";
 import type { MulticaIssueLinkStore } from "./multica-issue-links";
 import { createMulticaIssueLinkService, type MulticaIssueLinkServiceOptions } from "./multica-issue-link-service";
 
@@ -58,6 +59,9 @@ async function setup(initial: MulticaIssueLink[] = [], withHost = true, initialL
 		navigatePath: vi.fn(() => true),
 		runInPage: vi.fn(),
 		setActive: vi.fn(),
+		evaluateInPage: vi.fn(async (_script: string) =>
+			JSON.stringify({ ok: true, workspaceSlug: "acme", issueIdentifier: "MUL-1", title: "Fix from page", description: "Description" }),
+		),
 	};
 	let current = [...initial];
 	let listCalls = 0;
@@ -87,6 +91,7 @@ async function setup(initial: MulticaIssueLink[] = [], withHost = true, initialL
 		shellWebContents: shell,
 		store,
 		getHost: () => currentHost,
+		readSettings: async () => ({ url: "https://multica.example.com" }),
 	} as unknown as MulticaIssueLinkServiceOptions);
 	await Promise.resolve();
 	host.runInPage.mockClear();
@@ -243,9 +248,21 @@ describe("multica issue link service: linked sessions pill", () => {
 		expect(t.host.runInPage.mock.calls[0][0]).not.toContain("ao://sessions/b/b-9");
 
 		t.service.handlePageTitle("MUL-3: Another issue");
-		expect(t.host.runInPage.mock.calls[1][0]).not.toContain("ao://");
+		expect(t.host.runInPage.mock.calls[1][0]).toContain(AO_SEND_ISSUE_URL);
+		expect(t.host.runInPage.mock.calls[1][0]).not.toContain("ao://sessions/");
 		t.service.handlePageTitle("Inbox");
 		expect(t.host.runInPage.mock.calls[2][0]).not.toContain("ao://");
+	});
+
+	it("offers Send to AO only on an issue page", async () => {
+		const t = await setup();
+
+		t.service.handlePageTitle("MUL-1: Fix");
+		expect(t.host.runInPage.mock.calls[0][0]).toContain(AO_SEND_ISSUE_URL);
+
+		t.service.handlePageTitle("Issue");
+		expect(t.host.runInPage.mock.calls[1][0]).not.toContain(AO_SEND_ISSUE_URL);
+		expect(t.host.runInPage.mock.calls[1][0]).not.toContain("ao://");
 	});
 
 	it("refreshes the pill after each add and remove on the current issue", async () => {
@@ -290,7 +307,7 @@ describe("multica issue link service: linked sessions pill", () => {
 
 		t.service.handlePageTitle("MUL-1: T");
 		expect(t.host.runInPage).toHaveBeenCalledTimes(1);
-		expect(t.host.runInPage.mock.calls[0][0]).not.toContain("ao://");
+		expect(t.host.runInPage.mock.calls[0][0]).toContain(AO_SEND_ISSUE_URL);
 
 		initialLoad.resolve([link({ sessionId: "late", projectId: "late" })]);
 		await initialLoad.promise;
@@ -358,6 +375,48 @@ describe("multica issue link service: AO session links", () => {
 	});
 });
 
+describe("multica issue link service: Send to AO", () => {
+	it("reads the current issue and sends one request to the shell", async () => {
+		const t = await setup();
+		t.service.handlePageTitle("MUL-1: Fix");
+
+		expect(t.service.handleAoSessionLink(AO_SEND_ISSUE_URL)).toBe(true);
+		await Promise.resolve();
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(t.host.evaluateInPage).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("MUL-1"));
+		expect(t.shell.send).toHaveBeenCalledExactlyOnceWith(MULTICA_SEND_REQUEST_CHANNEL, {
+			ok: true,
+			issue: {
+				workspaceSlug: "acme",
+				issueIdentifier: "MUL-1",
+				title: "Fix from page",
+				description: "Description",
+				url: "https://multica.example.com/acme/issues/MUL-1",
+			},
+		});
+	});
+
+	it("sends no_issue when there is no current issue", async () => {
+		const t = await setup();
+
+		expect(t.service.handleAoSessionLink(AO_SEND_ISSUE_URL)).toBe(true);
+
+		expect(t.host.evaluateInPage).not.toHaveBeenCalled();
+		expect(t.shell.send).toHaveBeenCalledExactlyOnceWith(MULTICA_SEND_REQUEST_CHANNEL, { ok: false, reason: "no_issue" });
+	});
+
+	it("returns false after disposal", async () => {
+		const t = await setup();
+		t.service.dispose();
+
+		expect(t.service.handleAoSessionLink(AO_SEND_ISSUE_URL)).toBe(false);
+		expect(t.host.evaluateInPage).not.toHaveBeenCalled();
+		expect(t.shell.send).not.toHaveBeenCalled();
+	});
+});
+
 describe("multica issue link service: lifecycle", () => {
 	it("removes every IPC handler it registered", async () => {
 		const t = await setup();
@@ -382,6 +441,7 @@ describe("multica issue link service: lifecycle", () => {
 			navigatePath: vi.fn(() => true),
 			runInPage: vi.fn(),
 			setActive: vi.fn(),
+			evaluateInPage: vi.fn(),
 		};
 
 		t.service.dispose();
