@@ -177,6 +177,8 @@ import { createMulticaDaemonService, findMulticaBinary } from "./main/multica-da
 import { multicaBridgeChannels } from "./main/multica-desktop-bridge";
 import { resolveMulticaDesktopBundle } from "./main/multica-desktop-bundle";
 import { writeMulticaIpcJail } from "./main/multica-ipc-jail";
+import { createCombinedBadge } from "./main/combined-badge";
+import { createMulticaNotifications } from "./main/multica-notifications";
 import { createMulticaViewHost, type MulticaViewHost } from "./main/multica-view-host";
 import { ancestorRepositorySetupWarning, resolveCheckedOutBranch, scanImportFolder } from "./main/import-folder-scan";
 import { parseOpenFolderPathArg } from "./main/open-folder-arg";
@@ -318,6 +320,7 @@ let daemonStatus: DaemonStatus = { state: "stopped" };
 let daemonOutput = "";
 let browserViewHost: BrowserViewHost | null = null;
 let multicaViewHost: MulticaViewHost | null = null;
+const combinedBadge = createCombinedBadge();
 let browserProfileIpc: BrowserProfileIpc | null = null;
 let browserProfileImporter: BrowserProfileImportService | null = null;
 let windowComposition: WindowComposition | null = null;
@@ -869,6 +872,20 @@ async function createWindowInternal(): Promise<void> {
 					}),
 				logPath: path.join(os.homedir(), ".multica", "daemon.log"),
 			}),
+		notifications: createMulticaNotifications({
+			isSupported: () => ElectronNotification.isSupported(),
+			createNotification: ({ title, body }) =>
+				new ElectronNotification({ title, body, icon: process.platform === "darwin" ? undefined : windowIconPath() }),
+			isWindowFocused: () => !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused(),
+			// Suppress Multica banners only when AO is focused and the Multica view is showing.
+			isMulticaShown: () => multicaViewHost?.isShown() ?? false,
+			openInboxItem: (target) => { focusMainWindow(); multicaViewHost?.openInboxItem(target); },
+			setBadge: (count) => {
+				const total = combinedBadge.setMultica(count);
+				// macOS drives the Dock badge through the app, so the view host's teardown can still drop Multica's share while the window closes; the Windows overlay needs a live window.
+				if (process.platform === "darwin" || (mainWindow && !mainWindow.isDestroyed())) applyBadgeCount(total);
+			},
+		}),
 		// Multica's header is laid out around its own traffic-light position.
 		onTakeover: (takenOver) => {
 			multicaTakenOver = takenOver;
@@ -2654,9 +2671,9 @@ if (!app.isPackaged) {
 	});
 }
 
-ipcMain.handle("notifications:setBadge", (_event, count: number) => {
+// The OS badge shows AO's unread count plus Multica's, so both writers go through combinedBadge.
+function applyBadgeCount(n: number) {
 	if (!mainWindow) return { error: "no mainWindow" };
-	const n = Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
 	if (process.platform === "darwin") {
 		const dock = app.dock;
 		if (!dock) return { error: "no app.dock" };
@@ -2684,7 +2701,9 @@ ipcMain.handle("notifications:setBadge", (_event, count: number) => {
 		return { ok: app.setBadgeCount(n) };
 	}
 	return { ok: true };
-});
+}
+
+ipcMain.handle("notifications:setBadge", (_event, count: number) => applyBadgeCount(combinedBadge.setAo(count)));
 
 ipcMain.on(TRAY_SET_ATTENTION_STATE_CHANNEL, (event, state) => trayLifecycle.handleSetAttentionState(event, state));
 
