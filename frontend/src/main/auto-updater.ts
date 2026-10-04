@@ -6,6 +6,7 @@ import { CancellationToken } from "builder-util-runtime";
 import { app, dialog, autoUpdater as nativeAutoUpdater } from "electron";
 import { startMacUpdateProgress } from "./mac-update-progress";
 import { markUpdateRelaunch } from "./update-relaunch-flag";
+import { isUpdatesDisabledBuild } from "./updates-disabled";
 import { accessSync, constants as fsConstants, existsSync, lstatSync, readFileSync, readdirSync, statfsSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -37,11 +38,17 @@ import {
   type UpdateTrigger,
 } from "../shared/update-telemetry";
 
+function updatesUnavailable(): boolean { return !app.isPackaged || isUpdatesDisabledBuild(); }
+function updatesUnsupportedMessage(): string {
+  return app.isPackaged ? "Updates are turned off in this build." : "Updates are only available in the installed app.";
+}
+
 // Current AO uses the stock full-ZIP path. A future compatible build explicitly
 // selects the v2 subclass; old clients never learn its metadata or map URLs.
 const autoUpdater = process.platform === "darwin" && macDifferentialRollout.enabled === true
   ? new MacDifferentialV2Updater({ trustedKeys: macV2TrustedKeys })
   : stockAutoUpdater;
+if (isUpdatesDisabledBuild()) autoUpdater.autoDownload = autoUpdater.autoInstallOnAppQuit = false;
 
 const FAIL_CLOSED_UPDATE_SETTINGS: UpdateSettings = {
   enabled: false,
@@ -2289,6 +2296,7 @@ function reconcileAutomaticUpdateSchedule(
   stateDir: string,
   settings: UpdateSettings,
 ): void {
+  if (isUpdatesDisabledBuild()) return;
   schedulePeriodicAutomaticUpdateCheck(
     stateDir,
     automaticUpdateCheckInterval(settings),
@@ -2298,6 +2306,7 @@ function reconcileAutomaticUpdateSchedule(
 async function requestAutomaticUpdateCheck(
   stateDir: string,
 ): Promise<number | undefined> {
+  if (isUpdatesDisabledBuild()) return undefined;
   if (automaticCheckInFlight) return undefined;
   automaticCheckInFlight = true;
   try {
@@ -2312,6 +2321,7 @@ async function requestAutomaticUpdateCheck(
 // downloaded automatically. Both preferences come from update-settings.
 // Caller guards on app.isPackaged.
 export async function startAutoUpdates(stateDir: string): Promise<void> {
+  if (isUpdatesDisabledBuild()) return;
   escalationStateDir = stateDir;
   restoreStagedBuild(stateDir);
   startRetirementPollTimer(stateDir);
@@ -2336,6 +2346,7 @@ async function persistUpdaterSettings(
   stateDir: string,
   settings: UpdateSettings,
 ): Promise<void> {
+  if (isUpdatesDisabledBuild()) return;
   const next = await persistRendererUpdateSettings(stateDir, settings);
   applyUpdaterPolicy(next);
   configureFeed(next);
@@ -2370,7 +2381,7 @@ export async function checkForUpdatesNow(
   wireUpdaterEvents();
   // Asking again IS the explicit retry the exhausted message points at.
   forgetInstallRejections();
-	if (!app.isPackaged) {
+	if (updatesUnavailable()) {
     emitUpdateOutcome({
       event: "ao.renderer.update_unsupported",
       phase: activeUpdaterPhase,
@@ -2379,7 +2390,7 @@ export async function checkForUpdatesNow(
     });
     broadcast({
       state: "unsupported",
-      message: "Updates are only available in the installed app.",
+      message: updatesUnsupportedMessage(),
       requestId: options.requestId,
     });
     return;
@@ -2477,7 +2488,7 @@ export async function returnToHome(
 ): Promise<void> {
   escalationStateDir = stateDir;
   wireUpdaterEvents();
-  if (!app.isPackaged) {
+  if (updatesUnavailable()) {
     emitUpdateOutcome({
       event: "ao.renderer.update_unsupported",
       phase: activeUpdaterPhase,
@@ -2486,7 +2497,7 @@ export async function returnToHome(
     });
     broadcast({
       state: "unsupported",
-      message: "Updates are only available in the installed app.",
+      message: updatesUnsupportedMessage(),
       requestId,
     });
     return;
@@ -2542,7 +2553,7 @@ export async function downloadUpdateNow(requestId?: string): Promise<void> {
   const version = lastStatus.version;
   wireUpdaterEvents();
   forgetInstallRejections();
-	if (!app.isPackaged) {
+	if (updatesUnavailable()) {
     emitUpdateOutcome({
       event: "ao.renderer.update_unsupported",
       phase: activeUpdaterPhase,
@@ -2551,7 +2562,7 @@ export async function downloadUpdateNow(requestId?: string): Promise<void> {
     });
     broadcast({
       state: "unsupported",
-      message: "Updates are only available in the installed app.",
+      message: updatesUnsupportedMessage(),
       requestId,
     });
     return;
@@ -2610,6 +2621,7 @@ export async function setMacDifferentialUpdates(
   enabled: boolean,
 ): Promise<void> {
   if (typeof enabled !== "boolean") return;
+  if (isUpdatesDisabledBuild()) return;
   developerModeRequested = enabled;
   // Revoke eligibility synchronously, even while a previous operation is busy.
   // An already-started dependency download retains its captured options.
@@ -2710,7 +2722,7 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
   if (confirmedVersion !== undefined && (typeof confirmedVersion !== "string" || !confirmedVersion.trim())) {
     throw new Error("A valid confirmed update version is required.");
   }
-  if (!app.isPackaged) return;
+  if (updatesUnavailable()) return;
   if (awaitingStagedReplacement) {
     throw new Error("Check for updates and download an update before restarting to install.");
   }
