@@ -93,10 +93,21 @@ describe("MulticaPane", () => {
 		expect(screen.queryByText("Loading Multica…")).not.toBeInTheDocument();
 	});
 
-	it("shows why the page could not be loaded", () => {
-		showView({ active: true, status: "error", url: URL, error: "Multica desktop bundle not found." });
+	it("shows a dedicated message when Multica is not bundled, without a retry action or detail", () => {
+		showView({ active: true, status: "error", url: URL, error: "Multica desktop bundle not found.", errorKind: "bundle-missing" });
 		render(<MulticaPane />);
-		expect(screen.getByText("Multica desktop bundle not found.")).toBeInTheDocument();
+		expect(screen.getByText("Multica isn't bundled with this build")).toBeInTheDocument();
+		expect(screen.getByText(/This copy of Agent Orchestrator was built without Multica's desktop UI/)).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+		expect(screen.queryByText("Multica desktop bundle not found.")).not.toBeInTheDocument();
+	});
+
+	it("keeps the retry action and detail for generic errors", () => {
+		showView({ active: true, status: "error", url: URL, error: "ERR_FILE_NOT_FOUND" });
+		render(<MulticaPane />);
+
+		expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+		expect(screen.getByText("ERR_FILE_NOT_FOUND")).toBeInTheDocument();
 	});
 
 	it("switches with the keyboard shortcut, in both directions", () => {

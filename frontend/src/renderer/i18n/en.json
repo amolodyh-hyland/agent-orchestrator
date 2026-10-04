@@ -746,6 +746,8 @@
 	"multica.error.retry": "Try again",
 	"multica.error.title": "Can't reach Multica",
 	"multica.loading": "Loading Multica…",
+	"multica.notBundled.body": "This copy of Agent Orchestrator was built without Multica's desktop UI. Install a build that includes it, or run from source with AO_MULTICA_DESKTOP_OUT pointing at a Multica desktop build.",
+	"multica.notBundled.title": "Multica isn't bundled with this build",
 	"multica.settings.invalidUrl": "Enter a valid http:// or https:// address.",
 	"multica.settings.notSet": "Not set",
 	"multica.settings.saveFailed": "Couldn't save the Multica URL.",
