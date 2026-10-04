@@ -168,6 +168,7 @@ import {
 } from "./main/notification-signals";
 import { buildLinuxAppMenuTemplate, buildMacAppMenuTemplate, buildWindowsAppMenuTemplate } from "./main/menu";
 import { readMulticaSettings, writeMulticaUrl } from "./main/multica-settings";
+import { createMulticaDaemonService, findMulticaBinary } from "./main/multica-daemon-cli";
 import { multicaBridgeChannels } from "./main/multica-desktop-bridge";
 import { resolveMulticaDesktopBundle } from "./main/multica-desktop-bundle";
 import { writeMulticaIpcJail } from "./main/multica-ipc-jail";
@@ -850,6 +851,20 @@ async function createWindowInternal(): Promise<void> {
 			os: process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : process.platform === "linux" ? "linux" : "unknown",
 		},
 		hostName: () => os.hostname(),
+		// The daemon is driven through the installed multica CLI (AO_MULTICA_CLI
+		// overrides where it is found).
+		createDaemonService: (emit) =>
+			createMulticaDaemonService({
+				emit,
+				findBinary: () =>
+					findMulticaBinary({
+						override: process.env.AO_MULTICA_CLI?.trim() || undefined,
+						pathEnv: process.env.PATH,
+						home: os.homedir(),
+						platform: process.platform,
+					}),
+				logPath: path.join(os.homedir(), ".multica", "daemon.log"),
+			}),
 		// Multica's header is laid out around its own traffic-light position.
 		onTakeover: (takenOver) => {
 			if (!isMac || !mainWindow || mainWindow.isDestroyed()) return;
