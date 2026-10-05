@@ -37,10 +37,11 @@ Stubbed: `daemonAPI.openLogFile`, `window:open-issue`, `window:close`, notificat
 
 An AO session can be linked to Multica issues. Nothing changes in the Multica repo or its backend.
 
-- Linking: the session header (next to the status pill, shown once a Multica URL is set) has a chip. Paste an issue URL such as `http://localhost:3000/acme/issues/MUL-123`; the workspace slug and the identifier are stored. UUID URLs and bare identifiers are rejected, because the slug is needed to open the issue and the Multica page title only carries the identifier.
+- Linking: the action cluster at the right of the session tab strip (alongside open-in-editor, cues and archive, shown for worker sessions once a Multica URL is set) has a chip. Paste an issue URL such as `http://localhost:3000/acme/issues/MUL-123`; the workspace slug and the identifier are stored. UUID URLs and bare identifiers are rejected, because the slug is needed to open the issue and the Multica page title only carries the identifier.
 - AO to Multica: choosing a linked issue switches to the Multica view and dispatches Multica's own `multica:navigate` window event with `/<slug>/issues/<IDENT>`. It waits for the `inbox:open` listener (`bridge.whenReady`), the same signed-in layout that handles the event.
 - Multica to AO: Multica's renderer uses an in-memory router, so the URL never shows the issue. The host listens to `page-title-updated`; an issue page sets `document.title` to `<IDENT>: <title>`. When that identifier has links, AO injects a small shadow-DOM pill (`multica-linked-sessions-pill.ts`) into the page. Clicking it calls `window.open("ao://sessions/<project>/<session>")`; the view's window-open handler offers the URL to the link service, which accepts only linked pairs, switches back to AO and asks the shell to open the session.
 - Storage: `multica-issue-links.json` next to `multica-settings.json` in the AO state directory (`~/.ao` by default), written atomically with mode `0600`. Desktop only: the daemon, CLI and mobile do not see links, and links are not removed when a session is deleted.
+- Loading: the links store is loaded once by `MulticaPane` at the shell level, so the pill status badge and Send to AO duplicate check work even when the chip is not shown.
 - Fragile dependencies on Multica internals, each in one place with a unit test: the issue page title format (`parseMulticaIssueTitle`) and the `multica:navigate` event (`navigatePath` in `multica-view-host.ts`). If either changes, the pill disappears or opening an issue only surfaces Multica; nothing else breaks.
 - Not verified: behavior against a signed-in Multica server and the pill's position over Multica's UI. Verified in an Electron 33 probe: title events for page-initiated changes, `executeJavaScript` in the page main world, the pill rendering, and a click reaching the window-open handler.
 - Limits: lookups from the Multica page match on the identifier alone, so two workspaces with the same prefix would share links; the pill label is English only.
@@ -87,6 +88,7 @@ shown, followed by `+N` when more are linked.
   link service, which re-injects the pill. Publishing is debounced by 150 ms and unchanged
   snapshots are skipped.
 - Nothing is written to Multica, and no Multica credential is used.
+- Position: the pill stack sits above Multica's chat launcher ("Ask Multica"), at `bottom: calc(var(--chat-launcher-clearance, 3.5rem) + 8px)` using Multica's clearance token with a fallback; it can still cover Multica's chat window while open, since the window floats bottom-right and is user-resizable.
 - A missing session shows "Session not found"; a terminated session shows its daemon status.
   When the daemon or SSE stream is disconnected, the badge is dimmed and "offline" is appended.
   Signed-out Multica and non-issue pages show no pill.
