@@ -59,6 +59,31 @@ import {
 	type MulticaSettings,
 	type MulticaViewState,
 } from "./shared/multica";
+import {
+	MULTICA_LINKS_ADD_CHANNEL,
+	MULTICA_LINKS_CHANGED_CHANNEL,
+	MULTICA_LINKS_LIST_CHANNEL,
+	MULTICA_LINKS_OPEN_ISSUE_CHANNEL,
+	MULTICA_LINKS_OPEN_SESSION_CHANNEL,
+	MULTICA_LINKS_REMOVE_CHANNEL,
+	type MulticaIssueLink,
+	type MulticaIssueLinkAddRequest,
+	type MulticaIssueLinkAddResult,
+	type MulticaIssueLinkOpenRequest,
+	type MulticaIssueLinkRemoveRequest,
+	type MulticaOpenSessionTarget,
+} from "./shared/multica-issue-links";
+import {
+	MULTICA_SEND_REQUEST_CHANNEL,
+	isMulticaSendRequest,
+	type AoMulticaSendBridge,
+} from "./shared/multica-send-to-ao";
+import {
+	MULTICA_STATUS_PUBLISH_CHANNEL,
+	type AoMulticaStatusBridge,
+	type MulticaStatusPublishResult,
+	type MulticaStatusSnapshot,
+} from "./shared/multica-session-status";
 import type { UpdateCheckOptions } from "./main/auto-updater";
 import type { FeatureBuild } from "./main/feature-builds";
 import {
@@ -633,6 +658,41 @@ const api = {
 			};
 		},
 	},
+	multicaLinks: {
+		list: () => ipcRenderer.invoke(MULTICA_LINKS_LIST_CHANNEL) as Promise<MulticaIssueLink[]>,
+		add: (request: MulticaIssueLinkAddRequest) => ipcRenderer.invoke(MULTICA_LINKS_ADD_CHANNEL, request) as Promise<MulticaIssueLinkAddResult>,
+		remove: (request: MulticaIssueLinkRemoveRequest) => ipcRenderer.invoke(MULTICA_LINKS_REMOVE_CHANNEL, request) as Promise<MulticaIssueLink[]>,
+		openIssue: (request: MulticaIssueLinkOpenRequest) => ipcRenderer.invoke(MULTICA_LINKS_OPEN_ISSUE_CHANNEL, request) as Promise<boolean>,
+		onChanged: (listener: (links: MulticaIssueLink[]) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, links: MulticaIssueLink[]) => listener(links);
+			ipcRenderer.on(MULTICA_LINKS_CHANGED_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(MULTICA_LINKS_CHANGED_CHANNEL, wrapped);
+			};
+		},
+		onOpenSession: (listener: (target: MulticaOpenSessionTarget) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, target: MulticaOpenSessionTarget) => listener(target);
+			ipcRenderer.on(MULTICA_LINKS_OPEN_SESSION_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(MULTICA_LINKS_OPEN_SESSION_CHANNEL, wrapped);
+			};
+		},
+	},
+	multicaSend: {
+		onRequest: (listener) => {
+			const wrapped = (_event: unknown, request: unknown) => {
+				if (isMulticaSendRequest(request)) listener(request);
+			};
+			ipcRenderer.on(MULTICA_SEND_REQUEST_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(MULTICA_SEND_REQUEST_CHANNEL, wrapped);
+			};
+		},
+	} satisfies AoMulticaSendBridge,
+	multicaStatus: {
+		publish: (snapshot: MulticaStatusSnapshot) =>
+			ipcRenderer.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, snapshot) as Promise<MulticaStatusPublishResult>,
+	} satisfies AoMulticaStatusBridge,
 	keybindings: {
 		get: () => ipcRenderer.invoke("keybindings:get") as Promise<KeybindingOverrides>,
 		set: (overrides: KeybindingOverrides) =>
