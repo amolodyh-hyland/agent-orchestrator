@@ -23,6 +23,7 @@ import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./external-o
 import type { MulticaDaemonService } from "./multica-daemon-cli";
 import { createMulticaDesktopBridge, type MulticaAppInfo, type MulticaDesktopBridge } from "./multica-desktop-bridge";
 import type { MulticaDesktopBundle } from "./multica-desktop-bundle";
+import type { MulticaInboxTarget, MulticaNotifications } from "./multica-notifications";
 
 const CLOSE_ACTIVE_TAB_CHANNEL = "tab:close-active";
 const BUNDLE_MISSING_MESSAGE = "Multica desktop bundle not found. Build it and set AO_MULTICA_DESKTOP_OUT.";
@@ -55,6 +56,8 @@ export type MulticaViewHostOptions = {
 	/** BCP 47 locale handed to the renderer (its `desktopAPI.systemLocale`). */
 	locale: string;
 	appInfo: MulticaAppInfo;
+	/** Handles Multica's notification, auth-session and badge messages; the host resets it when the view is torn down. */
+	notifications: MulticaNotifications;
 	hostName: () => string;
 	/** Builds the daemon service for a new view; `emit` pushes messages to that view. */
 	createDaemonService: (emit: (channel: string, payload: unknown) => void) => MulticaDaemonService;
@@ -68,6 +71,8 @@ export type MulticaViewHostOptions = {
 
 export type MulticaViewHost = {
 	getState: () => MulticaViewState;
+	/** True while the Multica view covers the AO window. */
+	isShown: () => boolean;
 	setActive: (active: boolean) => void;
 	toggle: () => void;
 	/** Routes a `multica://` deep link to the view and surfaces it. False when ignored. */
@@ -77,6 +82,8 @@ export type MulticaViewHost = {
 	/** Runs a script in the Multica page's main world. Does nothing without a live view. */
 	runInPage: (script: string) => void;
 	evaluateInPage: (script: string) => Promise<unknown>;
+	/** Surfaces Multica and asks its renderer to open an inbox item. False when ignored (no Multica URL, no view). */
+	openInboxItem: (target: MulticaInboxTarget) => boolean;
 	dispose: () => void;
 };
 
@@ -101,6 +108,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 	let rendererUrl = "";
 	let shown = false;
 	let loadFailed = false;
+	let carriedPending: Array<[string, unknown[]]> = [];
 
 	const getState = (): MulticaViewState => ({ active, status, url, ...(error ? { error } : {}) });
 
@@ -201,6 +209,8 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 			getAppInfo: () => options.appInfo,
 			getRuntimeConfig: () => multicaRuntimeConfig(url),
 			getHostName: options.hostName,
+			notifications: options.notifications,
+			initialPending: carriedPending,
 			daemon: options.createDaemonService((channel, payload) => {
 				if (!contents.isDestroyed()) contents.send(channel, payload);
 			}),
@@ -209,6 +219,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 				if (!contents.isDestroyed()) contents.send(channel, payload);
 			},
 		});
+		carriedPending = [];
 
 		// The renderer uses an in-memory router, so it never navigates on its own.
 		// Anything that tries to leave the built bundle goes to the system browser.
@@ -235,20 +246,28 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 
 		// A page load drops every renderer subscription, so deep links must wait
 		// for the renderer to announce its listeners again.
-		contents.on("did-start-loading", () => bridge?.resetReadiness());
+		contents.on("did-start-loading", () => {
+			if (view?.webContents !== contents) return;
+			bridge?.resetReadiness();
+		});
 		// A failed navigation commits Chromium's own error page and then fires
 		// did-finish-load for it (observed order: fail, then finish), so a failure
 		// has to veto the next did-finish-load. Only an explicit load() (retry or a
 		// URL change) clears it; the error state offers no other way forward.
 		contents.on("did-finish-load", () => {
+			if (view?.webContents !== contents) return;
 			if (!loadFailed) setStatus("ready");
 		});
 		contents.on("did-fail-load", (_event, errorCode, errorDescription, _validatedURL, isMainFrame) => {
+			if (view?.webContents !== contents) return;
 			if (!isMainFrame || errorCode === -3) return;
 			loadFailed = true;
 			setStatus("error", errorDescription || "Unable to load page");
 		});
-		contents.on("render-process-gone", () => setStatus("error", "The Multica view stopped unexpectedly"));
+		contents.on("render-process-gone", () => {
+			if (view?.webContents !== contents) return;
+			setStatus("error", "The Multica view stopped unexpectedly");
+		});
 		contents.on("preload-error", (_event, preloadPath, preloadError) => {
 			console.error(`AO: Multica preload failed (${preloadPath}): ${preloadError.message}`);
 		});
@@ -284,6 +303,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 		bridge?.dispose();
 		bridge = undefined;
 		if (!current) return;
+		options.notifications.reset();
 		try {
 			mainWindow.contentView.removeChildView(current as unknown as WebContentsView);
 		} catch {
@@ -316,8 +336,15 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 			destroyView();
 			setStatus("unconfigured");
 		} else if (view || active) {
-			// The runtime config is read when the page's preload runs, so a URL
-			// change needs a fresh page load.
+			const carried = bridge?.pendingSnapshot() ?? [];
+			const hadView = Boolean(view);
+			destroyView();
+			if (hadView) {
+				carriedPending = carried;
+			} else {
+				options.notifications.reset();
+				carriedPending = [];
+			}
 			load();
 		} else {
 			setStatus("idle");
@@ -371,6 +398,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 
 	return {
 		getState,
+		isShown: () => shown,
 		setActive,
 		toggle: () => setActive(!active),
 		handleDeepLink: (rawUrl) => {
@@ -393,6 +421,13 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 		},
 		runInPage,
 		evaluateInPage,
+		openInboxItem: (target) => {
+			if (!url) return false;
+			setActive(true);
+			if (!bridge) return false;
+			bridge.dispatch("inbox:open", target);
+			return true;
+		},
 		dispose: () => {
 			for (const [channel] of handlers) options.ipcMain.removeHandler(channel);
 			try {
