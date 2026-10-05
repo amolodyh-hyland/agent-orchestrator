@@ -22,7 +22,12 @@ vi.mock("./makers/maker-dmg", async (importOriginal) => {
 	return { ...actual, sealDmg, verifyDmg, verifyMacArtifact, isSigningConfigured };
 });
 
-import config, { extraResourcesForPlatform, macSignOptionsForFile } from "./forge.config";
+import config, {
+	extraResourcesForPlatform,
+	macSignOptionsForFile,
+	missingMulticaResources,
+	multicaDesktopOutDir,
+} from "./forge.config";
 
 // Minimal synthetic Mach-O headers (thin little-endian + fat big-endian), the
 // two on-disk layouts the signing selector must tell apart. Full parser
@@ -106,6 +111,56 @@ describe("native runtime resources", () => {
 
 	it("does not bundle tmux on Windows", () => {
 		expect(extraResourcesForPlatform("win32")).not.toContain("tmux");
+	});
+});
+
+describe("Multica desktop resources", () => {
+	it("includes Multica resources only when explicitly enabled", () => {
+		expect(extraResourcesForPlatform("darwin", true)).toContain("multica-desktop");
+		expect(extraResourcesForPlatform("darwin", true)).toContain("ao-updates-disabled");
+		expect(extraResourcesForPlatform("darwin", false)).not.toContain("multica-desktop");
+		expect(extraResourcesForPlatform("darwin", false)).not.toContain("ao-updates-disabled");
+	});
+
+	it("uses AO_MULTICA_DESKTOP_OUT for the default resource selection", () => {
+		vi.stubEnv("AO_MULTICA_DESKTOP_OUT", undefined);
+		expect(extraResourcesForPlatform("darwin")).not.toContain("multica-desktop");
+		expect(extraResourcesForPlatform("darwin")).not.toContain("ao-updates-disabled");
+
+		vi.stubEnv("AO_MULTICA_DESKTOP_OUT", " /tmp/multica/out ");
+		expect(extraResourcesForPlatform("darwin")).toContain("multica-desktop");
+		expect(extraResourcesForPlatform("darwin")).toContain("ao-updates-disabled");
+	});
+
+	it("trims AO_MULTICA_DESKTOP_OUT and returns undefined when blank", () => {
+		vi.stubEnv("AO_MULTICA_DESKTOP_OUT", undefined);
+		expect(multicaDesktopOutDir()).toBeUndefined();
+		vi.stubEnv("AO_MULTICA_DESKTOP_OUT", "   ");
+		expect(multicaDesktopOutDir()).toBeUndefined();
+		vi.stubEnv("AO_MULTICA_DESKTOP_OUT", "  /tmp/multica/out  ");
+		expect(multicaDesktopOutDir()).toBe("/tmp/multica/out");
+	});
+
+	it("checks for the renderer, a supported preload entry point, and the update marker", () => {
+		const resourcesPath = "/fake/resources";
+		const complete = new Set([
+			"multica-desktop/renderer/index.html",
+			"multica-desktop/preload/index.js",
+			"ao-updates-disabled",
+		]);
+		const existsIn = (files: Set<string>) => (file: string) =>
+			files.has(file.slice(resourcesPath.length + 1).replaceAll("\\", "/"));
+
+		expect(missingMulticaResources(resourcesPath, existsIn(complete))).toEqual([]);
+		expect(missingMulticaResources(resourcesPath, existsIn(new Set()))).toEqual([
+			"multica-desktop/renderer/index.html",
+			"multica-desktop/preload/index.js",
+			"ao-updates-disabled",
+		]);
+		const commonJsPreload = new Set(complete);
+		commonJsPreload.delete("multica-desktop/preload/index.js");
+		commonJsPreload.add("multica-desktop/preload/index.cjs");
+		expect(missingMulticaResources(resourcesPath, existsIn(commonJsPreload))).toEqual([]);
 	});
 });
 

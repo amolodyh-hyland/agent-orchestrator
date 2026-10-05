@@ -26,6 +26,8 @@ type ImportOptions = {
     settings: UpdateSettings,
   ) => Promise<{ settings: UpdateSettings; cleared: boolean }>;
   isPackaged?: boolean;
+  updatesDisabled?: boolean;
+  updaterDefaultsEnabled?: boolean;
   rolloutReady?: boolean;
   version?: string;
 };
@@ -326,6 +328,10 @@ async function importAutoUpdater(
   vi.resetModules();
   const updaterEvents = new Map<string, UpdaterEventHandler>();
   const autoUpdater = createAutoUpdaterMock();
+  if (options.updaterDefaultsEnabled) {
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+  }
   const nativeUpdaterEvents = new Map<string, UpdaterEventHandler>();
   const nativeAutoUpdater = new EventEmitter();
   // Record each native handler so a test can fire it directly with explicit
@@ -378,6 +384,9 @@ async function importAutoUpdater(
     MacDifferentialV2Updater: class { constructor() { return autoUpdater; } },
   }));
   vi.doMock("electron-updater", () => ({ autoUpdater }));
+  vi.doMock("./updates-disabled", () => ({
+    isUpdatesDisabledBuild: vi.fn(() => options.updatesDisabled ?? false),
+  }));
   vi.doMock("electron", () => ({
     autoUpdater: nativeAutoUpdater,
     app: {
@@ -4601,4 +4610,136 @@ it("falls back to the 2 GiB cap when the archive size is unknown", async () => {
     updaterEvents.get("update-downloaded")?.({ version: "2.0.0" });
     expect(required.at(-1)).toBe(2 * 1024 * 1024 * 1024);
   } finally { restore(); }
+});
+
+describe("updates-disabled builds", () => {
+	it("does not persist enabled settings or run an automatic check", async () => {
+		vi.useFakeTimers();
+		const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+		try {
+			const { module, autoUpdater, writeUpdateSettings } = await importAutoUpdater(undefined, {
+				isPackaged: true,
+				updatesDisabled: true,
+				updaterDefaultsEnabled: true,
+			});
+
+			await module.setUpdateSettings(stateDir, {
+				enabled: true,
+				channel: "latest",
+				nightlyAck: false,
+				feature: null,
+			});
+			await vi.advanceTimersByTimeAsync(15 * 60 * 1000 + 1);
+
+			expect(writeUpdateSettings).not.toHaveBeenCalled();
+			expect(setIntervalSpy).not.toHaveBeenCalled();
+			expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+			expect(autoUpdater.autoInstallOnAppQuit).toBe(false);
+			expect(autoUpdater.autoDownload).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not start checks or polling timers", async () => {
+		vi.useFakeTimers();
+		const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+		try {
+			const { module, autoUpdater } = await importAutoUpdater(undefined, {
+				isPackaged: true,
+				updatesDisabled: true,
+			});
+
+			await module.startAutoUpdates(stateDir);
+
+			expect(setIntervalSpy).not.toHaveBeenCalled();
+			expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not persist differential settings or apply updater policy", async () => {
+		const restore = stubProcess("darwin", process.execPath);
+		try {
+			const { module, autoUpdater, writeUpdateSettings } = await importAutoUpdater({
+				enabled: true,
+				channel: "nightly",
+				nightlyAck: true,
+				feature: null,
+				macDifferentialUpdates: true,
+			}, {
+				isPackaged: true,
+				updatesDisabled: true,
+				updaterDefaultsEnabled: true,
+			});
+
+			await module.setMacDifferentialUpdates(stateDir, true);
+
+			expect(writeUpdateSettings).not.toHaveBeenCalled();
+			expect(autoUpdater.autoDownload).toBe(false);
+			expect(autoUpdater.autoInstallOnAppQuit).toBe(false);
+			expect(autoUpdater.disableDifferentialDownload).toBe(true);
+		} finally {
+			restore();
+		}
+	});
+
+	it("reports unsupported during a manual check without checking for updates", async () => {
+		const { module, autoUpdater, statusMessages } = await importAutoUpdater(undefined, {
+			isPackaged: true,
+			updatesDisabled: true,
+		});
+
+		await module.checkForUpdatesNow(stateDir, { requestId: "disabled-check" });
+
+		expect(statusMessages().at(-1)?.payload).toMatchObject({
+			state: "unsupported",
+			message: "Updates are turned off in this build.",
+			requestId: "disabled-check",
+		});
+		expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+	});
+
+	it("reports unsupported when returning to the home channel without checking for updates", async () => {
+		const { module, autoUpdater, statusMessages } = await importAutoUpdater(undefined, {
+			isPackaged: true,
+			updatesDisabled: true,
+		});
+
+		await module.returnToHome(stateDir);
+
+		expect(statusMessages().at(-1)?.payload).toMatchObject({
+			state: "unsupported",
+			message: "Updates are turned off in this build.",
+		});
+		expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+		expect(autoUpdater.downloadUpdate).not.toHaveBeenCalled();
+	});
+
+	it("does not download updates", async () => {
+		const { module, autoUpdater } = await importAutoUpdater(undefined, {
+			isPackaged: true,
+			updatesDisabled: true,
+		});
+
+		await module.downloadUpdateNow();
+
+		expect(autoUpdater.downloadUpdate).not.toHaveBeenCalled();
+	});
+
+	it("does not install updates", async () => {
+		const { module, autoUpdater, updaterEvents } = await importAutoUpdater(undefined, {
+			isPackaged: true,
+			updatesDisabled: true,
+		});
+
+		await module.checkForUpdatesNow(stateDir);
+		updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
+		expect(module.getUpdateStatus().staged?.version).toBe("2.1.0");
+
+		await expect(module.quitAndInstallUpdate()).resolves.toBeUndefined();
+
+		expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+	});
 });

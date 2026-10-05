@@ -783,6 +783,8 @@
 	"multica.status.prMore": "+{{count}} a mais",
 	"multica.status.stale": "{{status}} · offline",
 	"multica.loading": "Carregando o Multica…",
+	"multica.notBundled.body": "Esta versão do Agent Orchestrator foi compilada sem a interface de desktop do Multica. Instale uma compilação que a inclua ou execute a partir do código-fonte com AO_MULTICA_DESKTOP_OUT apontando para uma compilação de desktop do Multica.",
+	"multica.notBundled.title": "O Multica não está incluído nesta compilação",
 	"multica.settings.invalidUrl": "Informe um endereço http:// ou https:// válido.",
 	"multica.settings.notSet": "Não definido",
 	"multica.settings.saveFailed": "Não foi possível salvar a URL do Multica.",
