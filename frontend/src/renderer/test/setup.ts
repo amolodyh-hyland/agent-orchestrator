@@ -350,6 +350,16 @@ if (typeof window !== "undefined") {
 			onState: () => () => undefined,
 			onToggleShortcut: () => () => undefined,
 		},
+		multicaLinks: {
+			list: async () => [],
+			add: async () => ({ ok: false, reason: "save_failed" }),
+			remove: async () => [],
+			openIssue: async () => false,
+			onChanged: () => () => undefined,
+			onOpenSession: () => () => undefined,
+		},
+		multicaSend: { onRequest: vi.fn(() => () => undefined) },
+		multicaStatus: { publish: vi.fn(async () => ({ ok: true })) },
 		keybindings: {
 			get: async () => ({}),
 			set: async (overrides) => overrides,

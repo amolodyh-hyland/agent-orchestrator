@@ -279,6 +279,16 @@ export const aoBridge: AoBridge =
 			onState: () => () => undefined,
 			onToggleShortcut: () => () => undefined,
 		},
+		multicaLinks: {
+			list: async () => [],
+			add: async () => ({ ok: false, reason: "save_failed" }),
+			remove: async () => [],
+			openIssue: async () => false,
+			onChanged: () => () => undefined,
+			onOpenSession: () => () => undefined,
+		},
+		multicaSend: { onRequest: () => () => undefined },
+		multicaStatus: { publish: async () => ({ ok: false }) },
 		keybindings: {
 			get: async () => ({}),
 			set: async (overrides) => overrides,

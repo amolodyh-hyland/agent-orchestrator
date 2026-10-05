@@ -33,6 +33,72 @@ Stubbed: `daemonAPI.openLogFile`, `window:open-issue`, `window:close`, notificat
 
 `multica://` deep links are only routed when something hands them to AO (`open-url`, `second-instance`, launch argv). AO does not register itself as the OS handler for `multica://`.
 
+## Issue links
+
+An AO session can be linked to Multica issues. Nothing changes in the Multica repo or its backend.
+
+- Linking: the session header (next to the status pill, shown once a Multica URL is set) has a chip. Paste an issue URL such as `http://localhost:3000/acme/issues/MUL-123`; the workspace slug and the identifier are stored. UUID URLs and bare identifiers are rejected, because the slug is needed to open the issue and the Multica page title only carries the identifier.
+- AO to Multica: choosing a linked issue switches to the Multica view and dispatches Multica's own `multica:navigate` window event with `/<slug>/issues/<IDENT>`. It waits for the `inbox:open` listener (`bridge.whenReady`), the same signed-in layout that handles the event.
+- Multica to AO: Multica's renderer uses an in-memory router, so the URL never shows the issue. The host listens to `page-title-updated`; an issue page sets `document.title` to `<IDENT>: <title>`. When that identifier has links, AO injects a small shadow-DOM pill (`multica-linked-sessions-pill.ts`) into the page. Clicking it calls `window.open("ao://sessions/<project>/<session>")`; the view's window-open handler offers the URL to the link service, which accepts only linked pairs, switches back to AO and asks the shell to open the session.
+- Storage: `multica-issue-links.json` next to `multica-settings.json` in the AO state directory (`~/.ao` by default), written atomically with mode `0600`. Desktop only: the daemon, CLI and mobile do not see links, and links are not removed when a session is deleted.
+- Fragile dependencies on Multica internals, each in one place with a unit test: the issue page title format (`parseMulticaIssueTitle`) and the `multica:navigate` event (`navigatePath` in `multica-view-host.ts`). If either changes, the pill disappears or opening an issue only surfaces Multica; nothing else breaks.
+- Not verified: behavior against a signed-in Multica server and the pill's position over Multica's UI. Verified in an Electron 33 probe: title events for page-initiated changes, `executeJavaScript` in the page main world, the pill rendering, and a click reaching the window-open handler.
+- Limits: lookups from the Multica page match on the identifier alone, so two workspaces with the same prefix would share links; the pill label is English only.
+
+## Send to AO
+
+The AO pill on every Multica issue page has a "Send to AO" button. It opens a dialog in AO's shell
+where the user chooses an AO project and optionally an agent (the project's worker agent is the
+default). AO creates a worker session seeded with the issue, links it to the issue, and opens it.
+
+- Reading: main runs one async script in the Multica page with `webContents.executeJavaScript`
+  (`main/multica-issue-reader.ts`). The script reads `localStorage.multica_token` and
+  `multica_tabs.state.activeWorkspaceSlug`, then calls `GET <apiOrigin>/api/issues/<IDENT>` with
+  `Authorization: Bearer` and `X-Workspace-Slug`. Only issue JSON fields return to main; the token
+  stays in the page. As with issue links, the identifier comes from the page title.
+- Multica internals that can change: `multica_token`, `multica_tabs` (zustand persist,
+  `state.activeWorkspaceSlug`), `/api/issues/<IDENT>`, and the issue page title format.
+- Request: `ao://multica/send-issue` carries no data and is handled by
+  `multica-issue-link-service.ts`. Any page script can trigger it, but it only opens the dialog;
+  session creation always requires a click in AO.
+- Creation: the renderer sends `POST /api/v1/sessions` with `kind: worker`, `projectId`, optional
+  `harness`, `prompt`, and `displayName`. It does not send `issueId`; that field is for GitHub and
+  GitLab trackers.
+- The prompt in `shared/multica-send-to-ao.ts` holds the title, identifier, link, and description
+  in an escaped JSON block marked untrusted. It is limited to 16000 bytes; AO rejects prompts
+  above 16 KiB.
+- The dialog reports signed out, no issue open, or could not read the issue (including unknown
+  workspace, network, and timeout errors). There is no title-only fallback because the workspace
+  slug is required to link the issue.
+- Live linked sessions for the same issue are listed as duplicates; the user can still choose
+  "Send anyway".
+- Not verified: behavior against a signed-in live Multica server, pill placement, and localization
+  of the pill label (main uses English literals).
+
+## Status badges
+
+The AO pill shows a colored dot and localized status label for each linked session. Its tooltip
+shows PR number and state, CI, and review. Tones are `ready`, `attention`, `pending`, `working`,
+`done`, and `unknown`, following AO's attention zones. Sessions are sorted by urgency; five are
+shown, followed by `+N` when more are linked.
+
+- Data: the AO shell renderer's workspace query, kept live by the daemon SSE stream.
+  `MulticaStatusPublisher` publishes a snapshot over `multicaStatus:publish` to the main-process
+  link service, which re-injects the pill. Publishing is debounced by 150 ms and unchanged
+  snapshots are skipped.
+- Nothing is written to Multica, and no Multica credential is used.
+- A missing session shows "Session not found"; a terminated session shows its daemon status.
+  When the daemon or SSE stream is disconnected, the badge is dimmed and "offline" is appended.
+  Signed-out Multica and non-issue pages show no pill.
+- Freshness: activity updates within about a second. PR, CI, and review follow AO's SCM observer,
+  with a 30 s tick.
+- Limits: issue matching uses the identifier only, pill chrome text stays English, and behavior
+  has not been verified in a signed-in live Multica.
+- Files: `frontend/src/shared/multica-session-status.ts`,
+  `frontend/src/renderer/lib/multica-link-status.ts`,
+  `frontend/src/renderer/components/MulticaStatusPublisher.tsx`,
+  `main/multica-issue-link-service.ts`, `main/multica-linked-sessions-pill.ts`.
+
 ## Security model
 
 Multica's preload is attached to the Multica view only, in its own persistent partition (`persist:ao-multica`), with sandbox and context isolation on, every web permission denied, and main-frame navigation pinned to the built bundle (anything else goes to the system browser).
