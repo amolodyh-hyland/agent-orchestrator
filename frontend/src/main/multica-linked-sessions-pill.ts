@@ -113,7 +113,7 @@ export function buildLinkedSessionsPillScript(
 	if (payload.entries.length === 0 && !payload.sendUrl) return;
 	const pill = document.createElement("div");
 	pill.setAttribute("id", "${MULTICA_LINKED_SESSIONS_PILL_ID}");
-	pill.setAttribute("style", "position:fixed;right:16px;bottom:16px;z-index:2147483647;pointer-events:none");
+	pill.setAttribute("style", "position:fixed;right:16px;bottom:calc(var(--chat-launcher-clearance, 3.5rem) + 8px);z-index:2147483647;pointer-events:none");
 	const shadow = pill.attachShadow({ mode: "open" });
 	const style = document.createElement("style");
 	style.textContent = ${styles};
