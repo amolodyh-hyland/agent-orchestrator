@@ -9,6 +9,7 @@ import { useMulticaStore } from "../stores/multica-store";
 import { useUiStore } from "../stores/ui-store";
 import { CenterPanelShell } from "./CenterPanelShell";
 import { MulticaSendToAoDialog } from "./MulticaSendToAoDialog";
+import { MulticaStatusPublisher } from "./MulticaStatusPublisher";
 import { Button } from "./ui/button";
 
 function MulticaMessage({ title, body, detail, action }: { title: ReactNode; body?: string; detail?: string; action?: ReactNode }) {
@@ -101,6 +102,7 @@ export function MulticaPane() {
 	return (
 		<>
 			<MulticaSendToAoDialog />
+			<MulticaStatusPublisher />
 			{view.active ? <MulticaSurface view={view} /> : null}
 		</>
 	);

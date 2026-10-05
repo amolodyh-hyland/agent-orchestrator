@@ -83,6 +83,12 @@ import {
 	isMulticaSendRequest,
 	type AoMulticaSendBridge,
 } from "./shared/multica-send-to-ao";
+import {
+	MULTICA_STATUS_PUBLISH_CHANNEL,
+	type AoMulticaStatusBridge,
+	type MulticaStatusPublishResult,
+	type MulticaStatusSnapshot,
+} from "./shared/multica-session-status";
 import type { UpdateCheckOptions } from "./main/auto-updater";
 import type { FeatureBuild } from "./main/feature-builds";
 import {
@@ -730,6 +736,10 @@ const api = {
 			};
 		},
 	} satisfies AoMulticaSendBridge,
+	multicaStatus: {
+		publish: (snapshot: MulticaStatusSnapshot) =>
+			ipcRenderer.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, snapshot) as Promise<MulticaStatusPublishResult>,
+	} satisfies AoMulticaStatusBridge,
 	keybindings: {
 		get: () => ipcRenderer.invoke("keybindings:get") as Promise<KeybindingOverrides>,
 		set: (overrides: KeybindingOverrides) =>
