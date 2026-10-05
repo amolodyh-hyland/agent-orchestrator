@@ -52,5 +52,5 @@ The WebSocket is different: the handshake carries `Origin: file://`, and a Multi
 
 - Windows: AO's frameless window has no native controls under the Multica view.
 - Not verified: macOS traffic-light placement and drag regions with real mouse input, and Electron 33 against Multica's screens beyond sign-in, onboarding and the empty workspace.
-- The banner and badge path is covered by unit tests only and has not been verified end to end against a signed-in Multica server.
+- The banner, click-through and badge path is covered by unit tests and was verified on macOS in the dev app against a signed-in local Multica server (real inbox events, OS banners, clicks that open the item, combined badge, sign-out). It has not been verified on Windows or Linux.
 - No CLI install or update, no auto-start, and no issue windows.
