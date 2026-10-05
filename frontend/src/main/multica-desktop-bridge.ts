@@ -47,6 +47,8 @@ export type MulticaDesktopBridgeOptions = {
 	send: (channel: string, payload?: unknown) => void;
 	/** Receives Multica's notification, auth-session and badge messages. */
 	notifications: Pick<MulticaNotifications, "showNotification" | "reportAuthSession" | "setBadge">;
+	/** Queues safe deep links and auth tokens before the renderer subscribes. */
+	initialPending?: ReadonlyArray<readonly [channel: string, payloads: readonly unknown[]]>;
 };
 
 export type MulticaDesktopBridge = {
@@ -54,6 +56,8 @@ export type MulticaDesktopBridge = {
 	dispatch: (channel: string, payload: unknown) => void;
 	/** Drops messages still waiting for the renderer to subscribe to `channel`. */
 	clearPending: (channel: string) => void;
+	/** Copies queued payloads except inbox clicks, which belong to a server instance. */
+	pendingSnapshot: () => Array<[string, unknown[]]>;
 	/** A page load drops every renderer subscription, so readiness must be re-announced. */
 	resetReadiness: () => void;
 	dispose: () => void;
@@ -141,6 +145,11 @@ export function multicaBridgeChannels(): string[] {
 export function createMulticaDesktopBridge(options: MulticaDesktopBridgeOptions): MulticaDesktopBridge {
 	const ready = new Set<string>();
 	const pending = new Map<string, unknown[]>();
+	for (const [channel, payloads] of options.initialPending ?? []) {
+		if (!MAIN_RENDERER_CHANNELS.has(channel) || channel === "inbox:open") continue;
+		const queue = pending.get(channel) ?? [];
+		pending.set(channel, [...queue, ...payloads].slice(-MAX_PENDING_PER_CHANNEL));
+	}
 
 	const syncReplies: SyncReplies = {
 		"app:get-info": options.getAppInfo,
@@ -253,6 +262,10 @@ export function createMulticaDesktopBridge(options: MulticaDesktopBridgeOptions)
 			pending.set(channel, queue.slice(-MAX_PENDING_PER_CHANNEL));
 		},
 		clearPending: (channel) => pending.delete(channel),
+		pendingSnapshot: () =>
+			[...pending]
+				.filter(([channel, payloads]) => channel !== "inbox:open" && payloads.length > 0)
+				.map(([channel, payloads]): [string, unknown[]] => [channel, [...payloads]]),
 		resetReadiness: () => ready.clear(),
 		dispose: () => {
 			for (const [channel, listener] of [...syncListeners, ...noopListeners, ...notificationListeners, ...logStreamListeners]) {
@@ -260,7 +273,11 @@ export function createMulticaDesktopBridge(options: MulticaDesktopBridgeOptions)
 			}
 			options.daemon.dispose();
 			options.ipc.removeListener(CHANNEL_STATE_CHANNEL, onChannelState);
-			for (const [channel] of handlers) options.ipc.removeHandler(channel);
+			// Keep invokes local until this WebContents closes; otherwise they fall through to AO's global handlers.
+			for (const [channel] of handlers) {
+				options.ipc.removeHandler(channel);
+				options.ipc.handle(channel, () => undefined);
+			}
 			ready.clear();
 			pending.clear();
 		},

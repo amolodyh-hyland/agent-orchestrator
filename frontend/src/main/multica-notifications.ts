@@ -106,6 +106,7 @@ export function createMulticaNotifications(options: MulticaNotificationsOptions)
 		},
 		setBadge: (value) => {
 			const count = typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+			if (auth.isSignedOut() && count > 0) return;
 			try {
 				options.setBadge(count);
 			} catch {

@@ -230,6 +230,46 @@ describe("Multica notifications", () => {
 		expect(setBadge.mock.calls.map(([count]) => count)).toEqual([7, 2, 0, 0, 0, 0]);
 	});
 
+	it("ignores positive badge counts after explicit sign out", () => {
+		const { service, setBadge } = setup();
+		service.reportAuthSession(null);
+		setBadge.mockClear();
+
+		service.setBadge(7);
+
+		expect(setBadge).not.toHaveBeenCalled();
+	});
+
+	it("passes a zero badge count through after explicit sign out", () => {
+		const { service, setBadge } = setup();
+		service.reportAuthSession(null);
+		setBadge.mockClear();
+
+		service.setBadge(0);
+
+		expect(setBadge).toHaveBeenCalledExactlyOnceWith(0);
+	});
+
+	it("accepts a positive badge count before any auth report", () => {
+		const { service, setBadge } = setup();
+
+		service.setBadge(4);
+
+		expect(setBadge).toHaveBeenCalledExactlyOnceWith(4);
+	});
+
+	it("accepts positive badge counts after signing in again", () => {
+		const { service, setBadge } = setup();
+		service.reportAuthSession("user-a");
+		service.reportAuthSession(null);
+		service.reportAuthSession("user-b");
+		setBadge.mockClear();
+
+		service.setBadge(5);
+
+		expect(setBadge).toHaveBeenCalledExactlyOnceWith(5);
+	});
+
 	it("resets the session, closes live banners, and clears the badge contribution", () => {
 		const { service, notifications, setBadge } = setup();
 		service.reportAuthSession("u1");

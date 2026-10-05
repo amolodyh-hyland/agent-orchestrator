@@ -13,6 +13,7 @@ import {
 	TOGGLE_MULTICA_SHORTCUT_CHANNEL,
 	type MulticaSettings,
 } from "../shared/multica";
+import { createMulticaNotifications } from "./multica-notifications";
 import { createMulticaViewHost, type MulticaViewHostOptions } from "./multica-view-host";
 
 const URL = "http://localhost:3000/";
@@ -126,6 +127,7 @@ async function setup(initial: MulticaSettings = { url: URL }, overrides: Partial
 	const ipc = fakeIpc();
 	const openExternal = vi.fn(async (_url: string) => undefined);
 	const writeUrl = vi.fn(async (url: string) => coerceMulticaSettings({ url }));
+	const latestView = () => FakeWebContentsView.instances[FakeWebContentsView.instances.length - 1];
 	const host = await createMulticaViewHost({
 		mainWindow: { contentView },
 		shellWebContents: shell,
@@ -174,10 +176,54 @@ async function setup(initial: MulticaSettings = { url: URL }, overrides: Partial
 		ipc,
 		openExternal,
 		writeUrl,
-		view: () => FakeWebContentsView.instances[0],
-		multicaEvent: () => ({ sender: FakeWebContentsView.instances[0].webContents, returnValue: undefined as unknown }),
+		view: latestView,
+		multicaEvent: () => ({ sender: latestView().webContents, returnValue: undefined as unknown }),
 		stateChannelPayloads: () =>
 			shell.send.mock.calls.filter(([channel]) => channel === MULTICA_STATE_CHANNEL).map(([, state]) => state),
+	};
+}
+
+function setupRealNotifications() {
+	type Banner = {
+		handlers: Map<"click" | "failed", () => void>;
+		on: (event: "click" | "failed", listener: () => void) => void;
+		show: () => void;
+		close: () => void;
+		click: () => void;
+	};
+	const banners: Banner[] = [];
+	const openInboxItem = vi.fn();
+	const setBadge = vi.fn();
+	const createNotification = vi.fn(() => {
+		const handlers = new Map<"click" | "failed", () => void>();
+		const banner: Banner = {
+			handlers,
+			on: (event, listener) => handlers.set(event, listener),
+			show: vi.fn(),
+			close: vi.fn(),
+			click: () => handlers.get("click")?.(),
+		};
+		banners.push(banner);
+		return banner;
+	});
+	const service = createMulticaNotifications({
+		isSupported: () => true,
+		createNotification,
+		isWindowFocused: () => false,
+		isMulticaShown: () => false,
+		openInboxItem,
+		setBadge,
+	});
+	return { service, banners, createNotification, openInboxItem, setBadge };
+}
+
+function notificationPayload(itemId: string) {
+	return {
+		slug: "team/project",
+		itemId,
+		issueKey: `AO-${itemId}`,
+		title: "New comment",
+		body: "A comment was added",
 	};
 }
 
@@ -543,14 +589,17 @@ describe("multica view host: not configured", () => {
 });
 
 describe("multica view host: changing the URL", () => {
-	it("reloads the existing view so its preload reads the new runtime config", async () => {
+	it("replaces the view so its preload reads the new runtime config", async () => {
 		const t = await setup();
 		ready(t);
+		const oldView = t.view();
 
 		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "https://multica.example.com");
 
-		expect(t.view().webContents.loadURL).toHaveBeenCalledTimes(2);
-		expect(FakeWebContentsView.instances).toHaveLength(1);
+		expect(FakeWebContentsView.instances).toHaveLength(2);
+		expect(oldView.webContents.close).toHaveBeenCalledOnce();
+		expect(t.view()).not.toBe(oldView);
+		expect(t.view().webContents.loadURL).toHaveBeenCalledExactlyOnceWith(BUNDLE.rendererUrl);
 		expect(t.notifications.reset).toHaveBeenCalledOnce();
 		const event = t.multicaEvent();
 		t.view().webContents.ipc.emit("runtime-config:get", event);
@@ -564,6 +613,7 @@ describe("multica view host: changing the URL", () => {
 		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, URL);
 
 		expect(t.notifications.reset).not.toHaveBeenCalled();
+		expect(FakeWebContentsView.instances).toHaveLength(1);
 	});
 
 	it("drops a queued inbox item when the URL changes before renderer readiness", async () => {
@@ -571,9 +621,12 @@ describe("multica view host: changing the URL", () => {
 		const target = { slug: "team/project", itemId: "42", issueKey: "AO-42" };
 
 		expect(t.host.openInboxItem(target)).toBe(true);
+		const oldView = t.view();
 		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "https://multica.example.com");
 		t.view().webContents.ipc.emit("main-renderer:channel-state", t.multicaEvent(), { channel: "inbox:open", ready: true });
 
+		expect(t.view()).not.toBe(oldView);
+		expect(oldView.webContents.close).toHaveBeenCalledOnce();
 		expect(t.notifications.reset).toHaveBeenCalledOnce();
 		expect(t.view().webContents.send).not.toHaveBeenCalled();
 	});
@@ -582,9 +635,12 @@ describe("multica view host: changing the URL", () => {
 		const t = await setup();
 
 		expect(t.host.handleDeepLink("multica://auth/callback?token=abc.def")).toBe(true);
+		const oldView = t.view();
 		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "https://multica.example.com");
 		t.view().webContents.ipc.emit("main-renderer:channel-state", t.multicaEvent(), { channel: "auth:token", ready: true });
 
+		expect(t.view()).not.toBe(oldView);
+		expect(oldView.webContents.close).toHaveBeenCalledOnce();
 		expect(t.view().webContents.send).toHaveBeenCalledExactlyOnceWith("auth:token", "abc.def");
 	});
 
@@ -605,6 +661,147 @@ describe("multica view host: changing the URL", () => {
 		await expect(t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "ftp://x")).rejects.toThrow();
 
 		expect(t.host.getState().url).toBe(URL);
+	});
+});
+
+describe("multica view host: a stale document after a URL change", () => {
+	it("keeps stale invoke calls on the old view after it is replaced", async () => {
+		const daemon = {
+			getStatus: vi.fn(async () => ({ state: "stopped" as const })),
+			start: vi.fn(async () => ({ success: true })),
+			stop: vi.fn(async () => ({ success: true })),
+			restart: vi.fn(async () => ({ success: true })),
+			isInstalled: vi.fn(async () => true),
+			refreshBinary: vi.fn(),
+			probeRuntimes: vi.fn(async () => ({ probeResult: "error" as const })),
+			startLogStream: vi.fn(),
+			stopLogStream: vi.fn(),
+			startPolling: vi.fn(),
+			dispose: vi.fn(),
+		};
+		const t = await setup({ url: URL }, { createDaemonService: () => daemon });
+		t.host.setActive(true);
+		const oldView = t.view();
+
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "https://multica.example.com");
+		expect(t.view()).not.toBe(oldView);
+		for (const channel of ["daemon:stop", "daemon:restart", "shell:openExternal"]) {
+			expect(oldView.webContents.ipc.handlers.has(channel)).toBe(true);
+		}
+		for (const method of Object.values(daemon)) method.mockClear();
+		t.openExternal.mockClear();
+
+		for (const [channel, args] of [
+			["daemon:stop", []],
+			["daemon:restart", []],
+			["shell:openExternal", ["https://accounts.example.com/oauth"]],
+		] as const) {
+			const result = await oldView.webContents.ipc.invoke(channel, { sender: oldView.webContents }, ...args);
+			expect(result).toBeUndefined();
+		}
+
+		for (const method of Object.values(daemon)) expect(method).not.toHaveBeenCalled();
+		expect(t.openExternal).not.toHaveBeenCalled();
+		expect(t.ipc.handlers.has("daemon:stop")).toBe(false);
+		expect(t.ipc.handlers.has("daemon:restart")).toBe(false);
+		expect(t.ipc.handlers.has("shell:openExternal")).toBe(false);
+	});
+
+	it("removes the old notification listeners before the old document can report state", async () => {
+		const real = setupRealNotifications();
+		const t = await setup({ url: URL }, { notifications: real.service });
+		t.host.setActive(true);
+		const oldView = t.view();
+		const oldEvent = { sender: oldView.webContents };
+		oldView.webContents.ipc.emit("auth:session-state", oldEvent, "user-a");
+		oldView.webContents.ipc.emit("notification:show", oldEvent, notificationPayload("before-change"));
+		const originalBanner = real.banners[0];
+
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "https://multica.example.com");
+		const newView = t.view();
+		oldView.webContents.ipc.emit("auth:session-state", oldEvent, "user-a");
+		oldView.webContents.ipc.emit("notification:show", oldEvent, notificationPayload("from-stale-page"));
+
+		expect(newView).not.toBe(oldView);
+		expect(originalBanner.close).toHaveBeenCalledOnce();
+		expect(real.createNotification).toHaveBeenCalledOnce();
+		expect(real.openInboxItem).not.toHaveBeenCalled();
+		for (const channel of ["auth:session-state", "notification:show", "badge:set"]) {
+			expect(oldView.webContents.ipc.listeners.get(channel)?.size ?? 0).toBe(0);
+		}
+	});
+
+	it("keeps a prior banner stale across the same user signing in on the replacement", async () => {
+		const real = setupRealNotifications();
+		const t = await setup({ url: URL }, { notifications: real.service });
+		t.host.setActive(true);
+		const oldView = t.view();
+		oldView.webContents.ipc.emit("auth:session-state", { sender: oldView.webContents }, "user-a");
+		oldView.webContents.ipc.emit("notification:show", { sender: oldView.webContents }, notificationPayload("old-banner"));
+		const oldBanner = real.banners[0];
+
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "https://multica.example.com");
+		const newView = t.view();
+		newView.webContents.ipc.emit("auth:session-state", { sender: newView.webContents }, "user-a");
+		oldBanner.click();
+		newView.webContents.ipc.emit("notification:show", { sender: newView.webContents }, notificationPayload("new-banner"));
+		real.banners[1].click();
+
+		expect(newView).not.toBe(oldView);
+		expect(real.openInboxItem).toHaveBeenCalledExactlyOnceWith({
+			slug: "team/project",
+			itemId: "new-banner",
+			issueKey: "AO-new-banner",
+		});
+	});
+
+	it("handles the replacement renderer's first auth report immediately", async () => {
+		const real = setupRealNotifications();
+		const t = await setup({ url: URL }, { notifications: real.service });
+		t.host.setActive(true);
+		const oldView = t.view();
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "https://multica.example.com");
+		const newView = t.view();
+
+		newView.webContents.ipc.emit("auth:session-state", { sender: newView.webContents }, "user-a");
+		newView.webContents.ipc.emit("notification:show", { sender: newView.webContents }, notificationPayload("first-report"));
+
+		expect(newView).not.toBe(oldView);
+		expect(real.banners).toHaveLength(1);
+	});
+
+	it("ignores late load and crash events from the replaced view", async () => {
+		const t = await setup();
+		t.host.setActive(true);
+		const oldView = t.view();
+		oldView.webContents.emit("did-finish-load");
+
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "https://multica.example.com");
+		const newView = t.view();
+		oldView.webContents.emit("did-finish-load");
+		expect(t.host.getState().status).toBe("loading");
+		oldView.webContents.emit("did-fail-load", {}, -6, "ERR_FILE_NOT_FOUND", BUNDLE.rendererUrl, true);
+		oldView.webContents.emit("render-process-gone", {}, { reason: "crashed" });
+
+		expect(newView).not.toBe(oldView);
+		expect(t.host.getState()).toEqual({ active: true, status: "loading", url: "https://multica.example.com/" });
+		newView.webContents.emit("did-finish-load");
+		expect(t.host.getState()).toEqual({ active: true, status: "ready", url: "https://multica.example.com/" });
+	});
+
+	it("keeps the replacement readiness when the old view starts loading late", async () => {
+		const t = await setup();
+		t.host.setActive(true);
+		const oldView = t.view();
+
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "https://multica.example.com");
+		const newView = t.view();
+		const target = { slug: "team/project", itemId: "42", issueKey: "AO-42" };
+		newView.webContents.ipc.emit("main-renderer:channel-state", { sender: newView.webContents }, { channel: "inbox:open", ready: true });
+		oldView.webContents.emit("did-start-loading");
+
+		expect(t.host.openInboxItem(target)).toBe(true);
+		expect(newView.webContents.send).toHaveBeenCalledExactlyOnceWith("inbox:open", target);
 	});
 });
 
