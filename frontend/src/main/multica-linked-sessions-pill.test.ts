@@ -4,10 +4,11 @@ import {
 	MAX_PILL_ENTRIES,
 	MULTICA_LINKED_SESSIONS_PILL_ID,
 } from "./multica-linked-sessions-pill";
+import type { LinkedSessionPillEntry } from "./multica-linked-sessions-pill";
 
 const originalHtmlChildren = Array.from(document.documentElement.children);
 
-function evaluatePill(entries: { label: string; url: string }[], options?: { sendUrl?: string }): unknown {
+function evaluatePill(entries: LinkedSessionPillEntry[], options?: { sendUrl?: string }): unknown {
 	return new Function(buildLinkedSessionsPillScript(entries, options))();
 }
 
@@ -19,6 +20,137 @@ afterEach(() => {
 describe("multica linked sessions pill", () => {
 	it("evaluates as undefined", () => {
 		expect(evaluatePill([{ label: "Session", url: "ao://sessions/project/session" }])).toBeUndefined();
+	});
+
+	it("renders a leading status dot and label for each tone", () => {
+		const tones = ["ready", "attention", "pending", "working", "done", "unknown"] as const;
+		const buttons = tones.map((tone) => {
+			evaluatePill([
+				{
+					label: "Session",
+					url: "ao://sessions/project/session",
+					status: { tone, label: `Status ${tone}`, detail: "Details", stale: false },
+				},
+			]);
+			return document.getElementById(MULTICA_LINKED_SESSIONS_PILL_ID)?.shadowRoot?.querySelector("button");
+		});
+		expect(buttons.map((button) => button?.querySelector(".ao-status-dot")?.getAttribute("data-tone"))).toEqual(tones);
+		expect(buttons.map((button) => button?.firstElementChild?.className)).toEqual(tones.map(() => "ao-status-dot"));
+		expect(buttons.map((button) => button?.textContent)).toEqual(tones.map((tone) => `AO · Session · Status ${tone}`));
+		expect(buttons.map((button) => button?.getAttribute("title"))).toEqual(
+			tones.map(() => "Open AO session Session\nDetails"),
+		);
+	});
+
+	it("omits an empty status detail and marks only stale entries", () => {
+		evaluatePill([
+			{
+				label: "Fresh",
+				url: "ao://sessions/project/fresh",
+				status: { tone: "ready", label: "Ready", detail: "", stale: false },
+			},
+			{
+				label: "Old",
+				url: "ao://sessions/project/old",
+				status: { tone: "unknown", label: "Unknown", detail: "Unavailable", stale: true },
+			},
+		]);
+
+		const buttons = Array.from(
+			document.getElementById(MULTICA_LINKED_SESSIONS_PILL_ID)?.shadowRoot?.querySelectorAll("button") ?? [],
+		);
+		const styleText = document
+			.getElementById(MULTICA_LINKED_SESSIONS_PILL_ID)
+			?.shadowRoot?.querySelector("style")?.textContent;
+		expect(styleText).toMatch(/button\[data-stale="true"\]\s*\{\s*opacity:\s*0\.6;\s*\}/);
+		expect(buttons[0]?.getAttribute("title")).toBe("Open AO session Fresh");
+		expect(buttons[0]?.hasAttribute("data-stale")).toBe(false);
+		expect(buttons[1]?.getAttribute("title")).toBe("Open AO session Old\nUnavailable");
+		expect(buttons[1]?.getAttribute("data-stale")).toBe("true");
+	});
+
+	it("escapes status payload text in the generated script and restores it in the pill", () => {
+		const specialText = "a<b\u2028c\u2029d</script>";
+		const entries: LinkedSessionPillEntry[] = [
+			{
+				label: specialText,
+				url: "ao://sessions/project/session",
+				status: { tone: "attention", label: specialText, detail: specialText, stale: false },
+			},
+		];
+		const script = buildLinkedSessionsPillScript(entries);
+		const payloadStart = script.indexOf("const payload = ") + "const payload = ".length;
+		const payloadEnd = script.indexOf(";\n\tif (payload.entries", payloadStart);
+		const embeddedPayload = script.slice(payloadStart, payloadEnd);
+
+		expect(embeddedPayload).not.toContain("<");
+		expect(embeddedPayload).not.toContain("\u2028");
+		expect(embeddedPayload).not.toContain("\u2029");
+		expect(embeddedPayload).toContain("\\u003c");
+		expect(embeddedPayload).toContain("\\u2028");
+		expect(embeddedPayload).toContain("\\u2029");
+
+		evaluatePill(entries);
+		const button = document
+			.getElementById(MULTICA_LINKED_SESSIONS_PILL_ID)
+			?.shadowRoot?.querySelector("button");
+		expect(button?.textContent).toBe(`AO · ${specialText} · ${specialText}`);
+		expect(button?.getAttribute("title")).toBe(`Open AO session ${specialText}\n${specialText}`);
+	});
+
+	it("renders status labels and details as inert text", () => {
+		const scriptLike = "<img src=x onerror=alert(1)>";
+		evaluatePill([
+			{
+				label: "Session",
+				url: "ao://sessions/project/session",
+				status: { tone: "attention", label: scriptLike, detail: scriptLike, stale: false },
+			},
+		]);
+
+		const shadow = document.getElementById(MULTICA_LINKED_SESSIONS_PILL_ID)?.shadowRoot;
+		const button = shadow?.querySelector("button");
+		expect(button?.textContent).toBe(`AO · Session · ${scriptLike}`);
+		expect(button?.getAttribute("title")).toBe(`Open AO session Session\n${scriptLike}`);
+		expect(shadow?.querySelector("img")).toBeNull();
+	});
+
+	it("preserves the original button DOM when an entry has no status", () => {
+		evaluatePill([{ label: "Session", url: "ao://sessions/project/session" }]);
+
+		const shadow = document.getElementById(MULTICA_LINKED_SESSIONS_PILL_ID)?.shadowRoot;
+		const button = shadow?.querySelector("button");
+		expect(button?.getAttribute("type")).toBe("button");
+		expect(button?.getAttribute("title")).toBe("Open AO session Session");
+		expect(button?.textContent).toBe("AO · Session");
+		expect(shadow?.querySelector(".ao-status-dot")).toBeNull();
+	});
+
+	it("renders mixed entries and still opens a status entry URL", () => {
+		const open = vi.spyOn(window, "open").mockImplementation(() => null);
+		const statusUrl = "ao://sessions/project/status-session";
+		evaluatePill([
+			{ label: "Plain", url: "ao://sessions/project/plain" },
+			{
+				label: "Status",
+				url: statusUrl,
+				status: { tone: "working", label: "Working", detail: "Building", stale: false },
+			},
+		]);
+
+		const shadow = document.getElementById(MULTICA_LINKED_SESSIONS_PILL_ID)?.shadowRoot;
+		const buttons = Array.from(shadow?.querySelectorAll("button") ?? []);
+		expect(buttons.map((button) => button.textContent)).toEqual(["AO · Plain", "AO · Status · Working"]);
+		expect(buttons[0]?.querySelector(".ao-status-dot")).toBeNull();
+		expect(buttons[1]?.querySelector(".ao-status-dot")).not.toBeNull();
+		buttons[1]?.click();
+		expect(open).toHaveBeenCalledExactlyOnceWith(statusUrl);
+	});
+
+	it("generates a script that parses as JavaScript", () => {
+		expect(() => new Function(buildLinkedSessionsPillScript([
+			{ label: "Session", url: "ao://sessions/project/session", status: { tone: "ready", label: "Ready", detail: "", stale: false } },
+		]))).not.toThrow();
 	});
 
 	it("adds one pill under the document element with a button for each entry", () => {
