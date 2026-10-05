@@ -69,10 +69,11 @@ The Multica URL in Settings (default `http://localhost:3000`) feeds Multica's ru
      TMUX_TMPDIR=/tmp/ao-multica-tmp \
      TMPDIR=/tmp/ao-multica-tmp \
      "/path/to/Agent Orchestrator.app/Contents/MacOS/agent-orchestrator" \
+     --use-mock-keychain \
      --remote-debugging-port=9222
    ```
 
-2. Choose a free `AO_PORT` other than the default daemon port 3001, which could otherwise be probed and cause the real daemon to be shut down and replaced. `HOME` moves Electron `userData` (`~/.ao/electron`), `~/.ao`, and `~/.multica`; `TMUX_TMPDIR` is needed because the tmux socket name is fixed. Set `AO_TELEMETRY_RENDERER=off` in addition to `AO_TELEMETRY_EVENTS=off` and `AO_TELEMETRY_REMOTE=off` so the isolated run does not send desktop telemetry. The remote debugging port is optional. Create no terminal sessions and do not sign in to AO Cloud during this run.
+2. Choose a free `AO_PORT` other than the default daemon port 3001, which could otherwise be probed and cause the real daemon to be shut down and replaced. `HOME` moves Electron `userData` (`~/.ao/electron`), `~/.ao`, and `~/.multica`; `TMUX_TMPDIR` is needed because the tmux socket name is fixed. Set `AO_TELEMETRY_RENDERER=off` in addition to `AO_TELEMETRY_EVENTS=off` and `AO_TELEMETRY_REMOTE=off` so the isolated run does not send desktop telemetry. The `--use-mock-keychain` switch keeps Chromium and Electron storage (including `safeStorage`) off the real keychain, so there is no keychain dialog and the real “Agent Orchestrator Safe Storage” item is not used; it does not cover the browser-profile import, which calls `security find-generic-password` itself (do not use that feature in an isolated run). Without it, startup may prompt for keychain access. The remote debugging port is optional. Create no terminal sessions and do not sign in to AO Cloud during this run.
 
 3. This recipe has been run end to end through the AO/Multica toggle and bundled Multica sign-in screen when the app is placed under a directory with an `Applications` path component (for example, `/tmp/<x>/Applications/`), which prevents the relocation hand-off. Use only throwaway test copies; never use `/Applications`.
 
