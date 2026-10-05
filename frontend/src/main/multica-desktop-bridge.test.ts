@@ -270,6 +270,72 @@ describe("multica desktop bridge: stubs and sender scoping", () => {
 });
 
 describe("multica desktop bridge: main-to-renderer messages", () => {
+	it("delivers seeded payloads once and in order when the renderer announces readiness", () => {
+		const seededTokens: unknown[] = ["t1", "t2"];
+		const { ipc, send } = setup({ initialPending: [["auth:token", seededTokens]] });
+		seededTokens[0] = "changed";
+		seededTokens.push("t3");
+
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "auth:token", ready: true });
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "auth:token", ready: false });
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "auth:token", ready: true });
+
+		expect(send).toHaveBeenCalledTimes(2);
+		expect(send).toHaveBeenNthCalledWith(1, "auth:token", "t1");
+		expect(send).toHaveBeenNthCalledWith(2, "auth:token", "t2");
+	});
+
+	it("ignores seeded payloads for inbox clicks and unknown channels", () => {
+		const { bridge, ipc, send } = setup({
+			initialPending: [
+				["inbox:open", [{ itemId: "old-server" }]],
+				["unknown:channel", ["ignored"]],
+			],
+		});
+
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "inbox:open", ready: true });
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "unknown:channel", ready: true });
+
+		expect(send).not.toHaveBeenCalled();
+		expect(bridge.pendingSnapshot()).toEqual([]);
+	});
+
+	it("returns copied safe pending queues and excludes inbox clicks", () => {
+		const { bridge, ipc, send } = setup({
+			initialPending: [
+				["auth:token", ["token-1"]],
+				["invite:open", [{ inviteId: "invite-1" }]],
+				["inbox:open", [{ itemId: "item-1" }]],
+			],
+		});
+
+		const snapshot = bridge.pendingSnapshot();
+		expect(snapshot).toEqual([
+			["auth:token", ["token-1"]],
+			["invite:open", [{ inviteId: "invite-1" }]],
+		]);
+		snapshot[0][1][0] = "changed";
+		snapshot[0][1].push("extra");
+		snapshot.push(["settings:open", ["extra"]]);
+
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "auth:token", ready: true });
+		expect(send).toHaveBeenCalledExactlyOnceWith("auth:token", "token-1");
+		expect(bridge.pendingSnapshot()).toEqual([["invite:open", [{ inviteId: "invite-1" }]]]);
+
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "invite:open", ready: true });
+		expect(bridge.pendingSnapshot()).toEqual([]);
+	});
+
+	it("keeps only the last eight seeded payloads per channel", () => {
+		const { ipc, send } = setup({ initialPending: [["auth:token", [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]]] });
+
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "auth:token", ready: true });
+
+		expect(send).toHaveBeenCalledTimes(8);
+		expect(send).toHaveBeenNthCalledWith(1, "auth:token", 2);
+		expect(send).toHaveBeenNthCalledWith(8, "auth:token", 9);
+	});
+
 	it("drops a queued inbox click after the auth report invalidates the session", () => {
 		const { bridge, ipc, send, notificationFakes } = setup();
 		notificationFakes.reportAuthSession.mockReturnValue(true);
@@ -371,12 +437,24 @@ describe("multica desktop bridge: main-to-renderer messages", () => {
 		expect(send).toHaveBeenCalledExactlyOnceWith("auth:token", "t1");
 	});
 
-	it("releases every registration on dispose", () => {
-		const { bridge, ipc } = setup();
+	it("removes listeners and leaves inert invoke handlers on dispose", async () => {
+		const { bridge, ipc, daemon, openExternal } = setup();
+		const invokeChannels = [...ipc.handlers.keys()];
+		vi.clearAllMocks();
 
 		bridge.dispose();
 
-		expect(ipc.handlers.size).toBe(0);
+		expect(ipc.handlers.size).toBe(invokeChannels.length);
+		for (const channel of invokeChannels) expect(ipc.handlers.has(channel)).toBe(true);
+		for (const channel of invokeChannels) {
+			const result = await ipc.invoke(channel, MULTICA, "https://accounts.example.com/oauth");
+			expect(result).toBeUndefined();
+		}
+		for (const [name, method] of Object.entries(daemon)) {
+			if (name !== "dispose") expect(method).not.toHaveBeenCalled();
+		}
+		expect(daemon.dispose).toHaveBeenCalledOnce();
+		expect(openExternal).not.toHaveBeenCalled();
 		expect([...ipc.listeners.values()].every((set) => set.size === 0)).toBe(true);
 	});
 });

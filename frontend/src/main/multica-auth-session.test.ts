@@ -7,7 +7,27 @@ describe("Multica auth session", () => {
 		const session = createMulticaAuthSession();
 
 		expect(session.hasActiveSession()).toBe(false);
+		expect(session.isSignedOut()).toBe(false);
 		expect(session.generation()).toBe(0);
+	});
+
+	it("tracks explicit sign out separately from no report", () => {
+		const session = createMulticaAuthSession();
+
+		expect(session.isSignedOut()).toBe(false);
+		session.report(null);
+		expect(session.isSignedOut()).toBe(true);
+
+		expect(session.report("user-a")).toBe(true);
+		expect(session.isSignedOut()).toBe(false);
+		session.report(null);
+		expect(session.isSignedOut()).toBe(true);
+
+		expect(session.report(" ")).toBe(false);
+		expect(session.isSignedOut()).toBe(true);
+
+		session.reset();
+		expect(session.isSignedOut()).toBe(false);
 	});
 
 	it("does not invalidate the first user report or a repeat", () => {
