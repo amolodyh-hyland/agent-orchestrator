@@ -1,6 +1,7 @@
 import type { IpcMain, IpcMainEvent, IpcMainInvokeEvent } from "electron";
 import type { MulticaRuntimeConfigResult } from "../shared/multica";
 import type { MulticaDaemonService } from "./multica-daemon-cli";
+import type { MulticaNotifications } from "./multica-notifications";
 
 // AO's main process stands in for Multica's main process for the embedded
 // desktop renderer. Multica's own preload (attached to the Multica view only)
@@ -15,9 +16,8 @@ import type { MulticaDaemonService } from "./multica-daemon-cli";
 // Every handler still checks the sender as a second line of defence.
 //
 // What is real: app info, locale, runtime config, freeze breadcrumb, external
-// links, deep-link delivery (auth token, invite), and a minimal daemon surface
-// backed by the installed multica CLI (multica-daemon-cli.ts). Everything else is
-// a safe stub.
+// links, deep-link delivery (auth token, invite), notifications, account session,
+// badge, and a minimal daemon surface backed by the installed multica CLI.
 
 const CHANNEL_STATE_CHANNEL = "main-renderer:channel-state";
 
@@ -45,6 +45,10 @@ export type MulticaDesktopBridgeOptions = {
 	openExternal: (url: string) => Promise<void>;
 	/** Delivers a main-to-renderer message to the Multica view. */
 	send: (channel: string, payload?: unknown) => void;
+	/** Receives Multica's notification, auth-session and badge messages. */
+	notifications: Pick<MulticaNotifications, "showNotification" | "reportAuthSession" | "setBadge">;
+	/** Queues safe deep links and auth tokens before the renderer subscribes. */
+	initialPending?: ReadonlyArray<readonly [channel: string, payloads: readonly unknown[]]>;
 };
 
 export type MulticaDesktopBridge = {
@@ -52,6 +56,10 @@ export type MulticaDesktopBridge = {
 	dispatch: (channel: string, payload: unknown) => void;
 	/** Runs `callback` now when the renderer already subscribed to `channel`, otherwise once it does (once only). */
 	whenReady: (channel: string, callback: () => void) => void;
+	/** Drops messages still waiting for the renderer to subscribe to `channel`. */
+	clearPending: (channel: string) => void;
+	/** Copies queued payloads except inbox clicks, which belong to a server instance. */
+	pendingSnapshot: () => Array<[string, unknown[]]>;
 	/** A page load drops every renderer subscription, so readiness must be re-announced. */
 	resetReadiness: () => void;
 	dispose: () => void;
@@ -109,13 +117,11 @@ function invokeStubs(getHostName: () => string, daemon: MulticaDaemonService): R
 // `window:close` is deliberately a no-op: an embedded view closing "its window"
 // must never close AO's window.
 const LOG_STREAM_CHANNELS = ["daemon:start-log-stream", "daemon:stop-log-stream"] as const;
+const NOTIFICATION_CHANNELS = ["auth:session-state", "notification:show", "badge:set"] as const;
 
 const NOOP_SEND_CHANNELS = [
 	"freeze:ack",
-	"auth:session-state",
 	"renderer:route-context",
-	"notification:show",
-	"badge:set",
 	"window:close",
 ] as const;
 
@@ -132,6 +138,7 @@ export function multicaBridgeChannels(): string[] {
 		CHANNEL_STATE_CHANNEL,
 		"shell:openExternal",
 		...NOOP_SEND_CHANNELS,
+		...NOTIFICATION_CHANNELS,
 		...LOG_STREAM_CHANNELS,
 		...Object.keys(invokeStubs(() => "", {} as MulticaDaemonService)),
 	];
@@ -141,6 +148,11 @@ export function createMulticaDesktopBridge(options: MulticaDesktopBridgeOptions)
 	const ready = new Set<string>();
 	const pending = new Map<string, unknown[]>();
 	const waiting = new Map<string, Array<() => void>>();
+	for (const [channel, payloads] of options.initialPending ?? []) {
+		if (!MAIN_RENDERER_CHANNELS.has(channel) || channel === "inbox:open") continue;
+		const queue = pending.get(channel) ?? [];
+		pending.set(channel, [...queue, ...payloads].slice(-MAX_PENDING_PER_CHANNEL));
+	}
 
 	const syncReplies: SyncReplies = {
 		"app:get-info": options.getAppInfo,
@@ -167,6 +179,30 @@ export function createMulticaDesktopBridge(options: MulticaDesktopBridgeOptions)
 		channel,
 		() => undefined,
 	]);
+
+	const notificationListeners: Array<[string, (event: IpcMainEvent, value: unknown) => void]> = [
+		[
+			"auth:session-state",
+			(event, value) => {
+				if (options.isMulticaSender(event.sender) && options.notifications.reportAuthSession(value)) {
+					// Invalidation makes any queued inbox click belong to the previous account.
+					pending.delete("inbox:open");
+				}
+			},
+		],
+		[
+			"notification:show",
+			(event, value) => {
+				if (options.isMulticaSender(event.sender)) options.notifications.showNotification(value);
+			},
+		],
+		[
+			"badge:set",
+			(event, value) => {
+				if (options.isMulticaSender(event.sender)) options.notifications.setBadge(value);
+			},
+		],
+	];
 
 	const logStreamListeners: Array<[string, (event: IpcMainEvent) => void]> = [
 		[
@@ -221,7 +257,7 @@ export function createMulticaDesktopBridge(options: MulticaDesktopBridgeOptions)
 		),
 	];
 
-	for (const [channel, listener] of [...syncListeners, ...noopListeners, ...logStreamListeners]) options.ipc.on(channel, listener);
+	for (const [channel, listener] of [...syncListeners, ...noopListeners, ...notificationListeners, ...logStreamListeners]) options.ipc.on(channel, listener);
 	options.ipc.on(CHANNEL_STATE_CHANNEL, onChannelState);
 	for (const [channel, handler] of handlers) options.ipc.handle(channel, handler);
 	options.daemon.startPolling();
@@ -245,14 +281,23 @@ export function createMulticaDesktopBridge(options: MulticaDesktopBridgeOptions)
 			queue.push(callback);
 			waiting.set(channel, queue.slice(-MAX_PENDING_PER_CHANNEL));
 		},
+		clearPending: (channel) => pending.delete(channel),
+		pendingSnapshot: () =>
+			[...pending]
+				.filter(([channel, payloads]) => channel !== "inbox:open" && payloads.length > 0)
+				.map(([channel, payloads]): [string, unknown[]] => [channel, [...payloads]]),
 		resetReadiness: () => ready.clear(),
 		dispose: () => {
-			for (const [channel, listener] of [...syncListeners, ...noopListeners, ...logStreamListeners]) {
+			for (const [channel, listener] of [...syncListeners, ...noopListeners, ...notificationListeners, ...logStreamListeners]) {
 				options.ipc.removeListener(channel, listener);
 			}
 			options.daemon.dispose();
 			options.ipc.removeListener(CHANNEL_STATE_CHANNEL, onChannelState);
-			for (const [channel] of handlers) options.ipc.removeHandler(channel);
+			// Keep invokes local until this WebContents closes; otherwise they fall through to AO's global handlers.
+			for (const [channel] of handlers) {
+				options.ipc.removeHandler(channel);
+				options.ipc.handle(channel, () => undefined);
+			}
 			ready.clear();
 			pending.clear();
 			waiting.clear();
