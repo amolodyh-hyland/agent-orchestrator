@@ -15,6 +15,12 @@ import {
 	type MulticaIssueLink,
 	type MulticaIssueRef,
 } from "../shared/multica-issue-links";
+import {
+	MULTICA_STATUS_PUBLISH_CHANNEL,
+	MULTICA_STATUS_TONE_ORDER,
+	isMulticaStatusSnapshot,
+	type MulticaLinkStatusEntry,
+} from "../shared/multica-session-status";
 import { AO_SEND_ISSUE_URL, parseMulticaIssueTitleParts } from "../shared/multica-send-to-ao";
 import type { MulticaIssueLinkStore } from "./multica-issue-links";
 import { buildLinkedSessionsPillScript } from "./multica-linked-sessions-pill";
@@ -53,6 +59,9 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 	let cacheVersion = 0;
 	let currentIssue: string | null = null;
 	let currentTitle: string | null = null;
+	let statusEntries = new Map<string, MulticaLinkStatusEntry>();
+	let statusStale = false;
+	let statusKey = "";
 	let disposed = false;
 	const sendToAo = createMulticaSendToAo({
 		shellWebContents: options.shellWebContents,
@@ -87,10 +96,28 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 
 	const refreshPill = (): void => {
 		if (disposed) return;
+		const seenSessionIds = new Set<string>();
 		const entries = currentIssue
 			? links
 					.filter((link) => link.issueIdentifier === currentIssue)
-					.map((link) => ({ label: link.sessionId, url: aoSessionUrl(link.projectId, link.sessionId) }))
+					.filter((link) => {
+						if (seenSessionIds.has(link.sessionId)) return false;
+						seenSessionIds.add(link.sessionId);
+						return true;
+					})
+					.map((link) => {
+						const status = statusEntries.get(link.sessionId);
+						return {
+							label: link.sessionId,
+							url: aoSessionUrl(link.projectId, link.sessionId),
+							...(status ? { status: { tone: status.tone, label: status.label, detail: status.detail, stale: statusStale } } : {}),
+						};
+					})
+					.sort(
+						(left, right) =>
+							MULTICA_STATUS_TONE_ORDER[left.status?.tone ?? "unknown"] -
+							MULTICA_STATUS_TONE_ORDER[right.status?.tone ?? "unknown"],
+					)
 			: [];
 		options.getHost()?.runInPage(buildLinkedSessionsPillScript(entries, { sendUrl: currentIssue ? AO_SEND_ISSUE_URL : undefined }));
 	};
@@ -170,6 +197,20 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 				const path = multicaIssuePath(ref);
 				if (!isMulticaIssuePath(path)) return false;
 				return options.getHost()?.navigatePath(path) ?? false;
+			},
+		],
+		[
+			MULTICA_STATUS_PUBLISH_CHANNEL,
+			(event, payload) => {
+				if (disposed || !isTrustedShell(event)) return { ok: false };
+				if (!isMulticaStatusSnapshot(payload)) return { ok: false };
+				const key = JSON.stringify(payload);
+				if (key === statusKey) return { ok: true };
+				statusEntries = new Map(payload.entries.map((entry) => [entry.sessionId, entry]));
+				statusStale = payload.stale;
+				statusKey = key;
+				if (currentIssue) refreshPill();
+				return { ok: true };
 			},
 		],
 	];

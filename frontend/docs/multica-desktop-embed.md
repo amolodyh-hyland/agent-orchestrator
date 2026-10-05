@@ -75,6 +75,30 @@ default). AO creates a worker session seeded with the issue, links it to the iss
 - Not verified: behavior against a signed-in live Multica server, pill placement, and localization
   of the pill label (main uses English literals).
 
+## Status badges
+
+The AO pill shows a colored dot and localized status label for each linked session. Its tooltip
+shows PR number and state, CI, and review. Tones are `ready`, `attention`, `pending`, `working`,
+`done`, and `unknown`, following AO's attention zones. Sessions are sorted by urgency; five are
+shown, followed by `+N` when more are linked.
+
+- Data: the AO shell renderer's workspace query, kept live by the daemon SSE stream.
+  `MulticaStatusPublisher` publishes a snapshot over `multicaStatus:publish` to the main-process
+  link service, which re-injects the pill. Publishing is debounced by 150 ms and unchanged
+  snapshots are skipped.
+- Nothing is written to Multica, and no Multica credential is used.
+- A missing session shows "Session not found"; a terminated session shows its daemon status.
+  When the daemon or SSE stream is disconnected, the badge is dimmed and "offline" is appended.
+  Signed-out Multica and non-issue pages show no pill.
+- Freshness: activity updates within about a second. PR, CI, and review follow AO's SCM observer,
+  with a 30 s tick.
+- Limits: issue matching uses the identifier only, pill chrome text stays English, and behavior
+  has not been verified in a signed-in live Multica.
+- Files: `frontend/src/shared/multica-session-status.ts`,
+  `frontend/src/renderer/lib/multica-link-status.ts`,
+  `frontend/src/renderer/components/MulticaStatusPublisher.tsx`,
+  `main/multica-issue-link-service.ts`, `main/multica-linked-sessions-pill.ts`.
+
 ## Security model
 
 Multica's preload is attached to the Multica view only, in its own persistent partition (`persist:ao-multica`), with sandbox and context isolation on, every web permission denied, and main-frame navigation pinned to the built bundle (anything else goes to the system browser).
