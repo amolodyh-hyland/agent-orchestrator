@@ -7,6 +7,8 @@ export type MulticaAuthSession = {
 	report: (value: unknown) => boolean;
 	/** True while a user id is reported (the renderer is signed in). */
 	hasActiveSession: () => boolean;
+	/** True after the renderer explicitly reported null (signed out); false before a report and after reset. */
+	isSignedOut: () => boolean;
 	/** Increases on every invalidation. A banner created under an older value must not act on click. */
 	generation: () => number;
 	/** Forgets the reported user (state returns to "nothing reported") and invalidates: used when the view goes away. */
@@ -37,6 +39,7 @@ export function createMulticaAuthSession(): MulticaAuthSession {
 			return invalidated;
 		},
 		hasActiveSession: () => typeof current === "string",
+		isSignedOut: () => current === null,
 		generation: () => currentGeneration,
 		reset: () => {
 			current = undefined;
