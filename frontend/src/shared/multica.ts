@@ -40,6 +40,8 @@ export const DEFAULT_MULTICA_SETTINGS: MulticaSettings = { url: MULTICA_DEFAULT_
 
 export type MulticaStatus = "unconfigured" | "idle" | "loading" | "ready" | "error";
 
+export type MulticaErrorKind = "bundle-missing";
+
 export type MulticaViewState = {
 	/** True while the Multica view (not AO) is the one on screen. */
 	active: boolean;
@@ -47,6 +49,7 @@ export type MulticaViewState = {
 	/** The configured URL; empty when unset. */
 	url: string;
 	error?: string;
+	errorKind?: MulticaErrorKind;
 };
 
 export type MulticaUrl = { ok: true; url: string; origin: string } | { ok: false };
