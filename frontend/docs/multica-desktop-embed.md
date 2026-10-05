@@ -64,6 +64,7 @@ The Multica URL in Settings (default `http://localhost:3000`) feeds Multica's ru
      AO_PORT=43127 \
      AO_TELEMETRY_EVENTS=off \
      AO_TELEMETRY_REMOTE=off \
+     AO_TELEMETRY_RENDERER=off \
      AO_SENTRY_DSN= \
      TMUX_TMPDIR=/tmp/ao-multica-tmp \
      TMPDIR=/tmp/ao-multica-tmp \
@@ -71,9 +72,9 @@ The Multica URL in Settings (default `http://localhost:3000`) feeds Multica's ru
      --remote-debugging-port=9222
    ```
 
-2. Choose a free `AO_PORT` other than the default daemon port 3001, which could otherwise be probed and cause the real daemon to be shut down and replaced. `HOME` moves Electron `userData` (`~/.ao/electron`), `~/.ao`, and `~/.multica`; `TMUX_TMPDIR` is needed because the tmux socket name is fixed. The remote debugging port is optional. Create no terminal sessions and do not sign in to AO Cloud during this run.
+2. Choose a free `AO_PORT` other than the default daemon port 3001, which could otherwise be probed and cause the real daemon to be shut down and replaced. `HOME` moves Electron `userData` (`~/.ao/electron`), `~/.ao`, and `~/.multica`; `TMUX_TMPDIR` is needed because the tmux socket name is fixed. Set `AO_TELEMETRY_RENDERER=off` in addition to `AO_TELEMETRY_EVENTS=off` and `AO_TELEMETRY_REMOTE=off` so the isolated run does not send desktop telemetry. The remote debugging port is optional. Create no terminal sessions and do not sign in to AO Cloud during this run.
 
-3. The relocation hand-off described above also applies to this run. This launch recipe, without a way around that hand-off, has only been verified up to the hand-off.
+3. This recipe has been run end to end through the AO/Multica toggle and bundled Multica sign-in screen when the app is placed under a directory with an `Applications` path component (for example, `/tmp/<x>/Applications/`), which prevents the relocation hand-off. Use only throwaway test copies; never use `/Applications`.
 
 ## What is real and what is a stub
 
