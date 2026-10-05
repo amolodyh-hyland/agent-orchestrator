@@ -13,6 +13,7 @@ import {
 	parseMulticaDeepLink,
 	parseMulticaUrl,
 	type MulticaSettings,
+	type MulticaErrorKind,
 	type MulticaStatus,
 	type MulticaViewState,
 } from "../shared/multica";
@@ -104,13 +105,14 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 	let active = false;
 	let status: MulticaStatus = "unconfigured";
 	let error: string | undefined;
+	let errorKind: MulticaErrorKind | undefined;
 	let view: MulticaViewLike | undefined;
 	let rendererUrl = "";
 	let shown = false;
 	let loadFailed = false;
 	let carriedPending: Array<[string, unknown[]]> = [];
 
-	const getState = (): MulticaViewState => ({ active, status, url, ...(error ? { error } : {}) });
+	const getState = (): MulticaViewState => ({ active, status, url, ...(error ? { error } : {}), ...(errorKind ? { errorKind } : {}) });
 
 	const pushState = (): void => {
 		if (shellWebContents.isDestroyed()) return;
@@ -135,9 +137,10 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 
 	let bridge: MulticaDesktopBridge | undefined;
 
-	const setStatus = (next: MulticaStatus, nextError?: string): void => {
+	const setStatus = (next: MulticaStatus, nextError?: string, nextErrorKind?: MulticaErrorKind): void => {
 		status = next;
 		error = nextError;
+		errorKind = nextErrorKind;
 		applyView();
 		pushState();
 	};
@@ -173,7 +176,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 	const createView = (): MulticaViewLike | undefined => {
 		const bundle = options.resolveBundle();
 		if (!bundle) {
-			setStatus("error", BUNDLE_MISSING_MESSAGE);
+			setStatus("error", BUNDLE_MISSING_MESSAGE, "bundle-missing");
 			return undefined;
 		}
 		rendererUrl = bundle.rendererUrl;
