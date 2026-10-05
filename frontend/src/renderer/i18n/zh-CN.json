@@ -824,6 +824,8 @@
 	"multica.status.prMore": "另有 {{count}} 个",
 	"multica.status.stale": "{{status}} · 离线",
 	"multica.loading": "正在加载 Multica…",
+	"multica.notBundled.body": "此版本的 Agent Orchestrator 构建时未包含 Multica 桌面界面。请安装包含该界面的版本，或从源代码运行，并将 AO_MULTICA_DESKTOP_OUT 指向 Multica 桌面构建目录。",
+	"multica.notBundled.title": "此构建未包含 Multica",
 	"multica.settings.invalidUrl": "请输入有效的 http:// 或 https:// 地址。",
 	"multica.settings.notSet": "未设置",
 	"multica.settings.saveFailed": "无法保存 Multica URL。",

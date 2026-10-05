@@ -11,7 +11,9 @@ import { existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { MULTICA_DESKTOP_STAGE_DIR, stageMulticaDesktop } from "./scripts/stage-multica-desktop.mjs";
 import { BUNDLED_TMUX_VERSION } from "./scripts/tmux-version.mjs";
+import { UPDATES_DISABLED_MARKER } from "./src/main/updates-disabled";
 
 // Default GitHub release target (production). Releases land on Untrivial-ai
 // (the org the repo was transferred to in July 2026; AgentWrapper and aoagents
@@ -60,11 +62,19 @@ async function prepareNativeDependencies(platform: NodeJS.Platform, arch: string
 	});
 }
 
-export function extraResourcesForPlatform(platform: NodeJS.Platform): string[] {
+export function multicaDesktopOutDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
+	return env.AO_MULTICA_DESKTOP_OUT?.trim() || undefined;
+}
+
+export function extraResourcesForPlatform(
+	platform: NodeJS.Platform,
+	bundleMultica = multicaDesktopOutDir() !== undefined,
+): string[] {
 	return [
 		"daemon",
 		"agent-browser",
 		"resources/acp-runtime",
+		...(bundleMultica ? [MULTICA_DESKTOP_STAGE_DIR, UPDATES_DISABLED_MARKER] : []),
 		...(platform === "darwin" ? ["update-helper"] : []),
 		...(platform === "darwin" || platform === "linux" ? ["tmux"] : []),
 		"assets/icon.png",
@@ -101,6 +111,22 @@ export function macSignOptionsForFile(filePath: string): { entitlements?: string
 	// process.arch or to "no entitlements" — silently signing the Intel Node
 	// without allow-unsigned-executable-memory is exactly the #3879 crash.
 	return machoHasX86_64Slice(filePath) ? { entitlements: ACP_RUNTIME_NODE_ENTITLEMENTS } : {};
+}
+
+export function missingMulticaResources(
+	resourcesPath: string,
+	exists: (file: string) => boolean = existsSync,
+): string[] {
+	const rendererIndex = `${MULTICA_DESKTOP_STAGE_DIR}/renderer/index.html`;
+	const preloadIndex = `${MULTICA_DESKTOP_STAGE_DIR}/preload/index.js`;
+	const preloadCommonJS = `${MULTICA_DESKTOP_STAGE_DIR}/preload/index.cjs`;
+	const missing: string[] = [];
+	if (!exists(path.join(resourcesPath, rendererIndex))) missing.push(rendererIndex);
+	if (!exists(path.join(resourcesPath, preloadIndex)) && !exists(path.join(resourcesPath, preloadCommonJS))) {
+		missing.push(preloadIndex);
+	}
+	if (!exists(path.join(resourcesPath, UPDATES_DISABLED_MARKER))) missing.push(UPDATES_DISABLED_MARKER);
+	return missing;
 }
 
 // parseReleaseRepo turns an "owner/repo" string (from AO_RELEASE_REPO) into the
@@ -168,6 +194,12 @@ const config: ForgeConfig = {
 		// and macOS reports the app as "damaged". owner/repo are baked from
 		// AO_RELEASE_REPO at build time.
 		prePackage: async (_forgeConfig, platform, arch) => {
+			const outDir = multicaDesktopOutDir();
+			if (outDir) {
+				stageMulticaDesktop(path.resolve(outDir), path.resolve(MULTICA_DESKTOP_STAGE_DIR));
+				// Write the marker before signing, like app-update.yml, so Multica builds are sealed and cannot self-update to an official AO release.
+				writeFileSync(UPDATES_DISABLED_MARKER, "");
+			}
 			await prepareNativeDependencies(platform as NodeJS.Platform, arch);
 			if (platform === "darwin") {
 				const helperBuild = spawnSync(process.execPath, [path.resolve("scripts/build-update-helper.mjs"), "--arch", arch], { stdio: "inherit" });
@@ -210,6 +242,12 @@ const config: ForgeConfig = {
 					resourcesPath = path.join(outputPath, appBundle, "Contents", "Resources");
 					const helper = path.join(resourcesPath, "update-helper", "ao-update-progress");
 					if (!existsSync(helper)) throw new Error(`packaged macOS update helper missing from ${helper}`);
+				}
+				if (multicaDesktopOutDir()) {
+					const missing = missingMulticaResources(resourcesPath);
+					if (missing.length > 0) {
+						throw new Error(`packaged Multica resources missing from ${resourcesPath}: ${missing.join(", ")}`);
+					}
 				}
 				const binary = path.join(resourcesPath, "tmux", "bin", "tmux");
 				if (!existsSync(binary)) throw new Error(`packaged tmux missing from ${binary}`);

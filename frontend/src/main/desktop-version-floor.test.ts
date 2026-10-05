@@ -9,6 +9,7 @@ describe("checkDesktopVersionFloor", () => {
 
   async function importModule(options: {
     isPackaged?: boolean;
+    updatesDisabled?: boolean;
     version?: string;
     floor?: { min?: string; latest?: string; downloadUrl?: string };
     fetchError?: boolean;
@@ -25,6 +26,9 @@ describe("checkDesktopVersionFloor", () => {
       },
       dialog,
       shell: shellMock,
+    }));
+    vi.doMock("./updates-disabled", () => ({
+      isUpdatesDisabledBuild: vi.fn(() => options.updatesDisabled ?? false),
     }));
 
     const fetchMock = vi.fn(async () => {
@@ -45,6 +49,19 @@ describe("checkDesktopVersionFloor", () => {
     const { mod, fetchMock } = await importModule({ isPackaged: false });
     await mod.checkDesktopVersionFloor();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does nothing in an updates-disabled packaged build", async () => {
+    const { mod, dialog, shellMock, quit, fetchMock } = await importModule({
+      isPackaged: true,
+      updatesDisabled: true,
+      floor: { min: "0.12.13" },
+    });
+    await mod.checkDesktopVersionFloor();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(dialog.showMessageBox).not.toHaveBeenCalled();
+    expect(shellMock.openExternal).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
   });
 
   it("does nothing when floor is empty", async () => {
