@@ -98,6 +98,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 	let rendererUrl = "";
 	let shown = false;
 	let loadFailed = false;
+	let carriedPending: Array<[string, unknown[]]> = [];
 
 	const getState = (): MulticaViewState => ({ active, status, url, ...(error ? { error } : {}) });
 
@@ -189,6 +190,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 			getRuntimeConfig: () => multicaRuntimeConfig(url),
 			getHostName: options.hostName,
 			notifications: options.notifications,
+			initialPending: carriedPending,
 			daemon: options.createDaemonService((channel, payload) => {
 				if (!contents.isDestroyed()) contents.send(channel, payload);
 			}),
@@ -197,6 +199,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 				if (!contents.isDestroyed()) contents.send(channel, payload);
 			},
 		});
+		carriedPending = [];
 
 		// The renderer uses an in-memory router, so it never navigates on its own.
 		// Anything that tries to leave the built bundle goes to the system browser.
@@ -222,20 +225,28 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 
 		// A page load drops every renderer subscription, so deep links must wait
 		// for the renderer to announce its listeners again.
-		contents.on("did-start-loading", () => bridge?.resetReadiness());
+		contents.on("did-start-loading", () => {
+			if (view?.webContents !== contents) return;
+			bridge?.resetReadiness();
+		});
 		// A failed navigation commits Chromium's own error page and then fires
 		// did-finish-load for it (observed order: fail, then finish), so a failure
 		// has to veto the next did-finish-load. Only an explicit load() (retry or a
 		// URL change) clears it; the error state offers no other way forward.
 		contents.on("did-finish-load", () => {
+			if (view?.webContents !== contents) return;
 			if (!loadFailed) setStatus("ready");
 		});
 		contents.on("did-fail-load", (_event, errorCode, errorDescription, _validatedURL, isMainFrame) => {
+			if (view?.webContents !== contents) return;
 			if (!isMainFrame || errorCode === -3) return;
 			loadFailed = true;
 			setStatus("error", errorDescription || "Unable to load page");
 		});
-		contents.on("render-process-gone", () => setStatus("error", "The Multica view stopped unexpectedly"));
+		contents.on("render-process-gone", () => {
+			if (view?.webContents !== contents) return;
+			setStatus("error", "The Multica view stopped unexpectedly");
+		});
 		contents.on("preload-error", (_event, preloadPath, preloadError) => {
 			console.error(`AO: Multica preload failed (${preloadPath}): ${preloadError.message}`);
 		});
@@ -304,11 +315,15 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 			destroyView();
 			setStatus("unconfigured");
 		} else if (view || active) {
-			// The old server's banners and queued navigation must not reach the new server's renderer.
-			options.notifications.reset();
-			bridge?.clearPending("inbox:open");
-			// The runtime config is read when the page's preload runs, so a URL
-			// change needs a fresh page load.
+			const carried = bridge?.pendingSnapshot() ?? [];
+			const hadView = Boolean(view);
+			destroyView();
+			if (hadView) {
+				carriedPending = carried;
+			} else {
+				options.notifications.reset();
+				carriedPending = [];
+			}
 			load();
 		} else {
 			setStatus("idle");
