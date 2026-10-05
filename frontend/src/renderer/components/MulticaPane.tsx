@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import type { MulticaViewState } from "../../shared/multica";
 import { aoBridge } from "../lib/bridge";
 import { useNavigateToSession } from "../lib/navigate-to-session";
+import { useMulticaLinksStore } from "../stores/multica-links-store";
 import { useMulticaStore } from "../stores/multica-store";
 import { useUiStore } from "../stores/ui-store";
 import { CenterPanelShell } from "./CenterPanelShell";
@@ -82,6 +83,7 @@ function MulticaSurface({ view }: { view: MulticaViewState }) {
 export function MulticaPane() {
 	const view = useMulticaStore((state) => state.view);
 	const load = useMulticaStore((state) => state.load);
+	const loadLinks = useMulticaLinksStore((state) => state.load);
 	const toggle = useMulticaStore((state) => state.toggle);
 	const navigateToSession = useNavigateToSession();
 	const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -89,6 +91,10 @@ export function MulticaPane() {
 	useEffect(() => {
 		void load();
 	}, [load]);
+
+	useEffect(() => {
+		void loadLinks();
+	}, [loadLinks]);
 
 	useEffect(() => aoBridge.multica.onToggleShortcut(toggle), [toggle]);
 	useEffect(() => aoBridge.multicaLinks.onOpenSession((target) => navigateToSession(target.projectId, target.sessionId)), [navigateToSession]);

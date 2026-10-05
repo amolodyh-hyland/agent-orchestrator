@@ -3,7 +3,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MulticaViewState } from "../../shared/multica";
+import type { MulticaIssueLink } from "../../shared/multica-issue-links";
 import type { MulticaSendRequest } from "../../shared/multica-send-to-ao";
+import { useMulticaLinksStore } from "../stores/multica-links-store";
 import { useMulticaStore } from "../stores/multica-store";
 import { useUiStore } from "../stores/ui-store";
 import { MulticaPane } from "./MulticaPane";
@@ -38,6 +40,7 @@ describe("MulticaPane", () => {
 	let openSessionListener: ((target: { projectId: string; sessionId: string }) => void) | undefined;
 	let removeOpenSessionListener: ReturnType<typeof vi.fn>;
 	let removeSendListener: ReturnType<typeof vi.fn>;
+	let originalLinksLoad: ReturnType<typeof useMulticaLinksStore.getState>["load"];
 	let current: MulticaViewState;
 
 	function renderPane() {
@@ -51,6 +54,7 @@ describe("MulticaPane", () => {
 	}
 
 	beforeEach(() => {
+		originalLinksLoad = useMulticaLinksStore.getState().load;
 		router.pathname = "/";
 		originalMultica = { ...window.ao!.multica };
 		originalMulticaLinks = { ...window.ao!.multicaLinks };
@@ -85,7 +89,50 @@ describe("MulticaPane", () => {
 		Object.assign(window.ao!.multica, originalMultica);
 		Object.assign(window.ao!.multicaLinks, originalMulticaLinks);
 		Object.assign(window.ao!.multicaSend, originalMulticaSend);
+		useMulticaLinksStore.setState({ load: originalLinksLoad });
 		useUiStore.getState().closeSettings();
+	});
+
+	it("loads the issue links once on mount, without the chip", () => {
+		const loadLinks = vi.fn(async () => undefined);
+		useMulticaLinksStore.setState({ load: loadLinks });
+		renderPane();
+
+		expect(loadLinks).toHaveBeenCalledOnce();
+		expect(screen.queryByTestId("multica-issue-link-chip")).not.toBeInTheDocument();
+	});
+
+	it("loads and follows issue links through the pane", async () => {
+		vi.resetModules();
+		const linkedIssue: MulticaIssueLink = {
+			sessionId: "s1",
+			projectId: "p1",
+			workspaceSlug: "acme",
+			issueIdentifier: "MUL-1",
+			createdAt: "2026-01-01T00:00:00.000Z",
+		};
+		let onChangedListener: ((links: MulticaIssueLink[]) => void) | undefined;
+		window.ao!.multicaLinks.list = vi.fn(async () => [linkedIssue]);
+		window.ao!.multicaLinks.onChanged = vi.fn((listener: (links: MulticaIssueLink[]) => void) => {
+			onChangedListener = listener;
+			return () => undefined;
+		});
+
+		const [{ act, render }, { QueryClient, QueryClientProvider }, { useMulticaLinksStore: freshLinksStore }, { MulticaPane: FreshMulticaPane }] = await Promise.all([
+			import("@testing-library/react"),
+			import("@tanstack/react-query"),
+			import("../stores/multica-links-store"),
+			import("./MulticaPane"),
+		]);
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+		await act(async () => {
+			render(<QueryClientProvider client={queryClient}><FreshMulticaPane /></QueryClientProvider>);
+		});
+
+		expect(freshLinksStore.getState().links).toEqual([linkedIssue]);
+		await act(async () => onChangedListener?.([]));
+		expect(freshLinksStore.getState().links).toEqual([]);
 	});
 
 	it("renders nothing while AO is the active view", () => {
