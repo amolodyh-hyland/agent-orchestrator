@@ -24,6 +24,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 vi.mock("../lib/navigate-to-session", () => ({ useNavigateToSession: () => navigation.navigateToSession }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({ useWorkspaceQuery: () => ({ data: [] }), workspaceQueryKey: ["workspaces"] }));
 vi.mock("../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: [] } }) }));
+vi.mock("./MulticaStatusPublisher", () => ({ MulticaStatusPublisher: () => <div data-testid="multica-status-publisher" /> }));
 
 const URL = "http://localhost:3000/";
 type Bridge = NonNullable<typeof window.ao>;
@@ -187,5 +188,10 @@ describe("MulticaPane", () => {
 
 		expect(screen.getByRole("heading", { name: "Send to AO" })).toBeInTheDocument();
 		expect(screen.getByRole("alert")).toHaveTextContent("Open a Multica issue, then try again.");
+	});
+
+	it("mounts the Multica status publisher", () => {
+		renderPane();
+		expect(screen.getByTestId("multica-status-publisher")).toBeInTheDocument();
 	});
 });

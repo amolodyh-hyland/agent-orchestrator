@@ -9,6 +9,7 @@ import {
 	MULTICA_LINKS_REMOVE_CHANNEL,
 	type MulticaIssueLink,
 } from "../shared/multica-issue-links";
+import { MULTICA_STATUS_PUBLISH_CHANNEL } from "../shared/multica-session-status";
 import { AO_SEND_ISSUE_URL, MULTICA_SEND_REQUEST_CHANNEL } from "../shared/multica-send-to-ao";
 import type { MulticaIssueLinkStore } from "./multica-issue-links";
 import { createMulticaIssueLinkService, type MulticaIssueLinkServiceOptions } from "./multica-issue-link-service";
@@ -50,6 +51,19 @@ function deferred<T>() {
 		resolve = resolvePromise;
 	});
 	return { promise, resolve };
+}
+
+type PillEntry = { label: string; url: string; status?: { tone: string; label: string; detail: string; stale: boolean } };
+type PillPayload = { entries: PillEntry[]; overflow: number };
+
+function pillPayload(script: string): PillPayload {
+	const match = script.match(/const payload = (.*);\n\tif \(payload\.entries\.length/);
+	if (!match) throw new Error("Pill payload was not found");
+	return JSON.parse(match[1]) as PillPayload;
+}
+
+function pillEntries(script: string): PillEntry[] {
+	return pillPayload(script).entries;
 }
 
 async function setup(initial: MulticaIssueLink[] = [], withHost = true, initialList?: Promise<MulticaIssueLink[]>) {
@@ -121,6 +135,7 @@ describe("multica issue link service: IPC trust", () => {
 			MULTICA_LINKS_ADD_CHANNEL,
 			MULTICA_LINKS_REMOVE_CHANNEL,
 			MULTICA_LINKS_OPEN_ISSUE_CHANNEL,
+			MULTICA_STATUS_PUBLISH_CHANNEL,
 		];
 		vi.mocked(t.store.list).mockClear();
 		vi.mocked(t.store.add).mockClear();
@@ -318,6 +333,206 @@ describe("multica issue link service: linked sessions pill", () => {
 	});
 });
 
+describe("multica issue link service: status publish", () => {
+	it("rejects an untrusted sender and an invalid snapshot", async () => {
+		const t = await setup([link()]);
+		t.service.handlePageTitle("MUL-1: Fix login");
+		t.host.runInPage.mockClear();
+
+		expect(
+			t.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, { sender: { id: 8 } }, { stale: false, entries: [] }),
+		).toEqual({ ok: false });
+		expect(t.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, t.shellEvent, { stale: false, entries: [{ sessionId: "a-1" }] })).toEqual({
+			ok: false,
+		});
+		expect(t.host.runInPage).not.toHaveBeenCalled();
+	});
+
+	it("publishes statuses for linked sessions, skips other issues and avoids duplicate refreshes", async () => {
+		const t = await setup([
+			link(),
+			link({ sessionId: "b-2", projectId: "b" }),
+			link({ sessionId: "elsewhere", projectId: "other", issueIdentifier: "MUL-2" }),
+		]);
+		t.service.handlePageTitle("MUL-1: Fix login");
+		t.host.runInPage.mockClear();
+		const snapshot = {
+			stale: false,
+			entries: [
+				{ sessionId: "a-1", tone: "ready" as const, label: "Ready A", detail: "All clear" },
+				{ sessionId: "b-2", tone: "attention" as const, label: "Review B", detail: "Needs review" },
+				{ sessionId: "elsewhere", tone: "done" as const, label: "Wrong issue", detail: "Hidden" },
+			],
+		};
+
+		expect(t.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, t.shellEvent, snapshot)).toEqual({ ok: true });
+		expect(t.host.runInPage).toHaveBeenCalledTimes(1);
+		expect(t.host.runInPage.mock.calls[0][0]).toContain("Ready A");
+		expect(t.host.runInPage.mock.calls[0][0]).toContain("Review B");
+		expect(t.host.runInPage.mock.calls[0][0]).not.toContain("Wrong issue");
+
+		expect(t.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, t.shellEvent, snapshot)).toEqual({ ok: true });
+		expect(t.host.runInPage).toHaveBeenCalledTimes(1);
+		expect(
+			t.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, t.shellEvent, {
+				...snapshot,
+				entries: snapshot.entries.map((entry) => (entry.sessionId === "a-1" ? { ...entry, label: "Updated A" } : entry)),
+			}),
+		).toEqual({ ok: true });
+		expect(t.host.runInPage).toHaveBeenCalledTimes(2);
+	});
+
+	it("stores snapshots while no issue is shown and applies them on the next issue title", async () => {
+		const t = await setup([link()]);
+		t.service.handlePageTitle("Inbox");
+		t.host.runInPage.mockClear();
+		const snapshot = {
+			stale: false,
+			entries: [{ sessionId: "a-1", tone: "working" as const, label: "Building", detail: "Tests" }],
+		};
+
+		expect(t.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, t.shellEvent, snapshot)).toEqual({ ok: true });
+		expect(t.host.runInPage).not.toHaveBeenCalled();
+		t.service.handlePageTitle("MUL-1: Fix login");
+		expect(t.host.runInPage).toHaveBeenCalledTimes(1);
+		expect(t.host.runInPage.mock.calls[0][0]).toContain("Building");
+
+		const beforeTitle = await setup([link()]);
+		expect(beforeTitle.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, beforeTitle.shellEvent, snapshot)).toEqual({ ok: true });
+		expect(beforeTitle.host.runInPage).not.toHaveBeenCalled();
+		beforeTitle.service.handlePageTitle("MUL-1: Fix login");
+		expect(beforeTitle.host.runInPage.mock.calls[0][0]).toContain("Building");
+	});
+
+	it("deduplicates sessions, sorts by tone, preserves unpublished order and passes through stale", async () => {
+		const t = await setup([
+			link({ sessionId: "working", projectId: "working" }),
+			link({ sessionId: "ready", projectId: "ready" }),
+			link({ sessionId: "done", projectId: "done" }),
+			link({ sessionId: "attention", projectId: "attention" }),
+			link({ sessionId: "unpublished-2", projectId: "unpublished-2" }),
+			link({ sessionId: "unpublished-1", projectId: "unpublished-1" }),
+			link({ sessionId: "ready", projectId: "duplicate", workspaceSlug: "other" }),
+		]);
+		t.service.handlePageTitle("MUL-1: Fix login");
+		t.host.runInPage.mockClear();
+		expect(
+			t.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, t.shellEvent, {
+				stale: true,
+				entries: [
+					{ sessionId: "working", tone: "working", label: "Working", detail: "Build" },
+					{ sessionId: "ready", tone: "ready", label: "Ready", detail: "" },
+					{ sessionId: "done", tone: "done", label: "Done", detail: "" },
+					{ sessionId: "attention", tone: "attention", label: "Attention", detail: "Review" },
+				],
+			}),
+		).toEqual({ ok: true });
+
+		const entries = pillEntries(t.host.runInPage.mock.calls[0][0]);
+		expect(entries.map((entry) => entry.label)).toEqual([
+			"ready",
+			"attention",
+			"working",
+			"done",
+			"unpublished-2",
+		]);
+		expect(entries[0]?.url).toBe("ao://sessions/ready/ready");
+		expect(entries.slice(0, 4).every((entry) => entry.status?.stale === true)).toBe(true);
+		expect(entries[4]?.status).toBeUndefined();
+	});
+
+	it("keeps unpublished sessions in their original order without adding status", async () => {
+		const t = await setup([
+			link({ sessionId: "unpublished-2", projectId: "unpublished-2" }),
+			link({ sessionId: "unpublished-1", projectId: "unpublished-1" }),
+		]);
+		t.service.handlePageTitle("MUL-1: Fix login");
+		t.host.runInPage.mockClear();
+
+		expect(t.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, t.shellEvent, { stale: false, entries: [] })).toEqual({ ok: true });
+
+		const entries = pillEntries(t.host.runInPage.mock.calls[0][0]);
+		expect(entries.map((entry) => entry.label)).toEqual(["unpublished-2", "unpublished-1"]);
+		expect(entries.every((entry) => entry.status === undefined)).toBe(true);
+	});
+
+	it("sorts all six published tones in urgency order", async () => {
+		const sessions = ["done", "unknown", "working", "pending", "attention", "ready"];
+		const t = await setup(sessions.map((sessionId) => link({ sessionId, projectId: sessionId })));
+		t.service.handlePageTitle("MUL-1: Fix login");
+		t.host.runInPage.mockClear();
+
+		expect(
+			t.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, t.shellEvent, {
+				stale: false,
+				entries: sessions.map((sessionId) => ({
+					sessionId,
+					tone: sessionId,
+					label: sessionId,
+					detail: "",
+				})),
+			}),
+		).toEqual({ ok: true });
+
+		const payload = pillPayload(t.host.runInPage.mock.calls[0][0]);
+		expect(payload.entries.map((entry) => entry.status?.tone)).toEqual(["ready", "attention", "pending", "working", "done"]);
+		expect(payload.overflow).toBe(1);
+	});
+
+	it("preserves link order for tone ties, unknown statuses, and unpublished sessions", async () => {
+		const sessions = ["attention-1", "unknown", "unpublished-1", "attention-2", "unpublished-2"];
+		const t = await setup(sessions.map((sessionId) => link({ sessionId, projectId: sessionId })));
+		t.service.handlePageTitle("MUL-1: Fix login");
+		t.host.runInPage.mockClear();
+
+		expect(
+			t.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, t.shellEvent, {
+				stale: false,
+				entries: [
+					{ sessionId: "attention-1", tone: "attention", label: "Attention 1", detail: "" },
+					{ sessionId: "unknown", tone: "unknown", label: "Unknown", detail: "" },
+					{ sessionId: "attention-2", tone: "attention", label: "Attention 2", detail: "" },
+				],
+			}),
+		).toEqual({ ok: true });
+
+		const entries = pillEntries(t.host.runInPage.mock.calls[0][0]);
+		expect(entries.map((entry) => entry.label)).toEqual([
+			"attention-1",
+			"attention-2",
+			"unknown",
+			"unpublished-1",
+			"unpublished-2",
+		]);
+		expect(entries.map((entry) => entry.status?.tone)).toEqual(["attention", "attention", "unknown", undefined, undefined]);
+	});
+
+	it("deduplicates seven linked sessions and reports overflow after showing the most urgent five", async () => {
+		const sessions = ["unknown-1", "ready", "done", "pending", "unknown-2", "working", "attention"];
+		const links = sessions.map((sessionId) => link({ sessionId, projectId: sessionId }));
+		links.push(link({ sessionId: "ready", projectId: "duplicate", workspaceSlug: "other" }));
+		const t = await setup(links);
+		t.service.handlePageTitle("MUL-1: Fix login");
+		t.host.runInPage.mockClear();
+
+		expect(
+			t.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, t.shellEvent, {
+				stale: false,
+				entries: sessions.map((sessionId) => ({
+					sessionId,
+					tone: sessionId.replace(/-\d$/, ""),
+					label: sessionId,
+					detail: "",
+				})),
+			}),
+		).toEqual({ ok: true });
+
+		const payload = pillPayload(t.host.runInPage.mock.calls[0][0]);
+		expect(payload.entries.map((entry) => entry.label)).toEqual(["ready", "attention", "pending", "working", "done"]);
+		expect(payload.overflow).toBe(2);
+	});
+});
+
 describe("multica issue link service: initial cache version", () => {
 	it.each(["list", "add"] as const)("keeps a %s result that arrives before the initial cache load", async (operation) => {
 		const initialLoad = deferred<MulticaIssueLink[]>();
@@ -426,6 +641,23 @@ describe("multica issue link service: lifecycle", () => {
 
 		expect(t.ipc.removed.sort()).toEqual(registered);
 		expect(t.ipc.handlers.size).toBe(0);
+	});
+
+	it("removes the status handler and ignores publishes after disposal", async () => {
+		const t = await setup([link()]);
+		t.service.handlePageTitle("MUL-1: Fix login");
+		t.host.runInPage.mockClear();
+
+		t.service.dispose();
+
+		expect(t.ipc.handlers.has(MULTICA_STATUS_PUBLISH_CHANNEL)).toBe(false);
+		expect(
+			t.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, t.shellEvent, {
+				stale: false,
+				entries: [{ sessionId: "a-1", tone: "ready", label: "Ready", detail: "" }],
+			}),
+		).toBeUndefined();
+		expect(t.host.runInPage).not.toHaveBeenCalled();
 	});
 
 	it("does not apply an in-flight add or handle events after disposal", async () => {

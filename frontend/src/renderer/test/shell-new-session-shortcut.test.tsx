@@ -151,6 +151,7 @@ vi.mock("../lib/bridge", () => ({
 			onOpenSession: () => () => undefined,
 		},
 		multicaSend: { onRequest: () => () => undefined },
+		multicaStatus: { publish: async () => ({ ok: true }) },
 		window: {},
 		tray: {
 			setAttentionState: () => undefined,

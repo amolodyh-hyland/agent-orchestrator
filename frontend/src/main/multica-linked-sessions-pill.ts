@@ -1,7 +1,10 @@
+import type { MulticaStatusTone } from "../shared/multica-session-status";
+
 export const MULTICA_LINKED_SESSIONS_PILL_ID = "ao-linked-sessions";
 export const MAX_PILL_ENTRIES = 5;
 
-export type LinkedSessionPillEntry = { label: string; url: string };
+export type LinkedSessionPillStatus = { tone: MulticaStatusTone; label: string; detail: string; stale: boolean };
+export type LinkedSessionPillEntry = { label: string; url: string; status?: LinkedSessionPillStatus };
 
 const PILL_STYLES = `
 .ao-linked-sessions-column {
@@ -22,11 +25,44 @@ button {
 	cursor: pointer;
 	font: inherit;
 	line-height: 1.2;
+	max-width: 360px;
+	overflow: hidden;
 	padding: 6px 10px;
 	pointer-events: auto;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 button:hover {
 	background: #f3f4f6;
+}
+.ao-status-dot {
+	display: inline-block;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	margin-right: 6px;
+	vertical-align: middle;
+}
+.ao-status-dot[data-tone="ready"] {
+	background: #16a34a;
+}
+.ao-status-dot[data-tone="attention"] {
+	background: #dc2626;
+}
+.ao-status-dot[data-tone="pending"] {
+	background: #d97706;
+}
+.ao-status-dot[data-tone="working"] {
+	background: #2563eb;
+}
+.ao-status-dot[data-tone="done"] {
+	background: #6b7280;
+}
+.ao-status-dot[data-tone="unknown"] {
+	background: #9ca3af;
+}
+button[data-stale="true"] {
+	opacity: 0.6;
 }
 .ao-linked-sessions-more {
 	border: 1px solid rgba(31, 41, 55, 0.14);
@@ -99,8 +135,21 @@ export function buildLinkedSessionsPillScript(
 	for (const entry of payload.entries) {
 		const button = document.createElement("button");
 		button.setAttribute("type", "button");
-		button.setAttribute("title", "Open AO session " + entry.label);
-		button.textContent = "AO · " + entry.label;
+		if (entry.status) {
+			button.setAttribute(
+				"title",
+				"Open AO session " + entry.label + (entry.status.detail ? "\\n" + entry.status.detail : ""),
+			);
+			button.textContent = "AO · " + entry.label + " · " + entry.status.label;
+			const dot = document.createElement("span");
+			dot.setAttribute("class", "ao-status-dot");
+			dot.setAttribute("data-tone", entry.status.tone);
+			button.insertBefore(dot, button.firstChild);
+			if (entry.status.stale) button.setAttribute("data-stale", "true");
+		} else {
+			button.setAttribute("title", "Open AO session " + entry.label);
+			button.textContent = "AO · " + entry.label;
+		}
 		button.addEventListener("click", (event) => {
 			event.preventDefault();
 			window.open(entry.url);
