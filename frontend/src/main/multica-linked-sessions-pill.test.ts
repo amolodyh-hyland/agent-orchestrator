@@ -22,6 +22,30 @@ describe("multica linked sessions pill", () => {
 		expect(evaluatePill([{ label: "Session", url: "ao://sessions/project/session" }])).toBeUndefined();
 	});
 
+	it("positions the linked sessions pill above the chat launcher", () => {
+		evaluatePill([{ label: "Session", url: "ao://sessions/project/session" }]);
+
+		const style = document.getElementById(MULTICA_LINKED_SESSIONS_PILL_ID)?.getAttribute("style");
+		expect(style).toContain("position:fixed");
+		expect(style).toContain("right:16px");
+		expect(style).toContain("bottom:calc(var(--chat-launcher-clearance, 3.5rem) + 8px)");
+		expect(style).toContain("z-index:2147483647");
+		expect(style).toContain("pointer-events:none");
+		expect(style).not.toContain("bottom:16px");
+	});
+
+	it("uses the same position when rendering only Send to AO", () => {
+		evaluatePill([], { sendUrl: "ao://multica/send-issue" });
+
+		const style = document.getElementById(MULTICA_LINKED_SESSIONS_PILL_ID)?.getAttribute("style");
+		expect(style).toContain("position:fixed");
+		expect(style).toContain("right:16px");
+		expect(style).toContain("bottom:calc(var(--chat-launcher-clearance, 3.5rem) + 8px)");
+		expect(style).toContain("z-index:2147483647");
+		expect(style).toContain("pointer-events:none");
+		expect(style).not.toContain("bottom:16px");
+	});
+
 	it("renders a leading status dot and label for each tone", () => {
 		const tones = ["ready", "attention", "pending", "working", "done", "unknown"] as const;
 		const buttons = tones.map((tone) => {

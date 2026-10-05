@@ -192,7 +192,6 @@ export function ShellTopbar({
 						)}
 						<span aria-hidden="true" className="workspace-topbar__identity-separator" />
 						<SessionStatusPill session={session} />
-						{!isOrchestrator ? <MulticaIssueLinkChip projectId={session.workspaceId} sessionId={session.id} /> : null}
 					</div>
 				) : isAutomationsRoute ? (
 					<div className="inline-flex min-w-0 items-center gap-1.5" data-testid="automations-topbar-label">
@@ -280,6 +279,11 @@ export function ShellTopbar({
 									<TooltipContent side="bottom">{t("shell.openKanban")}</TooltipContent>
 								</Tooltip>
 							</>
+						) : null}
+						{session && !isOrchestrator ? (
+							<span className="inline-flex" key={`multica-link-${session.id}`} style={noDragStyle}>
+								<MulticaIssueLinkChip projectId={session.workspaceId} sessionId={session.id} />
+							</span>
 						) : null}
 						{/* Open-in-editor leads the session actions: it is the only
 						    non-destructive one, and it must sit left of Kill. Kept outside
