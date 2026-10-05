@@ -16,6 +16,7 @@ import {
 	type MulticaStatus,
 	type MulticaViewState,
 } from "../shared/multica";
+import { isMulticaIssuePath } from "../shared/multica-issue-links";
 import type { KeybindingOverrides } from "../shared/shortcuts";
 import { attachAppShortcuts } from "./app-shortcuts";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./external-open";
@@ -28,7 +29,7 @@ const BUNDLE_MISSING_MESSAGE = "Multica desktop bundle not found. Build it and s
 
 type MulticaWebContents = Pick<
 	WebContents,
-	"id" | "on" | "loadURL" | "focus" | "close" | "isDestroyed" | "setWindowOpenHandler" | "send" | "ipc"
+	"id" | "on" | "loadURL" | "executeJavaScript" | "focus" | "close" | "isDestroyed" | "setWindowOpenHandler" | "send" | "ipc"
 > & {
 	session: Pick<Session, "setPermissionRequestHandler" | "setPermissionCheckHandler" | "setPreloads" | "webRequest">;
 };
@@ -59,6 +60,10 @@ export type MulticaViewHostOptions = {
 	createDaemonService: (emit: (channel: string, payload: unknown) => void) => MulticaDaemonService;
 	/** Called when the Multica view takes over the whole window or gives it back. */
 	onTakeover?: (takenOver: boolean) => void;
+	/** Receives every page title the Multica view reports (Multica sets "MUL-1: Title" on an issue page). */
+	onPageTitleChange?: (title: string) => void;
+	/** Offered each external-open target before the allowlist; return true when the URL was handled. */
+	onAoSessionLink?: (url: string) => boolean;
 };
 
 export type MulticaViewHost = {
@@ -67,6 +72,11 @@ export type MulticaViewHost = {
 	toggle: () => void;
 	/** Routes a `multica://` deep link to the view and surfaces it. False when ignored. */
 	handleDeepLink: (url: string) => boolean;
+	/** Opens a Multica issue route in the view, surfacing it first. False when the path is not an issue route or the view is unavailable. */
+	navigatePath: (path: string) => boolean;
+	/** Runs a script in the Multica page's main world. Does nothing without a live view. */
+	runInPage: (script: string) => void;
+	evaluateInPage: (script: string) => Promise<unknown>;
 	dispose: () => void;
 };
 
@@ -102,7 +112,17 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 	const isTrustedShell = (event: IpcMainEvent | IpcMainInvokeEvent): boolean => event.sender.id === shellWebContents.id;
 
 	const openExternally = (target: string): void => {
+		if (options.onAoSessionLink?.(target)) return;
 		if (isAllowedAppExternalURL(target)) void options.shell.openExternal(target).catch(() => undefined);
+	};
+
+	const runInPage = (script: string): void => {
+		if (!view || view.webContents.isDestroyed()) return;
+		void view.webContents.executeJavaScript(script).catch(() => undefined);
+	};
+	const evaluateInPage = async (script: string): Promise<unknown> => {
+		if (!view || view.webContents.isDestroyed()) return undefined;
+		return await view.webContents.executeJavaScript(script).catch(() => undefined);
 	};
 
 	let bridge: MulticaDesktopBridge | undefined;
@@ -207,6 +227,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 		};
 		contents.on("will-navigate", (event, target) => guardNavigation(event, target));
 		contents.on("will-redirect", (event, target, _isInPlace, isMainFrame) => guardNavigation(event, target, isMainFrame));
+		contents.on("page-title-updated", (_event, title) => options.onPageTitleChange?.(title));
 		contents.setWindowOpenHandler(({ url: target }) => {
 			openExternally(target);
 			return { action: "deny" };
@@ -361,6 +382,17 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 			bridge.dispatch(link.channel, link.payload);
 			return true;
 		},
+		navigatePath: (path) => {
+			if (!isMulticaIssuePath(path) || !url) return false;
+			setActive(true);
+			if (!view || view.webContents.isDestroyed() || !bridge) return false;
+			const script = `window.dispatchEvent(new CustomEvent("multica:navigate", { detail: { path: ${JSON.stringify(path)} } }));`;
+			// The signed-in layout subscribes to inbox:open and handles multica:navigate, so it can act.
+			bridge.whenReady("inbox:open", () => runInPage(script));
+			return true;
+		},
+		runInPage,
+		evaluateInPage,
 		dispose: () => {
 			for (const [channel] of handlers) options.ipcMain.removeHandler(channel);
 			try {

@@ -24,6 +24,7 @@ class FakeWebContents extends EventEmitter {
 	id = FakeWebContents.nextId++;
 	destroyed = false;
 	loadURL = vi.fn(async (_url: string) => undefined);
+	executeJavaScript = vi.fn(async (_script: string): Promise<unknown> => undefined);
 	focus = vi.fn();
 	send = vi.fn();
 	ipc = fakeIpc();
@@ -401,6 +402,163 @@ describe("multica view host: navigation", () => {
 		expect(t.openExternal).toHaveBeenCalledExactlyOnceWith("https://example.com/");
 		expect(contents.windowOpenHandler?.({ url: "file:///etc/passwd" })).toEqual({ action: "deny" });
 		expect(t.openExternal).toHaveBeenCalledOnce();
+	});
+
+	it("offers window-open targets to the AO session-link handler before the external allowlist", async () => {
+		const onAoSessionLink = vi.fn(() => true);
+		const t = await setup({ url: URL }, { onAoSessionLink });
+		t.host.setActive(true);
+		const contents = t.view().webContents;
+		const target = "ao://sessions/p/s";
+
+		expect(contents.windowOpenHandler?.({ url: target })).toEqual({ action: "deny" });
+
+		expect(onAoSessionLink).toHaveBeenCalledExactlyOnceWith(target);
+		expect(t.openExternal).not.toHaveBeenCalled();
+	});
+
+	it("keeps the external allowlist behavior when the AO session-link handler declines or is absent", async () => {
+		const onAoSessionLink = vi.fn(() => false);
+		const declined = await setup({ url: URL }, { onAoSessionLink });
+		declined.host.setActive(true);
+		const declinedContents = declined.view().webContents;
+		declinedContents.windowOpenHandler?.({ url: "ao://sessions/p/s" });
+		declinedContents.windowOpenHandler?.({ url: "https://example.com/" });
+
+		expect(onAoSessionLink).toHaveBeenNthCalledWith(1, "ao://sessions/p/s");
+		expect(onAoSessionLink).toHaveBeenNthCalledWith(2, "https://example.com/");
+		expect(declined.openExternal).toHaveBeenCalledExactlyOnceWith("https://example.com/");
+
+		const absent = await setup();
+		absent.host.setActive(true);
+		const absentContents = absent.view().webContents;
+		absentContents.windowOpenHandler?.({ url: "https://example.com/" });
+		absentContents.windowOpenHandler?.({ url: "ao://sessions/p/s" });
+
+		expect(absent.openExternal).toHaveBeenCalledExactlyOnceWith("https://example.com/");
+	});
+
+	it("offers blocked will-navigate targets to the AO session-link handler", async () => {
+		const onAoSessionLink = vi.fn(() => true);
+		const t = await setup({ url: URL }, { onAoSessionLink });
+		t.host.setActive(true);
+		const event = { preventDefault: vi.fn() };
+
+		t.view().webContents.emit("will-navigate", event, "ao://sessions/p/s");
+
+		expect(event.preventDefault).toHaveBeenCalledOnce();
+		expect(onAoSessionLink).toHaveBeenCalledExactlyOnceWith("ao://sessions/p/s");
+		expect(t.openExternal).not.toHaveBeenCalled();
+	});
+});
+
+describe("multica view host: page hooks", () => {
+	it("reports every page title and tolerates an absent title handler", async () => {
+		const onPageTitleChange = vi.fn();
+		const t = await setup({ url: URL }, { onPageTitleChange });
+		t.host.setActive(true);
+
+		t.view().webContents.emit("page-title-updated", {}, "MUL-1: First title");
+		t.view().webContents.emit("page-title-updated", {}, "MUL-1: Updated title");
+
+		expect(onPageTitleChange).toHaveBeenNthCalledWith(1, "MUL-1: First title");
+		expect(onPageTitleChange).toHaveBeenNthCalledWith(2, "MUL-1: Updated title");
+
+		const withoutHandler = await setup();
+		withoutHandler.host.setActive(true);
+		expect(() => withoutHandler.view().webContents.emit("page-title-updated", {}, "MUL-1: Title")).not.toThrow();
+	});
+
+	it("runs a script only while a live view exists", async () => {
+		const t = await setup();
+		t.host.runInPage("window.test = true;");
+		expect(FakeWebContentsView.instances).toHaveLength(0);
+
+		t.host.setActive(true);
+		t.host.runInPage("window.test = true;");
+		expect(t.view().webContents.executeJavaScript).toHaveBeenCalledExactlyOnceWith("window.test = true;");
+
+		t.host.dispose();
+		t.host.runInPage("window.test = false;");
+		expect(t.view().webContents.executeJavaScript).toHaveBeenCalledOnce();
+	});
+
+	it("returns the value from an evaluated page script", async () => {
+		const t = await setup();
+		t.host.setActive(true);
+		t.view().webContents.executeJavaScript.mockResolvedValue({ identifier: "MUL-1" });
+
+		await expect(t.host.evaluateInPage("Promise.resolve({ identifier: 'MUL-1' })")).resolves.toEqual({ identifier: "MUL-1" });
+	});
+
+	it("resolves undefined when an evaluated page script rejects", async () => {
+		const t = await setup();
+		t.host.setActive(true);
+		t.view().webContents.executeJavaScript.mockRejectedValue(new Error("page unavailable"));
+
+		await expect(t.host.evaluateInPage("window.test")).resolves.toBeUndefined();
+	});
+
+	it("resolves undefined when evaluated without a view", async () => {
+		const t = await setup();
+
+		await expect(t.host.evaluateInPage("window.test")).resolves.toBeUndefined();
+	});
+
+	it("resolves undefined after the host is disposed", async () => {
+		const t = await setup();
+		t.host.setActive(true);
+		t.host.dispose();
+
+		await expect(t.host.evaluateInPage("window.test")).resolves.toBeUndefined();
+	});
+
+	it("resolves undefined when the view is destroyed", async () => {
+		const t = await setup();
+		t.host.setActive(true);
+		t.view().webContents.destroyed = true;
+
+		await expect(t.host.evaluateInPage("window.test")).resolves.toBeUndefined();
+		expect(t.view().webContents.executeJavaScript).not.toHaveBeenCalled();
+	});
+});
+
+describe("multica view host: issue navigation", () => {
+	it("activates the view and waits for inbox readiness before dispatching an issue route", async () => {
+		const t = await setup();
+		ready(t);
+		t.host.setActive(false);
+
+		expect(t.host.navigatePath("/acme/issues/MUL-1")).toBe(true);
+		expect(t.host.getState().active).toBe(true);
+		expect(t.view().webContents.executeJavaScript).not.toHaveBeenCalled();
+
+		t.view().webContents.ipc.emit("main-renderer:channel-state", t.multicaEvent(), { channel: "inbox:open", ready: true });
+
+		expect(t.view().webContents.executeJavaScript).toHaveBeenCalledExactlyOnceWith(
+			'window.dispatchEvent(new CustomEvent("multica:navigate", { detail: { path: "/acme/issues/MUL-1" } }));',
+		);
+	});
+
+	it.each(["/acme/issues/mul-1", "javascript:alert(1)", "/acme/issues/MUL-1?x=1"])(
+		"does not activate the view for an invalid issue path: %s",
+		async (path) => {
+			const t = await setup();
+
+			expect(t.host.navigatePath(path)).toBe(false);
+			expect(t.host.getState().active).toBe(false);
+			expect(FakeWebContentsView.instances).toHaveLength(0);
+		},
+	);
+
+	it("returns false when Multica is unconfigured or its bundle is missing", async () => {
+		const unconfigured = await setup({ url: "" });
+		expect(unconfigured.host.navigatePath("/acme/issues/MUL-1")).toBe(false);
+		expect(FakeWebContentsView.instances).toHaveLength(0);
+
+		const missingBundle = await setup({ url: URL }, { resolveBundle: () => null });
+		expect(missingBundle.host.navigatePath("/acme/issues/MUL-1")).toBe(false);
+		expect(FakeWebContentsView.instances).toHaveLength(0);
 	});
 });
 

@@ -58,7 +58,7 @@ function setup(overrides: Partial<MulticaDesktopBridgeOptions> = {}) {
 	const openExternal = vi.fn(async (_url: string) => undefined);
 	const send = vi.fn();
 	const daemon = fakeDaemon();
-	const bridge = createMulticaDesktopBridge({
+	const bridgeOptions = {
 		daemon,
 		ipc,
 		isMulticaSender: (sender: { id: number }) => sender.id === MULTICA.id,
@@ -71,8 +71,9 @@ function setup(overrides: Partial<MulticaDesktopBridgeOptions> = {}) {
 		openExternal,
 		send,
 		...overrides,
-	} as unknown as MulticaDesktopBridgeOptions);
-	return { bridge, ipc, openExternal, send, daemon };
+	} as unknown as MulticaDesktopBridgeOptions;
+	const bridge = createMulticaDesktopBridge(bridgeOptions);
+	return { bridge, bridgeOptions, ipc, openExternal, send, daemon };
 }
 
 describe("multica desktop bridge: synchronous channels", () => {
@@ -237,6 +238,98 @@ describe("multica desktop bridge: main-to-renderer messages", () => {
 		bridge.dispatch("auth:token", "t2");
 		expect(send).toHaveBeenLastCalledWith("auth:token", "t2");
 		expect(send).toHaveBeenCalledTimes(2);
+	});
+
+	it("runs whenReady synchronously once the channel is already ready", () => {
+		const { bridge, ipc } = setup();
+		const callback = vi.fn();
+
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "inbox:open", ready: true });
+		bridge.whenReady("inbox:open", callback);
+		expect(callback).toHaveBeenCalledOnce();
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "inbox:open", ready: true });
+
+		expect(callback).toHaveBeenCalledOnce();
+	});
+
+	it("runs a waiting whenReady callback once when the channel becomes ready", () => {
+		const { bridge, ipc } = setup();
+		const callback = vi.fn();
+
+		bridge.whenReady("inbox:open", callback);
+		expect(callback).not.toHaveBeenCalled();
+
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "inbox:open", ready: true });
+		expect(callback).toHaveBeenCalledOnce();
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "inbox:open", ready: true });
+
+		expect(callback).toHaveBeenCalledOnce();
+	});
+
+	it("waits for readiness again after resetReadiness", () => {
+		const { bridge, ipc } = setup();
+		const callback = vi.fn();
+
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "inbox:open", ready: true });
+		bridge.resetReadiness();
+		bridge.whenReady("inbox:open", callback);
+		expect(callback).not.toHaveBeenCalled();
+
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "inbox:open", ready: true });
+
+		expect(callback).toHaveBeenCalledOnce();
+	});
+
+	it("drops waiting callbacks on dispose", () => {
+		const { bridge, bridgeOptions, ipc } = setup();
+		const callback = vi.fn();
+
+		bridge.whenReady("inbox:open", callback);
+		bridge.dispose();
+		const freshBridge = createMulticaDesktopBridge({
+			...bridgeOptions,
+			daemon: fakeDaemon() as unknown as MulticaDesktopBridgeOptions["daemon"],
+		});
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "inbox:open", ready: true });
+
+		expect(callback).not.toHaveBeenCalled();
+		freshBridge.dispose();
+	});
+
+	it("keeps only the newest eight waiting callbacks for a channel", () => {
+		const { bridge, ipc } = setup();
+		const callbacks = Array.from({ length: 9 }, () => vi.fn());
+
+		for (const callback of callbacks) bridge.whenReady("inbox:open", callback);
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "inbox:open", ready: true });
+
+		expect(callbacks[0]).not.toHaveBeenCalled();
+		for (const callback of callbacks.slice(1)) expect(callback).toHaveBeenCalledOnce();
+	});
+
+	it("continues after a waiting callback throws", () => {
+		const { bridge, ipc } = setup();
+		const callback = vi.fn();
+
+		bridge.whenReady("inbox:open", () => {
+			throw new Error("boom");
+		});
+		bridge.whenReady("inbox:open", callback);
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "inbox:open", ready: true });
+
+		expect(callback).toHaveBeenCalledOnce();
+	});
+
+	it("ignores readiness reports from other senders for whenReady callbacks", () => {
+		const { bridge, ipc } = setup();
+		const callback = vi.fn();
+
+		bridge.whenReady("inbox:open", callback);
+		ipc.send("main-renderer:channel-state", STRANGER, { channel: "inbox:open", ready: true });
+
+		expect(callback).not.toHaveBeenCalled();
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "inbox:open", ready: true });
+		expect(callback).toHaveBeenCalledOnce();
 	});
 
 	it("ignores readiness reports from other senders and for unknown channels", () => {
