@@ -173,6 +173,7 @@ import { multicaBridgeChannels } from "./main/multica-desktop-bridge";
 import { resolveMulticaDesktopBundle } from "./main/multica-desktop-bundle";
 import { createMulticaIssueLinkService, type MulticaIssueLinkService } from "./main/multica-issue-link-service";
 import { createMulticaIssueLinkStore } from "./main/multica-issue-links";
+import { isUpdatesDisabledBuild } from "./main/updates-disabled";
 import { writeMulticaIpcJail } from "./main/multica-ipc-jail";
 import { createCombinedBadge } from "./main/combined-badge";
 import { createMulticaNotifications } from "./main/multica-notifications";
@@ -2474,7 +2475,9 @@ ipcMain.handle("keybindings:setRecording", (event, active: unknown): void => {
 	keybindingRecordingActive = active;
 });
 
-ipcMain.handle("featureBuilds:list", () => listFeatureBuilds());
+ipcMain.handle("featureBuilds:list", () =>
+	isUpdatesDisabledBuild() ? [] : listFeatureBuilds(),
+);
 ipcMain.handle("featureBuilds:getActive", () => getActiveFeatureBuild());
 
 ipcMain.handle("updates:getStatus", (): UpdateStatus => getUpdateStatus());
@@ -2496,6 +2499,7 @@ ipcMain.handle("updates:install", (_event, confirmedVersion?: string) => quitAnd
 // in-process, so restart AO like a manual quit-and-reopen. install-on-quit is
 // already off on the failed path, so quitting can't apply a half-prepared build.
 ipcMain.handle("updates:relaunch", () => {
+	if (isUpdatesDisabledBuild()) return;
 	app.relaunch();
 	app.quit();
 });
@@ -2791,6 +2795,8 @@ app.on("second-instance", (_event, argv) => {
 // frontend/docs/desktop-release.md.
 function initAutoUpdates(): void {
 	if (!app.isPackaged) return;
+	// The marker means this build must not self-update.
+	if (isUpdatesDisabledBuild()) return;
 	const runFile = runFilePath();
 	if (!runFile) return;
 	const stateDir = path.dirname(runFile);

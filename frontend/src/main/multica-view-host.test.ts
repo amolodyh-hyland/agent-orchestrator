@@ -701,13 +701,21 @@ describe("multica view host: load state", () => {
 		t.host.setActive(true);
 
 		expect(FakeWebContentsView.instances).toHaveLength(0);
-		expect(t.host.getState()).toMatchObject({ active: true, status: "error", error: expect.stringContaining("bundle not found") });
+		expect(t.host.getState()).toMatchObject({
+			active: true,
+			status: "error",
+			error: expect.stringContaining("bundle not found"),
+			errorKind: "bundle-missing",
+		});
+		expect(t.stateChannelPayloads().at(-1)).toMatchObject({ status: "error", errorKind: "bundle-missing" });
 
 		bundle = BUNDLE;
 		t.ipc.invoke(MULTICA_RELOAD_CHANNEL, t.shellEvent);
 
 		expect(FakeWebContentsView.instances).toHaveLength(1);
 		expect(t.host.getState()).toEqual({ active: true, status: "loading", url: URL });
+		t.view().webContents.emit("did-finish-load");
+		expect(t.host.getState()).toEqual({ active: true, status: "ready", url: URL });
 	});
 });
 
