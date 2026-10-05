@@ -1,5 +1,6 @@
 import { app, dialog, shell } from "electron";
 import semver from "semver";
+import { isUpdatesDisabledBuild } from "./updates-disabled";
 
 const FLOOR_URL =
   "https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/desktop-version-floor.json";
@@ -30,7 +31,7 @@ function isBelow(running: string, floor: string): boolean {
 }
 
 export async function checkDesktopVersionFloor(): Promise<void> {
-  if (!app.isPackaged) return;
+  if (!app.isPackaged || isUpdatesDisabledBuild()) return;
   let floor: Floor;
   try {
     const response = await fetch(FLOOR_URL, {
