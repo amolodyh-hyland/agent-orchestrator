@@ -159,3 +159,43 @@ describe("shortcut binding matching and validation", () => {
 		expect(shortcutBindingValidationError(chord({ key: "j", meta: true }), true)).toBeNull();
 	});
 });
+
+describe("toggle-multica shortcut", () => {
+	it("is listed in the catalog under General", () => {
+		expect(APP_SHORTCUTS).toContainEqual(expect.objectContaining({ id: "toggle-multica", category: "General" }));
+	});
+
+	it("matches ⌘⇧E on macOS and Ctrl+Shift+E elsewhere, in either key case", () => {
+		expect(matchesAppShortcut("toggle-multica", chord({ key: "E", meta: true, shift: true }), true)).toBe(true);
+		expect(matchesAppShortcut("toggle-multica", chord({ key: "e", meta: true, shift: true }), true)).toBe(true);
+		expect(matchesAppShortcut("toggle-multica", chord({ key: "e", ctrl: true, shift: true }), false)).toBe(true);
+	});
+
+	it("does not match without Shift, with the wrong modifier, or with extras", () => {
+		expect(matchesAppShortcut("toggle-multica", chord({ key: "e", meta: true }), true)).toBe(false);
+		expect(matchesAppShortcut("toggle-multica", chord({ key: "e", ctrl: true, shift: true }), true)).toBe(false);
+		expect(matchesAppShortcut("toggle-multica", chord({ key: "e", ctrl: true }), false)).toBe(false);
+		expect(matchesAppShortcut("toggle-multica", chord({ key: "e", ctrl: true, shift: true, alt: true }), false)).toBe(false);
+	});
+
+	it("ships defaults that pass the same validation as user-assigned bindings", () => {
+		for (const isMac of [true, false]) {
+			for (const binding of defaultShortcutBindings("toggle-multica", isMac)) {
+				expect(shortcutBindingValidationError(binding, isMac)).toBeNull();
+			}
+		}
+	});
+
+	it("does not collide with any other default binding", () => {
+		for (const isMac of [true, false]) {
+			const [multica] = defaultShortcutBindings("toggle-multica", isMac);
+			for (const shortcut of APP_SHORTCUTS) {
+				if (shortcut.id === "toggle-multica") continue;
+				expect(
+					defaultShortcutBindings(shortcut.id, isMac).some((other) => matchesShortcutBinding(multica, other)),
+					`${shortcut.id} (${isMac ? "mac" : "other"})`,
+				).toBe(false);
+			}
+		}
+	});
+});

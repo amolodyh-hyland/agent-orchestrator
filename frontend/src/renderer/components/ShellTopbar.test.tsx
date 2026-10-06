@@ -2,7 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useMulticaStore } from "../stores/multica-store";
 import { useUiStore } from "../stores/ui-store";
 import {
 	CLOUD_PROJECT_KIND,
@@ -402,6 +403,55 @@ describe("ShellTopbar status pill", () => {
 		expect(pill).toHaveStyle({ color: "var(--color-status-working)" });
 		expect(pill.querySelector("span")).toHaveClass("animate-status-pulse");
 		expect(screen.queryByText("Exited")).not.toBeInTheDocument();
+	});
+});
+
+describe("ShellTopbar Multica issue link", () => {
+	let previousView = useMulticaStore.getState().view;
+
+	beforeEach(() => {
+		previousView = useMulticaStore.getState().view;
+		useMulticaStore.setState({ view: { active: false, status: "ready", url: "http://localhost:3000/" } });
+	});
+
+	afterEach(() => {
+		useMulticaStore.setState({ view: previousView });
+	});
+
+	it("renders once in the session actions when embedded", () => {
+		renderTopbar(sessionWith(), true);
+
+		const actions = screen.getByTestId("workspace-topbar-actions");
+		expect(within(actions).getAllByTestId("multica-issue-link-chip")).toHaveLength(1);
+	});
+
+	it("renders once in the standalone session actions, outside the identity", () => {
+		renderTopbar(sessionWith());
+
+		const actions = screen.getByTestId("workspace-topbar-actions");
+		expect(within(actions).getAllByTestId("multica-issue-link-chip")).toHaveLength(1);
+		expect(within(screen.getByTestId("session-topbar-identity")).queryByTestId("multica-issue-link-chip"))
+			.not.toBeInTheDocument();
+	});
+
+	it.each([false, true])("does not render for an orchestrator session (embedded: %s)", (embedded) => {
+		renderTopbar(orchestrator, embedded);
+
+		expect(screen.queryByTestId("multica-issue-link-chip")).not.toBeInTheDocument();
+	});
+
+	it("does not render while Multica is unconfigured", () => {
+		useMulticaStore.setState({ view: { active: false, status: "unconfigured", url: "" } });
+		renderTopbar(sessionWith());
+
+		expect(screen.queryByTestId("multica-issue-link-chip")).not.toBeInTheDocument();
+	});
+
+	it("does not render on a project board route", () => {
+		locationMock.pathname = "/projects/proj-1";
+		renderTopbarSessions([worker], "");
+
+		expect(screen.queryByTestId("multica-issue-link-chip")).not.toBeInTheDocument();
 	});
 });
 
