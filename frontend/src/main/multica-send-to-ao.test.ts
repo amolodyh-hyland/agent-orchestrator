@@ -83,6 +83,24 @@ describe("Multica send to AO", () => {
 		expect(t.order).toEqual(["evaluate", "setActive", "send"]);
 	});
 
+	it("includes the requested project id after a successful read", async () => {
+		const t = setup();
+		t.service.request({ projectId: "project-one" });
+		await flushPromises();
+
+		expect(t.shell.send).toHaveBeenCalledExactlyOnceWith(MULTICA_SEND_REQUEST_CHANNEL, {
+			ok: true,
+			projectId: "project-one",
+			issue: {
+				workspaceSlug: "acme",
+				issueIdentifier: "MUL-1",
+				title: "Fix login",
+				description: "Description",
+				url: "https://multica.example.com/acme/issues/MUL-1",
+			},
+		});
+	});
+
 	it("normalizes the delivered issue reference", async () => {
 		const t = setup();
 		t.host.evaluateInPage.mockResolvedValueOnce(
@@ -158,6 +176,18 @@ describe("Multica send to AO", () => {
 		expect(t.host.setActive).toHaveBeenCalledExactlyOnceWith(false);
 	});
 
+	it("does not include the project id when a requested read fails", async () => {
+		const t = setup();
+		t.host.evaluateInPage.mockResolvedValueOnce(JSON.stringify({ ok: false, reason: "signed_out" }));
+		t.service.request({ projectId: "project-one" });
+		await flushPromises();
+
+		expect(t.shell.send).toHaveBeenCalledExactlyOnceWith(MULTICA_SEND_REQUEST_CHANNEL, {
+			ok: false,
+			reason: "signed_out",
+		});
+	});
+
 	it.each([
 		["no_workspace", JSON.stringify({ ok: false, reason: "no_workspace" })],
 		["unreadable", JSON.stringify({ ok: false, reason: "unreadable" })],
@@ -229,9 +259,9 @@ describe("Multica send to AO", () => {
 		const pending = deferred<unknown>();
 		const t = setup();
 		t.host.evaluateInPage.mockImplementationOnce(() => pending.promise);
-		t.service.request();
+		t.service.request({ projectId: "project-one" });
 		await flushPromises();
-		t.service.request();
+		t.service.request({ projectId: "project-two" });
 		expect(t.host.evaluateInPage).toHaveBeenCalledOnce();
 
 		pending.resolve(successfulRead);
@@ -241,6 +271,8 @@ describe("Multica send to AO", () => {
 
 		expect(t.host.evaluateInPage).toHaveBeenCalledTimes(2);
 		expect(t.shell.send).toHaveBeenCalledTimes(2);
+		expect(t.shell.send.mock.calls[0][1]).toMatchObject({ projectId: "project-one" });
+		expect(t.shell.send.mock.calls[1][1]).not.toHaveProperty("projectId");
 	});
 
 	it("does not send to a destroyed shell", async () => {
