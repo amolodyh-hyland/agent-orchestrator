@@ -3,12 +3,14 @@ package multicahost
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -34,6 +36,23 @@ type ErrDaemonAlreadyRunning struct {
 	Port            int
 	OtherProfile    string
 	OtherProfileSet bool
+}
+
+type ErrNoToken struct {
+	ConfigPath string
+}
+
+func (e *ErrNoToken) Error() string {
+	return fmt.Sprintf("Multica profile token is required in %s", e.ConfigPath)
+}
+
+type ErrNonLocalServer struct {
+	Scheme string
+	Host   string
+}
+
+func (e *ErrNonLocalServer) Error() string {
+	return fmt.Sprintf("Multica in-process daemon requires a local server URL (got %s://%s)", e.Scheme, e.Host)
 }
 
 func (e *ErrDaemonAlreadyRunning) Error() string {
@@ -112,6 +131,10 @@ func startWith(ctx context.Context, logger *slog.Logger, deps dependencies) (fun
 	if err != nil {
 		return noop, err
 	}
+	profileConfig, err := readProfileConfig(filepath.Join(stateDir, "config.json"))
+	if err != nil {
+		return noop, err
+	}
 	if healthPortInUse(port) {
 		return noop, &ErrDaemonAlreadyRunning{Profile: profile, Port: port}
 	}
@@ -126,12 +149,16 @@ func startWith(ctx context.Context, logger *slog.Logger, deps dependencies) (fun
 	overrides := daemonhost.Overrides{
 		Profile:           profile,
 		HealthPort:        port,
+		ServerURL:         serverURLOverride(deps.getenv, profileConfig.ServerURL),
 		DisableAutoUpdate: true,
 		DisableAutoReload: true,
 	}
 	cfg, err := deps.loadConfig(overrides)
 	if err != nil {
 		return noop, fmt.Errorf("load Multica daemon config: %w", err)
+	}
+	if err := requireLocalServer(cfg.ServerBaseURL); err != nil {
+		return noop, err
 	}
 	cfg.Profile = profile
 	cfg.HealthPort = port
@@ -164,7 +191,11 @@ func startWith(ctx context.Context, logger *slog.Logger, deps dependencies) (fun
 				hostLogger.Error("Multica daemon panicked", "panic", recovered)
 			}
 		}()
-		if runErr := host.Run(hostCtx); runErr != nil && !errors.Is(runErr, context.Canceled) {
+		runErr := func() error {
+			defer cancel()
+			return host.Run(hostCtx)
+		}()
+		if runErr != nil && !errors.Is(runErr, context.Canceled) {
 			hostLogger.Error("Multica daemon stopped with an error", "err", runErr)
 		}
 		if restartPath := host.RestartBinary(); restartPath != "" {
@@ -186,6 +217,46 @@ func startWith(ctx context.Context, logger *slog.Logger, deps dependencies) (fun
 		})
 	}
 	return stop, nil
+}
+
+type profileConfig struct {
+	ServerURL string `json:"server_url"`
+	Token     string `json:"token"`
+}
+
+func readProfileConfig(path string) (profileConfig, error) {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return profileConfig{}, &ErrNoToken{ConfigPath: path}
+	}
+	var cfg profileConfig
+	if err := json.Unmarshal(contents, &cfg); err != nil || strings.TrimSpace(cfg.Token) == "" {
+		return profileConfig{}, &ErrNoToken{ConfigPath: path}
+	}
+	return cfg, nil
+}
+
+func serverURLOverride(getenv func(string) string, profileURL string) string {
+	if serverURL := strings.TrimSpace(getenv("MULTICA_SERVER_URL")); serverURL != "" {
+		return serverURL
+	}
+	return profileURL
+}
+
+func requireLocalServer(serverURL string) error {
+	parsed, err := url.Parse(serverURL)
+	if err != nil {
+		return &ErrNonLocalServer{}
+	}
+	host := parsed.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	ip := net.ParseIP(host)
+	if ip != nil && ip.IsLoopback() {
+		return nil
+	}
+	return &ErrNonLocalServer{Scheme: parsed.Scheme, Host: parsed.Host}
 }
 
 func realDependencies() dependencies {
@@ -257,7 +328,15 @@ func findOtherRunningProfile(home, selected string, processLive func(int) bool) 
 	profiles := []struct {
 		name string
 		dir  string
-	}{{name: "", dir: root}}
+	}{}
+	if info, err := os.Stat(root); err == nil && info.IsDir() {
+		profiles = append(profiles, struct {
+			name string
+			dir  string
+		}{name: "", dir: root})
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", false, fmt.Errorf("stat default profile directory: %w", err)
+	}
 
 	entries, err := os.ReadDir(filepath.Join(root, "profiles"))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -278,14 +357,16 @@ func findOtherRunningProfile(home, selected string, processLive func(int) bool) 
 		}
 		pidPath := filepath.Join(profile.dir, "daemon.pid")
 		contents, err := os.ReadFile(pidPath)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return "", false, fmt.Errorf("read %s: %w", pidPath, err)
 		}
-		pid, err := strconv.Atoi(strings.TrimSpace(string(contents)))
-		if err == nil && pid > 0 && processLive(pid) {
+		if err == nil {
+			pid, parseErr := strconv.Atoi(strings.TrimSpace(string(contents)))
+			if parseErr == nil && pid > 0 && processLive(pid) {
+				return profile.name, true, nil
+			}
+		}
+		if healthPortInUse(healthPortForProfile(profile.name)) {
 			return profile.name, true, nil
 		}
 	}
