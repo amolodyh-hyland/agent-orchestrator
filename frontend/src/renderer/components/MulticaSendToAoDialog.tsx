@@ -67,7 +67,7 @@ export function MulticaSendToAoDialog() {
 	const applyRequest = (request: MulticaSendRequest) => {
 		requestId.current += 1;
 		setReceived({ id: requestId.current, request });
-		setProjectId("");
+		setProjectId(request.ok && request.projectId ? request.projectId : "");
 		setAgent("");
 		setSubmitting(false);
 		setError(null);
@@ -92,7 +92,8 @@ export function MulticaSendToAoDialog() {
 	);
 
 	useEffect(() => {
-		if (!received?.request.ok || projectId || projects.length === 0) return;
+		if (!received?.request.ok || projects.length === 0) return;
+		if (projectId && projects.some((project) => project.id === projectId)) return;
 		let mostRecent: string | undefined;
 		let mostRecentAt = Number.NEGATIVE_INFINITY;
 		for (const project of projects) {

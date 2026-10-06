@@ -288,7 +288,7 @@ export const aoBridge: AoBridge =
 			onOpenSession: () => () => undefined,
 		},
 		multicaSend: { onRequest: () => () => undefined },
-		multicaStatus: { publish: async () => ({ ok: false }) },
+		multicaOpenWithAo: { publish: async () => ({ ok: false }) },
 		keybindings: {
 			get: async () => ({}),
 			set: async (overrides) => overrides,

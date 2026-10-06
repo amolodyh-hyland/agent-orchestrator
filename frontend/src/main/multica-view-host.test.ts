@@ -26,6 +26,7 @@ class FakeWebContents extends EventEmitter {
 	destroyed = false;
 	loadURL = vi.fn(async (_url: string) => undefined);
 	executeJavaScript = vi.fn(async (_script: string): Promise<unknown> => undefined);
+	executeJavaScriptInIsolatedWorld = vi.fn(async (_worldId: number, _scripts: Array<{ code: string }>): Promise<unknown> => undefined);
 	focus = vi.fn();
 	send = vi.fn();
 	ipc = fakeIpc();
@@ -549,6 +550,37 @@ describe("multica view host: page hooks", () => {
 		t.host.dispose();
 		t.host.runInPage("window.test = false;");
 		expect(t.view().webContents.executeJavaScript).toHaveBeenCalledOnce();
+	});
+
+	it("runs a script in AO's isolated world", async () => {
+		const t = await setup();
+		t.host.setActive(true);
+
+		t.host.runInAoWorld("window.test = true;");
+
+		expect(t.view().webContents.executeJavaScriptInIsolatedWorld).toHaveBeenCalledExactlyOnceWith(1001, [
+			{ code: "window.test = true;" },
+		]);
+	});
+
+	it("does not run an isolated script without a live view or after destruction", async () => {
+		const t = await setup();
+		t.host.runInAoWorld("window.test = true;");
+		expect(FakeWebContentsView.instances).toHaveLength(0);
+
+		t.host.setActive(true);
+		t.view().webContents.destroyed = true;
+		t.host.runInAoWorld("window.test = false;");
+		expect(t.view().webContents.executeJavaScriptInIsolatedWorld).not.toHaveBeenCalled();
+	});
+
+	it("swallows isolated-world script rejections", async () => {
+		const t = await setup();
+		t.host.setActive(true);
+		t.view().webContents.executeJavaScriptInIsolatedWorld.mockRejectedValue(new Error("world unavailable"));
+
+		expect(() => t.host.runInAoWorld("window.test = true;")).not.toThrow();
+		await Promise.resolve();
 	});
 
 	it("returns the value from an evaluated page script", async () => {
