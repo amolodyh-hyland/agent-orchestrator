@@ -4,6 +4,7 @@ import { expect } from "vitest";
 import { appI18n } from "../i18n";
 import { appCatalogs } from "../i18n/all-messages";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
+import { DEFAULT_MULTICA_SETTINGS } from "../../shared/multica";
 
 // The app loads non-English catalogs on demand. Component tests read other
 // locales synchronously (getFixedT, t after changeLanguage), so give the shared
@@ -374,6 +375,25 @@ if (typeof window !== "undefined") {
 			get: async () => ({ ...DEFAULT_UI_SETTINGS }),
 			set: async (settings) => coerceUiSettings({ ...DEFAULT_UI_SETTINGS, ...settings }),
 		},
+		multica: {
+			getState: async () => ({ active: false, status: "unconfigured", url: "" }),
+			setActive: async () => ({ active: false, status: "unconfigured", url: "" }),
+			reload: async () => ({ active: false, status: "unconfigured", url: "" }),
+			getSettings: async () => ({ ...DEFAULT_MULTICA_SETTINGS }),
+			setSettings: async (url: string) => ({ url }),
+			onState: () => () => undefined,
+			onToggleShortcut: () => () => undefined,
+		},
+		multicaLinks: {
+			list: async () => [],
+			add: async () => ({ ok: false, reason: "save_failed" }),
+			remove: async () => [],
+			openIssue: async () => false,
+			onChanged: () => () => undefined,
+			onOpenSession: () => () => undefined,
+		},
+		multicaSend: { onRequest: vi.fn(() => () => undefined) },
+		multicaOpenWithAo: { publish: vi.fn(async () => ({ ok: true })) },
 		keybindings: {
 			get: async () => ({}),
 			set: async (overrides) => overrides,

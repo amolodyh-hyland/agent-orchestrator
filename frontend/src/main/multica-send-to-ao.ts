@@ -1,0 +1,118 @@
+import type { WebContents } from "electron";
+import { multicaRuntimeConfig, type MulticaSettings } from "../shared/multica";
+import { multicaIssuePath, parseMulticaIssueRef } from "../shared/multica-issue-links";
+import {
+	MULTICA_SEND_REQUEST_CHANNEL,
+	multicaIssueWebUrl,
+	type MulticaSendRequest,
+} from "../shared/multica-send-to-ao";
+import { buildReadIssueScript, parseReadIssueResult, READ_ISSUE_TIMEOUT_MS } from "./multica-issue-reader";
+import type { MulticaViewHost } from "./multica-view-host";
+
+export type MulticaSendToAoOptions = {
+	shellWebContents: Pick<WebContents, "isDestroyed" | "send">;
+	getHost: () => Pick<MulticaViewHost, "evaluateInPage" | "setActive"> | undefined;
+	getCurrentIssue: () => { identifier: string; title: string } | null;
+	readSettings: () => Promise<MulticaSettings>;
+};
+
+export type MulticaSendToAo = { request: (options?: { projectId?: string }) => void; dispose: () => void };
+
+export function createMulticaSendToAo(options: MulticaSendToAoOptions): MulticaSendToAo {
+	let disposed = false;
+	let inFlight = false;
+
+	const deliver = (request: MulticaSendRequest): void => {
+		if (disposed) return;
+		try {
+			options.getHost()?.setActive(false);
+		} catch {
+			// The view can disappear while the request is being delivered.
+		}
+		try {
+			if (!options.shellWebContents.isDestroyed()) {
+				options.shellWebContents.send(MULTICA_SEND_REQUEST_CHANNEL, request);
+			}
+		} catch {
+			// The shell can close while the request is being delivered.
+		}
+	};
+
+	const requestIssue = async (projectId?: string): Promise<void> => {
+		try {
+			const issue = options.getCurrentIssue();
+			if (!issue) {
+				deliver({ ok: false, reason: "no_issue" });
+				return;
+			}
+
+			const settings = await options.readSettings();
+			if (disposed) return;
+			const config = multicaRuntimeConfig(settings.url);
+			if (!config.ok) {
+				deliver({ ok: false, reason: "unreadable" });
+				return;
+			}
+
+			const host = options.getHost();
+			if (!host) {
+				deliver({ ok: false, reason: "unreadable" });
+				return;
+			}
+
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			let raw: unknown;
+			try {
+				const timeout = new Promise<undefined>((resolve) => {
+					timer = setTimeout(() => resolve(undefined), READ_ISSUE_TIMEOUT_MS + 2000);
+				});
+				raw = await Promise.race([
+					host.evaluateInPage(buildReadIssueScript({ apiUrl: config.config.apiUrl, identifier: issue.identifier })),
+					timeout,
+				]);
+			} finally {
+				if (timer !== undefined) clearTimeout(timer);
+			}
+			if (disposed) return;
+
+			const result = parseReadIssueResult(raw);
+			if (!result.ok) {
+				deliver({ ok: false, reason: result.reason === "signed_out" ? "signed_out" : "unreadable" });
+				return;
+			}
+			const issueRef = parseMulticaIssueRef(
+				multicaIssuePath({ workspaceSlug: result.workspaceSlug, issueIdentifier: result.issueIdentifier }),
+			);
+			if (!issueRef) {
+				deliver({ ok: false, reason: "unreadable" });
+				return;
+			}
+			deliver({
+				ok: true,
+				...(projectId !== undefined ? { projectId } : {}),
+				issue: {
+					workspaceSlug: issueRef.workspaceSlug,
+					issueIdentifier: issueRef.issueIdentifier,
+					title: Array.from(result.title).slice(0, 500).join(""),
+					description: Array.from(result.description).slice(0, 50000).join(""),
+					url: multicaIssueWebUrl(config.config.appUrl, issueRef),
+				},
+			});
+		} catch {
+			deliver({ ok: false, reason: "unreadable" });
+		} finally {
+			inFlight = false;
+		}
+	};
+
+	return {
+		request: (requestOptions) => {
+			if (disposed || inFlight) return;
+			inFlight = true;
+			void requestIssue(requestOptions?.projectId);
+		},
+		dispose: () => {
+			disposed = true;
+		},
+	};
+}
