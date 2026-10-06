@@ -31,6 +31,7 @@ export const shortcutLabelKeys: Record<AppShortcutId, MessageKey> = {
 	"model-picker": "shortcut.model-picker",
 	"open-orchestrator": "shortcut.open-orchestrator",
 	"toggle-browser-devtools": "titlebar.devtools",
+	"toggle-multica": "shortcut.toggle-multica",
 };
 
 export const shortcutCategoryLabelKeys: Record<ShortcutCategory, MessageKey> = {

@@ -56,7 +56,8 @@ export type AppShortcutId =
 	| "copy-session-path"
 	| "model-picker"
 	| "open-orchestrator"
-	| "toggle-browser-devtools";
+	| "toggle-browser-devtools"
+	| "toggle-multica";
 
 export type ShortcutCategory = "General" | "Navigation" | "Session" | "Panels";
 
@@ -111,6 +112,7 @@ export const APP_SHORTCUTS: readonly ShortcutDefinition[] = [
 	{ id: "toggle-terminal", label: "Toggle terminal", category: "Panels" },
 	{ id: "toggle-diff", label: "Toggle diff", category: "Panels" },
 	{ id: "toggle-browser-devtools", label: "Toggle browser DevTools", category: "Panels" },
+	{ id: "toggle-multica", label: "Switch between AO and Multica", category: "General" },
 ];
 
 const binding = (
@@ -205,6 +207,8 @@ export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): read
 			return [isMac ? binding("o", { meta: true, shift: true }) : binding("g", { ctrl: true, shift: true })];
 		case "toggle-browser-devtools":
 			return [isMac ? binding("i", { meta: true, alt: true }) : binding("i", { ctrl: true, shift: true })];
+		case "toggle-multica":
+			return [isMac ? binding("e", { meta: true, shift: true }) : binding("e", { ctrl: true, alt: true })];
 	}
 }
 
