@@ -33,7 +33,7 @@ func TestRunHelperIfRequestedNotHandled(t *testing.T) {
 			}
 			t.Cleanup(func() { runPreparationHelper = originalRunner })
 
-			handled, code := RunHelperIfRequested(tt.args, stdin, &stdout, &stderr)
+			handled, code := runHelperIfRequested(tt.args, stdin, &stdout, &stderr, helperGetenv(false))
 			if handled || code != 0 {
 				t.Fatalf("RunHelperIfRequested() = (%v, %d), want (false, 0)", handled, code)
 			}
@@ -63,7 +63,7 @@ func TestRunHelperIfRequestedSuccess(t *testing.T) {
 	}
 	t.Cleanup(func() { runPreparationHelper = originalRunner })
 
-	handled, code := RunHelperIfRequested([]string{"ao", daemonhost.PreparationHelperArg}, stdin, &stdout, &stderr)
+	handled, code := runHelperIfRequested([]string{"ao", daemonhost.PreparationHelperArg}, stdin, &stdout, &stderr, helperGetenv(true))
 	if !handled || code != 0 {
 		t.Fatalf("RunHelperIfRequested() = (%v, %d), want (true, 0)", handled, code)
 	}
@@ -83,11 +83,38 @@ func TestRunHelperIfRequestedFailure(t *testing.T) {
 	runPreparationHelper = func(io.Reader, io.Writer, *slog.Logger) error { return wantErr }
 	t.Cleanup(func() { runPreparationHelper = originalRunner })
 
-	handled, code := RunHelperIfRequested([]string{"ao", daemonhost.PreparationHelperArg}, stdin, &stdout, &stderr)
+	handled, code := runHelperIfRequested([]string{"ao", daemonhost.PreparationHelperArg}, stdin, &stdout, &stderr, helperGetenv(true))
 	if !handled || code != 1 {
 		t.Fatalf("RunHelperIfRequested() = (%v, %d), want (true, 1)", handled, code)
 	}
 	if !strings.Contains(stderr.String(), wantErr.Error()) {
 		t.Fatalf("stderr = %q, want it to contain %q", stderr.String(), wantErr)
+	}
+}
+
+func TestRunHelperIfRequestedFlagOffDoesNotHandleHelper(t *testing.T) {
+	t.Setenv(FlagEnv, "")
+	stdin := strings.NewReader("input")
+	var stdout, stderr bytes.Buffer
+	called := false
+	originalRunner := runPreparationHelper
+	runPreparationHelper = func(io.Reader, io.Writer, *slog.Logger) error {
+		called = true
+		return nil
+	}
+	t.Cleanup(func() { runPreparationHelper = originalRunner })
+
+	handled, code := RunHelperIfRequested([]string{"ao", daemonhost.PreparationHelperArg}, stdin, &stdout, &stderr)
+	if handled || code != 0 || called || stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("flag-off helper result = (%v, %d), called=%v stdout=%q stderr=%q", handled, code, called, stdout.String(), stderr.String())
+	}
+}
+
+func helperGetenv(enabled bool) func(string) string {
+	return func(key string) string {
+		if key == FlagEnv && enabled {
+			return "1"
+		}
+		return ""
 	}
 }

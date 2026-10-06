@@ -66,6 +66,7 @@ func CLIActorType(actorType, commandPath string) string {
 }
 
 var legacyActorlessSystemCLICommands = map[string]struct{}{
+	"ao __multica_daemon":        {},
 	"ao agent-process":           {},
 	"ao agent-process supervise": {},
 	"ao chat-host":               {},

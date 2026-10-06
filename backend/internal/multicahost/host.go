@@ -1,4 +1,4 @@
-// Package multicahost runs the Multica agent daemon inside the AO daemon.
+// Package multicahost runs the Multica agent daemon in a child AO process.
 package multicahost
 
 import (
@@ -15,22 +15,33 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/multica-ai/multica/server/pkg/daemonhost"
 )
 
-const (
-	enabledEnv        = "AO_MULTICA_INPROCESS"
-	profileEnv        = "AO_MULTICA_PROFILE"
-	healthPortEnv     = "AO_MULTICA_HEALTH_PORT"
-	managedCLIVersion = "0.0.0-ao-inprocess"
-	shutdownTimeout   = 15 * time.Second
-)
+const managedCLIVersion = "0.0.0-ao-hosted"
 
-// ErrDaemonAlreadyRunning reports that starting a Multica daemon could
-// interfere with an existing daemon or its machine-wide runtime identity.
+// ErrConfiguration reports a child-host refusal that should not be retried.
+type ErrConfiguration struct {
+	Err error
+}
+
+func (e *ErrConfiguration) Error() string {
+	if e == nil || e.Err == nil {
+		return "Multica daemon configuration is not usable"
+	}
+	return strings.Join(strings.Fields(e.Err.Error()), " ")
+}
+
+func (e *ErrConfiguration) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+// ErrDaemonAlreadyRunning reports that a daemon already owns a profile or port.
 type ErrDaemonAlreadyRunning struct {
 	Profile         string
 	Port            int
@@ -52,7 +63,7 @@ type ErrNonLocalServer struct {
 }
 
 func (e *ErrNonLocalServer) Error() string {
-	return fmt.Sprintf("Multica in-process daemon requires a local server URL (got %s://%s)", e.Scheme, e.Host)
+	return fmt.Sprintf("Multica daemon requires a local server URL (got %s://%s)", e.Scheme, e.Host)
 }
 
 func (e *ErrDaemonAlreadyRunning) Error() string {
@@ -73,150 +84,13 @@ type daemon interface {
 
 type dependencies struct {
 	getenv      func(string) string
+	setenv      func(string, string) error
 	homeDir     func() (string, error)
 	loadConfig  func(daemonhost.Overrides) (daemonhost.Config, error)
 	newDaemon   func(daemonhost.Config, *slog.Logger) daemon
 	processLive func(int) bool
-}
-
-// Start starts the embedded Multica daemon when AO_MULTICA_INPROCESS is on.
-// Startup failures are logged and leave the AO daemon running.
-func Start(ctx context.Context, logger *slog.Logger) (stop func()) {
-	stop = noop
-	if !inProcessEnabled(os.Getenv(enabledEnv)) {
-		return stop
-	}
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			if logger == nil {
-				logger = slog.Default()
-			}
-			logger.Warn("Multica in-process daemon panicked during startup", "panic", recovered)
-			stop = noop
-		}
-	}()
-
-	started, err := startWith(ctx, logger, realDependencies())
-	if err != nil {
-		logStartFailure(logger, err)
-		return stop
-	}
-	return started
-}
-
-func startWith(ctx context.Context, logger *slog.Logger, deps dependencies) (func(), error) {
-	if deps.getenv == nil || !inProcessEnabled(deps.getenv(enabledEnv)) {
-		return noop, nil
-	}
-	if err := ctx.Err(); err != nil {
-		return noop, err
-	}
-	if logger == nil {
-		logger = slog.Default()
-	}
-
-	profile := strings.TrimSpace(deps.getenv(profileEnv))
-	port := healthPortForProfile(profile)
-	if override := strings.TrimSpace(deps.getenv(healthPortEnv)); override != "" {
-		if parsed, err := strconv.Atoi(override); err == nil && parsed > 0 && parsed <= 65535 {
-			port = parsed
-		}
-	}
-
-	home, err := deps.homeDir()
-	if err != nil {
-		return noop, fmt.Errorf("resolve home directory for Multica: %w", err)
-	}
-	stateDir, err := profileStateDir(home, profile)
-	if err != nil {
-		return noop, err
-	}
-	profileConfig, err := readProfileConfig(filepath.Join(stateDir, "config.json"))
-	if err != nil {
-		return noop, err
-	}
-	if healthPortInUse(port) {
-		return noop, &ErrDaemonAlreadyRunning{Profile: profile, Port: port}
-	}
-	otherProfile, foundOtherProfile, err := findOtherRunningProfile(home, profile, deps.processLive)
-	if err != nil {
-		return noop, fmt.Errorf("check Multica profile daemons: %w", err)
-	}
-	if foundOtherProfile {
-		return noop, &ErrDaemonAlreadyRunning{Profile: profile, Port: port, OtherProfile: otherProfile, OtherProfileSet: true}
-	}
-
-	overrides := daemonhost.Overrides{
-		Profile:           profile,
-		HealthPort:        port,
-		ServerURL:         serverURLOverride(deps.getenv, profileConfig.ServerURL),
-		DisableAutoUpdate: true,
-		DisableAutoReload: true,
-	}
-	cfg, err := deps.loadConfig(overrides)
-	if err != nil {
-		return noop, fmt.Errorf("load Multica daemon config: %w", err)
-	}
-	if err := requireLocalServer(cfg.ServerBaseURL); err != nil {
-		return noop, err
-	}
-	cfg.Profile = profile
-	cfg.HealthPort = port
-	cfg.AutoUpdateEnabled = false
-	cfg.AutoReloadEnabled = false
-	cfg.LaunchedBy = "desktop"
-	cfg.CLIVersion = managedCLIVersion
-
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
-		return noop, fmt.Errorf("create Multica profile directory: %w", err)
-	}
-	logFile, err := os.OpenFile(filepath.Join(stateDir, "daemon.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return noop, fmt.Errorf("open Multica daemon log: %w", err)
-	}
-	hostLogger := newHostLogger(logFile, logger)
-	host := deps.newDaemon(cfg, hostLogger)
-	if host == nil {
-		_ = logFile.Close()
-		return noop, errors.New("create Multica daemon: nil daemon")
-	}
-
-	hostCtx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	go func() {
-		defer logFile.Close()
-		defer close(done)
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				hostLogger.Error("Multica daemon panicked", "panic", recovered)
-			}
-		}()
-		runErr := func() error {
-			defer cancel()
-			return host.Run(hostCtx)
-		}()
-		if runErr != nil && !errors.Is(runErr, context.Canceled) {
-			hostLogger.Error("Multica daemon stopped with an error", "err", runErr)
-		}
-		if restartPath := host.RestartBinary(); restartPath != "" {
-			hostLogger.Warn("Multica daemon requested restart; ignoring in-process restart", "path", restartPath)
-		}
-	}()
-
-	var once sync.Once
-	stop := func() {
-		once.Do(func() {
-			cancel()
-			timer := time.NewTimer(shutdownTimeout)
-			defer timer.Stop()
-			select {
-			case <-done:
-			case <-timer.C:
-				hostLogger.Warn("timed out waiting for Multica daemon to stop", "timeout", shutdownTimeout)
-			}
-		})
-	}
-	return stop, nil
+	portInUse   func(int) bool
+	pid         func() int
 }
 
 type profileConfig struct {
@@ -259,47 +133,6 @@ func requireLocalServer(serverURL string) error {
 	return &ErrNonLocalServer{Scheme: parsed.Scheme, Host: parsed.Host}
 }
 
-func realDependencies() dependencies {
-	return dependencies{
-		getenv:      os.Getenv,
-		homeDir:     os.UserHomeDir,
-		loadConfig:  daemonhost.LoadConfig,
-		newDaemon:   func(cfg daemonhost.Config, logger *slog.Logger) daemon { return daemonhost.New(cfg, logger) },
-		processLive: processIsAlive,
-	}
-}
-
-func inProcessEnabled(value string) bool {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "1", "true", "on":
-		return true
-	default:
-		return false
-	}
-}
-
-func healthPortForProfile(profile string) int {
-	if profile == "" {
-		return daemonhost.DefaultHealthPort
-	}
-	var sum int
-	for _, b := range []byte(profile) {
-		sum += int(b)
-	}
-	return daemonhost.DefaultHealthPort + 1 + sum%1000
-}
-
-func profileStateDir(home, profile string) (string, error) {
-	root := filepath.Join(home, ".multica")
-	if profile == "" {
-		return root, nil
-	}
-	if profile == "." || profile == ".." || filepath.Base(profile) != profile || strings.ContainsAny(profile, `/\\`) {
-		return "", fmt.Errorf("invalid Multica profile %q", profile)
-	}
-	return filepath.Join(root, "profiles", profile), nil
-}
-
 func healthPortInUse(port int) bool {
 	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 	ln, err := net.Listen("tcp", addr)
@@ -323,7 +156,7 @@ func healthPortInUse(port int) bool {
 	return true
 }
 
-func findOtherRunningProfile(home, selected string, processLive func(int) bool) (string, bool, error) {
+func findOtherRunningProfile(home, selected string, processLive func(int) bool, portInUse func(int) bool) (string, bool, error) {
 	root := filepath.Join(home, ".multica")
 	profiles := []struct {
 		name string
@@ -366,34 +199,18 @@ func findOtherRunningProfile(home, selected string, processLive func(int) bool) 
 				return profile.name, true, nil
 			}
 		}
-		if healthPortInUse(healthPortForProfile(profile.name)) {
+		getenv := func(key string) string {
+			if key == ProfileEnv {
+				return profile.name
+			}
+			return ""
+		}
+		if portInUse(HealthPort(getenv)) {
 			return profile.name, true, nil
 		}
 	}
 	return "", false, nil
 }
-
-func logStartFailure(logger *slog.Logger, err error) {
-	if logger == nil {
-		logger = slog.Default()
-	}
-	var alreadyRunning *ErrDaemonAlreadyRunning
-	if errors.As(err, &alreadyRunning) {
-		attrs := []any{"profile", alreadyRunning.Profile, "port", alreadyRunning.Port, "err", err}
-		if alreadyRunning.OtherProfileSet {
-			otherProfile := alreadyRunning.OtherProfile
-			if otherProfile == "" {
-				otherProfile = "default"
-			}
-			attrs = append(attrs, "other_profile", otherProfile)
-		}
-		logger.Warn("Multica in-process daemon not started", attrs...)
-		return
-	}
-	logger.Warn("Multica in-process daemon failed to start", "err", err)
-}
-
-func noop() {}
 
 func newHostLogger(file io.Writer, aoLogger *slog.Logger) *slog.Logger {
 	if aoLogger == nil {
