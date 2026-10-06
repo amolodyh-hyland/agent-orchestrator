@@ -56,6 +56,8 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 	const menuStyleTokens = (currentPayload: OpenWithAoPagePayload) => currentPayload.style;
 	const buildStyles = (currentPayload: OpenWithAoPagePayload): string => {
 		const tokens = menuStyleTokens(currentPayload);
+		const panelBorderColor = `color-mix(in oklab, var(--surface-border, rgba(0,0,0,.1)) ${tokens.borderColorMixPercent}%, transparent)`;
+		const separatorColor = `color-mix(in oklab, var(--border, rgba(0,0,0,.08)) ${tokens.borderColorMixPercent}%, transparent)`;
 		return `
 :host { all: initial; }
 .panel {
@@ -69,7 +71,7 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 	background: var(--surface-raised, #fff);
 	color: var(--popover-foreground, #111827);
 	border-radius: 8px;
-	box-shadow: 0 0 0 ${tokens.borderWidth} var(--surface-border, rgba(0,0,0,.1)), var(--menu-shadow, 0 8px 24px rgba(15,23,42,.08));
+	box-shadow: 0 0 0 ${tokens.borderWidth} ${panelBorderColor}, var(--menu-shadow, 0 8px 24px rgba(15,23,42,.08));
 	font: ${tokens.menuFontWeight} ${tokens.menuFontSize}/${tokens.menuLineHeight} var(--font-sans, system-ui, sans-serif);
 	overflow-y: auto;
 	overflow-x: hidden;
@@ -89,7 +91,7 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 	display: flex;
 	align-items: center;
 	gap: 6px;
-	padding: 4px 6px;
+	padding: ${tokens.menuRowPaddingY} 6px;
 	border-radius: 6px;
 	font-size: ${tokens.menuFontSize};
 	font-weight: ${tokens.menuFontWeight};
@@ -110,8 +112,8 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 }
 .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .state { font-size: ${tokens.menuStateFontSize}; color: var(--muted-foreground, #6b7280); white-space: nowrap; }
-.label { padding: 4px 6px; font-size: ${tokens.menuLabelFontSize}; font-weight: 500; color: var(--muted-foreground, #6b7280); }
-.sep { height: ${tokens.borderWidth}; margin: 4px -4px; background: var(--border, rgba(0,0,0,.08)); }
+.label { padding: ${tokens.menuRowPaddingY} 6px; font-size: ${tokens.menuLabelFontSize}; font-weight: 500; line-height: ${tokens.menuLineHeight}; color: var(--muted-foreground, #6b7280); }
+.sep { height: ${tokens.borderWidth}; margin: 4px -4px; background: ${separatorColor}; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .dot { display: inline-block; width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; }
 .dot[data-tone="ready"] { background: #16a34a; }
@@ -124,7 +126,7 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 .icon { width: 12px; height: 12px; flex: 0 0 12px; }
 .chev { width: 14px; height: 14px; flex: 0 0 14px; }
 @media (min-resolution: 2dppx) {
-	.panel { box-shadow: 0 0 0 ${tokens.borderWidthHiDpi} var(--surface-border, rgba(0,0,0,.1)), var(--menu-shadow, 0 8px 24px rgba(15,23,42,.08)); }
+	.panel { box-shadow: 0 0 0 ${tokens.borderWidthHiDpi} ${panelBorderColor}, var(--menu-shadow, 0 8px 24px rgba(15,23,42,.08)); }
 	.sep { height: ${tokens.borderWidthHiDpi}; }
 }
 @media (prefers-reduced-motion: no-preference) {
