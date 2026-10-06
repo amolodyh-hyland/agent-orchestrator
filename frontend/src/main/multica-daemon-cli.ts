@@ -32,7 +32,7 @@ export type DaemonResult = { success: boolean; error?: string };
 export type ExecFileLike = (
 	file: string,
 	args: string[],
-	options: { timeout: number; maxBuffer: number; windowsHide: boolean },
+	options: { timeout: number; maxBuffer: number; windowsHide: boolean; env?: NodeJS.ProcessEnv },
 	callback: (error: Error | null, stdout: string, stderr: string) => void,
 ) => unknown;
 
@@ -55,6 +55,8 @@ export type MulticaDaemonService = {
 export type FindBinaryOptions = {
 	/** Explicit path (AO_MULTICA_CLI). When set it is the only candidate. */
 	override?: string;
+	/** Packaged executable, checked after the override and before PATH. */
+	bundledPath?: string;
 	pathEnv?: string;
 	home: string;
 	platform: NodeJS.Platform;
@@ -72,15 +74,16 @@ function isExecutableFile(file: string): boolean {
 }
 
 /**
- * Locates the multica CLI: the override when set, otherwise the first match on
- * PATH plus the usual user-install directories (a GUI-launched app inherits a
- * minimal PATH). Relative PATH entries are ignored.
+ * Locates the multica CLI: the override when set, otherwise the bundled binary
+ * and then PATH plus usual user-install directories (a GUI-launched app
+ * inherits a minimal PATH). Relative PATH entries are ignored.
  */
 export function findMulticaBinary(options: FindBinaryOptions): string | null {
 	const isExecutable = options.isExecutable ?? isExecutableFile;
 	if (options.override) {
 		return path.isAbsolute(options.override) && isExecutable(options.override) ? options.override : null;
 	}
+	if (options.bundledPath && path.isAbsolute(options.bundledPath) && isExecutable(options.bundledPath)) return options.bundledPath;
 	const name = options.platform === "win32" ? "multica.exe" : "multica";
 	const fallbacks =
 		options.platform === "win32" ? [] : ["/usr/local/bin", "/opt/homebrew/bin", path.join(options.home, ".local", "bin")];
@@ -96,6 +99,7 @@ export type MulticaDaemonServiceOptions = {
 	/** Pushes a main-to-renderer message to the Multica view. */
 	emit: (channel: string, payload: unknown) => void;
 	findBinary: () => string | null;
+	cliNotFoundMessage?: string;
 	logPath: string;
 	isOwnedDaemon?: (status: DaemonStatus) => boolean;
 	listRunningDaemons?: () => Promise<RunningMulticaDaemon[]>;
@@ -119,9 +123,15 @@ export function createMulticaDaemonService(options: MulticaDaemonServiceOptions)
 		return binary;
 	};
 
-	const run = (bin: string, args: string[], timeout: number): Promise<{ error: Error | null; stdout: string; stderr: string }> =>
+	const run = (bin: string, args: string[], timeout: number, launchedByDesktop = false): Promise<{ error: Error | null; stdout: string; stderr: string }> =>
 		new Promise((resolve) => {
-			exec(bin, args, { timeout, maxBuffer: MAX_BUFFER, windowsHide: true }, (error, stdout, stderr) => resolve({ error, stdout, stderr }));
+			const execOptions = {
+				timeout,
+				maxBuffer: MAX_BUFFER,
+				windowsHide: true,
+				...(launchedByDesktop ? { env: { ...process.env, MULTICA_LAUNCHED_BY: "desktop" } } : {}),
+			};
+			exec(bin, args, execOptions, (error, stdout, stderr) => resolve({ error, stdout, stderr }));
 		});
 
 	// Concurrent callers (the page may ask repeatedly) share one CLI process.
@@ -156,7 +166,7 @@ export function createMulticaDaemonService(options: MulticaDaemonServiceOptions)
 		action: "start" | "stop" | "restart",
 	): Promise<DaemonResult> => {
 		const bin = locate();
-		if (!bin) return { success: false, error: "multica CLI is not installed" };
+		if (!bin) return { success: false, error: options.cliNotFoundMessage ?? "multica CLI is not installed" };
 		if (lifecycleBusy) return { success: false, error: DAEMON_BUSY_MESSAGE };
 		lifecycleBusy = true;
 		try {
@@ -184,7 +194,7 @@ export function createMulticaDaemonService(options: MulticaDaemonServiceOptions)
 				}
 			}
 			push({ state: transient });
-			const result = await run(bin, args, timeout);
+			const result = await run(bin, args, timeout, action === "start" || action === "restart");
 			const failure = result.error ? (result.stderr.trim() || result.error.message).slice(0, 300) : undefined;
 			let status: DaemonStatus | undefined;
 			let markerFailure: string | undefined;

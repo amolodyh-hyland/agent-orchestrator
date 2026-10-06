@@ -28,6 +28,19 @@ describe("findMulticaBinary", () => {
 		expect(findMulticaBinary({ ...base, override: "multica", isExecutable: () => true })).toBeNull();
 	});
 
+	it("checks the bundled executable before PATH and only when it is absolute and executable", () => {
+		expect(
+			findMulticaBinary({
+				...base,
+				bundledPath: "/resources/multica-cli/multica",
+				pathEnv: "/bin",
+				isExecutable: has("/resources/multica-cli/multica", "/bin/multica"),
+			}),
+		).toBe("/resources/multica-cli/multica");
+		expect(findMulticaBinary({ ...base, bundledPath: "relative/multica", isExecutable: () => false })).toBeNull();
+		expect(findMulticaBinary({ ...base, bundledPath: "/missing/multica", pathEnv: "/bin", isExecutable: has("/bin/multica") })).toBe("/bin/multica");
+	});
+
 	it("searches PATH then the usual install directories, ignoring relative entries", () => {
 		expect(findMulticaBinary({ ...base, pathEnv: "/bin:/x/bin", isExecutable: has("/x/bin/multica") })).toBe("/x/bin/multica");
 		expect(findMulticaBinary({ ...base, pathEnv: "", isExecutable: has("/opt/homebrew/bin/multica") })).toBe("/opt/homebrew/bin/multica");
@@ -37,9 +50,9 @@ describe("findMulticaBinary", () => {
 });
 
 function fakeExec(responses: Record<string, { stdout?: string; stderr?: string; error?: Error }> = {}) {
-	const calls: Array<{ file: string; args: string[]; timeout: number }> = [];
+	const calls: Array<{ file: string; args: string[]; timeout: number; env?: NodeJS.ProcessEnv }> = [];
 	const exec: ExecFileLike = (file, args, options, callback) => {
-		calls.push({ file, args, timeout: options.timeout });
+		calls.push({ file, args, timeout: options.timeout, ...(options.env ? { env: options.env } : {}) });
 		const response = responses[args.join(" ")] ?? {};
 		queueMicrotask(() => callback(response.error ?? null, response.stdout ?? "", response.stderr ?? ""));
 	};
@@ -148,6 +161,24 @@ describe("multica daemon service", () => {
 		expect(calls).toHaveLength(0);
 	});
 
+	it("uses the packaged not-found message while preserving cli_not_found status", async () => {
+		const { exec, calls } = fakeExec();
+		const service = createMulticaDaemonService({
+			emit: vi.fn(),
+			findBinary: () => null,
+			cliNotFoundMessage: "The Multica CLI isn't bundled with this build and was not found on PATH",
+			execFile: exec,
+			logPath: "/nonexistent/daemon.log",
+		});
+
+		expect(await service.getStatus()).toEqual({ state: "cli_not_found" });
+		expect(await service.restart()).toEqual({
+			success: false,
+			error: "The Multica CLI isn't bundled with this build and was not found on PATH",
+		});
+		expect(calls).toHaveLength(0);
+	});
+
 	it("starts and stops through the CLI, pushing the transient and the final state", async () => {
 		const { service, emit, calls } = setup({ "daemon status --output json": { stdout: RUNNING } });
 
@@ -171,6 +202,19 @@ describe("multica daemon service", () => {
 			["stop", 15_000],
 			["restart", 90_000],
 		]);
+	});
+
+	it("marks start and restart as desktop-managed, without adding the variable to status calls", async () => {
+		const { service, calls } = setup({ "daemon status --output json": { stdout: RUNNING } });
+
+		await service.start();
+		await service.restart();
+
+		expect(calls.filter((call) => call.args[1] === "start" || call.args[1] === "restart").map((call) => call.env?.MULTICA_LAUNCHED_BY)).toEqual([
+			"desktop",
+			"desktop",
+		]);
+		expect(calls.filter((call) => call.args[1] === "status").every((call) => call.env === undefined)).toBe(true);
 	});
 
 	it("reports a failed command with the CLI's message, truncated", async () => {

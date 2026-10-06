@@ -246,6 +246,16 @@ Multica's preload also exposes a generic `window.electron.ipcRenderer`, and seve
 
 `webSecurity` stays on (`MULTICA_WEB_SECURITY` in `src/shared/multica.ts`). Multica's cloud API and a default local self-host both accept REST calls from the `file://` renderer.
 
+## CLI binary and attribution
+
+The CLI resolver checks `AO_MULTICA_CLI` first; when set, it is the only candidate. Otherwise it checks the bundled CLI, then `PATH` and the usual user-install directories. Packaged apps look for the bundled executable at `Resources/multica-cli/multica` (or `multica.exe` on Windows). Builds without a bundled CLI can still use a CLI found through the remaining resolver paths.
+
+To include the CLI in a package, set `AO_MULTICA_CLI_BIN` to the absolute path of a built Multica executable and `AO_MULTICA_NOTICE_DIR` to the directory containing Multica's `NOTICE` and `LICENSE`. Packaging stages the executable and copies both attribution files next to it. It records the executable's SHA-256 in `multica-cli/multica.sha256`.
+
+The Multica LICENSE text says that when the daemon or CLI is used without a Multica user interface, user-facing documentation must state that the product is built on Multica and link to [Multica](https://github.com/multica-ai/multica). Builds embedding the Multica UI must leave the Multica logo, product name, and copyright display unmodified.
+
+AO starts or restarts the daemon with `MULTICA_LAUNCHED_BY=desktop`. Multica uses this attribution to skip CLI self-update and mark the runtime as managed by Desktop. To update or roll back a bundled CLI, rebuild the AO package with a different `AO_MULTICA_CLI_BIN`; the `multica.sha256` file identifies the binary included in that build.
+
 The Open in AO controller runs in Electron's isolated world (`MULTICA_AO_WORLD_ID` = 1001),
 separate from Multica's page script. Its per-process nonce is not written to the DOM, menu labels
 use `textContent`, and action rows require trusted events.

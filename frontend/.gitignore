@@ -2,4 +2,5 @@ app-update.yml
 .env.local
 /update-helper/
 /multica-desktop/
+/multica-cli/
 /ao-updates-disabled

@@ -940,10 +940,14 @@ async function createWindowInternal(): Promise<void> {
 				findBinary: () =>
 					findMulticaBinary({
 						override: process.env.AO_MULTICA_CLI?.trim() || undefined,
+						bundledPath: app.isPackaged
+							? path.join(process.resourcesPath, "multica-cli", process.platform === "win32" ? "multica.exe" : "multica")
+							: undefined,
 						pathEnv: process.env.PATH,
 						home: os.homedir(),
 						platform: process.platform,
 					}),
+				cliNotFoundMessage: app.isPackaged ? "The Multica CLI isn't bundled with this build and was not found on PATH" : undefined,
 				logPath: path.join(homeDirectory, ".multica", "daemon.log"),
 				isOwnedDaemon: ownerStore.isOwnedDaemon,
 				listRunningDaemons: () => listRunningMulticaDaemons(guardOptions),
