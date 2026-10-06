@@ -141,21 +141,29 @@ If the cluster is missing or hidden, a floating button with the same menu appear
 above Multica's chat launcher after about 1.5 seconds. It moves back into the header when the
 cluster returns; both controls are never shown together.
 
-- Look: the control is a subtle outlined rectangle that reproduces Multica's own `Button`
+- Look: the control is a subtle outlined rectangle that follows Multica's own `Button`
   (`variant="outline"`, `size="sm"`; the same component as the Filter, Display and Board buttons of the
   issue list toolbar) from Multica's CSS variables: 28 px high (`--button-height-sm`), 6 px radius
-  (`--radius-md`), 1 px `--border` and `--background` fill, `--muted-foreground` text, 13/18 px weight
-  500 (`--text-label`), 10 px side padding, 4 px gap, 14 px icon, hover and expanded `--muted` fill,
-  focus ring `--ring`, disabled at 50 % opacity; dark theme (`html.dark`) uses the `--input`-based
-  border and fill like the native button. The controller injects one `<style id="ao-open-with-ao-style">`
-  scoped to `button[data-ao-open-with-ao="trigger"]` (so it does not depend on Multica's compiled
-  Tailwind utilities, which only exist when used) and removes it with the controller. The fallback
-  uses the same rules inside its shadow root (`:host-context(html.dark)`). Computed styles matched
-  Multica's native Filter button on all 11 compared properties in light and dark.
-- Menus: the dropdown and submenus use Multica's menu tokens (8 px radius, 4 px padding, 1 px
-  `--surface-border` ring plus `--menu-shadow`, 28 px rows with 6 px radius, 14/20 px text, 16 px
-  chevrons, `--accent` highlight, `--border` separators, `min-width` 8 rem).
-
+  (`--radius-md`), a hairline border in the low-contrast `--border` token in both themes (1 px,
+  0.5 px on displays with at least 2 device pixels per CSS pixel), `--background` fill, `--muted-foreground`
+  text, 13/18 px weight 500 (`--text-label`), 10 px side padding, 4 px gap, 14 px icon, hover and expanded
+  `--muted` fill, focus ring `--ring`, disabled at 50 % opacity; the dark theme (`html.dark`) uses the
+  `--input`-based fill like the native button. The controller injects one
+  `<style id="ao-open-with-ao-style">` scoped to `button[data-ao-open-with-ao="trigger"]` (so it does not
+  depend on Multica's compiled Tailwind utilities, which only exist when used) and removes it with the
+  controller. The fallback uses the same rules inside its shadow root (`:host-context(html.dark)`).
+- Menus: the dropdown and submenus follow Multica's menu component (8 px radius, 4 px padding, 28 px rows
+  with 6 px radius and 4px 6px padding, `--menu-shadow`, `--accent` highlight, `--border` separators,
+  `min-width` 8 rem) with a hairline `--surface-border` ring (no borders around options; separators are a
+  hairline), 12 px weight 400 option text (`--text-caption`; state and section label text 11 px,
+  `--text-micro`; 14 px chevrons, 12 px link marker) and a maximum height of 218 px (about 7 rows plus a
+  peek of the next) for the dropdown and every submenu, scrolling inside and never leaving the viewport
+  (checked at 1000x700 and 1320x860).
+- Style tokens: every tunable value lives in one object, `OPEN_WITH_AO_STYLE` in
+  `shared/multica-open-with-ao.ts` (`borderWidth` 1px, `borderWidthHiDpi` 0.5px, `menuFontSize`,
+  `menuStateFontSize`, `menuLabelFontSize`, `menuFontWeight` 400, `menuLineHeight` 20px, `menuMaxHeightPx`
+  218). It travels in the page payload as `payload.style`, so the injected controller and menu need no
+  imports and a change is one line.
 - Anchor: the first locator layer looks for the three-dot trigger (`button[data-slot=dropdown-menu-trigger]`
   with `svg.lucide-ellipsis`) inside `span.relative.inline-flex` inside
   `div.flex.items-center.shrink-0` inside a `<header>`. The second layer uses the same structure
