@@ -69,6 +69,34 @@ function mockGeometry(input?: {
 	Object.defineProperty(window, "innerHeight", { configurable: true, value: 600 });
 }
 
+function mockScrollableMenuGeometry(panelRect = rect(0, 100, 240, 120), footerHeight = 52): void {
+	vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+		if (this.id === "menu-trigger") return rect(40, 20, 150, 30);
+		if (this.classList.contains("panel")) return panelRect;
+		const panelElement = this.closest<HTMLElement>(".panel");
+		if (this.classList.contains("footer")) {
+			const ownerRect = panelElement?.getBoundingClientRect() ?? panelRect;
+			return rect(ownerRect.left + 4, ownerRect.bottom - footerHeight, ownerRect.width - 8, footerHeight);
+		}
+		if (this.matches(".item[data-key]")) {
+			const footer = this.closest<HTMLElement>(".footer");
+			if (footer) {
+				const footerRect = footer.getBoundingClientRect();
+				const footerRows = Array.from(footer.querySelectorAll<HTMLElement>(".item[data-key]"));
+				const index = footerRows.indexOf(this);
+				return rect(4, footerRect.top + index * 24, 200, 24);
+			}
+			const rows = Array.from(panelElement?.querySelectorAll<HTMLElement>(".item[data-key]") ?? [])
+				.filter((row) => !row.closest(".footer"));
+			const index = rows.indexOf(this);
+			return rect(4, panelRect.top + 4 + index * 24 - (panelElement?.scrollTop ?? 0), 200, 24);
+		}
+		return rect(0, 0, 100, 24);
+	});
+	Object.defineProperty(window, "innerWidth", { configurable: true, value: 800 });
+	Object.defineProperty(window, "innerHeight", { configurable: true, value: 600 });
+}
+
 function makeTrigger(): HTMLElement {
 	const trigger = document.createElement("button");
 	trigger.id = "menu-trigger";
@@ -177,6 +205,51 @@ describe("multica Open with AO menu", () => {
 		expect(allProjects?.getAttribute("aria-expanded")).toBe("true");
 		expect(menuRows(shadow, "1").map((row) => row.getAttribute("data-key"))).toEqual(["project:alpha", "project:beta"]);
 		expect(shadow?.querySelector('.panel[data-level="1"]')?.getAttribute("aria-label")).toBe("All projects");
+	});
+
+	it("groups trailing project actions in sticky footers only when a panel has them", () => {
+		mockGeometry();
+		const listMenu = openMenu(payload({ projects: [project("alpha"), project("beta")] }));
+		const listRoot = panel(listMenu.shadow, 0);
+		expect(listRoot?.querySelector(".footer")).toBeNull();
+		listMenu.shadow?.querySelector<HTMLElement>('[data-key="project:alpha"]')?.click();
+		const projectFooter = panel(listMenu.shadow, 1)?.querySelector<HTMLElement>(".footer");
+		expect(Array.from(projectFooter?.children ?? [], (row) => row.getAttribute("data-key") ?? row.getAttribute("role"))).toEqual([
+			"separator",
+			"new-task:alpha",
+		]);
+		listMenu.menu.close();
+
+		const deducedMenu = openMenu(payload({ deducedProjectId: "alpha" }));
+		const deducedFooter = panel(deducedMenu.shadow, 0)?.querySelector<HTMLElement>(".footer");
+		expect(Array.from(deducedFooter?.children ?? [], (row) => row.getAttribute("data-key") ?? row.getAttribute("role"))).toEqual([
+			"separator",
+			"new-task:alpha",
+			"separator",
+			"all-projects",
+		]);
+		deducedMenu.menu.close();
+
+		const infoMenu = openMenu(payload({ daemon: "stopped" }));
+		expect(panel(infoMenu.shadow, 0)?.querySelector(".footer")).toBeNull();
+	});
+
+	it("shows focus rings only in keyboard navigation mode across all open panels", () => {
+		mockGeometry();
+		const { shadow } = openMenu(payload({ projects: [project("alpha"), project("beta")] }));
+		const root = panel(shadow, 0);
+		const style = shadow?.querySelector("style")?.textContent ?? "";
+		expect(style).toContain(".panel:focus { outline: none; }");
+		expect(style).toContain('.panel[data-nav="keyboard"] .item:focus-visible');
+		expect(style).not.toContain("\n.item:focus-visible {");
+		expect(root?.getAttribute("data-nav")).toBe("pointer");
+
+		key(root, "ArrowDown");
+		expect(panel(shadow, 0)?.getAttribute("data-nav")).toBe("keyboard");
+		shadow?.querySelector<HTMLElement>('[data-key="project:alpha"]')?.click();
+		expect(panel(shadow, 1)?.getAttribute("data-nav")).toBe("keyboard");
+		panel(shadow, 1)?.dispatchEvent(new Event("pointermove", { bubbles: true }));
+		expect(Array.from(shadow?.querySelectorAll<HTMLElement>(".panel") ?? []).every((entry) => entry.getAttribute("data-nav") === "pointer")).toBe(true);
 	});
 
 	it("renders project content, disabled empty states, overflow, and conditionally includes New task", () => {
@@ -649,10 +722,74 @@ describe("multica Open with AO menu", () => {
 		const last = shadow?.querySelector<HTMLElement>('[data-key="project:epsilon"]');
 		key(last, "End");
 		expect(shadow?.activeElement).toBe(last);
+		expect(root?.querySelector(".footer")).toBeNull();
 		expect(root?.scrollTop).toBe(68);
 		key(last, "Home");
 		expect(shadow?.activeElement?.getAttribute("data-key")).toBe("project:alpha");
 		expect(root?.scrollTop).toBe(0);
+	});
+
+	it("keeps the sticky footer visible at End and reveals the previous task on ArrowUp", () => {
+		const tasks = Array.from({ length: 24 }, (_, index) => session(`task-alpha-${index}`, "alpha"));
+		mockScrollableMenuGeometry();
+		const { shadow } = openMenu(
+			payload({ deducedProjectId: "alpha", projects: [project("alpha", { sessions: tasks })] }),
+			vi.fn(),
+			{ viaKeyboard: true },
+		);
+		const root = panel(shadow, 0);
+		const newTask = shadow?.querySelector<HTMLElement>('[data-key="new-task:alpha"]');
+		const allProjects = shadow?.querySelector<HTMLElement>('[data-key="all-projects"]');
+
+		key(newTask, "End");
+		expect(shadow?.activeElement).toBe(allProjects);
+		expect(root?.scrollTop).toBe(0);
+
+		newTask?.focus();
+		key(newTask, "ArrowUp");
+		const lastTask = shadow?.querySelector<HTMLElement>('[data-key="task:task-alpha-23"]');
+		const footer = root?.querySelector<HTMLElement>(".footer");
+		expect(shadow?.activeElement).toBe(lastTask);
+		expect(root?.scrollTop).toBeGreaterThan(0);
+		expect(lastTask?.getBoundingClientRect().bottom).toBeLessThanOrEqual(footer?.getBoundingClientRect().top ?? 0);
+	});
+
+	it("keeps focused rows above the sticky footer while ArrowDown passes through the last tasks", () => {
+		const tasks = Array.from({ length: 24 }, (_, index) => session(`task-alpha-${index}`, "alpha"));
+		mockScrollableMenuGeometry();
+		const { shadow } = openMenu(
+			payload({ deducedProjectId: "alpha", projects: [project("alpha", { sessions: tasks })] }),
+			vi.fn(),
+			{ viaKeyboard: true },
+		);
+		const root = panel(shadow, 0);
+		const footer = root?.querySelector<HTMLElement>(".footer");
+		let focused = shadow?.querySelector<HTMLElement>('[data-key="task:task-alpha-20"]') ?? null;
+		focused?.focus({ preventScroll: true });
+
+		for (const index of [21, 22, 23]) {
+			key(focused, "ArrowDown");
+			focused = shadow?.querySelector<HTMLElement>(`[data-key="task:task-alpha-${index}"]`) ?? null;
+			expect(shadow?.activeElement).toBe(focused);
+			expect(focused?.getBoundingClientRect().bottom).toBeLessThanOrEqual(footer?.getBoundingClientRect().top ?? 0);
+		}
+	});
+
+	it("restores a focused task above the sticky footer after update", () => {
+		const tasks = Array.from({ length: 24 }, (_, index) => session(`task-alpha-${index}`, "alpha"));
+		mockScrollableMenuGeometry();
+		const initialPayload = payload({ deducedProjectId: "alpha", projects: [project("alpha", { sessions: tasks })] });
+		const { menu, shadow } = openMenu(initialPayload);
+		shadow?.querySelector<HTMLElement>('[data-key="task:task-alpha-23"]')?.focus({ preventScroll: true });
+
+		menu.update(payload({ deducedProjectId: "alpha", projects: [project("alpha", { sessions: tasks })] }));
+
+		const root = panel(shadow, 0);
+		const footer = root?.querySelector<HTMLElement>(".footer");
+		const restoredTask = shadow?.querySelector<HTMLElement>('[data-key="task:task-alpha-23"]');
+		expect(shadow?.activeElement).toBe(restoredTask);
+		expect(root?.scrollTop).toBeGreaterThan(0);
+		expect(restoredTask?.getBoundingClientRect().bottom).toBeLessThanOrEqual(footer?.getBoundingClientRect().top ?? 0);
 	});
 
 	it("keeps a keyboard-opened submenu through the queued reveal scroll and closes it on a genuine scroll", () => {
@@ -1000,6 +1137,52 @@ describe("multica Open with AO menu", () => {
 		expect(submenu?.style.left).toBe("500px");
 		expect(submenu?.style.top).toBe("452px");
 		expect(submenu?.style.maxHeight).toBe("584px");
+	});
+
+	it("keeps deeper cascades on the flipped left side without overlapping the root", () => {
+		mockGeometry({
+			trigger: rect(650, 20, 120, 30),
+			panels: { "0": rect(0, 0, 240, 120), "1": rect(0, 0, 200, 140), "2": rect(0, 0, 200, 140) },
+			rows: { "all-projects": rect(700, 100, 80, 28), "project:alpha": rect(520, 130, 80, 28) },
+		});
+		const { shadow } = openMenu(payload({ deducedProjectId: "alpha" }));
+		shadow?.querySelector<HTMLElement>('[data-key="all-projects"]')?.click();
+		shadow?.querySelector<HTMLElement>('.panel[data-level="1"] [data-key="project:alpha"]')?.click();
+
+		const root = panel(shadow, 0);
+		const levelOne = panel(shadow, 1);
+		const levelTwo = panel(shadow, 2);
+		expect(root?.style.left).toBe("530px");
+		expect(levelOne?.style.left).toBe("500px");
+		expect(levelTwo?.style.left).toBe("320px");
+		expect(parseFloat(levelTwo?.style.left ?? "0") + 200).toBeLessThanOrEqual(parseFloat(root?.style.left ?? "0"));
+	});
+
+	it("falls back to the right for a deeper cascade when the parent's left side has no room", () => {
+		mockGeometry({
+			trigger: rect(650, 20, 120, 30),
+			panels: { "0": rect(0, 0, 240, 120), "1": rect(0, 0, 200, 140), "2": rect(0, 0, 200, 140) },
+			rows: { "all-projects": rect(700, 100, 80, 28), "project:alpha": rect(100, 130, 80, 28) },
+		});
+		const { shadow } = openMenu(payload({ deducedProjectId: "alpha" }));
+		shadow?.querySelector<HTMLElement>('[data-key="all-projects"]')?.click();
+		shadow?.querySelector<HTMLElement>('.panel[data-level="1"] [data-key="project:alpha"]')?.click();
+
+		expect(panel(shadow, 1)?.style.left).toBe("500px");
+		expect(panel(shadow, 2)?.style.left).toBe("180px");
+	});
+
+	it("keeps the existing rightward cascade when level one opens to the right", () => {
+		mockGeometry({
+			panels: { "0": rect(0, 0, 240, 120), "1": rect(0, 0, 200, 140), "2": rect(0, 0, 200, 140) },
+			rows: { "all-projects": rect(300, 100, 80, 28), "project:alpha": rect(450, 130, 80, 28) },
+		});
+		const { shadow } = openMenu(payload({ deducedProjectId: "alpha" }));
+		shadow?.querySelector<HTMLElement>('[data-key="all-projects"]')?.click();
+		shadow?.querySelector<HTMLElement>('.panel[data-level="1"] [data-key="project:alpha"]')?.click();
+
+		expect(panel(shadow, 1)?.style.left).toBe("380px");
+		expect(panel(shadow, 2)?.style.left).toBe("530px");
 	});
 
 	it("uses scrollable panel styles and repositions every open level on resize", () => {
