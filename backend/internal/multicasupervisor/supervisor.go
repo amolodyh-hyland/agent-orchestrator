@@ -321,6 +321,12 @@ func (s *Supervisor) handleRequest(state *ownerState, req request) {
 	case requestStart:
 		s.start(state, req.resp)
 	case requestStop:
+		if state.status.State == StateExternal {
+			// AO runs nothing here: answering "stopped" would claim to have
+			// stopped a daemon that keeps running.
+			s.answer(state, req.resp, ErrExternal)
+			return
+		}
 		s.stop(state, req.resp, req.ctx, false)
 	case requestRestart:
 		s.restart(state, req.resp, req.ctx)

@@ -256,6 +256,12 @@ func TestExternalDetectionAndExplicitTakeover(t *testing.T) {
 	if err := supervisor.Restart(context.Background()); !errors.Is(err, ErrExternal) {
 		t.Fatalf("Restart external error = %v, want ErrExternal", err)
 	}
+	if err := supervisor.Stop(context.Background()); !errors.Is(err, ErrExternal) {
+		t.Fatalf("Stop external error = %v, want ErrExternal", err)
+	}
+	if state := supervisor.Status().State; state != StateExternal {
+		t.Fatalf("state after refused Stop = %s, want external", state)
+	}
 	if factory.count() != 0 {
 		t.Fatal("external daemon was started over")
 	}
