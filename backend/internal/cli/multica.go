@@ -155,9 +155,9 @@ func writeMulticaStatus(w io.Writer, status multicaDaemonStatus, jsonOutput bool
 		fmt.Fprintf(&b, " (pid %d)", status.PID)
 	}
 	b.WriteByte('\n')
-	fmt.Fprintf(&b, "Profile: %s\n", status.Profile)
-	fmt.Fprintf(&b, "Health port: %d\n", status.HealthPort)
 	if status.Enabled {
+		fmt.Fprintf(&b, "Profile: %s\n", status.Profile)
+		fmt.Fprintf(&b, "Health port: %d\n", status.HealthPort)
 		if status.Desired != "" {
 			fmt.Fprintf(&b, "Desired: %s\n", status.Desired)
 		}

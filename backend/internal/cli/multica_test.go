@@ -82,8 +82,8 @@ func TestMulticaStatusHumanAndJSONOutput(t *testing.T) {
 		{
 			name:   "disabled",
 			status: multicaDaemonStatus{State: "disabled", Desired: "stopped", Profile: "default", HealthPort: 4700},
-			want:   []string{"Multica daemon: disabled", "Profile: default", "Health port: 4700", "Multica daemon hosting is off. Start the AO daemon with AO_MULTICA_DAEMON=1 to host it."},
-			omit:   []string{"Desired:", "Restarts:"},
+			want:   []string{"Multica daemon: disabled", "Multica daemon hosting is off. Start the AO daemon with AO_MULTICA_DAEMON=1 to host it."},
+			omit:   []string{"Profile:", "Health port:", "Desired:", "Restarts:"},
 		},
 		{
 			name:   "stopped",
