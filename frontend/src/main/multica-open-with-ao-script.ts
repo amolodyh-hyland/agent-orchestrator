@@ -136,11 +136,7 @@ span { white-space: nowrap; }
 	}
 
 	function syncValidityTimer(): void {
-		const shouldRun =
-			observer !== null &&
-			!destroyed &&
-			payload.issue !== null &&
-			(state === "ANCHORED" || state === "FALLBACK");
+		const shouldRun = observer !== null && !destroyed && payload.issue !== null;
 		if (!shouldRun) {
 			clearValidityTimer();
 			return;
@@ -227,21 +223,23 @@ span { white-space: nowrap; }
 	}
 
 	function showFallback(): void {
-		if (destroyed || payload.issue === null || fallbackHost) return;
+		if (destroyed || payload.issue === null) return;
 		clearFallbackTimer();
-		closeMenuBeforeReplacingTrigger();
-		removeCurrentTrigger();
-		const host = document.createElement("div");
-		host.id = FALLBACK_ID;
-		host.style.cssText = "position:fixed; right:16px; bottom:calc(var(--chat-launcher-clearance, 3.5rem) + 8px); z-index:2147483000; pointer-events:auto";
-		const shadow = host.attachShadow({ mode: "open" });
-		const style = document.createElement("style");
-		style.textContent = FALLBACK_STYLES;
-		shadow.appendChild(style);
-		trigger = createTrigger();
-		shadow.appendChild(trigger);
-		document.documentElement.appendChild(host);
-		fallbackHost = host;
+		if (!fallbackHost) {
+			closeMenuBeforeReplacingTrigger();
+			removeCurrentTrigger();
+			const host = document.createElement("div");
+			host.id = FALLBACK_ID;
+			host.style.cssText = "position:fixed; right:16px; bottom:calc(var(--chat-launcher-clearance, 3.5rem) + 8px); z-index:2147483000; pointer-events:auto";
+			const shadow = host.attachShadow({ mode: "open" });
+			const style = document.createElement("style");
+			style.textContent = FALLBACK_STYLES;
+			shadow.appendChild(style);
+			trigger = createTrigger();
+			shadow.appendChild(trigger);
+			document.documentElement.appendChild(host);
+			fallbackHost = host;
+		}
 		state = "FALLBACK";
 		syncValidityTimer();
 	}
@@ -312,7 +310,9 @@ span { white-space: nowrap; }
 			trigger = null;
 			lastAnchorActions = null;
 		}
-		if (state !== "FALLBACK" && fallbackTimer === null) {
+		if (fallbackHost) state = "FALLBACK";
+		else if (!headerTriggerWasPlaced) state = "WAIT";
+		if (!fallbackHost && state !== "FALLBACK" && fallbackTimer === null) {
 			fallbackTimer = window.setTimeout(() => {
 				fallbackTimer = null;
 				if (destroyed || payload.issue === null) return;
@@ -320,7 +320,6 @@ span { white-space: nowrap; }
 				else ensure();
 			}, FALLBACK_DELAY);
 		}
-		if (!headerTriggerWasPlaced) state = "WAIT";
 		syncValidityTimer();
 	}
 
