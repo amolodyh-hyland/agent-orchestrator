@@ -11,6 +11,14 @@ import {
 	MAX_OPEN_WITH_AO_PROJECTS,
 	MAX_OPEN_WITH_AO_SESSIONS,
 	MAX_OPEN_WITH_AO_STATE_LABEL,
+	MENU_BORDER_COLOR_MIX_PERCENT,
+	MENU_BORDER_WIDTH,
+	MENU_BORDER_WIDTH_HIDPI,
+	MENU_MAX_HEIGHT_PX,
+	OPTION_FONT_SIZE,
+	OPTION_FONT_WEIGHT,
+	OPTION_LINE_HEIGHT,
+	OPTION_PADDING_Y,
 	OPEN_WITH_AO_ACTION_PREFIX,
 	OPEN_WITH_AO_LABEL,
 	OPEN_WITH_AO_STYLE,
@@ -249,15 +257,25 @@ describe("buildOpenWithAoPagePayload", () => {
 			projects: [],
 		});
 		expect(OPEN_WITH_AO_LABEL).toBe("Open in AO");
+		expect(MENU_MAX_HEIGHT_PX).toBe(208);
+		expect(MENU_BORDER_WIDTH).toBe("1px");
+		expect(MENU_BORDER_WIDTH_HIDPI).toBe("0.5px");
+		expect(MENU_BORDER_COLOR_MIX_PERCENT).toBe(55);
+		expect(OPTION_FONT_SIZE).toBe("12px");
+		expect(OPTION_FONT_WEIGHT).toBe("400");
+		expect(OPTION_LINE_HEIGHT).toBe("16px");
+		expect(OPTION_PADDING_Y).toBe("6px");
 		expect(OPEN_WITH_AO_STYLE).toEqual({
-			borderWidth: "1px",
-			borderWidthHiDpi: "0.5px",
-			menuFontSize: "var(--text-caption, 12px)",
-			menuStateFontSize: "var(--text-micro, 11px)",
-			menuLabelFontSize: "var(--text-micro, 11px)",
-			menuFontWeight: "400",
-			menuLineHeight: "20px",
-			menuMaxHeightPx: 218,
+			borderWidth: MENU_BORDER_WIDTH,
+			borderWidthHiDpi: MENU_BORDER_WIDTH_HIDPI,
+			borderColorMixPercent: MENU_BORDER_COLOR_MIX_PERCENT,
+			menuFontSize: OPTION_FONT_SIZE,
+			menuStateFontSize: "11px",
+			menuLabelFontSize: "11px",
+			menuFontWeight: OPTION_FONT_WEIGHT,
+			menuLineHeight: OPTION_LINE_HEIGHT,
+			menuRowPaddingY: OPTION_PADDING_Y,
+			menuMaxHeightPx: MENU_MAX_HEIGHT_PX,
 		});
 	});
 
