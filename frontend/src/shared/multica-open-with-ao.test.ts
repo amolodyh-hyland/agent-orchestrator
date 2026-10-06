@@ -12,6 +12,7 @@ import {
 	MAX_OPEN_WITH_AO_SESSIONS,
 	MAX_OPEN_WITH_AO_STATE_LABEL,
 	OPEN_WITH_AO_ACTION_PREFIX,
+	OPEN_WITH_AO_LABEL,
 	parseOpenWithAoActionUrl,
 	sortOpenWithAoSessions,
 	type OpenWithAoAction,
@@ -236,6 +237,7 @@ describe("buildOpenWithAoPagePayload", () => {
 		expect(
 			buildOpenWithAoPagePayload({ snapshot: null, links: [], issue: null, nonce: NONCE }),
 		).toEqual({
+			label: OPEN_WITH_AO_LABEL,
 			nonce: NONCE,
 			issue: null,
 			daemon: "unknown",
@@ -244,6 +246,7 @@ describe("buildOpenWithAoPagePayload", () => {
 			deduction: null,
 			projects: [],
 		});
+		expect(OPEN_WITH_AO_LABEL).toBe("Open with AO");
 	});
 
 	it("does not mark sessions linked when there is no issue", () => {
@@ -267,6 +270,7 @@ describe("buildOpenWithAoPagePayload", () => {
 			issue: { identifier: "ABC-1", title: "A task" },
 			nonce: NONCE,
 		});
+		expect(result.label).toBe(OPEN_WITH_AO_LABEL);
 		expect(result.projects.find(({ id }) => id === "project-1")).toMatchObject({ linked: true, sessions: [{ linked: true }] });
 		expect(result.deducedProjectId).toBe("project-1");
 		expect(result.deduction).toBe("linked");

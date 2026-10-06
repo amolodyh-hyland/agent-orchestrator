@@ -59,14 +59,15 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 	position: fixed;
 	pointer-events: auto;
 	box-sizing: border-box;
-	min-width: 14rem;
+	min-width: 8rem;
+	width: max-content;
 	max-width: 22rem;
 	padding: 4px;
 	background: var(--surface-raised, #fff);
 	color: var(--popover-foreground, #111827);
 	border-radius: var(--radius, 0.5rem);
 	box-shadow: 0 0 0 1px var(--surface-border, rgba(0,0,0,.1)), var(--menu-shadow, 0 8px 24px rgba(15,23,42,.08));
-	font: var(--text-body, 14px)/1.4 var(--font-sans, system-ui, sans-serif);
+	font: var(--text-body, 14px)/var(--text-body--line-height, 20px) var(--font-sans, system-ui, sans-serif);
 	overflow-y: auto;
 	overflow-x: hidden;
 	overscroll-behavior: contain;
@@ -115,6 +116,7 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 .dot[data-tone="unknown"] { background: #9ca3af; }
 .item[data-stale="true"], .item[data-terminated="true"] { opacity: .6; }
 .icon { width: 14px; height: 14px; flex: 0 0 14px; }
+.chev { width: 16px; height: 16px; flex: 0 0 16px; }
 @media (prefers-reduced-motion: no-preference) {
 	.panel { animation: ao-menu-fade-in 100ms ease-out; }
 	@keyframes ao-menu-fade-in { from { opacity: 0; } to { opacity: 1; } }
@@ -240,8 +242,9 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 		svg.setAttribute("class", `icon ${className}`);
 		svg.setAttribute("aria-hidden", "true");
 		svg.setAttribute("viewBox", "0 0 24 24");
-		svg.setAttribute("width", "14");
-		svg.setAttribute("height", "14");
+		const size = className === "chev" ? "16" : "14";
+		svg.setAttribute("width", size);
+		svg.setAttribute("height", size);
 		svg.setAttribute("fill", "none");
 		svg.setAttribute("stroke", "currentColor");
 		svg.setAttribute("stroke-width", "2");
@@ -842,7 +845,7 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 		shadow.appendChild(style);
 		document.body.appendChild(host);
 		trigger.setAttribute("aria-expanded", "true");
-		const root = appendPanel(buildModel(payload), 0, "Open with AO", trigger, null, null);
+		const root = appendPanel(buildModel(payload), 0, payload.label, trigger, null, null);
 		window.addEventListener("resize", onResize);
 		document.addEventListener("keydown", onKeyDown, true);
 		document.addEventListener("pointerdown", onPointerDown, true);
@@ -892,7 +895,7 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 		clearTimers();
 		for (const panel of panels) removePanel(panel);
 		panels = [];
-		const root = appendPanel(buildModel(payload), 0, "Open with AO", trigger, null, null);
+		const root = appendPanel(buildModel(payload), 0, payload.label, trigger, null, null);
 		for (const key of chain) {
 			const found = findSubmenuRow(key);
 			if (!found) break;
