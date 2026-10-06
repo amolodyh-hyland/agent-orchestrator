@@ -192,7 +192,7 @@ declare const MAIN_WINDOW_VITE_NAME: string;
 const execFileAsync = promisify(execFile);
 
 function probeMulticaHealth(port: number, timeoutMs: number): Promise<MulticaHealthPayload | null> {
-	return new Promise((resolve) => {
+	return new Promise((resolve, reject) => {
 		let settled = false;
 		const finish = (payload: MulticaHealthPayload | null): void => {
 			if (settled) return;
@@ -219,10 +219,13 @@ function probeMulticaHealth(port: number, timeoutMs: number): Promise<MulticaHea
 					finish({});
 				}
 			});
-			response.on("error", () => finish(null));
+			response.on("error", reject);
 		});
 		request.setTimeout(timeoutMs, () => request.destroy(new Error("Multica health probe timed out")));
-		request.on("error", () => finish(null));
+		request.on("error", (error: NodeJS.ErrnoException) => {
+			if (["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT"].includes(error.code ?? "")) finish(null);
+			else reject(error);
+		});
 	});
 }
 
@@ -907,6 +910,9 @@ async function createWindowInternal(): Promise<void> {
 		createDaemonService: (emit) => {
 			const homeDirectory = os.homedir();
 			const ownerStore = createMulticaDaemonOwnerStore(app.getPath("userData"));
+			const bundledMulticaBinary = app.isPackaged
+				? path.resolve(process.resourcesPath, "multica-cli", process.platform === "win32" ? "multica.exe" : "multica")
+				: undefined;
 			const guardOptions = {
 				homeDirectory,
 				probeHealth: probeMulticaHealth,
@@ -940,9 +946,7 @@ async function createWindowInternal(): Promise<void> {
 				findBinary: () =>
 					findMulticaBinary({
 						override: process.env.AO_MULTICA_CLI?.trim() || undefined,
-						bundledPath: app.isPackaged
-							? path.join(process.resourcesPath, "multica-cli", process.platform === "win32" ? "multica.exe" : "multica")
-							: undefined,
+						bundledPath: bundledMulticaBinary,
 						pathEnv: process.env.PATH,
 						home: os.homedir(),
 						platform: process.platform,
@@ -953,6 +957,8 @@ async function createWindowInternal(): Promise<void> {
 				listRunningDaemons: () => listRunningMulticaDaemons(guardOptions),
 				writeOwnerMarker: ownerStore.write,
 				removeOwnerMarker: ownerStore.remove,
+				isBundledBinary: (binaryPath: string) =>
+					!process.env.AO_MULTICA_CLI?.trim() && bundledMulticaBinary !== undefined && path.resolve(binaryPath) === bundledMulticaBinary,
 			});
 		},
 		onPageTitleChange: (title) => multicaIssueLinkService?.handlePageTitle(title),

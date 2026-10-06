@@ -3,7 +3,13 @@ import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createMulticaDaemonService, DAEMON_BUSY_MESSAGE, findMulticaBinary, type ExecFileLike } from "./multica-daemon-cli";
+import {
+	createMulticaDaemonService,
+	DAEMON_BUSY_MESSAGE,
+	findMulticaBinary,
+	type ExecFileLike,
+	type MulticaDaemonServiceOptions,
+} from "./multica-daemon-cli";
 import { createMulticaDaemonOwnerStore, healthPortForProfile, type RunningMulticaDaemon } from "./multica-daemon-guard";
 
 const RUNNING = JSON.stringify({
@@ -59,24 +65,28 @@ function fakeExec(responses: Record<string, { stdout?: string; stderr?: string; 
 	return { exec, calls };
 }
 
-function setup(responses?: Parameters<typeof fakeExec>[0], binary: string | null = "/usr/local/bin/multica") {
+function setup(
+	responses?: Parameters<typeof fakeExec>[0],
+	binary: string | null = "/usr/local/bin/multica",
+	serviceOptions: Partial<MulticaDaemonServiceOptions> = {},
+) {
 	const { exec, calls } = fakeExec(responses);
 	const emit = vi.fn();
-	const service = createMulticaDaemonService({ emit, findBinary: () => binary, execFile: exec, logPath: "/nonexistent/daemon.log", pollMs: 1000 });
+	const service = createMulticaDaemonService({ emit, findBinary: () => binary, execFile: exec, logPath: "/nonexistent/daemon.log", pollMs: 1000, ...serviceOptions });
 	return { service, emit, calls };
 }
 
 function setupGuardedService(stateDirectory: string, daemons: RunningMulticaDaemon[] = [], responses?: Parameters<typeof fakeExec>[0]) {
 	const { exec, calls } = fakeExec(responses);
 	const emit = vi.fn();
-	const ownerStore = createMulticaDaemonOwnerStore(stateDirectory);
+	const ownerStore = createMulticaDaemonOwnerStore(stateDirectory, { readProcessStart: async () => "process-1" });
 	const service = createMulticaDaemonService({
 		emit,
 		findBinary: () => "/usr/local/bin/multica",
 		execFile: exec,
 		logPath: "/nonexistent/daemon.log",
 		isOwnedDaemon: ownerStore.isOwnedDaemon,
-		listRunningDaemons: async () => daemons,
+		listRunningDaemons: async () => ({ state: "known", daemons }),
 		writeOwnerMarker: ownerStore.write,
 		removeOwnerMarker: ownerStore.remove,
 	});
@@ -180,7 +190,7 @@ describe("multica daemon service", () => {
 	});
 
 	it("starts and stops through the CLI, pushing the transient and the final state", async () => {
-		const { service, emit, calls } = setup({ "daemon status --output json": { stdout: RUNNING } });
+		const { service, emit, calls } = setup({ "daemon status --output json": { stdout: RUNNING } }, undefined, { isOwnedDaemon: () => true });
 
 		expect(await service.start()).toEqual({ success: true });
 
@@ -191,7 +201,7 @@ describe("multica daemon service", () => {
 	});
 
 	it("uses bounded timeouts for lifecycle commands", async () => {
-		const { service, calls } = setup();
+		const { service, calls } = setup({ "daemon status --output json": { stdout: '{"status":"stopped"}' } }, undefined, { isOwnedDaemon: () => true });
 
 		await service.start();
 		await service.stop();
@@ -204,17 +214,26 @@ describe("multica daemon service", () => {
 		]);
 	});
 
-	it("marks start and restart as desktop-managed, without adding the variable to status calls", async () => {
-		const { service, calls } = setup({ "daemon status --output json": { stdout: RUNNING } });
+	it("adds launch attribution only for the bundled binary", async () => {
+		for (const binaryPath of ["/opt/user/multica", "/usr/local/bin/multica"]) {
+			const external = setup({ "daemon status --output json": { stdout: RUNNING } }, binaryPath, { isBundledBinary: () => false });
+			await external.service.start();
+			await external.service.restart();
+			expect(external.calls.filter((call) => call.args[1] === "start" || call.args[1] === "restart").every((call) => call.env === undefined)).toBe(true);
+		}
 
-		await service.start();
-		await service.restart();
-
-		expect(calls.filter((call) => call.args[1] === "start" || call.args[1] === "restart").map((call) => call.env?.MULTICA_LAUNCHED_BY)).toEqual([
+		const bundled = setup(
+			{ "daemon status --output json": { stdout: RUNNING } },
+			"/resources/multica-cli/multica",
+			{ isBundledBinary: (binaryPath) => path.resolve(binaryPath) === "/resources/multica-cli/multica" },
+		);
+		await bundled.service.start();
+		await bundled.service.restart();
+		expect(bundled.calls.filter((call) => call.args[1] === "start" || call.args[1] === "restart").map((call) => call.env?.MULTICA_LAUNCHED_BY)).toEqual([
 			"desktop",
 			"desktop",
 		]);
-		expect(calls.filter((call) => call.args[1] === "status").every((call) => call.env === undefined)).toBe(true);
+		expect(bundled.calls.filter((call) => call.args[1] === "status").every((call) => call.env === undefined)).toBe(true);
 	});
 
 	it("reports a failed command with the CLI's message, truncated", async () => {
@@ -270,6 +289,84 @@ describe("multica daemon service", () => {
 		expect(calls).toHaveLength(1);
 	});
 
+	it("does not reuse a delayed pre-operation status to decide ownership", async () => {
+		const stateDirectory = mkdtempSync(path.join(os.tmpdir(), "multica-service-owner-"));
+		try {
+			const ownerStore = createMulticaDaemonOwnerStore(stateDirectory, { readProcessStart: async () => "process-1" });
+			let statusCalls = 0;
+			let resolveOldStatus: (() => void) | undefined;
+			const calls: string[] = [];
+			const exec: ExecFileLike = (_file, args, _options, callback) => {
+				const command = args.join(" ");
+				calls.push(command);
+				if (command === "daemon status --output json") {
+					statusCalls += 1;
+					if (statusCalls === 1) resolveOldStatus = () => callback(null, '{"status":"stopped"}', "");
+					else queueMicrotask(() => callback(null, RUNNING, ""));
+				} else queueMicrotask(() => callback(null, "", ""));
+			};
+			const service = createMulticaDaemonService({
+				emit: vi.fn(),
+				findBinary: () => "/usr/local/bin/multica",
+				execFile: exec,
+				logPath: "/nonexistent/daemon.log",
+				isOwnedDaemon: ownerStore.isOwnedDaemon,
+				writeOwnerMarker: ownerStore.write,
+			});
+			const oldRead = service.getStatus();
+			await vi.waitFor(() => expect(resolveOldStatus).toEqual(expect.any(Function)));
+
+			expect(await service.start()).toEqual({ success: true });
+			resolveOldStatus?.();
+			expect(await oldRead).toEqual({ state: "stopped" });
+			expect(statusCalls).toBe(2);
+			expect(calls).toEqual(["daemon status --output json", "daemon start", "daemon status --output json"]);
+			expect(await ownerStore.isOwnedDaemon({ state: "running", pid: 94028, profile: "", daemonId: "d1" })).toBe(true);
+		} finally {
+			rmSync(stateDirectory, { recursive: true, force: true });
+		}
+	});
+
+	it("rewrites the owner marker on a later successful start", async () => {
+		const { exec, calls } = fakeExec({ "daemon status --output json": { stdout: RUNNING } });
+		let writes = 0;
+		const service = createMulticaDaemonService({
+			emit: vi.fn(),
+			findBinary: () => "/usr/local/bin/multica",
+			execFile: exec,
+			logPath: "/nonexistent/daemon.log",
+			writeOwnerMarker: async () => {
+				writes += 1;
+				if (writes === 1) throw new Error("marker disk error");
+			},
+		});
+
+		expect(await service.start()).toEqual({
+			success: false,
+			error: "Multica daemon operation succeeded but AO could not update its ownership marker: marker disk error",
+		});
+		expect(await service.start()).toEqual({ success: true });
+		expect(writes).toBe(2);
+		expect(calls.filter((call) => call.args.join(" ") === "daemon start")).toHaveLength(2);
+	});
+
+	it("refuses start when the profile scan outcome is unknown", async () => {
+		const { exec, calls } = fakeExec();
+		const service = createMulticaDaemonService({
+			emit: vi.fn(),
+			findBinary: () => "/usr/local/bin/multica",
+			execFile: exec,
+			logPath: "/nonexistent/daemon.log",
+			listRunningDaemons: async () => ({ state: "unknown" }),
+		});
+
+		expect(await service.start()).toEqual({
+			success: false,
+			error: "Could not verify whether another Multica daemon is running; not starting a second one",
+		});
+		expect(calls).toHaveLength(0);
+	});
+
 	it("serializes lifecycle commands across services, so a replaced view cannot overlap an old one", async () => {
 		const old = setup();
 		const replacement = setup();
@@ -283,13 +380,13 @@ describe("multica daemon service", () => {
 	});
 
 	it("does not launch follow-up commands for a service disposed mid-command", async () => {
-		const { service, calls } = setup();
+		const { service, calls } = setup({ "daemon status --output json": { stdout: '{"status":"stopped"}' } }, "/usr/local/bin/multica", { isOwnedDaemon: () => true });
 
 		const pending = service.stop();
 		service.dispose();
 		await pending;
 
-		expect(calls.map((call) => call.args[1])).toEqual(["stop"]);
+		expect(calls.map((call) => call.args[1])).toEqual(["status", "stop", "status"]);
 	});
 
 	const refusalCases: Array<[RunningMulticaDaemon, string]> = [
@@ -340,7 +437,7 @@ describe("multica daemon service", () => {
 		}
 	});
 
-	it("stops an AO-owned daemon and removes its marker", async () => {
+	it("keeps the marker when a successful stop still reports the owned daemon", async () => {
 		const stateDirectory = mkdtempSync(path.join(os.tmpdir(), "multica-service-owner-"));
 		try {
 			const { service, calls, ownerStore } = setupGuardedService(stateDirectory, [], { "daemon status --output json": { stdout: RUNNING } });
@@ -348,10 +445,66 @@ describe("multica daemon service", () => {
 
 			expect(await service.stop()).toEqual({ success: true });
 			expect(calls.some((call) => call.args.join(" ") === "daemon stop")).toBe(true);
-			expect(ownerStore.isOwnedDaemon({ state: "running", pid: 94028 })).toBe(false);
+			expect(await ownerStore.isOwnedDaemon({ state: "running", pid: 94028, profile: "", daemonId: "d1" })).toBe(true);
+			expect((await service.getStatus())).toMatchObject({ state: "running", externallyManaged: false });
 		} finally {
 			rmSync(stateDirectory, { recursive: true, force: true });
 		}
+	});
+
+	it("removes the marker only after a fresh status confirms the daemon stopped", async () => {
+		const stateDirectory = mkdtempSync(path.join(os.tmpdir(), "multica-service-owner-"));
+		try {
+			const ownerStore = createMulticaDaemonOwnerStore(stateDirectory, { readProcessStart: async () => "process-1" });
+			await ownerStore.write({ state: "running", pid: 94028, profile: "" });
+			let statusReads = 0;
+			const calls: string[] = [];
+			const exec: ExecFileLike = (_file, args, _options, callback) => {
+				const command = args.join(" ");
+				calls.push(command);
+				if (command === "daemon status --output json") {
+					statusReads += 1;
+					queueMicrotask(() => callback(null, statusReads === 1 ? RUNNING : '{"status":"stopped"}', ""));
+				} else queueMicrotask(() => callback(null, "", ""));
+			};
+			const service = createMulticaDaemonService({
+				emit: vi.fn(),
+				findBinary: () => "/usr/local/bin/multica",
+				execFile: exec,
+				logPath: "/nonexistent/daemon.log",
+				isOwnedDaemon: ownerStore.isOwnedDaemon,
+				writeOwnerMarker: ownerStore.write,
+				removeOwnerMarker: ownerStore.remove,
+			});
+
+			expect(await service.stop()).toEqual({ success: true });
+			expect(calls).toEqual(["daemon status --output json", "daemon stop", "daemon status --output json"]);
+			expect(await ownerStore.isOwnedDaemon({ state: "running", pid: 94028, profile: "" })).toBe(false);
+		} finally {
+			rmSync(stateDirectory, { recursive: true, force: true });
+		}
+	});
+
+	it("refuses to stop when status failed even if a later status might find a live daemon", async () => {
+		const { service, calls } = setup({
+			"daemon status --output json": { stdout: RUNNING, error: new Error("status failed") },
+		});
+
+		expect(await service.stop()).toEqual({
+			success: false,
+			error: "Could not read the Multica daemon's status; not stopping a daemon AO cannot identify",
+		});
+		expect(calls.map((call) => call.args.join(" "))).toEqual(["daemon status --output json"]);
+	});
+
+	it.each(["", "not json", "[]", '{"status":"mystery"}'])("refuses to stop with unknown status output %j", async (stdout) => {
+		const { service, calls } = setup({ "daemon status --output json": { stdout } }, "/usr/local/bin/multica", { isOwnedDaemon: () => true });
+
+		expect(await service.stop()).toEqual({
+			success: false,
+			error: "Could not read the Multica daemon's status; not stopping a daemon AO cannot identify",
+		});
+		expect(calls.some((call) => call.args[1] === "stop")).toBe(false);
 	});
 
 	it("keeps ownership after the service is recreated and serializes two concurrent starts", async () => {

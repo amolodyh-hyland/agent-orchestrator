@@ -6,7 +6,7 @@ export type DaemonState = "running" | "stopped" | "starting" | "stopping" | "cli
 
 export type DaemonStatus = {
 	state: DaemonState;
-	/** A running daemon that AO did not start and cannot control. */
+	/** AO marks daemons it did not start as externally managed. */
 	externallyManaged?: boolean;
 	pid?: number;
 	uptime?: string;

@@ -3,7 +3,7 @@ import { accessSync, constants, statSync } from "node:fs";
 import { open, stat } from "node:fs/promises";
 import path from "node:path";
 import { daemonStatusKey, mapDaemonStatus, probeFromStatus, type DaemonStatus, type LocalRuntimeProbe } from "../shared/multica-daemon";
-import type { RunningMulticaDaemon } from "./multica-daemon-guard";
+import type { MulticaDaemonScanResult, RunningMulticaDaemon } from "./multica-daemon-guard";
 
 // A minimal daemon control surface for the embedded Multica UI. It shells out to
 // the installed `multica` CLI (fixed argument arrays through execFile, never a
@@ -101,10 +101,11 @@ export type MulticaDaemonServiceOptions = {
 	findBinary: () => string | null;
 	cliNotFoundMessage?: string;
 	logPath: string;
-	isOwnedDaemon?: (status: DaemonStatus) => boolean;
-	listRunningDaemons?: () => Promise<RunningMulticaDaemon[]>;
+	isOwnedDaemon?: (status: DaemonStatus) => boolean | Promise<boolean>;
+	listRunningDaemons?: () => Promise<MulticaDaemonScanResult>;
 	writeOwnerMarker?: (status: DaemonStatus) => Promise<void>;
 	removeOwnerMarker?: () => Promise<void>;
+	isBundledBinary?: (binaryPath: string) => boolean;
 	execFile?: ExecFileLike;
 	pollMs?: number;
 };
@@ -135,22 +136,42 @@ export function createMulticaDaemonService(options: MulticaDaemonServiceOptions)
 		});
 
 	// Concurrent callers (the page may ask repeatedly) share one CLI process.
-	let statusInFlight: Promise<DaemonStatus> | undefined;
-	const readStatus = (): Promise<DaemonStatus> => {
-		statusInFlight ??= (async (): Promise<DaemonStatus> => {
+	type StatusSnapshot = { status: DaemonStatus; statusName?: string; known: boolean };
+	let statusInFlight: Promise<StatusSnapshot> | undefined;
+	const readStatusSnapshot = (): Promise<StatusSnapshot> => {
+		if (statusInFlight) return statusInFlight;
+		let pending: Promise<StatusSnapshot>;
+		pending = (async (): Promise<StatusSnapshot> => {
 			const bin = locate();
-			if (!bin) return { state: "cli_not_found" };
+			if (!bin) return { status: { state: "cli_not_found" }, known: false };
 			// A stopped daemon may exit non-zero; the JSON (when any) still says so.
 			const result = await run(bin, ["daemon", "status", "--output", "json"], STATUS_TIMEOUT_MS);
 			const status = mapDaemonStatus(result.stdout);
-			if (options.isOwnedDaemon && (status.state === "running" || status.state === "starting")) {
-				status.externallyManaged = !options.isOwnedDaemon(status);
+			let statusName: string | undefined;
+			try {
+				const parsed: unknown = JSON.parse(result.stdout);
+				if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+					const raw = (parsed as Record<string, unknown>).status;
+					if (typeof raw === "string") statusName = raw;
+				}
+			} catch {
+				// Malformed output is not a confirmed daemon state.
 			}
-			return status;
+			const known = result.error === null && (statusName === "running" || statusName === "starting" || statusName === "stopped");
+			if (options.isOwnedDaemon && (status.state === "running" || status.state === "starting")) {
+				status.externallyManaged = !(await options.isOwnedDaemon(status));
+			}
+			return { status, ...(statusName !== undefined ? { statusName } : {}), known };
 		})().finally(() => {
-			statusInFlight = undefined;
+			if (statusInFlight === pending) statusInFlight = undefined;
 		});
-		return statusInFlight;
+		statusInFlight = pending;
+		return pending;
+	};
+	const readStatus = async (): Promise<DaemonStatus> => (await readStatusSnapshot()).status;
+	const readFreshStatusSnapshot = (): Promise<StatusSnapshot> => {
+		statusInFlight = undefined;
+		return readStatusSnapshot();
 	};
 
 	const push = (status: DaemonStatus): void => {
@@ -169,24 +190,44 @@ export function createMulticaDaemonService(options: MulticaDaemonServiceOptions)
 		if (!bin) return { success: false, error: options.cliNotFoundMessage ?? "multica CLI is not installed" };
 		if (lifecycleBusy) return { success: false, error: DAEMON_BUSY_MESSAGE };
 		lifecycleBusy = true;
+		statusInFlight = undefined;
 		try {
-			if (action === "stop" && options.isOwnedDaemon) {
-				const status = await readStatus();
-				if ((status.state === "running" || status.state === "starting") && !options.isOwnedDaemon(status)) {
+			if (action === "stop") {
+				const snapshot = await readFreshStatusSnapshot();
+				const status = snapshot.status;
+				if (!snapshot.known) {
+					return { success: false, error: "Could not read the Multica daemon's status; not stopping a daemon AO cannot identify" };
+				}
+				if ((status.state === "running" || status.state === "starting") && !(await options.isOwnedDaemon?.(status))) {
 					return { success: false, error: "This Multica daemon was not started by AO; stop it where it was started" };
 				}
 			}
 			if ((action === "start" || action === "restart") && options.listRunningDaemons) {
-				let daemons: RunningMulticaDaemon[];
+				let scan: MulticaDaemonScanResult;
 				try {
-					daemons = await options.listRunningDaemons();
+					scan = await options.listRunningDaemons();
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					return { success: false, error: `Unable to check for running Multica daemons: ${message}` };
 				}
-				const other = daemons.find((daemon) => !options.isOwnedDaemon?.({ state: "running", pid: daemon.pid }));
+				if (scan.state === "unknown") {
+					return { success: false, error: "Could not verify whether another Multica daemon is running; not starting a second one" };
+				}
+				let other: RunningMulticaDaemon | undefined;
+				for (const daemon of scan.daemons) {
+					const daemonStatus: DaemonStatus = {
+						state: "running",
+						pid: daemon.pid,
+						profile: daemon.profile ?? daemon.profiles[0] ?? "",
+						daemonId: daemon.daemonId,
+					};
+					if (!(await options.isOwnedDaemon?.(daemonStatus))) {
+						other = daemon;
+						break;
+					}
+				}
 				if (other) {
-					const profile = other.profiles.map((name) => name || "default").join(", ");
+					const profile = (other.profile !== undefined ? [other.profile] : other.profiles).map((name) => name || "default").join(", ");
 					return {
 						success: false,
 						error: `A Multica daemon is already running (profile ${profile}, port ${other.port}); AO will not start a second one`,
@@ -194,11 +235,13 @@ export function createMulticaDaemonService(options: MulticaDaemonServiceOptions)
 				}
 			}
 			push({ state: transient });
-			const result = await run(bin, args, timeout, action === "start" || action === "restart");
+			const result = await run(bin, args, timeout, (action === "start" || action === "restart") && (options.isBundledBinary?.(bin) ?? false));
 			const failure = result.error ? (result.stderr.trim() || result.error.message).slice(0, 300) : undefined;
 			let status: DaemonStatus | undefined;
 			let markerFailure: string | undefined;
-			if (!failure && action === "stop") {
+			const snapshot = await readFreshStatusSnapshot();
+			status = snapshot.status;
+			if (!failure && action === "stop" && snapshot.known && snapshot.statusName === "stopped") {
 				try {
 					await options.removeOwnerMarker?.();
 				} catch (error) {
@@ -206,17 +249,21 @@ export function createMulticaDaemonService(options: MulticaDaemonServiceOptions)
 				}
 			}
 			if (!failure && (action === "start" || action === "restart")) {
-				status = await readStatus();
-			}
-			if (!failure && (action === "start" || action === "restart") && status?.state === "running" && status.pid !== undefined) {
-				try {
-					await options.writeOwnerMarker?.(status);
-					if (options.isOwnedDaemon) status.externallyManaged = !options.isOwnedDaemon(status);
-				} catch (error) {
-					markerFailure = error instanceof Error ? error.message : String(error);
+				if (snapshot.known && (status.state === "running" || status.state === "starting") && status.pid !== undefined) {
+					try {
+						await options.writeOwnerMarker?.(status);
+						if (options.isOwnedDaemon) status.externallyManaged = !(await options.isOwnedDaemon(status));
+					} catch (error) {
+						markerFailure = error instanceof Error ? error.message : String(error);
+					}
+				} else {
+					markerFailure = "could not read the Multica daemon's status after the operation";
 				}
 			}
-			if (!disposed) push(status ?? (status = await readStatus()));
+			if (!failure && action === "stop" && (status.state === "running" || status.state === "starting") && options.isOwnedDaemon) {
+				status.externallyManaged = !(await options.isOwnedDaemon(status));
+			}
+			if (!disposed) push(status);
 			if (failure) return { success: false, error: failure };
 			if (markerFailure) return { success: false, error: `Multica daemon operation succeeded but AO could not update its ownership marker: ${markerFailure}` };
 			return { success: true };
