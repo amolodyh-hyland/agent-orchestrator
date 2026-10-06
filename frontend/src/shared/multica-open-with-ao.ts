@@ -4,8 +4,8 @@ export const MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL = "multicaOpenWithAo:publish";
 export const OPEN_WITH_AO_ACTION_PREFIX = "ao://multica/open-with-ao/";
 // This is the single place to rename the Open in AO control.
 export const OPEN_WITH_AO_LABEL = "Open in AO";
-// Fixed cap for about 9 rows of 28px in the dropdown and every submenu; panels scroll inside and clamp to the viewport.
-export const MENU_MAX_HEIGHT_PX = 270;
+// Fixed cap for about 10 rows of 28px in the dropdown and every submenu; panels scroll inside and clamp to the viewport.
+export const MENU_MAX_HEIGHT_PX = 283;
 // Hairline border, ring, and separator width on standard-density displays.
 export const MENU_BORDER_WIDTH = "1px";
 // Hairline border, ring, and separator width on displays with >= 2 device pixels per CSS pixel.

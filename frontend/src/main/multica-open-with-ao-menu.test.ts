@@ -26,7 +26,7 @@ const DEFAULT_MENU_STYLE: MenuStyleTokens = {
 	menuLabelFontSize: "11px",
 	menuFontWeight: "400",
 	menuLineHeight: "16px",
-	menuMaxHeightPx: 270,
+	menuMaxHeightPx: 283,
 };
 
 function session(id: string, projectId: string, overrides: Partial<OpenWithAoPageSession> = {}): OpenWithAoPageSession {
@@ -124,7 +124,7 @@ function mockCappedPanelGeometry(input?: { trigger?: DOMRect; panels?: Record<st
 	Object.defineProperty(window, "innerHeight", { configurable: true, value: 600 });
 }
 
-function mockScrollableMenuGeometry(panelRect = rect(0, 100, 240, 270)): void {
+function mockScrollableMenuGeometry(panelRect = rect(0, 100, 240, 283)): void {
 	vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
 		if (this.id === "menu-trigger") return rect(40, 20, 150, 30);
 		if (this.classList.contains("panel")) return panelRect;
@@ -955,7 +955,7 @@ describe("multica Open in AO menu", () => {
 		const footer = root?.querySelector<HTMLElement>(".footer");
 		const newTask = shadow?.querySelector<HTMLElement>('[data-key="new-task:alpha"]');
 		const allProjects = shadow?.querySelector<HTMLElement>('[data-key="all-projects"]');
-		expect(root?.style.maxHeight).toBe("270px");
+		expect(root?.style.maxHeight).toBe("283px");
 		expect(shadow?.querySelector("style")?.textContent).toMatch(/\.footer\s*\{[^}]*position:\s*sticky;[^}]*bottom:\s*-4px;/);
 
 		key(newTask, "End");
@@ -1291,7 +1291,7 @@ describe("multica Open in AO menu", () => {
 		const root = shadow?.querySelector<HTMLElement>('.panel[data-level="0"]');
 		expect(root?.style.left).toBe("530px");
 		expect(root?.style.top).toBe("64px");
-		expect(root?.style.maxHeight).toBe("270px");
+		expect(root?.style.maxHeight).toBe("283px");
 		expect(root?.getAttribute("data-placement")).toBe("below");
 	});
 
@@ -1300,7 +1300,7 @@ describe("multica Open in AO menu", () => {
 		const { shadow } = openMenu();
 		const root = shadow?.querySelector<HTMLElement>('.panel[data-level="0"]');
 		expect(root?.style.top).toBe("406px");
-		expect(root?.style.maxHeight).toBe("270px");
+		expect(root?.style.maxHeight).toBe("283px");
 		expect(root?.getAttribute("data-placement")).toBe("above");
 	});
 
@@ -1308,8 +1308,8 @@ describe("multica Open in AO menu", () => {
 		mockGeometry({ trigger: rect(40, 400, 150, 30), panels: { "0": rect(0, 0, 240, 700) } });
 		const { shadow } = openMenu();
 		const root = shadow?.querySelector<HTMLElement>('.panel[data-level="0"]');
-		expect(root?.style.top).toBe("126px");
-		expect(root?.style.maxHeight).toBe("270px");
+		expect(root?.style.top).toBe("113px");
+		expect(root?.style.maxHeight).toBe("283px");
 		expect(root?.getAttribute("data-placement")).toBe("above");
 		expect(shadow?.querySelector("style")?.textContent).toContain("overflow-y: auto");
 	});
@@ -1319,7 +1319,7 @@ describe("multica Open in AO menu", () => {
 		const { shadow } = openMenu();
 		const root = shadow?.querySelector<HTMLElement>('.panel[data-level="0"]');
 		expect(root?.style.top).toBe("184px");
-		expect(root?.style.maxHeight).toBe("270px");
+		expect(root?.style.maxHeight).toBe("283px");
 		expect(root?.getAttribute("data-placement")).toBe("below");
 		expect(shadow?.querySelector("style")?.textContent).toContain("overflow-y: auto");
 	});
@@ -1352,13 +1352,13 @@ describe("multica Open in AO menu", () => {
 		submenu = shadow?.querySelector<HTMLElement>('.panel[data-level="1"]');
 		expect(submenu?.style.left).toBe("500px");
 		expect(submenu?.style.top).toBe("452px");
-		expect(submenu?.style.maxHeight).toBe("270px");
+		expect(submenu?.style.maxHeight).toBe("283px");
 	});
 
 	it.each([
 		[1320, 860],
 		[1000, 700],
-	])("caps tall root panels and submenus at 270px in a %ipx by %ipx viewport", (width, height) => {
+	])("caps tall root panels and submenus at 283px in a %ipx by %ipx viewport", (width, height) => {
 		mockGeometry({ panels: { "0": rect(0, 0, 240, 500), "1": rect(0, 0, 200, 400) } });
 		Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
 		Object.defineProperty(window, "innerHeight", { configurable: true, value: height });
@@ -1367,8 +1367,8 @@ describe("multica Open in AO menu", () => {
 		const root = panel(shadow, 0);
 		const submenu = panel(shadow, 1);
 
-		expect(root?.style.maxHeight).toBe("270px");
-		expect(submenu?.style.maxHeight).toBe("270px");
+		expect(root?.style.maxHeight).toBe("283px");
+		expect(submenu?.style.maxHeight).toBe("283px");
 		for (const openedPanel of [root, submenu]) {
 			const left = Number.parseFloat(openedPanel?.style.left ?? "0");
 			const top = Number.parseFloat(openedPanel?.style.top ?? "0");
@@ -1427,7 +1427,7 @@ describe("multica Open in AO menu", () => {
 		window.dispatchEvent(new Event("resize"));
 		top = Number.parseFloat(submenu?.style.top ?? "0");
 		height = submenu?.getBoundingClientRect().height ?? 0;
-		expect(submenu?.style.maxHeight).toBe("270px");
+		expect(submenu?.style.maxHeight).toBe("283px");
 		expect(top + height).toBeLessThanOrEqual(window.innerHeight - 8);
 	});
 
@@ -1438,8 +1438,8 @@ describe("multica Open in AO menu", () => {
 		const root = panel(shadow, 0);
 
 		expect(root?.getAttribute("data-placement")).toBe("above");
-		expect(root?.style.top).toBe("486px");
-		expect(root?.style.maxHeight).toBe("270px");
+		expect(root?.style.top).toBe("473px");
+		expect(root?.style.maxHeight).toBe("283px");
 	});
 
 	it("bounds root and submenu heights to the available space in a tiny viewport", () => {
