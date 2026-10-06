@@ -85,6 +85,10 @@ Daemon (`src/main/multica-daemon-cli.ts`): `daemonAPI` drives the installed `mul
 
 AO's `externallyManaged` status intentionally means “a daemon AO did not start.” Multica Desktop uses that field to mean a daemon on a different OS, so AO's value can cause the embedded controls to hide Stop/Restart even when the daemon is on this OS. AO passes `MULTICA_LAUNCHED_BY=desktop` only when it runs its bundled CLI; override and PATH binaries keep their own update behavior. Default-profile status polling reports only the default profile and does not surface a Desktop daemon running in a named profile. Only start and restart enumerate other profiles; stop checks ownership of the daemon its status/stop command targets. Polling and the log tail stop when the Multica view is destroyed, and lifecycle commands never overlap. `syncToken`, `clearToken` and `setTargetApiUrl` are deliberate no-ops: the CLI keeps its own login and server config. Preferences stay off (auto-start and stop-on-quit are not implemented).
 
+### Hosted mode
+
+When the AO daemon hosts Multica's daemon (`AO_MULTICA_DAEMON=1`, off by default), the daemon panel starts, stops, restarts and reads the daemon through the AO API (`src/main/multica-daemon-hosted.ts`) instead of this CLI-driven service; the ownership guard and marker above are not used, because AO's daemon supervises the process. A daemon that AO does not run is reported as externally managed, so the panel hides Stop and Restart for it. See [`docs/multica-hosted-daemon.md`](../../docs/multica-hosted-daemon.md).
+
 ### Known limits
 
 - For an unbundled CLI (an override or a binary found on `PATH`), Multica's own update or reload can restart the daemon as a new process. AO cannot authenticate that successor, so it shows the daemon as externally managed until the daemon is restarted from AO or the CLI.

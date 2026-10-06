@@ -9,7 +9,9 @@ supervisor's `userData` (Chromium cache, cookies, local/session storage, crash
 dumps), must resolve under `~/.ao` (overridable via `AO_DATA_DIR`/`AO_RUN_FILE`).
 Never write to or read from `~/Library/Application Support` or any other OS-default
 app-data location. `frontend/src/main.ts` pins Electron's `userData` to
-`~/.ao/electron`; do not remove that override. See the hard rule in `AGENTS.md`.
+`~/.ao/electron`; do not remove that override. The one other exception is the optional
+Multica daemon that AO can host (`AO_MULTICA_DAEMON=1`), which keeps Multica's own state in
+`~/.multica` and `~/multica_workspaces`. See the hard rule in `AGENTS.md`.
 
 ## Design System
 
