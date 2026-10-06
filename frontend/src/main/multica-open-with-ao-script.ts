@@ -29,32 +29,93 @@ export function createOpenWithAoController(options: {
 	createMenu: (options: OpenWithAoMenuFactoryOptions) => OpenWithAoMenu;
 }): OpenWithAoController {
 	const FALLBACK_ID = "ao-open-with-ao-fallback";
+	const STYLE_ID = "ao-open-with-ao-style";
 	const FALLBACK_DELAY = 1500;
 	const MUTATION_DEBOUNCE = 32;
 	const VALIDITY_INTERVAL = 2000;
 	const RELOCATION_WINDOW = 1000;
 	const RELOCATION_LIMIT = 5;
 	const RELOCATION_COOLDOWN = 5000;
+	const HEADER_STYLES = `
+button[data-ao-open-with-ao="trigger"] {
+	appearance: none;
+	display: inline-flex;
+	flex: 0 0 auto;
+	align-items: center;
+	justify-content: center;
+	box-sizing: border-box;
+	height: var(--button-height-sm,1.75rem);
+	gap: var(--button-gap-sm,.25rem);
+	padding: 0 var(--button-padding-sm,.625rem);
+	border: 1px solid var(--border,rgba(0,0,0,.08));
+	border-radius: var(--radius-md,.375rem);
+	background: var(--background,#fff);
+	background-clip: padding-box;
+	color: var(--muted-foreground,#6b7280);
+	font: 500 var(--text-label,13px)/var(--text-label--line-height,18px) var(--font-sans,system-ui,sans-serif);
+	white-space: nowrap;
+	cursor: default;
+	user-select: none;
+	outline: none;
+	-webkit-app-region: no-drag;
+	transition: color .15s,background-color .15s,border-color .15s,box-shadow .15s,transform .15s;
+}
+button[data-ao-open-with-ao="trigger"]:hover,
+button[data-ao-open-with-ao="trigger"][aria-expanded="true"] {
+	background: var(--muted,#f4f4f5);
+	color: var(--foreground,#111827);
+}
+button[data-ao-open-with-ao="trigger"]:focus-visible {
+	border-color: var(--ring,#a1a1aa);
+	box-shadow: 0 0 0 3px color-mix(in oklab,var(--ring,#a1a1aa) 50%,transparent);
+}
+button[data-ao-open-with-ao="trigger"]:disabled { pointer-events: none; opacity: .5; }
+button[data-ao-open-with-ao="trigger"] svg { width: 14px; height: 14px; flex: 0 0 14px; pointer-events: none; }
+.dark button[data-ao-open-with-ao="trigger"] {
+	border-color: var(--input,rgba(255,255,255,.15));
+	background: color-mix(in oklab,var(--input,rgba(255,255,255,.15)) 30%,transparent);
+}
+.dark button[data-ao-open-with-ao="trigger"]:hover,
+.dark button[data-ao-open-with-ao="trigger"][aria-expanded="true"] {
+	background: color-mix(in oklab,var(--input,rgba(255,255,255,.15)) 50%,transparent);
+	color: var(--foreground,#fafafa);
+}
+.dark button[data-ao-open-with-ao="trigger"]:focus-visible { border-color: var(--ring, #a1a1aa); }
+`;
 	const FALLBACK_STYLES = `
 :host { all: initial; }
 button {
 	appearance: none;
-	background: var(--surface-raised, #fff);
-	color: var(--foreground, #111827);
-	border: 1px solid var(--surface-border, rgba(0,0,0,.12));
-	border-radius: 999px;
-	box-shadow: var(--menu-shadow, 0 2px 10px rgba(0,0,0,.18));
-	padding: 6px 12px;
-	font: 12px/1.2 var(--font-sans, system-ui, sans-serif);
-	cursor: pointer;
 	display: inline-flex;
+	flex: 0 0 auto;
 	align-items: center;
-	gap: 6px;
+	justify-content: center;
+	box-sizing: border-box;
+	height: var(--button-height-sm,1.75rem);
+	gap: var(--button-gap-sm,.25rem);
+	padding: 0 var(--button-padding-sm,.625rem);
+	border: 1px solid var(--border,rgba(0,0,0,.08));
+	border-radius: var(--radius-md,.375rem);
+	background: var(--background,#fff);
+	background-clip: padding-box;
+	color: var(--muted-foreground,#6b7280);
+	font: 500 var(--text-label,13px)/var(--text-label--line-height,18px) var(--font-sans,system-ui,sans-serif);
+	white-space: nowrap;
+	cursor: default;
+	user-select: none;
+	outline: none;
+	-webkit-app-region: no-drag;
+	box-shadow: var(--menu-shadow, 0 2px 8px rgba(0,0,0,.12));
+	transition: color .15s,background-color .15s,border-color .15s,box-shadow .15s,transform .15s;
 }
-button:hover { background: var(--accent, #f4f4f5); }
-button:focus-visible { outline: 2px solid var(--ring, #a1a1aa); outline-offset: 2px; }
-svg { width: 16px; height: 16px; flex: 0 0 16px; }
+button:hover, button[aria-expanded="true"] { background: var(--muted,#f4f4f5); color: var(--foreground,#111827); }
+button:focus-visible { border-color: var(--ring,#a1a1aa); box-shadow: 0 0 0 3px color-mix(in oklab,var(--ring,#a1a1aa) 50%,transparent),var(--menu-shadow, 0 2px 8px rgba(0,0,0,.12)); }
+button:disabled { pointer-events: none; opacity: .5; }
+svg { width: 14px; height: 14px; flex: 0 0 14px; pointer-events: none; }
 span { white-space: nowrap; }
+:host-context(html.dark) button { border-color: var(--input,rgba(255,255,255,.15)); background: color-mix(in oklab,var(--input,rgba(255,255,255,.15)) 30%,transparent); }
+:host-context(html.dark) button:hover, :host-context(html.dark) button[aria-expanded="true"] { background: color-mix(in oklab,var(--input,rgba(255,255,255,.15)) 50%,transparent); color: var(--foreground,#fafafa); }
+:host-context(html.dark) button:focus-visible { border-color: var(--ring, #a1a1aa); }
 `;
 
 	let payload = options.payload;
@@ -93,6 +154,29 @@ span { white-space: nowrap; }
 	let relocationTimes: number[] = [];
 	let suppressHeaderUntil = 0;
 	let destroyed = false;
+
+	function ensureStyle(): void {
+		const styles = document.querySelectorAll<HTMLStyleElement>(`style#${STYLE_ID}`);
+		let style = styles[0] ?? null;
+		for (let index = 1; index < styles.length; index += 1) styles[index]?.remove();
+		if (!style) {
+			style = document.createElement("style");
+			style.id = STYLE_ID;
+			style.textContent = HEADER_STYLES;
+		}
+		if (!style.isConnected) (document.head ?? document.documentElement).appendChild(style);
+	}
+
+	function removeStyle(): void {
+		document.querySelectorAll(`#${STYLE_ID}`).forEach((style) => style.remove());
+	}
+
+	function setTriggerLabel(button: HTMLButtonElement, labelText: string): void {
+		button.setAttribute("aria-label", labelText);
+		button.setAttribute("title", labelText);
+		const label = button.querySelector("span");
+		if (label) label.textContent = labelText;
+	}
 
 	function clearFallbackTimer(): void {
 		if (fallbackTimer === null) return;
@@ -150,11 +234,11 @@ span { white-space: nowrap; }
 	function createIcon(): SVGSVGElement {
 		const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
 		icon.setAttribute("viewBox", "0 0 24 24");
-		icon.setAttribute("width", "16");
-		icon.setAttribute("height", "16");
+		icon.setAttribute("width", "14");
+		icon.setAttribute("height", "14");
 		icon.setAttribute("fill", "none");
 		icon.setAttribute("stroke", "currentColor");
-		icon.setAttribute("stroke-width", "1.8");
+		icon.setAttribute("stroke-width", "2");
 		icon.setAttribute("stroke-linecap", "round");
 		icon.setAttribute("stroke-linejoin", "round");
 		icon.setAttribute("aria-hidden", "true");
@@ -172,27 +256,15 @@ span { white-space: nowrap; }
 		return icon;
 	}
 
-	function createTrigger(className?: string): HTMLButtonElement {
+	function createTrigger(labelText: string): HTMLButtonElement {
 		const button = document.createElement("button");
 		button.type = "button";
 		button.setAttribute("data-ao-open-with-ao", "trigger");
-		button.setAttribute("aria-label", "Open with AO");
-		button.setAttribute("title", "Open with AO");
 		button.setAttribute("aria-haspopup", "menu");
 		button.setAttribute("aria-expanded", "false");
-		if (className !== undefined) {
-			button.className = className;
-			button.style.cssText = "width:auto; padding:0 8px; gap:6px; height:var(--button-height-sm, 28px)";
-		} else {
-			button.style.cssText = "font-size:12px; line-height:1.2";
-		}
+		setTriggerLabel(button, labelText);
 		const label = document.createElement("span");
-		label.textContent = "Open with AO";
-		if (className !== undefined) {
-			label.style.cssText = "font-size:var(--text-caption,12px); font-weight:500; white-space:nowrap";
-		} else {
-			label.style.cssText = "white-space:nowrap";
-		}
+		label.textContent = labelText;
 		button.append(createIcon(), label);
 		button.addEventListener("click", (event) => {
 			event.preventDefault();
@@ -235,7 +307,7 @@ span { white-space: nowrap; }
 			const style = document.createElement("style");
 			style.textContent = FALLBACK_STYLES;
 			shadow.appendChild(style);
-			trigger = createTrigger();
+			trigger = createTrigger(payload.label);
 			shadow.appendChild(trigger);
 			document.documentElement.appendChild(host);
 			fallbackHost = host;
@@ -288,11 +360,10 @@ span { white-space: nowrap; }
 				enterRelocationFallback();
 				return;
 			}
-			if (!trigger) trigger = createTrigger(anchor.menuTrigger.className);
-			else {
-				trigger.className = anchor.menuTrigger.className;
-				trigger.style.cssText = "width:auto; padding:0 8px; gap:6px; height:var(--button-height-sm, 28px)";
-			}
+			if (!trigger) {
+				ensureStyle();
+				trigger = createTrigger(payload.label);
+			} else setTriggerLabel(trigger, payload.label);
 			const alreadyPlaced =
 				trigger.parentElement === anchor.actions && trigger.nextSibling === anchor.insertBefore;
 			if (!alreadyPlaced) anchor.actions.insertBefore(trigger, anchor.insertBefore);
@@ -364,9 +435,11 @@ span { white-space: nowrap; }
 			clearTimers();
 			suppressHeaderUntil = 0;
 			relocationTimes = [];
+			removeStyle();
 			state = "NO_ISSUE";
 			return;
 		}
+		if (trigger) setTriggerLabel(trigger, payload.label);
 		if (state === "NO_ISSUE") state = "WAIT";
 		ensure();
 		startObserver();
@@ -380,6 +453,7 @@ span { white-space: nowrap; }
 		menu.destroy();
 		removeCurrentTrigger();
 		removeFallback();
+		removeStyle();
 		disconnectObserver();
 		clearTimers();
 		state = "NO_ISSUE";
