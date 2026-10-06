@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/multicahost"
 )
 
 const multicaActionTimeout = 70 * time.Second
@@ -166,10 +168,13 @@ func writeMulticaStatus(w io.Writer, status multicaDaemonStatus, jsonOutput bool
 	}
 	if status.LastExit != nil {
 		condition := "unknown"
-		if status.LastExit.Crash {
+		switch {
+		case status.LastExit.Crash:
 			condition = "crash"
-		} else if status.LastExit.Graceful {
+		case status.LastExit.Graceful:
 			condition = "graceful"
+		case status.LastExit.Code == multicahost.ExitConfig:
+			condition = "configuration refused"
 		}
 		fmt.Fprintf(&b, "Last exit: code %d", status.LastExit.Code)
 		if status.LastExit.Signal != "" {

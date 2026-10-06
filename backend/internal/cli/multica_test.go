@@ -67,6 +67,13 @@ func TestMulticaStatusHumanAndJSONOutput(t *testing.T) {
 			want: []string{"Multica daemon: failed", "Last exit: code 1, signal SIGTERM, crash at 2026-10-06T11:59:00Z", "Last error: startup failed", "Recent logs:\n  first log\n  last log\n"},
 		},
 		{
+			name: "refused configuration",
+			status: multicaDaemonStatus{Enabled: true, State: "failed", Desired: "running", Profile: "work",
+				HealthPort: 4701, LastExit: &multicaLastExit{Code: 78, At: lastExitAt},
+				LastError: "Multica profile token is required"},
+			want: []string{"Multica daemon: failed", "Last exit: code 78, configuration refused at 2026-10-06T11:59:00Z", "Last error: Multica profile token is required"},
+		},
+		{
 			name: "external",
 			status: multicaDaemonStatus{Enabled: true, State: "external", Desired: "stopped", Profile: "work", HealthPort: 4701,
 				Health: &multicaHealth{Status: "ok", PID: 456, DaemonID: "multica-123", Profile: "work", DeviceName: "laptop", ServerURL: "https://multica.example"}},
