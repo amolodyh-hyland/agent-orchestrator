@@ -139,7 +139,12 @@ export async function discoverMulticaProfiles(
 			} else {
 				childRealPath = await fs.realpath(childPath);
 			}
-			if (!isDirectory || !isInsideDirectory(rootRealPath, childRealPath) || ancestors.has(childRealPath)) continue;
+			if (!isDirectory) continue;
+			if (!isInsideDirectory(rootRealPath, childRealPath)) {
+				if (entry.isSymbolicLink()) throw new Error("Multica profile symlink resolves outside the profiles root");
+				continue;
+			}
+			if (ancestors.has(childRealPath)) continue;
 			const childDepth = depth + 1;
 			if (childDepth > MULTICA_PROFILE_DISCOVERY_MAX_DEPTH) throw new Error("Multica profile discovery depth limit exceeded");
 			const childAncestors = new Set(ancestors);
@@ -217,12 +222,17 @@ export function createMulticaDaemonOwnerStore(stateDirectory: string, options: O
 	const getProcessStart = options.readProcessStart ?? ((pid) => readProcessStart(pid, platform, exec));
 	return {
 		isOwnedDaemon: async (status) => {
-			if (!isValidPid(status.pid)) return false;
+			if (platform === "win32" || !isValidPid(status.pid)) return false;
 			const marker = readMulticaDaemonOwnerMarkerSync(stateDirectory);
-			if (!marker || marker.pid !== status.pid || marker.profile !== (status.profile ?? "")) return false;
-			if (marker.daemonId !== undefined && status.daemonId !== undefined && marker.daemonId !== status.daemonId) return false;
-			const processStart = await getProcessStart(status.pid);
-			return !(marker.processStart !== undefined && processStart !== undefined && marker.processStart !== processStart);
+			if (!marker || marker.pid !== status.pid || marker.profile !== (status.profile ?? "") || !marker.processStart) return false;
+			if (marker.daemonId !== undefined && marker.daemonId !== status.daemonId) return false;
+			let processStart: string | undefined;
+			try {
+				processStart = await getProcessStart(status.pid);
+			} catch {
+				return false;
+			}
+			return Boolean(processStart) && marker.processStart === processStart;
 		},
 		write: async (status) => {
 			if (!isValidPid(status.pid)) throw new Error("cannot record Multica daemon ownership without a pid");
@@ -253,7 +263,13 @@ export function createMulticaDaemonOwnerStore(stateDirectory: string, options: O
 function parseHealthPayload(value: unknown): MulticaHealthPayload | null {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
 	const payload = value as Record<string, unknown>;
-	if (payload.status !== "running" && payload.status !== "starting") return null;
+	if (
+		(payload.status !== "running" && payload.status !== "starting") ||
+		!isValidPid(payload.pid) ||
+		typeof payload.daemon_id !== "string" ||
+		payload.daemon_id.trim().length === 0
+	)
+		return null;
 	return payload as MulticaHealthPayload;
 }
 

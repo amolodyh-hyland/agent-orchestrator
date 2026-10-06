@@ -9,7 +9,7 @@ import { machoHasX86_64Slice } from "./makers/macho-archs";
 import MakerAppImage from "./makers/maker-appimage";
 import { accessSync, constants, existsSync, lstatSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { MULTICA_DESKTOP_STAGE_DIR, stageMulticaDesktop } from "./scripts/stage-multica-desktop.mjs";
@@ -111,6 +111,16 @@ export function isMulticaCliSigningConfigured(env: NodeJS.ProcessEnv = process.e
 	return Boolean(env.APPLE_SIGNING_IDENTITY?.trim() || env.CSC_LINK?.trim());
 }
 
+function hasExecutableMagic(contents: Buffer, platform: NodeJS.Platform): boolean {
+	const magic = contents.subarray(0, 4).toString("hex").toLowerCase();
+	if (platform === "darwin") {
+		return new Set(["feedface", "cefaedfe", "feedfacf", "cffaedfe", "cafebabe", "bebafeca", "cafebabf", "bfbafeca"]).has(magic);
+	}
+	if (platform === "linux") return magic === "7f454c46";
+	if (platform === "win32") return magic.startsWith("4d5a");
+	return false;
+}
+
 export function verifyMulticaCliResources(
 	cliDirectory: string,
 	platform: NodeJS.Platform,
@@ -122,6 +132,7 @@ export function verifyMulticaCliResources(
 	const binaryStat = lstatSync(binaryPath);
 	if (!binaryStat.isFile() || binaryStat.isSymbolicLink()) throw new Error(`Multica CLI binary is not a regular file: ${binaryPath}`);
 	if (binaryStat.size === 0) throw new Error(`Multica CLI binary is empty: ${binaryPath}`);
+	if (!hasExecutableMagic(readFileSync(binaryPath), platform)) throw new Error(`Multica CLI binary has the wrong executable format for ${platform}: ${binaryPath}`);
 	if (platform !== "win32") {
 		try {
 			accessSync(binaryPath, constants.X_OK);
@@ -138,15 +149,28 @@ export function verifyMulticaCliResources(
 		const actualDigest = createHash("sha256").update(readFileSync(binaryPath)).digest("hex");
 		if (actualDigest.toLowerCase() !== match[1].toLowerCase()) throw new Error(`Multica CLI SHA-256 does not match ${binaryName}`);
 	}
+	for (const name of ["LICENSE", "NOTICE"]) {
+		const file = path.join(cliDirectory, name);
+		const fileStat = lstatSync(file);
+		if (!fileStat.isFile() || fileStat.isSymbolicLink()) throw new Error(`Multica CLI ${name} is not a regular file: ${file}`);
+		if (fileStat.size === 0) throw new Error(`Multica CLI ${name} is empty: ${file}`);
+	}
 }
 
 export function verifyPackagedMulticaCli(
 	resourcesPath: string,
 	platform: NodeJS.Platform,
 	env: NodeJS.ProcessEnv = process.env,
+	options: { verifyCodeSignature?: (binaryPath: string) => void } = {},
 ): void {
-	verifyMulticaCliResources(path.join(resourcesPath, "multica-cli"), platform, {
-		compareDigest: !isMulticaCliSigningConfigured(env),
+	const cliDirectory = path.join(resourcesPath, "multica-cli");
+	const signedMacBuild = platform === "darwin" && isMulticaCliSigningConfigured(env);
+	if (signedMacBuild) {
+		const binaryPath = path.join(cliDirectory, "multica");
+		(options.verifyCodeSignature ?? ((file) => execFileSync("codesign", ["--verify", "--strict", file], { stdio: "pipe" })))(binaryPath);
+	}
+	verifyMulticaCliResources(cliDirectory, platform, {
+		compareDigest: !signedMacBuild,
 	});
 }
 

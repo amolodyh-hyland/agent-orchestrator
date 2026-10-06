@@ -105,6 +105,7 @@ export type MulticaDaemonServiceOptions = {
 	listRunningDaemons?: () => Promise<MulticaDaemonScanResult>;
 	writeOwnerMarker?: (status: DaemonStatus) => Promise<void>;
 	removeOwnerMarker?: () => Promise<void>;
+	isPidAlive?: (pid: number) => boolean;
 	isBundledBinary?: (binaryPath: string) => boolean;
 	execFile?: ExecFileLike;
 	pollMs?: number;
@@ -192,15 +193,20 @@ export function createMulticaDaemonService(options: MulticaDaemonServiceOptions)
 		lifecycleBusy = true;
 		statusInFlight = undefined;
 		try {
+			let ownedStopStatus: DaemonStatus | undefined;
 			if (action === "stop") {
 				const snapshot = await readFreshStatusSnapshot();
 				const status = snapshot.status;
-				if (!snapshot.known) {
-					return { success: false, error: "Could not read the Multica daemon's status; not stopping a daemon AO cannot identify" };
-				}
-				if ((status.state === "running" || status.state === "starting") && !(await options.isOwnedDaemon?.(status))) {
-					return { success: false, error: "This Multica daemon was not started by AO; stop it where it was started" };
-				}
+				if (
+					!snapshot.known ||
+					(status.state !== "running" && status.state !== "starting") ||
+					!Number.isSafeInteger(status.pid) ||
+					(status.pid ?? 0) <= 0 ||
+					!options.isOwnedDaemon ||
+					!(await options.isOwnedDaemon(status))
+				)
+					return { success: false, error: "No Multica daemon started by AO is running; stop it where it was started" };
+				ownedStopStatus = status;
 			}
 			if ((action === "start" || action === "restart") && options.listRunningDaemons) {
 				let scan: MulticaDaemonScanResult;
@@ -239,13 +245,25 @@ export function createMulticaDaemonService(options: MulticaDaemonServiceOptions)
 			const failure = result.error ? (result.stderr.trim() || result.error.message).slice(0, 300) : undefined;
 			let status: DaemonStatus | undefined;
 			let markerFailure: string | undefined;
+			let stopPidStillAlive = false;
 			const snapshot = await readFreshStatusSnapshot();
 			status = snapshot.status;
-			if (!failure && action === "stop" && snapshot.known && snapshot.statusName === "stopped") {
+			if (!failure && action === "stop" && ownedStopStatus?.pid !== undefined) {
+				let processAlive = true;
 				try {
-					await options.removeOwnerMarker?.();
-				} catch (error) {
-					markerFailure = error instanceof Error ? error.message : String(error);
+					processAlive = options.isPidAlive?.(ownedStopStatus.pid) ?? true;
+				} catch {
+					processAlive = true;
+				}
+				if (!processAlive) {
+					try {
+						await options.removeOwnerMarker?.();
+					} catch (error) {
+						markerFailure = error instanceof Error ? error.message : String(error);
+					}
+				} else {
+					stopPidStillAlive = true;
+					status = { ...ownedStopStatus, externallyManaged: false };
 				}
 			}
 			if (!failure && (action === "start" || action === "restart")) {
@@ -260,7 +278,7 @@ export function createMulticaDaemonService(options: MulticaDaemonServiceOptions)
 					markerFailure = "could not read the Multica daemon's status after the operation";
 				}
 			}
-			if (!failure && action === "stop" && (status.state === "running" || status.state === "starting") && options.isOwnedDaemon) {
+			if (!failure && !stopPidStillAlive && action === "stop" && (status.state === "running" || status.state === "starting") && options.isOwnedDaemon) {
 				status.externallyManaged = !(await options.isOwnedDaemon(status));
 			}
 			if (!disposed) push(status);

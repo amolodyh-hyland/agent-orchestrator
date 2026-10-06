@@ -107,10 +107,10 @@ describe("Multica daemon guard", () => {
 	it("discovers nested names and maps them to the nested daemon pid path", async () => {
 		const state = guard();
 		state.addProfile("team/dev");
-		state.health.set(healthPortForProfile("team/dev"), { status: "running", pid: 301, profile: "team/dev" });
+		state.health.set(healthPortForProfile("team/dev"), { status: "running", pid: 301, profile: "team/dev", daemon_id: "nested" });
 
 		expect(await listRunningMulticaDaemons(state.options)).toEqual(known([
-			{ profiles: ["team/dev"], profile: "team/dev", port: healthPortForProfile("team/dev"), pid: 301 },
+			{ profiles: ["team/dev"], profile: "team/dev", port: healthPortForProfile("team/dev"), pid: 301, daemonId: "nested" },
 		]));
 		expect(state.fileReads).toContain(path.join(state.profilesDirectory, "team", "dev", "daemon.pid"));
 	});
@@ -119,33 +119,33 @@ describe("Multica daemon guard", () => {
 		const state = guard();
 		const target = state.addProfile("actual-profile");
 		symlinkSync(target, path.join(state.profilesDirectory, "linked-profile"), "dir");
-		state.health.set(healthPortForProfile("linked-profile"), { status: "running", pid: 302, profile: "linked-profile" });
+		state.health.set(healthPortForProfile("linked-profile"), { status: "running", pid: 302, profile: "linked-profile", daemon_id: "linked" });
 
 		expect(await listRunningMulticaDaemons(state.options)).toEqual(known([
-			{ profiles: ["linked-profile"], profile: "linked-profile", port: healthPortForProfile("linked-profile"), pid: 302 },
+			{ profiles: ["linked-profile"], profile: "linked-profile", port: healthPortForProfile("linked-profile"), pid: 302, daemonId: "linked" },
 		]));
 		expect(state.fileReads).toContain(path.join(state.profilesDirectory, "linked-profile", "daemon.pid"));
 	});
 
-	it.skipIf(process.platform === "win32")("skips a directory symlink that points outside the profiles root", async () => {
+	it.skipIf(process.platform === "win32")("returns unknown for a directory symlink that points outside the profiles root", async () => {
 		const state = guard();
 		const outside = path.join(state.homeDirectory, ".multica", "outside-profile");
 		mkdirSync(outside, { recursive: true });
 		writeFileSync(path.join(outside, "config.json"), "{}");
 		symlinkSync(outside, path.join(state.profilesDirectory, "outside"), "dir");
 
-		expect(await listRunningMulticaDaemons(state.options)).toEqual(known([]));
-		expect(state.probeCalls).toEqual([19514]);
+		expect(await listRunningMulticaDaemons(state.options)).toEqual({ state: "unknown" });
+		expect(state.probeCalls).toEqual([]);
 	});
 
 	it.skipIf(process.platform === "win32")("skips a directory symlink cycle", async () => {
 		const state = guard();
 		state.addProfile("team/dev");
 		symlinkSync(path.join(state.profilesDirectory, "team"), path.join(state.profilesDirectory, "team", "dev", "loop"), "dir");
-		state.health.set(healthPortForProfile("team/dev"), { status: "running", pid: 303, profile: "team/dev" });
+		state.health.set(healthPortForProfile("team/dev"), { status: "running", pid: 303, profile: "team/dev", daemon_id: "cycle" });
 
 		expect(await listRunningMulticaDaemons(state.options)).toEqual(known([
-			{ profiles: ["team/dev"], profile: "team/dev", port: healthPortForProfile("team/dev"), pid: 303 },
+			{ profiles: ["team/dev"], profile: "team/dev", port: healthPortForProfile("team/dev"), pid: 303, daemonId: "cycle" },
 		]));
 	});
 
@@ -200,7 +200,17 @@ describe("Multica daemon guard", () => {
 		expect(await listRunningMulticaDaemons(state.options)).toEqual(known([{ profiles: [""], profile: "", port: 19514, pid: 44 }]));
 	});
 
-	it.each([{}, [], null, "not json", { status: "stopped", pid: 45 }])("ignores an invalid health payload %j", async (payload) => {
+	it.each([
+		{},
+		[],
+		null,
+		"not json",
+		{ status: "stopped", pid: 45, daemon_id: "daemon" },
+		{ status: "running" },
+		{ status: "running", pid: 45 },
+		{ status: "running", pid: "45", daemon_id: "daemon" },
+		{ status: "running", pid: 45, daemon_id: " " },
+	])("ignores an invalid health payload %j", async (payload) => {
 		const state = guard();
 		state.health.set(19514, payload);
 
@@ -250,8 +260,28 @@ describe("Multica daemon owner marker", () => {
 		await store.write(status);
 		expect(await store.isOwnedDaemon({ ...status, profile: "other" })).toBe(false);
 		expect(await store.isOwnedDaemon({ ...status, daemonId: "another-daemon" })).toBe(false);
+		expect(await store.isOwnedDaemon({ state: "running", pid: 456, profile: "work" })).toBe(false);
 		processStart = "recycled process";
 		expect(await store.isOwnedDaemon(status)).toBe(false);
+	});
+
+	it("fails closed when the current process start cannot be read", async () => {
+		temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "multica-owner-"));
+		const writer = createMulticaDaemonOwnerStore(temporaryDirectory, storeOptions);
+		const status = { state: "running" as const, pid: 456, profile: "work" };
+		await writer.write(status);
+
+		const reader = createMulticaDaemonOwnerStore(temporaryDirectory, { readProcessStart: async () => undefined });
+		expect(await reader.isOwnedDaemon(status)).toBe(false);
+	});
+
+	it("fails closed for an older marker without a process start", async () => {
+		temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "multica-owner-"));
+		const markerPath = path.join(temporaryDirectory, MULTICA_OWNER_MARKER_NAME);
+		writeFileSync(markerPath, JSON.stringify({ pid: 456, profile: "work", startedAt: "older marker" }));
+		const store = createMulticaDaemonOwnerStore(temporaryDirectory, storeOptions);
+
+		expect(await store.isOwnedDaemon({ state: "running", pid: 456, profile: "work" })).toBe(false);
 	});
 
 	it("ignores malformed markers and can remove a marker after stop", async () => {
@@ -283,5 +313,6 @@ describe("Multica daemon owner marker", () => {
 		const windows = createMulticaDaemonOwnerStore(temporaryDirectory, { platform: "win32", execFile });
 		await windows.write({ state: "running", pid: 9 });
 		expect(calls).toEqual([]);
+		expect(await windows.isOwnedDaemon({ state: "running", pid: 9 })).toBe(false);
 	});
 });

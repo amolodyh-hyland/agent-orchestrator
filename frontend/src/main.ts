@@ -872,6 +872,14 @@ async function createWindowInternal(): Promise<void> {
 		createDaemonService: (emit) => {
 			const homeDirectory = os.homedir();
 			const ownerStore = createMulticaDaemonOwnerStore(app.getPath("userData"));
+			const isPidAlive = (pid: number): boolean => {
+				try {
+					process.kill(pid, 0);
+					return true;
+				} catch (error) {
+					return (error as NodeJS.ErrnoException).code === "EPERM";
+				}
+			};
 			const bundledMulticaBinary = app.isPackaged
 				? path.resolve(process.resourcesPath, "multica-cli", process.platform === "win32" ? "multica.exe" : "multica")
 				: undefined;
@@ -886,14 +894,7 @@ async function createWindowInternal(): Promise<void> {
 						throw error;
 					}
 				},
-				isPidAlive: (pid: number): boolean => {
-					try {
-						process.kill(pid, 0);
-						return true;
-					} catch (error) {
-						return (error as NodeJS.ErrnoException).code === "EPERM";
-					}
-				},
+				isPidAlive,
 			};
 			return createMulticaDaemonService({
 				emit,
@@ -911,6 +912,7 @@ async function createWindowInternal(): Promise<void> {
 				listRunningDaemons: () => listRunningMulticaDaemons(guardOptions),
 				writeOwnerMarker: ownerStore.write,
 				removeOwnerMarker: ownerStore.remove,
+				isPidAlive,
 				isBundledBinary: (binaryPath: string) =>
 					!process.env.AO_MULTICA_CLI?.trim() && bundledMulticaBinary !== undefined && path.resolve(binaryPath) === bundledMulticaBinary,
 			});
