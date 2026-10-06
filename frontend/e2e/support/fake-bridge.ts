@@ -314,7 +314,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onOpenSession: () => unsubscribe,
 				},
 				multicaSend: { onRequest: () => unsubscribe },
-				multicaStatus: { publish: async () => ({ ok: true }) },
+				multicaOpenWithAo: { publish: async () => ({ ok: true }) },
 				keybindings: {
 					get: async () => ({}),
 					set: async (overrides) => overrides,
@@ -938,7 +938,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onOpenSession: () => unsubscribe,
 				},
 				multicaSend: { onRequest: () => unsubscribe },
-				multicaStatus: { publish: async () => ({ ok: true }) },
+				multicaOpenWithAo: { publish: async () => ({ ok: true }) },
 				keybindings: {
 					get: async () => ({}),
 					set: async (overrides) => overrides,

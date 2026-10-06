@@ -7,7 +7,6 @@ import {
 	MULTICA_LINKS_OPEN_ISSUE_CHANNEL,
 	MULTICA_LINKS_OPEN_SESSION_CHANNEL,
 	MULTICA_LINKS_REMOVE_CHANNEL,
-	aoSessionUrl,
 	isMulticaIssuePath,
 	multicaIssuePath,
 	parseAoSessionUrl,
@@ -15,15 +14,10 @@ import {
 	type MulticaIssueLink,
 	type MulticaIssueRef,
 } from "../shared/multica-issue-links";
-import {
-	MULTICA_STATUS_PUBLISH_CHANNEL,
-	MULTICA_STATUS_TONE_ORDER,
-	isMulticaStatusSnapshot,
-	type MulticaLinkStatusEntry,
-} from "../shared/multica-session-status";
+import { MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL, OPEN_WITH_AO_ACTION_PREFIX } from "../shared/multica-open-with-ao";
 import { AO_SEND_ISSUE_URL, parseMulticaIssueTitleParts } from "../shared/multica-send-to-ao";
 import type { MulticaIssueLinkStore } from "./multica-issue-links";
-import { buildLinkedSessionsPillScript } from "./multica-linked-sessions-pill";
+import { createMulticaOpenWithAo } from "./multica-open-with-ao";
 import { createMulticaSendToAo } from "./multica-send-to-ao";
 import type { MulticaViewHost } from "./multica-view-host";
 
@@ -32,7 +26,7 @@ export type MulticaIssueLinkServiceOptions = {
 	shellWebContents: Pick<WebContents, "id" | "isDestroyed" | "send">;
 	store: MulticaIssueLinkStore;
 	/** The Multica view host is created after this service, so it is looked up lazily. */
-	getHost: () => Pick<MulticaViewHost, "navigatePath" | "runInPage" | "setActive" | "evaluateInPage"> | undefined;
+	getHost: () => Pick<MulticaViewHost, "navigatePath" | "runInPage" | "runInAoWorld" | "setActive" | "evaluateInPage"> | undefined;
 	readSettings: () => Promise<MulticaSettings>;
 };
 
@@ -59,32 +53,7 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 	let cacheVersion = 0;
 	let currentIssue: string | null = null;
 	let currentTitle: string | null = null;
-	let statusEntries = new Map<string, MulticaLinkStatusEntry>();
-	let statusStale = false;
-	let statusKey = "";
 	let disposed = false;
-	const sendToAo = createMulticaSendToAo({
-		shellWebContents: options.shellWebContents,
-		getHost: options.getHost,
-		getCurrentIssue: () => (currentIssue ? { identifier: currentIssue, title: currentTitle ?? "" } : null),
-		readSettings: options.readSettings,
-	});
-	const isTrustedShell = (event: IpcMainInvokeEvent): boolean => event.sender.id === options.shellWebContents.id;
-
-	try {
-		void options.store
-			.list()
-			.then((loaded) => {
-				if (!disposed && cacheVersion === 0) {
-					links = loaded;
-					refreshPill();
-				}
-			})
-			.catch(() => undefined);
-	} catch {
-		// The store may be unavailable while the app is starting.
-	}
-
 	const replaceLinks = (next: MulticaIssueLink[]): void => {
 		links = next;
 		cacheVersion += 1;
@@ -94,33 +63,64 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 		if (!disposed && !options.shellWebContents.isDestroyed()) options.shellWebContents.send(MULTICA_LINKS_CHANGED_CHANNEL, next);
 	};
 
-	const refreshPill = (): void => {
-		if (disposed) return;
-		const seenSessionIds = new Set<string>();
-		const entries = currentIssue
-			? links
-					.filter((link) => link.issueIdentifier === currentIssue)
-					.filter((link) => {
-						if (seenSessionIds.has(link.sessionId)) return false;
-						seenSessionIds.add(link.sessionId);
-						return true;
-					})
-					.map((link) => {
-						const status = statusEntries.get(link.sessionId);
-						return {
-							label: link.sessionId,
-							url: aoSessionUrl(link.projectId, link.sessionId),
-							...(status ? { status: { tone: status.tone, label: status.label, detail: status.detail, stale: statusStale } } : {}),
-						};
-					})
-					.sort(
-						(left, right) =>
-							MULTICA_STATUS_TONE_ORDER[left.status?.tone ?? "unknown"] -
-							MULTICA_STATUS_TONE_ORDER[right.status?.tone ?? "unknown"],
-					)
-			: [];
-		options.getHost()?.runInPage(buildLinkedSessionsPillScript(entries, { sendUrl: currentIssue ? AO_SEND_ISSUE_URL : undefined }));
+	const openSession = (target: { projectId: string; sessionId: string }): void => {
+		options.getHost()?.setActive(false);
+		if (!options.shellWebContents.isDestroyed()) options.shellWebContents.send(MULTICA_LINKS_OPEN_SESSION_CHANNEL, target);
 	};
+
+	async function addLink(
+		link: Omit<MulticaIssueLink, "createdAt">,
+		result?: { links?: MulticaIssueLink[]; error?: unknown },
+	): Promise<boolean> {
+		try {
+			const next = await options.store.add(link);
+			if (result) result.links = next;
+			if (!disposed) {
+				replaceLinks(next);
+				pushChanged(next);
+				refreshOpenWithAo();
+			}
+			return true;
+		} catch (error) {
+			if (result) result.error = error;
+			return false;
+		}
+	}
+
+	const sendToAo = createMulticaSendToAo({
+		shellWebContents: options.shellWebContents,
+		getHost: options.getHost,
+		getCurrentIssue: () => (currentIssue ? { identifier: currentIssue, title: currentTitle ?? "" } : null),
+		readSettings: options.readSettings,
+	});
+	const openWithAo = createMulticaOpenWithAo({
+		getHost: options.getHost,
+		getCurrentIssue: () => (currentIssue ? { identifier: currentIssue, title: currentTitle ?? "" } : null),
+		getLinks: () => links,
+		addLink,
+		openSession,
+		requestNewTask: (projectId) => sendToAo.request({ projectId }),
+	});
+	function refreshOpenWithAo(): void {
+		if (disposed) return;
+		openWithAo.refresh();
+	}
+
+	const isTrustedShell = (event: IpcMainInvokeEvent): boolean => event.sender.id === options.shellWebContents.id;
+
+	try {
+		void options.store
+			.list()
+			.then((loaded) => {
+				if (!disposed && cacheVersion === 0) {
+					links = loaded;
+					refreshOpenWithAo();
+				}
+			})
+			.catch(() => undefined);
+	} catch {
+		// The store may be unavailable while the app is starting.
+	}
 
 	const handlers: Array<[string, IpcHandler]> = [
 		[
@@ -130,7 +130,7 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 				const listed = await options.store.list();
 				if (!disposed) {
 					replaceLinks(listed);
-					refreshPill();
+					refreshOpenWithAo();
 				}
 				return listed;
 			},
@@ -144,23 +144,21 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 				}
 				const issue = parseMulticaIssueRef(payload.issue);
 				if (!issue) return { ok: false, reason: "invalid_issue" };
-				try {
-					const next = await options.store.add({
+				const result: { links?: MulticaIssueLink[]; error?: unknown } = {};
+				const added = await addLink(
+					{
 						sessionId: payload.sessionId,
 						projectId: payload.projectId,
 						workspaceSlug: issue.workspaceSlug,
 						issueIdentifier: issue.issueIdentifier,
-					});
-					if (!disposed) {
-						replaceLinks(next);
-						pushChanged(next);
-						refreshPill();
-					}
-					return { ok: true, links: next };
-				} catch (error) {
-					const reason = isRecord(error) && error.message === "invalid link" ? "invalid_session" : "save_failed";
+					},
+					result,
+				);
+				if (!added) {
+					const reason = isRecord(result.error) && result.error.message === "invalid link" ? "invalid_session" : "save_failed";
 					return { ok: false, reason };
 				}
+				return { ok: true, links: result.links ?? links };
 			},
 		],
 		[
@@ -177,7 +175,7 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 					if (!disposed) {
 						replaceLinks(next);
 						pushChanged(next);
-						refreshPill();
+						refreshOpenWithAo();
 					}
 					return next;
 				} catch {
@@ -200,17 +198,10 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 			},
 		],
 		[
-			MULTICA_STATUS_PUBLISH_CHANNEL,
+			MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL,
 			(event, payload) => {
 				if (disposed || !isTrustedShell(event)) return { ok: false };
-				if (!isMulticaStatusSnapshot(payload)) return { ok: false };
-				const key = JSON.stringify(payload);
-				if (key === statusKey) return { ok: true };
-				statusEntries = new Map(payload.entries.map((entry) => [entry.sessionId, entry]));
-				statusStale = payload.stale;
-				statusKey = key;
-				if (currentIssue) refreshPill();
-				return { ok: true };
+				return openWithAo.setSnapshot(payload);
 			},
 		],
 	];
@@ -222,10 +213,11 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 			const parts = parseMulticaIssueTitleParts(title);
 			currentIssue = parts?.identifier ?? null;
 			currentTitle = parts?.title ?? null;
-			refreshPill();
+			refreshOpenWithAo();
 		},
 		handleAoSessionLink: (url) => {
 			if (disposed) return false;
+			if (url.startsWith(OPEN_WITH_AO_ACTION_PREFIX)) return openWithAo.handleActionUrl(url);
 			if (url === AO_SEND_ISSUE_URL) {
 				sendToAo.request();
 				return true;
@@ -233,8 +225,7 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 			const target = parseAoSessionUrl(url);
 			if (!target) return false;
 			if (links.some((link) => link.projectId === target.projectId && link.sessionId === target.sessionId)) {
-				options.getHost()?.setActive(false);
-				if (!options.shellWebContents.isDestroyed()) options.shellWebContents.send(MULTICA_LINKS_OPEN_SESSION_CHANNEL, target);
+				openSession(target);
 			}
 			return true;
 		},
@@ -242,6 +233,7 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 			if (disposed) return;
 			disposed = true;
 			sendToAo.dispose();
+			openWithAo.dispose();
 			for (const [channel] of handlers) options.ipcMain.removeHandler(channel);
 		},
 	};

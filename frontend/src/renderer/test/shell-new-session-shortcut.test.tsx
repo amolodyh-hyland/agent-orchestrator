@@ -158,7 +158,7 @@ vi.mock("../lib/bridge", () => ({
 			onOpenSession: () => () => undefined,
 		},
 		multicaSend: { onRequest: () => () => undefined },
-		multicaStatus: { publish: async () => ({ ok: true }) },
+		multicaOpenWithAo: { publish: async () => ({ ok: true }) },
 		window: {},
 		tray: {
 			setAttentionState: () => undefined,
@@ -186,6 +186,8 @@ vi.mock("../lib/host-clients", () => ({
 vi.mock("../hooks/useDaemonStatus", () => ({
 	useDaemonStatus: () => shellMocks.state.daemonStatus,
 }));
+
+vi.mock("../components/MulticaOpenWithAoPublisher", () => ({ MulticaOpenWithAoPublisher: () => null }));
 
 vi.mock("../lib/api-client", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../lib/api-client")>()),
