@@ -119,7 +119,7 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
-describe("Multica Open with AO snapshot and refresh", () => {
+describe("Multica Open in AO snapshot and refresh", () => {
 	it("rejects an invalid snapshot without changing the stored snapshot", () => {
 		const t = setup();
 		const first = snapshot();
@@ -185,7 +185,7 @@ describe("Multica Open with AO snapshot and refresh", () => {
 	});
 });
 
-describe("Multica Open with AO actions", () => {
+describe("Multica Open in AO actions", () => {
 	it("returns false for non-prefixed URLs and leaves dependencies untouched", () => {
 		const t = setup();
 		t.service.setSnapshot(snapshot());

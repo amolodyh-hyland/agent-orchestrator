@@ -172,7 +172,7 @@ function openThreeLevelMenu() {
 	return state;
 }
 
-describe("multica Open with AO menu", () => {
+describe("multica Open in AO menu", () => {
 	it("renders list mode projects as submenu rows in an open shadow root", () => {
 		mockGeometry();
 		const menuPayload = payload({ projects: [project("alpha"), project("beta")] });
@@ -198,7 +198,7 @@ describe("multica Open with AO menu", () => {
 		const root = panel(shadow, 0);
 
 		expect(root?.getAttribute("aria-label")).toBe("Initial label");
-		expect(createOpenWithAoMenu.toString()).not.toContain("Open with AO");
+		expect(createOpenWithAoMenu.toString()).not.toContain("Open in AO");
 
 		menu.update(payload({ label: "Updated label" }));
 		expect(panel(shadow, 0)?.getAttribute("aria-label")).toBe("Updated label");

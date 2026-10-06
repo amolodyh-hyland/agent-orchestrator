@@ -130,7 +130,7 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
-describe("multica Open with AO page controller script", () => {
+describe("multica Open in AO page controller script", () => {
 	it.each([
 		["valid workspace", JSON.stringify({ state: { activeWorkspaceSlug: "Acme_Workspace-2" } }), "acme_workspace-2"],
 		["missing workspace", null, null],
@@ -210,8 +210,8 @@ describe("multica Open with AO page controller script", () => {
 		expect(trigger?.className).toBe("");
 		expect(trigger?.className).not.toBe(menuTrigger.className);
 		expect(trigger?.type).toBe("button");
-		expect(trigger?.getAttribute("aria-label")).toBe("Open with AO");
-		expect(trigger?.getAttribute("title")).toBe("Open with AO");
+		expect(trigger?.getAttribute("aria-label")).toBe("Open in AO");
+		expect(trigger?.getAttribute("title")).toBe("Open in AO");
 		expect(trigger?.getAttribute("aria-haspopup")).toBe("menu");
 		expect(trigger?.getAttribute("aria-expanded")).toBe("false");
 		expect(trigger?.hasAttribute("id")).toBe(false);
@@ -221,7 +221,7 @@ describe("multica Open with AO page controller script", () => {
 		expect(trigger?.querySelector("svg")?.getAttribute("height")).toBe("14");
 		expect(trigger?.querySelector("svg")?.getAttribute("stroke-width")).toBe("2");
 		expect(trigger?.querySelector("svg")?.className.baseVal ?? "").not.toMatch(/size-/);
-		expect(trigger?.querySelector("span")?.textContent).toBe("Open with AO");
+		expect(trigger?.querySelector("span")?.textContent).toBe("Open in AO");
 		expect(trigger?.getAttribute("style")).toBeNull();
 		expect(document.querySelectorAll("style#ao-open-with-ao-style")).toHaveLength(1);
 	});
@@ -230,9 +230,9 @@ describe("multica Open with AO page controller script", () => {
 		mountIssueHeader();
 		const controller = createDirectController(payload(), locateOpenWithAoAnchor);
 		const trigger = getHeaderTrigger()!;
-		expect(trigger.getAttribute("aria-label")).toBe("Open with AO");
-		expect(trigger.getAttribute("title")).toBe("Open with AO");
-		expect(trigger.querySelector("span")?.textContent).toBe("Open with AO");
+		expect(trigger.getAttribute("aria-label")).toBe("Open in AO");
+		expect(trigger.getAttribute("title")).toBe("Open in AO");
+		expect(trigger.querySelector("span")?.textContent).toBe("Open in AO");
 
 		controller.update(payload({ label: "Send to AO" }));
 
