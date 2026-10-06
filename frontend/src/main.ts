@@ -77,6 +77,7 @@ import { type DaemonLaunchSpec, bundledDaemonIdentityError, resolveDaemonLaunch 
 import { createListenPortScanner, defaultRunFilePath, parseRunFile } from "./shared/daemon-discovery";
 import type { DaemonStatus } from "./shared/daemon-status";
 import { canonicalPathInside, sameCanonicalPath } from "./shared/path-identity";
+import { MULTICA_DEEP_LINK_PROTOCOL, MULTICA_WEB_SECURITY } from "./shared/multica";
 import {
 	refreshSlowDaemonStartupDetails,
 	slowDaemonStartupStatus,
@@ -178,6 +179,17 @@ import {
 	toastSilent,
 } from "./main/notification-signals";
 import { buildLinuxAppMenuTemplate, buildMacAppMenuTemplate, buildWindowsAppMenuTemplate } from "./main/menu";
+import { readMulticaSettings, writeMulticaUrl } from "./main/multica-settings";
+import { createMulticaDaemonService, findMulticaBinary } from "./main/multica-daemon-cli";
+import { multicaBridgeChannels } from "./main/multica-desktop-bridge";
+import { resolveMulticaDesktopBundle } from "./main/multica-desktop-bundle";
+import { createMulticaIssueLinkService, type MulticaIssueLinkService } from "./main/multica-issue-link-service";
+import { createMulticaIssueLinkStore } from "./main/multica-issue-links";
+import { isUpdatesDisabledBuild } from "./main/updates-disabled";
+import { writeMulticaIpcJail } from "./main/multica-ipc-jail";
+import { createCombinedBadge } from "./main/combined-badge";
+import { createMulticaNotifications } from "./main/multica-notifications";
+import { createMulticaViewHost, type MulticaViewHost } from "./main/multica-view-host";
 import { ancestorRepositorySetupWarning, resolveCheckedOutBranch, scanImportFolder } from "./main/import-folder-scan";
 import { parseOpenFolderPathArg } from "./main/open-folder-arg";
 import { registerRemotesIpc, remotesFilePath } from "./main/remotes-main";
@@ -319,6 +331,9 @@ let daemonStatus: DaemonStatus = { state: "stopped" };
 let daemonAttachmentGeneration = 0;
 let daemonOutput = "";
 let browserViewHost: BrowserViewHost | null = null;
+let multicaViewHost: MulticaViewHost | null = null;
+let multicaIssueLinkService: MulticaIssueLinkService | null = null;
+const combinedBadge = createCombinedBadge();
 let browserProfileIpc: BrowserProfileIpc | null = null;
 let browserProfileImporter: BrowserProfileImportService | null = null;
 let windowComposition: WindowComposition | null = null;
@@ -385,6 +400,11 @@ const isDev = !app.isPackaged;
 // on Windows (supervisorPipeFromRunFile derives it from the same dir basename).
 const DEV_DAEMON_PORT = 3002;
 const DEV_STATE_SUBDIR = "dev"; // ~/.ao/dev/
+
+// Where Multica's own desktop window places the traffic lights (its header
+// reserves room for them there). AO's own position comes from syncMacWindowButtons.
+const MULTICA_MAC_WINDOW_BUTTON_POSITION = { x: 16, y: 17 };
+let multicaTakenOver = false;
 
 const RENDERER_SCHEME = "app";
 const RENDERER_HOST = "renderer";
@@ -560,7 +580,7 @@ function buildWindowsAppMenu(): Menu {
 			void browserViewHost?.toggleDevToolsForLastFocused().then((state) => {
 				if (!state) fallback();
 			}).catch(fallback);
-		}),
+		}, () => multicaViewHost?.toggle()),
 	);
 }
 
@@ -571,7 +591,7 @@ function buildLinuxAppMenu(): Menu {
 	return Menu.buildFromTemplate(
 		buildLinuxAppMenuTemplate(() => {
 			void toggleAppDevTools(browserViewHost, getShellWebContents);
-		}),
+		}, () => multicaViewHost?.toggle()),
 	);
 }
 
@@ -714,7 +734,7 @@ async function createWindowInternal(): Promise<void> {
 					void host.toggleDevToolsForLastFocused().then((state) => {
 						if (!state) fallback();
 					}).catch(fallback);
-				}),
+				}, () => multicaViewHost?.toggle()),
 			),
 		);
 	} else if (process.platform === "linux") {
@@ -889,6 +909,78 @@ async function createWindowInternal(): Promise<void> {
 	});
 	if (daemonStatus.state === "ready") establishBrowserRuntimeLink();
 
+	// Registered before the renderer loads: the shell queries its state on mount.
+	multicaIssueLinkService = createMulticaIssueLinkService({
+		ipcMain,
+		shellWebContents,
+		store: createMulticaIssueLinkStore(browserProfileStateDir()),
+		getHost: () => multicaViewHost ?? undefined,
+		readSettings: () => readMulticaSettings(browserProfileStateDir()),
+	});
+	multicaViewHost = await createMulticaViewHost({
+		mainWindow,
+		shellWebContents,
+		ipcMain,
+		shell,
+		WebContentsView,
+		isMac,
+		getKeybindingOverrides: () => keybindingOverrides,
+		isKeybindingRecording: () => keybindingRecordingActive,
+		readSettings: () => readMulticaSettings(browserProfileStateDir()),
+		writeUrl: (url) => writeMulticaUrl(browserProfileStateDir(), url),
+		// Packaged builds only trust the bundle shipped in resources; the env
+		// override is for development runs against a local Multica checkout.
+		resolveBundle: () =>
+			resolveMulticaDesktopBundle(
+				app.isPackaged ? path.join(process.resourcesPath, "multica-desktop") : process.env.AO_MULTICA_DESKTOP_OUT,
+			),
+		ipcJailPreload: writeMulticaIpcJail(path.join(app.getPath("userData"), "multica"), multicaBridgeChannels()),
+		webSecurity: MULTICA_WEB_SECURITY,
+		locale: app.getLocale(),
+		appInfo: {
+			version: app.getVersion(),
+			os: process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : process.platform === "linux" ? "linux" : "unknown",
+		},
+		hostName: () => os.hostname(),
+		// The daemon is driven through the installed multica CLI (AO_MULTICA_CLI
+		// overrides where it is found).
+		createDaemonService: (emit) =>
+			createMulticaDaemonService({
+				emit,
+				findBinary: () =>
+					findMulticaBinary({
+						override: process.env.AO_MULTICA_CLI?.trim() || undefined,
+						pathEnv: process.env.PATH,
+						home: os.homedir(),
+						platform: process.platform,
+					}),
+				logPath: path.join(os.homedir(), ".multica", "daemon.log"),
+			}),
+		onPageTitleChange: (title) => multicaIssueLinkService?.handlePageTitle(title),
+		onAoSessionLink: (url) => multicaIssueLinkService?.handleAoSessionLink(url) ?? false,
+		notifications: createMulticaNotifications({
+			isSupported: () => ElectronNotification.isSupported(),
+			createNotification: ({ title, body }) =>
+				new ElectronNotification({ title, body, icon: process.platform === "darwin" ? undefined : windowIconPath() }),
+			isWindowFocused: () => !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused(),
+			// Suppress Multica banners only when AO is focused and the Multica view is showing.
+			isMulticaShown: () => multicaViewHost?.isShown() ?? false,
+			openInboxItem: (target) => { focusMainWindow(); multicaViewHost?.openInboxItem(target); },
+			setBadge: (count) => {
+				const total = combinedBadge.setMultica(count);
+				// macOS drives the Dock badge through the app, so the view host's teardown can still drop Multica's share while the window closes; the Windows overlay needs a live window.
+				if (process.platform === "darwin" || (mainWindow && !mainWindow.isDestroyed())) applyBadgeCount(total);
+			},
+		}),
+		// Multica's header is laid out around its own traffic-light position.
+		onTakeover: (takenOver) => {
+			multicaTakenOver = takenOver;
+			if (!isMac || !mainWindow || mainWindow.isDestroyed()) return;
+			if (takenOver) mainWindow.setWindowButtonPosition(MULTICA_MAC_WINDOW_BUTTON_POSITION);
+			else syncMacWindowButtons(mainWindow, shellWebContents);
+		},
+	});
+
 	void shellWebContents.loadURL(rendererUrl());
 
 	if (isDev && process.env.AO_OPEN_DEVTOOLS === "1") {
@@ -899,7 +991,7 @@ async function createWindowInternal(): Promise<void> {
 
 	const syncWindowChrome = () => {
 		if (!mainWindow || shellWebContents.isDestroyed()) return;
-		if (process.platform === "darwin") syncMacWindowButtons(mainWindow, shellWebContents);
+		if (process.platform === "darwin" && !multicaTakenOver) syncMacWindowButtons(mainWindow, shellWebContents);
 		shellWebContents.send("window:zoom", shellWebContents.getZoomFactor());
 	};
 	// Resize/zoom and fullscreen exit can reset AppKit's button placement.
@@ -945,6 +1037,10 @@ async function createWindowInternal(): Promise<void> {
 		disposeBrowserRuntimeLink();
 		keybindingRecordingActive = false;
 		if (windowComposition === composition) windowComposition = null;
+		multicaViewHost?.dispose();
+		multicaViewHost = null;
+		multicaIssueLinkService?.dispose();
+		multicaIssueLinkService = null;
 		void disposeBrowserViewHost()
 			.finally(() => {
 				composition.dispose();
@@ -2524,7 +2620,9 @@ ipcMain.handle("keybindings:setRecording", (event, active: unknown): void => {
 	keybindingRecordingActive = active;
 });
 
-ipcMain.handle("featureBuilds:list", () => listFeatureBuilds());
+ipcMain.handle("featureBuilds:list", () =>
+	isUpdatesDisabledBuild() ? [] : listFeatureBuilds(),
+);
 ipcMain.handle("featureBuilds:getActive", () => getActiveFeatureBuild());
 
 ipcMain.handle("updates:getStatus", (): UpdateStatus => getUpdateStatus());
@@ -2546,6 +2644,7 @@ ipcMain.handle("updates:install", (_event, confirmedVersion?: string) => quitAnd
 // in-process, so restart AO like a manual quit-and-reopen. install-on-quit is
 // already off on the failed path, so quitting can't apply a half-prepared build.
 ipcMain.handle("updates:relaunch", () => {
+	if (isUpdatesDisabledBuild()) return;
 	app.relaunch();
 	desktopQuit.quitCompletely();
 });
@@ -2682,9 +2781,9 @@ if (!app.isPackaged) {
 	});
 }
 
-ipcMain.handle("notifications:setBadge", (_event, count: number) => {
+// The OS badge shows AO's unread count plus Multica's, so both writers go through combinedBadge.
+function applyBadgeCount(n: number) {
 	if (!mainWindow) return { error: "no mainWindow" };
-	const n = Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
 	if (process.platform === "darwin") {
 		const dock = app.dock;
 		if (!dock) return { error: "no app.dock" };
@@ -2712,7 +2811,9 @@ ipcMain.handle("notifications:setBadge", (_event, count: number) => {
 		return { ok: app.setBadgeCount(n) };
 	}
 	return { ok: true };
-});
+}
+
+ipcMain.handle("notifications:setBadge", (_event, count: number) => applyBadgeCount(combinedBadge.setAo(count)));
 
 ipcMain.on(TRAY_SET_ATTENTION_STATE_CHANNEL, (event, state) => trayLifecycle.handleSetAttentionState(event, state));
 
@@ -2781,15 +2882,27 @@ async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 	}
 }
 
+// Routes a multica:// deep link (sign-in token, invite) to the embedded Multica
+// view. AO never registers itself as the OS handler for multica://, so these only
+// arrive when the OS or a second launch hands one over explicitly.
+function handleMulticaDeepLinkAndFocus(url: string): boolean {
+	if (!url.startsWith(MULTICA_DEEP_LINK_PROTOCOL) || !multicaViewHost?.handleDeepLink(url)) return false;
+	focusMainWindow();
+	return true;
+}
+
 // macOS: the OS sends the ao-app:// URL via the open-url event when the app is
 // already running. If the app is not running, the URL is passed in process.argv
 // on first launch (handled in app.whenReady below).
 app.on("open-url", (event, url) => {
 	event.preventDefault();
+	if (handleMulticaDeepLinkAndFocus(url)) return;
 	void handleCloudDeepLinkAndFocus(url);
 });
 
 app.on("second-instance", (_event, argv) => {
+	const multicaLink = argv.find((value) => value.startsWith(MULTICA_DEEP_LINK_PROTOCOL));
+	if (multicaLink && handleMulticaDeepLinkAndFocus(multicaLink)) return;
 	const deepLink = argv.find((value) => value.startsWith("ao-app://"));
 	if (deepLink) {
 		void handleCloudDeepLinkAndFocus(deepLink);
@@ -2828,6 +2941,8 @@ app.on("second-instance", (_event, argv) => {
 // frontend/docs/desktop-release.md.
 function initAutoUpdates(): void {
 	if (!app.isPackaged) return;
+	// The marker means this build must not self-update.
+	if (isUpdatesDisabledBuild()) return;
 	const runFile = runFilePath();
 	if (!runFile) return;
 	const stateDir = path.dirname(runFile);
@@ -3046,6 +3161,8 @@ app.whenReady().then(async () => {
 	if (deepLinkArg) {
 		void handleCloudDeepLinkAndFocus(deepLinkArg);
 	}
+	const multicaLinkArg = process.argv.find((a) => a.startsWith(MULTICA_DEEP_LINK_PROTOCOL));
+	if (multicaLinkArg) handleMulticaDeepLinkAndFocus(multicaLinkArg);
 
 	// Windows/Linux: a folder dropped on the taskbar icon/shortcut while the
 	// app was not running launches it with the folder's path in argv. The

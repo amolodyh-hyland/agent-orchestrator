@@ -19,6 +19,7 @@ export const shortcutLabelKeys: Record<AppShortcutId, MessageKey> = {
 	"toggle-inspector": "shortcut.toggle-inspector",
 	"focus-terminal": "shortcut.focus-terminal",
 	"toggle-browser-devtools": "titlebar.devtools",
+	"toggle-multica": "shortcut.toggle-multica",
 };
 
 export const shortcutCategoryLabelKeys: Record<ShortcutCategory, MessageKey> = {

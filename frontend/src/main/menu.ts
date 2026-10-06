@@ -9,7 +9,14 @@ import type { MenuItemConstructorOptions } from "electron";
 // window whenever a tab or terminal close races the native menu. Multi-tab
 // macOS applications (Safari, Chrome, VS Code) bind Shift+Command+W to "Close Window"
 // so Command+W remains scoped to tabs and terminals.
-export function buildMacAppMenuTemplate(onToggleDevTools: () => void): MenuItemConstructorOptions[] {
+// No accelerator on purpose: the chord is a customizable app shortcut handled
+// in the main process (`toggle-multica`), and a fixed menu accelerator would
+// drift from the user's binding.
+function multicaMenuItems(onToggleMultica?: () => void): MenuItemConstructorOptions[] {
+	return onToggleMultica ? [{ label: "Switch AO / Multica", click: onToggleMultica }] : [];
+}
+
+export function buildMacAppMenuTemplate(onToggleDevTools: () => void, onToggleMultica?: () => void): MenuItemConstructorOptions[] {
 	return [
 		{ role: "appMenu" },
 		{
@@ -32,6 +39,7 @@ export function buildMacAppMenuTemplate(onToggleDevTools: () => void): MenuItemC
 					accelerator: "Alt+Command+I",
 					click: onToggleDevTools,
 				},
+				...multicaMenuItems(onToggleMultica),
 				{ type: "separator" },
 				{ role: "resetZoom" },
 				{ role: "zoomIn" },
@@ -44,7 +52,7 @@ export function buildMacAppMenuTemplate(onToggleDevTools: () => void): MenuItemC
 	];
 }
 
-export function buildWindowsAppMenuTemplate(onToggleDevTools?: () => void): MenuItemConstructorOptions[] {
+export function buildWindowsAppMenuTemplate(onToggleDevTools?: () => void, onToggleMultica?: () => void): MenuItemConstructorOptions[] {
 	const devtoolsItem: MenuItemConstructorOptions = onToggleDevTools
 		? {
 			label: "Toggle DevTools",
@@ -70,6 +78,7 @@ export function buildWindowsAppMenuTemplate(onToggleDevTools?: () => void): Menu
 			submenu: [
 				{ role: "reload" },
 				devtoolsItem,
+				...multicaMenuItems(onToggleMultica),
 				{ type: "separator" },
 				{ role: "resetZoom" },
 				{ accelerator: "Ctrl+=", role: "zoomIn" },
@@ -86,6 +95,6 @@ export function buildWindowsAppMenuTemplate(onToggleDevTools?: () => void): Menu
 	];
 }
 
-export function buildLinuxAppMenuTemplate(onToggleDevTools?: () => void): MenuItemConstructorOptions[] {
-	return buildWindowsAppMenuTemplate(onToggleDevTools);
+export function buildLinuxAppMenuTemplate(onToggleDevTools?: () => void, onToggleMultica?: () => void): MenuItemConstructorOptions[] {
+	return buildWindowsAppMenuTemplate(onToggleDevTools, onToggleMultica);
 }
