@@ -96,6 +96,7 @@ export type MulticaDaemonServiceOptions = {
 	emit: (channel: string, payload: unknown) => void;
 	findBinary: () => string | null;
 	logPath: string;
+	isOwnedDaemon?: (status: DaemonStatus) => boolean;
 	execFile?: ExecFileLike;
 	pollMs?: number;
 };
@@ -127,7 +128,11 @@ export function createMulticaDaemonService(options: MulticaDaemonServiceOptions)
 			if (!bin) return { state: "cli_not_found" };
 			// A stopped daemon may exit non-zero; the JSON (when any) still says so.
 			const result = await run(bin, ["daemon", "status", "--output", "json"], STATUS_TIMEOUT_MS);
-			return mapDaemonStatus(result.stdout);
+			const status = mapDaemonStatus(result.stdout);
+			if (options.isOwnedDaemon && (status.state === "running" || status.state === "starting")) {
+				status.externallyManaged = !options.isOwnedDaemon(status);
+			}
+			return status;
 		})().finally(() => {
 			statusInFlight = undefined;
 		});

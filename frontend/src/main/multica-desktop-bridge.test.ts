@@ -39,7 +39,7 @@ function fakeIpc() {
 
 function fakeDaemon() {
 	return {
-		getStatus: vi.fn(async () => ({ state: "running", pid: 7 })),
+		getStatus: vi.fn(async () => ({ state: "running", pid: 7, externallyManaged: true })),
 		start: vi.fn(async () => ({ success: true })),
 		stop: vi.fn(async () => ({ success: true })),
 		restart: vi.fn(async () => ({ success: true })),
@@ -221,7 +221,7 @@ describe("multica desktop bridge: stubs and sender scoping", () => {
 		["daemon:start", [], { success: true }],
 		["daemon:stop", [], { success: true }],
 		["daemon:restart", [], { success: true }],
-		["daemon:get-status", [], { state: "running", pid: 7 }],
+		["daemon:get-status", [], { state: "running", pid: 7, externallyManaged: true }],
 		["daemon:probe-runtimes", [], { probeResult: "error" }],
 		["daemon:get-host-name", [], "dev-box"],
 		["daemon:set-target-api-url", ["http://x"], undefined],

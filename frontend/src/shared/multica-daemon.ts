@@ -6,6 +6,8 @@ export type DaemonState = "running" | "stopped" | "starting" | "stopping" | "cli
 
 export type DaemonStatus = {
 	state: DaemonState;
+	/** A running daemon that AO did not start and cannot control. */
+	externallyManaged?: boolean;
 	pid?: number;
 	uptime?: string;
 	daemonId?: string;
@@ -35,6 +37,9 @@ const str = (value: unknown, max = 256): string | undefined =>
  * Maps the CLI's status JSON to the renderer's shape. Anything that is not a
  * running or starting daemon (empty output, errors, garbage) is "stopped"; the
  * caller reports "cli_not_found" itself when there is no binary.
+ * AO leaves installing_cli, recovery_paused, and auth_expired to Multica
+ * Desktop's token probing and recovery policy. The CLI also has no per-runtime
+ * liveness, so probeFromStatus reports every listed agent online and none offline.
  */
 export function mapDaemonStatus(stdout: string): DaemonStatus {
 	let parsed: unknown;

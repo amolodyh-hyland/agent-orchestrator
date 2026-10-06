@@ -3,7 +3,6 @@ import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mapDaemonStatus, probeFromStatus } from "../shared/multica-daemon";
 import { createMulticaDaemonService, DAEMON_BUSY_MESSAGE, findMulticaBinary, type ExecFileLike } from "./multica-daemon-cli";
 
 const RUNNING = JSON.stringify({
@@ -16,49 +15,6 @@ const RUNNING = JSON.stringify({
 	server_url: "http://localhost:3000",
 	agents: ["claude", "codex"],
 	workspaces: [{ id: "w1", runtimes: ["a", "b"] }],
-});
-
-describe("mapDaemonStatus", () => {
-	it("maps a running daemon to the renderer's shape", () => {
-		expect(mapDaemonStatus(RUNNING)).toEqual({
-			state: "running",
-			pid: 94028,
-			uptime: "1h",
-			daemonId: "d1",
-			deviceName: "host",
-			profile: "",
-			serverUrl: "http://localhost:3000",
-			agents: ["claude", "codex"],
-			workspaceCount: 1,
-		});
-	});
-
-	it("reports a daemon that is still starting as starting, not stopped", () => {
-		expect(mapDaemonStatus(JSON.stringify({ status: "starting", pid: 5 }))).toEqual({ state: "starting", pid: 5 });
-	});
-
-	it("treats anything that is not clearly running as stopped", () => {
-		for (const input of ["", "not json", "[]", "null", JSON.stringify({ status: "stopped" }), JSON.stringify({ pid: 1 })]) {
-			expect(mapDaemonStatus(input)).toEqual({ state: "stopped" });
-		}
-	});
-
-	it("drops malformed fields instead of passing them through", () => {
-		const status = mapDaemonStatus(JSON.stringify({ status: "running", pid: "x", agents: ["claude", 5, "Bad Name!"], device_name: 3 }));
-
-		expect(status).toEqual({ state: "running", agents: ["claude"] });
-	});
-
-	it("reports the runtimes a running daemon lists and nothing for a stopped one", () => {
-		expect(probeFromStatus(mapDaemonStatus(RUNNING))).toEqual({
-			probeResult: "success",
-			runtimeCount: 2,
-			providerSummary: { claude: 1, codex: 1 },
-			onlineCount: 2,
-			offlineCount: 0,
-		});
-		expect(probeFromStatus({ state: "stopped" })).toEqual({ probeResult: "error" });
-	});
 });
 
 describe("findMulticaBinary", () => {
@@ -106,6 +62,63 @@ describe("multica daemon service", () => {
 
 		expect((await service.getStatus()).state).toBe("running");
 		expect(calls).toEqual([{ file: "/usr/local/bin/multica", args: ["daemon", "status", "--output", "json"], timeout: 10_000 }]);
+	});
+
+	it("maps stopped JSON even when the CLI exits non-zero", async () => {
+		const { service } = setup({ "daemon status --output json": { stdout: '{\n  "status": "stopped"\n}', error: new Error("exit 1") } });
+
+		expect(await service.getStatus()).toEqual({ state: "stopped" });
+	});
+
+	it("marks running and starting daemons from the ownership predicate", async () => {
+		const { service } = setup({ "daemon status --output json": { stdout: RUNNING } });
+		const startingOwnership = vi.fn(() => false);
+		const startingService = createMulticaDaemonService({
+			emit: vi.fn(),
+			findBinary: () => "/usr/local/bin/multica",
+			execFile: fakeExec({ "daemon status --output json": { stdout: '{"status":"starting","pid":5}' } }).exec,
+			logPath: "/nonexistent/daemon.log",
+			isOwnedDaemon: startingOwnership,
+		});
+		const runningOwnership = vi.fn(() => false);
+		const externalService = createMulticaDaemonService({
+			emit: vi.fn(),
+			findBinary: () => "/usr/local/bin/multica",
+			execFile: fakeExec({ "daemon status --output json": { stdout: RUNNING } }).exec,
+			logPath: "/nonexistent/daemon.log",
+			isOwnedDaemon: runningOwnership,
+		});
+
+		expect(await service.getStatus()).not.toHaveProperty("externallyManaged");
+		expect(await startingService.getStatus()).toMatchObject({ state: "starting", externallyManaged: true });
+		expect(startingOwnership).toHaveBeenCalledWith(expect.objectContaining({ state: "starting" }));
+		expect(await externalService.getStatus()).toMatchObject({ state: "running", externallyManaged: true });
+		expect(await externalService.probeRuntimes()).toMatchObject({ probeResult: "success", runtimeCount: 2 });
+		expect(runningOwnership).toHaveBeenCalledTimes(2);
+	});
+
+	it("includes ownership changes in polling status pushes", async () => {
+		vi.useFakeTimers();
+		let owned = true;
+		const { exec } = fakeExec({ "daemon status --output json": { stdout: RUNNING } });
+		const emit = vi.fn();
+		const service = createMulticaDaemonService({
+			emit,
+			findBinary: () => "/usr/local/bin/multica",
+			execFile: exec,
+			logPath: "/nonexistent/daemon.log",
+			pollMs: 1000,
+			isOwnedDaemon: () => owned,
+		});
+
+		service.startPolling();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(emit).toHaveBeenCalledWith("daemon:status", expect.objectContaining({ state: "running", externallyManaged: false }));
+
+		owned = false;
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(emit).toHaveBeenLastCalledWith("daemon:status", expect.objectContaining({ state: "running", externallyManaged: true }));
+		service.dispose();
 	});
 
 	it("reports a missing CLI without running anything", async () => {
