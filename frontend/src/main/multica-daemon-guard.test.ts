@@ -1,5 +1,6 @@
 // @vitest-environment node
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { readdir, realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,9 +8,11 @@ import {
 	createMulticaDaemonOwnerStore,
 	healthPortForProfile,
 	listRunningMulticaDaemons,
+	MULTICA_PROFILE_DISCOVERY_MAX_DEPTH,
 	MULTICA_OWNER_MARKER_NAME,
 	type MulticaDaemonGuardOptions,
 	type MulticaDaemonScanResult,
+	type ProfileDiscoveryFs,
 	type RunningMulticaDaemon,
 } from "./multica-daemon-guard";
 
@@ -21,22 +24,43 @@ afterEach(() => {
 });
 
 function guard(overrides: Partial<MulticaDaemonGuardOptions> = {}) {
-	const homeDirectory = "/home/test-user";
+	temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "multica-guard-"));
+	const homeDirectory = temporaryDirectory;
+	const profilesDirectory = path.join(homeDirectory, ".multica", "profiles");
+	mkdirSync(profilesDirectory, { recursive: true });
 	const files = new Map<string, string>();
-	const directories = new Map<string, string[]>();
+	const fileReads: string[] = [];
 	const health = new Map<number, unknown | null>();
+	const probeCalls: number[] = [];
 	const alive = new Set<number>();
 	const multica = new Set<number>();
+	const profileFs: ProfileDiscoveryFs = {
+		readdir: async (directory) => readdir(directory, { withFileTypes: true }),
+		realpath,
+		stat,
+	};
 	const options: MulticaDaemonGuardOptions = {
 		homeDirectory,
-		probeHealth: async (port) => health.get(port) ?? null,
-		readFile: async (file) => files.get(file) ?? null,
-		listDirectories: async (directory) => directories.get(directory) ?? [],
+		probeHealth: async (port) => {
+			probeCalls.push(port);
+			return health.get(port) ?? null;
+		},
+		readFile: async (file) => {
+			fileReads.push(file);
+			return files.get(file) ?? null;
+		},
+		profileFs,
 		isPidAlive: (pid) => alive.has(pid),
 		isMulticaProcess: (pid) => multica.has(pid),
 		...overrides,
 	};
-	return { options, files, directories, health, alive, multica, homeDirectory };
+	const addProfile = (profile: string): string => {
+		const profilePath = path.join(profilesDirectory, profile);
+		mkdirSync(profilePath, { recursive: true });
+		writeFileSync(path.join(profilePath, "config.json"), "{}");
+		return profilePath;
+	};
+	return { options, files, fileReads, health, probeCalls, alive, multica, homeDirectory, profilesDirectory, addProfile };
 }
 
 const known = (daemons: RunningMulticaDaemon[]): MulticaDaemonScanResult => ({ state: "known", daemons });
@@ -44,9 +68,8 @@ const known = (daemons: RunningMulticaDaemon[]): MulticaDaemonScanResult => ({ s
 describe("Multica daemon guard", () => {
 	it("lists the default, named, and desktop-localhost profiles with health identity", async () => {
 		const state = guard();
-		const multicaDirectory = path.join(state.homeDirectory, ".multica");
-		const profilesDirectory = path.join(multicaDirectory, "profiles");
-		state.directories.set(profilesDirectory, ["desktop-localhost", "work"]);
+		state.addProfile("desktop-localhost");
+		state.addProfile("work");
 		state.health.set(healthPortForProfile(""), { status: "running", pid: 100, profile: "", daemon_id: "default-id", server_url: "https://default.test" });
 		state.health.set(healthPortForProfile("work"), { status: "starting", pid: 101, profile: "work", daemon_id: "work-id", server_url: "https://work.test" });
 		state.health.set(healthPortForProfile("desktop-localhost"), { status: "running", pid: 102, profile: "desktop-localhost", daemon_id: "desktop-id", server_url: "https://desktop.test" });
@@ -71,14 +94,74 @@ describe("Multica daemon guard", () => {
 
 	it("reports a colliding health port once using the responder's profile", async () => {
 		const state = guard();
-		const profilesDirectory = path.join(state.homeDirectory, ".multica", "profiles");
-		state.directories.set(profilesDirectory, ["ab", "ba"]);
+		state.addProfile("ab");
+		state.addProfile("ba");
 		state.health.set(healthPortForProfile("ab"), { status: "running", pid: 201, profile: "ba", daemon_id: "collision" });
 
 		const daemons = await listRunningMulticaDaemons(state.options);
 
 		expect(healthPortForProfile("ab")).toBe(healthPortForProfile("ba"));
 		expect(daemons).toEqual(known([{ profiles: ["ba"], profile: "ba", port: healthPortForProfile("ab"), pid: 201, daemonId: "collision" }]));
+	});
+
+	it("discovers nested names and maps them to the nested daemon pid path", async () => {
+		const state = guard();
+		state.addProfile("team/dev");
+		state.health.set(healthPortForProfile("team/dev"), { status: "running", pid: 301, profile: "team/dev" });
+
+		expect(await listRunningMulticaDaemons(state.options)).toEqual(known([
+			{ profiles: ["team/dev"], profile: "team/dev", port: healthPortForProfile("team/dev"), pid: 301 },
+		]));
+		expect(state.fileReads).toContain(path.join(state.profilesDirectory, "team", "dev", "daemon.pid"));
+	});
+
+	it.skipIf(process.platform === "win32")("follows a directory symlink whose target stays inside the profiles root", async () => {
+		const state = guard();
+		const target = state.addProfile("actual-profile");
+		symlinkSync(target, path.join(state.profilesDirectory, "linked-profile"), "dir");
+		state.health.set(healthPortForProfile("linked-profile"), { status: "running", pid: 302, profile: "linked-profile" });
+
+		expect(await listRunningMulticaDaemons(state.options)).toEqual(known([
+			{ profiles: ["linked-profile"], profile: "linked-profile", port: healthPortForProfile("linked-profile"), pid: 302 },
+		]));
+		expect(state.fileReads).toContain(path.join(state.profilesDirectory, "linked-profile", "daemon.pid"));
+	});
+
+	it.skipIf(process.platform === "win32")("skips a directory symlink that points outside the profiles root", async () => {
+		const state = guard();
+		const outside = path.join(state.homeDirectory, ".multica", "outside-profile");
+		mkdirSync(outside, { recursive: true });
+		writeFileSync(path.join(outside, "config.json"), "{}");
+		symlinkSync(outside, path.join(state.profilesDirectory, "outside"), "dir");
+
+		expect(await listRunningMulticaDaemons(state.options)).toEqual(known([]));
+		expect(state.probeCalls).toEqual([19514]);
+	});
+
+	it.skipIf(process.platform === "win32")("skips a directory symlink cycle", async () => {
+		const state = guard();
+		state.addProfile("team/dev");
+		symlinkSync(path.join(state.profilesDirectory, "team"), path.join(state.profilesDirectory, "team", "dev", "loop"), "dir");
+		state.health.set(healthPortForProfile("team/dev"), { status: "running", pid: 303, profile: "team/dev" });
+
+		expect(await listRunningMulticaDaemons(state.options)).toEqual(known([
+			{ profiles: ["team/dev"], profile: "team/dev", port: healthPortForProfile("team/dev"), pid: 303 },
+		]));
+	});
+
+	it("returns unknown when profile discovery reaches its depth bound", async () => {
+		const state = guard();
+		const profile = Array.from({ length: MULTICA_PROFILE_DISCOVERY_MAX_DEPTH + 1 }, (_, index) => `level${index + 1}`).join("/");
+		state.addProfile(profile);
+
+		expect(await listRunningMulticaDaemons(state.options)).toEqual({ state: "unknown" });
+	});
+
+	it("returns unknown when profile discovery reaches its entry bound", async () => {
+		const state = guard();
+		for (let index = 0; index <= 500; index++) writeFileSync(path.join(state.profilesDirectory, `entry-${index}`), "");
+
+		expect(await listRunningMulticaDaemons(state.options)).toEqual({ state: "unknown" });
 	});
 
 	it("ignores a stale pid file when the health port does not answer", async () => {

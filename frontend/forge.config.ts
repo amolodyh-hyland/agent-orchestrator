@@ -7,7 +7,7 @@ import MakerNSIS from "./makers/maker-nsis";
 import MakerDMG, { isSigningConfigured, sealDmg, verifyDmg, verifyMacArtifact } from "./makers/maker-dmg";
 import { machoHasX86_64Slice } from "./makers/macho-archs";
 import MakerAppImage from "./makers/maker-appimage";
-import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, lstatSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -105,6 +105,49 @@ export function writeMulticaCliSha256(stageDir: string, platform: NodeJS.Platfor
 	const checksumPath = path.join(stageDir, "multica.sha256");
 	writeFileSync(checksumPath, `${digest}  ${binaryName}\n`);
 	return checksumPath;
+}
+
+export function isMulticaCliSigningConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+	return Boolean(env.APPLE_SIGNING_IDENTITY?.trim() || env.CSC_LINK?.trim());
+}
+
+export function verifyMulticaCliResources(
+	cliDirectory: string,
+	platform: NodeJS.Platform,
+	options: { compareDigest?: boolean } = {},
+): void {
+	const binaryName = platform === "win32" ? "multica.exe" : "multica";
+	const binaryPath = path.join(cliDirectory, binaryName);
+	const checksumPath = path.join(cliDirectory, "multica.sha256");
+	const binaryStat = lstatSync(binaryPath);
+	if (!binaryStat.isFile() || binaryStat.isSymbolicLink()) throw new Error(`Multica CLI binary is not a regular file: ${binaryPath}`);
+	if (binaryStat.size === 0) throw new Error(`Multica CLI binary is empty: ${binaryPath}`);
+	if (platform !== "win32") {
+		try {
+			accessSync(binaryPath, constants.X_OK);
+		} catch {
+			throw new Error(`Multica CLI binary is not executable: ${binaryPath}`);
+		}
+	}
+	const checksumStat = lstatSync(checksumPath);
+	if (!checksumStat.isFile() || checksumStat.isSymbolicLink()) throw new Error(`Multica CLI checksum is not a regular file: ${checksumPath}`);
+	const checksum = readFileSync(checksumPath, "utf8");
+	const match = /^([\da-fA-F]{64})  ([^\r\n]+)\r?\n?$/.exec(checksum);
+	if (!match || match[2] !== binaryName) throw new Error(`Multica CLI checksum is malformed or names the wrong binary: ${checksumPath}`);
+	if (options.compareDigest !== false) {
+		const actualDigest = createHash("sha256").update(readFileSync(binaryPath)).digest("hex");
+		if (actualDigest.toLowerCase() !== match[1].toLowerCase()) throw new Error(`Multica CLI SHA-256 does not match ${binaryName}`);
+	}
+}
+
+export function verifyPackagedMulticaCli(
+	resourcesPath: string,
+	platform: NodeJS.Platform,
+	env: NodeJS.ProcessEnv = process.env,
+): void {
+	verifyMulticaCliResources(path.join(resourcesPath, "multica-cli"), platform, {
+		compareDigest: !isMulticaCliSigningConfigured(env),
+	});
 }
 
 export function missingMulticaCliResources(
@@ -240,7 +283,9 @@ const config: ForgeConfig = {
 			const cliBin = multicaCliBin();
 			if (cliBin) {
 				stageMulticaCli(cliBin, multicaNoticeDir(), path.resolve(MULTICA_CLI_STAGE_DIR), platform as NodeJS.Platform);
-				writeMulticaCliSha256(path.resolve(MULTICA_CLI_STAGE_DIR), platform as NodeJS.Platform);
+				const cliStageDir = path.resolve(MULTICA_CLI_STAGE_DIR);
+				writeMulticaCliSha256(cliStageDir, platform as NodeJS.Platform);
+				verifyMulticaCliResources(cliStageDir, platform as NodeJS.Platform);
 			}
 			await prepareNativeDependencies(platform as NodeJS.Platform, arch);
 			if (platform === "darwin") {
@@ -284,6 +329,7 @@ const config: ForgeConfig = {
 						if (missing.length > 0) {
 							throw new Error(`packaged Multica CLI resources missing from ${resourcesPath}: ${missing.join(", ")}`);
 						}
+						verifyPackagedMulticaCli(resourcesPath, packageResult.platform as NodeJS.Platform);
 					}
 				}
 				return;
@@ -308,6 +354,7 @@ const config: ForgeConfig = {
 					if (missing.length > 0) {
 						throw new Error(`packaged Multica CLI resources missing from ${resourcesPath}: ${missing.join(", ")}`);
 					}
+					verifyPackagedMulticaCli(resourcesPath, packageResult.platform as NodeJS.Platform);
 				}
 				const binary = path.join(resourcesPath, "tmux", "bin", "tmux");
 				if (!existsSync(binary)) throw new Error(`packaged tmux missing from ${binary}`);

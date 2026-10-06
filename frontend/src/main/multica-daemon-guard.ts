@@ -1,6 +1,6 @@
 import { execFile as nodeExecFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { DaemonStatus } from "../shared/multica-daemon";
@@ -32,10 +32,31 @@ export type MulticaDaemonGuardOptions = {
 	homeDirectory: string;
 	probeHealth: (port: number, timeoutMs: number) => Promise<unknown | null>;
 	readFile: (file: string) => Promise<string | null>;
-	listDirectories: (directory: string) => Promise<string[]>;
+	profileFs?: ProfileDiscoveryFs;
 	isPidAlive: (pid: number) => boolean;
 	platform?: NodeJS.Platform;
 	isMulticaProcess?: (pid: number) => boolean | undefined | Promise<boolean | undefined>;
+};
+
+export const MULTICA_PROFILE_DISCOVERY_MAX_DEPTH = 6;
+export const MULTICA_PROFILE_DISCOVERY_MAX_ENTRIES = 500;
+
+export type ProfileDiscoveryEntry = {
+	name: string;
+	isDirectory: () => boolean;
+	isSymbolicLink: () => boolean;
+};
+
+export type ProfileDiscoveryFs = {
+	readdir: (directory: string) => Promise<ProfileDiscoveryEntry[]>;
+	realpath: (file: string) => Promise<string>;
+	stat: (file: string) => Promise<{ isDirectory: () => boolean }>;
+};
+
+const defaultProfileDiscoveryFs: ProfileDiscoveryFs = {
+	readdir: async (directory) => readdir(directory, { withFileTypes: true }),
+	realpath,
+	stat,
 };
 
 export type MulticaDaemonOwnerMarker = {
@@ -68,6 +89,67 @@ export function healthPortForProfile(profile: string): number {
 	let sum = 0;
 	for (const byte of Buffer.from(profile, "utf8")) sum += byte;
 	return MULTICA_DEFAULT_HEALTH_PORT + 1 + (sum % 1000);
+}
+
+function isInsideDirectory(root: string, candidate: string): boolean {
+	const relative = path.relative(root, candidate);
+	return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+export async function discoverMulticaProfiles(
+	profilesRoot: string,
+	fs: ProfileDiscoveryFs = defaultProfileDiscoveryFs,
+): Promise<string[]> {
+	let rootRealPath: string;
+	try {
+		rootRealPath = await fs.realpath(profilesRoot);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+		throw error;
+	}
+	if (!(await fs.stat(rootRealPath)).isDirectory()) throw new Error("Multica profiles root is not a directory");
+
+	const profiles = new Set<string>();
+	let entriesSeen = 0;
+	const walk = async (directory: string, logicalDirectory: string, depth: number, ancestors: Set<string>): Promise<void> => {
+		const entries = await fs.readdir(directory);
+		for (const entry of entries) {
+			entriesSeen++;
+			if (entriesSeen > MULTICA_PROFILE_DISCOVERY_MAX_ENTRIES) throw new Error("Multica profile discovery entry limit exceeded");
+			if (entry.name === "config.json" && !entry.isDirectory()) {
+				const profile = path.relative(profilesRoot, logicalDirectory).split(path.sep).join("/");
+				if (profile && profile !== ".") profiles.add(profile);
+			}
+
+			if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+			const childPath = path.join(directory, entry.name);
+			let childRealPath: string;
+			let isDirectory = entry.isDirectory();
+			if (entry.isSymbolicLink()) {
+				try {
+					const childStat = await fs.stat(childPath);
+					if (!childStat.isDirectory()) continue;
+					childRealPath = await fs.realpath(childPath);
+					isDirectory = true;
+				} catch (error) {
+					const code = (error as NodeJS.ErrnoException).code;
+					if (code === "ENOENT" || code === "ELOOP") continue;
+					throw error;
+				}
+			} else {
+				childRealPath = await fs.realpath(childPath);
+			}
+			if (!isDirectory || !isInsideDirectory(rootRealPath, childRealPath) || ancestors.has(childRealPath)) continue;
+			const childDepth = depth + 1;
+			if (childDepth > MULTICA_PROFILE_DISCOVERY_MAX_DEPTH) throw new Error("Multica profile discovery depth limit exceeded");
+			const childAncestors = new Set(ancestors);
+			childAncestors.add(childRealPath);
+			await walk(childPath, path.join(logicalDirectory, entry.name), childDepth, childAncestors);
+		}
+	};
+
+	await walk(profilesRoot, profilesRoot, 0, new Set([rootRealPath]));
+	return [...profiles].sort();
 }
 
 function parsePid(value: string | null): number | undefined {
@@ -193,19 +275,18 @@ function isMulticaDaemonProcess(pid: number, platform: NodeJS.Platform): Promise
 export async function listRunningMulticaDaemons(options: MulticaDaemonGuardOptions): Promise<MulticaDaemonScanResult> {
 	const multicaDirectory = path.join(options.homeDirectory, ".multica");
 	const profileDirectory = path.join(multicaDirectory, "profiles");
-	const namedProfiles = await options.listDirectories(profileDirectory);
-	const profiles = ["", ...new Set(namedProfiles.filter((profile) => profile.length > 0))];
-	const byPort = new Map<number, { profiles: string[]; pids: Array<{ profile: string; pid: number | undefined }> }>();
-	for (const profile of profiles) {
-		const port = healthPortForProfile(profile);
-		const profilePath = profile === "" ? multicaDirectory : path.join(profileDirectory, profile);
-		const group = byPort.get(port) ?? { profiles: [], pids: [] };
-		group.profiles.push(profile);
-		group.pids.push({ profile, pid: parsePid(await options.readFile(path.join(profilePath, "daemon.pid"))) });
-		byPort.set(port, group);
-	}
-
 	try {
+		const namedProfiles = await discoverMulticaProfiles(profileDirectory, options.profileFs);
+		const profiles = ["", ...namedProfiles];
+		const byPort = new Map<number, { profiles: string[]; pids: Array<{ profile: string; pid: number | undefined }> }>();
+		for (const profile of profiles) {
+			const port = healthPortForProfile(profile);
+			const profilePath = profile === "" ? multicaDirectory : path.join(profileDirectory, profile);
+			const group = byPort.get(port) ?? { profiles: [], pids: [] };
+			group.profiles.push(profile);
+			group.pids.push({ profile, pid: parsePid(await options.readFile(path.join(profilePath, "daemon.pid"))) });
+			byPort.set(port, group);
+		}
 		const results = await Promise.all(
 			[...byPort.entries()].map(async ([port, group]): Promise<RunningMulticaDaemon | null> => {
 				const health = parseHealthPayload(await options.probeHealth(port, MULTICA_HEALTH_TIMEOUT_MS));
