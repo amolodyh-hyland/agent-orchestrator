@@ -133,12 +133,28 @@ issue, links it to the issue, and opens it.
 
 ## Open with AO header menu
 
-On an issue page, AO inserts an "Open with AO" button (robot icon and label) as a sibling immediately
-before the pin button in the issue header action cluster, before the three-dot trigger and
-properties-panel toggle. It copies the neighboring button's classes for the light and dark themes.
-If the cluster is missing or hidden, a floating pill fallback with the same menu appears bottom
-right above Multica's chat launcher after about 1.5 seconds. It moves back into the header when the
+On an issue page, AO inserts an "Open with AO" button (small bot icon and label) as a sibling
+immediately before the pin button in the issue header action cluster, before the three-dot trigger
+and properties-panel toggle. The label is the single constant `OPEN_WITH_AO_LABEL` in
+`shared/multica-open-with-ao.ts` (it travels in the page payload; rename it there).
+If the cluster is missing or hidden, a floating button with the same menu appears bottom right
+above Multica's chat launcher after about 1.5 seconds. It moves back into the header when the
 cluster returns; both controls are never shown together.
+
+- Look: the control is a subtle outlined rectangle that reproduces Multica's own `Button`
+  (`variant="outline"`, `size="sm"`; the same component as the Filter, Display and Board buttons of the
+  issue list toolbar) from Multica's CSS variables: 28 px high (`--button-height-sm`), 6 px radius
+  (`--radius-md`), 1 px `--border` and `--background` fill, `--muted-foreground` text, 13/18 px weight
+  500 (`--text-label`), 10 px side padding, 4 px gap, 14 px icon, hover and expanded `--muted` fill,
+  focus ring `--ring`, disabled at 50 % opacity; dark theme (`html.dark`) uses the `--input`-based
+  border and fill like the native button. The controller injects one `<style id="ao-open-with-ao-style">`
+  scoped to `button[data-ao-open-with-ao="trigger"]` (so it does not depend on Multica's compiled
+  Tailwind utilities, which only exist when used) and removes it with the controller. The fallback
+  uses the same rules inside its shadow root (`:host-context(html.dark)`). Computed styles matched
+  Multica's native Filter button on all 11 compared properties in light and dark.
+- Menus: the dropdown and submenus use Multica's menu tokens (8 px radius, 4 px padding, 1 px
+  `--surface-border` ring plus `--menu-shadow`, 28 px rows with 6 px radius, 14/20 px text, 16 px
+  chevrons, `--accent` highlight, `--border` separators, `min-width` 8 rem).
 
 - Anchor: the first locator layer looks for the three-dot trigger (`button[data-slot=dropdown-menu-trigger]`
   with `svg.lucide-ellipsis`) inside `span.relative.inline-flex` inside
