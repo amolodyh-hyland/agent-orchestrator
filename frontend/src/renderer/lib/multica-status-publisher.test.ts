@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MulticaStatusPublishResult, MulticaStatusSnapshot } from "../../shared/multica-session-status";
+import type { MulticaLinkStatusEntry } from "../../shared/multica-session-status";
 import { createLatestWinsPublisher } from "./multica-status-publisher";
 
-function snapshot(label: string, stale = false): MulticaStatusSnapshot {
+type TestSnapshot = { stale: boolean; entries: MulticaLinkStatusEntry[] };
+type PublishResult = { ok: boolean };
+
+function snapshot(label: string, stale = false): TestSnapshot {
 	return { stale, entries: [{ sessionId: "s1", tone: "working", label, detail: "" }] };
 }
 
@@ -28,7 +31,7 @@ describe("createLatestWinsPublisher", () => {
 	it("waits for the debounce window", async () => {
 		const a = snapshot("A");
 		const publish = vi.fn().mockResolvedValue({ ok: true });
-		const publisher = createLatestWinsPublisher({ publish, delayMs: 150 });
+		const publisher = createLatestWinsPublisher<TestSnapshot>({ publish, delayMs: 150 });
 
 		publisher.set(a);
 		await vi.advanceTimersByTimeAsync(149);
@@ -42,7 +45,7 @@ describe("createLatestWinsPublisher", () => {
 		const b = snapshot("B");
 		const c = snapshot("C");
 		const publish = vi.fn().mockResolvedValue({ ok: true });
-		const publisher = createLatestWinsPublisher({ publish, delayMs: 150 });
+		const publisher = createLatestWinsPublisher<TestSnapshot>({ publish, delayMs: 150 });
 
 		publisher.set(a);
 		await vi.advanceTimersByTimeAsync(50);
@@ -60,7 +63,7 @@ describe("createLatestWinsPublisher", () => {
 		const b = snapshot("B");
 		const c = snapshot("C");
 		const publish = vi.fn().mockResolvedValue({ ok: true });
-		const publisher = createLatestWinsPublisher({
+		const publisher = createLatestWinsPublisher<TestSnapshot>({
 			publish,
 			delayMs: 150,
 			initialAcceptedKey: JSON.stringify(a),
@@ -83,9 +86,9 @@ describe("createLatestWinsPublisher", () => {
 	it("publishes a corrective snapshot after the in-flight snapshot settles", async () => {
 		const a = snapshot("A");
 		const b = snapshot("B");
-		const bResult = deferred<MulticaStatusPublishResult>();
+		const bResult = deferred<PublishResult>();
 		const publish = vi.fn().mockResolvedValueOnce({ ok: true }).mockReturnValueOnce(bResult.promise).mockResolvedValue({ ok: true });
-		const publisher = createLatestWinsPublisher({ publish, delayMs: 150 });
+		const publisher = createLatestWinsPublisher<TestSnapshot>({ publish, delayMs: 150 });
 
 		publisher.set(a);
 		await vi.advanceTimersByTimeAsync(150);
@@ -105,9 +108,9 @@ describe("createLatestWinsPublisher", () => {
 	it("does not let completion bypass the newest snapshot's debounce", async () => {
 		const b = snapshot("B");
 		const c = snapshot("C");
-		const bResult = deferred<MulticaStatusPublishResult>();
+		const bResult = deferred<PublishResult>();
 		const publish = vi.fn().mockReturnValueOnce(bResult.promise).mockResolvedValue({ ok: true });
-		const publisher = createLatestWinsPublisher({ publish, delayMs: 150 });
+		const publisher = createLatestWinsPublisher<TestSnapshot>({ publish, delayMs: 150 });
 
 		publisher.set(b);
 		await vi.advanceTimersByTimeAsync(150);
@@ -124,9 +127,9 @@ describe("createLatestWinsPublisher", () => {
 	it.each(["reject", "false"] as const)("publishes the newer snapshot after an in-flight failure (%s)", async (failure) => {
 		const b = snapshot("B");
 		const c = snapshot("C");
-		const bResult = deferred<MulticaStatusPublishResult>();
+		const bResult = deferred<PublishResult>();
 		const publish = vi.fn().mockReturnValueOnce(bResult.promise).mockResolvedValue({ ok: true });
-		const publisher = createLatestWinsPublisher({ publish, delayMs: 150 });
+		const publisher = createLatestWinsPublisher<TestSnapshot>({ publish, delayMs: 150 });
 
 		publisher.set(b);
 		await vi.advanceTimersByTimeAsync(150);
@@ -143,9 +146,9 @@ describe("createLatestWinsPublisher", () => {
 	it("does not retry the newer snapshot when it also fails", async () => {
 		const b = snapshot("B");
 		const c = snapshot("C");
-		const bResult = deferred<MulticaStatusPublishResult>();
+		const bResult = deferred<PublishResult>();
 		const publish = vi.fn().mockReturnValueOnce(bResult.promise).mockResolvedValueOnce({ ok: false });
-		const publisher = createLatestWinsPublisher({ publish, delayMs: 150 });
+		const publisher = createLatestWinsPublisher<TestSnapshot>({ publish, delayMs: 150 });
 
 		publisher.set(b);
 		await vi.advanceTimersByTimeAsync(150);
@@ -165,7 +168,7 @@ describe("createLatestWinsPublisher", () => {
 		const b = snapshot("B");
 		const c = snapshot("C");
 		const publish = vi.fn().mockRejectedValue(new Error("publish failed"));
-		const publisher = createLatestWinsPublisher({ publish, delayMs: 150 });
+		const publisher = createLatestWinsPublisher<TestSnapshot>({ publish, delayMs: 150 });
 
 		publisher.set(b);
 		await vi.advanceTimersByTimeAsync(150);
@@ -191,7 +194,7 @@ describe("createLatestWinsPublisher", () => {
 		const publish = vi.fn(() => {
 			throw new Error("publish failed");
 		});
-		const publisher = createLatestWinsPublisher({ publish, delayMs: 150 });
+		const publisher = createLatestWinsPublisher<TestSnapshot>({ publish, delayMs: 150 });
 
 		expect(() => publisher.set(b)).not.toThrow();
 		await vi.advanceTimersByTimeAsync(150);
@@ -205,16 +208,16 @@ describe("createLatestWinsPublisher", () => {
 		const b = snapshot("B");
 		const c = snapshot("C");
 		const publish = vi.fn().mockResolvedValue({ ok: true });
-		const beforeDebounce = createLatestWinsPublisher({ publish, delayMs: 150 });
+		const beforeDebounce = createLatestWinsPublisher<TestSnapshot>({ publish, delayMs: 150 });
 
 		beforeDebounce.set(a);
 		beforeDebounce.dispose();
 		await vi.advanceTimersByTimeAsync(150);
 		expect(publish).not.toHaveBeenCalled();
 
-		const aResult = deferred<MulticaStatusPublishResult>();
+		const aResult = deferred<PublishResult>();
 		publish.mockReset().mockReturnValueOnce(aResult.promise).mockResolvedValue({ ok: true });
-		const inFlight = createLatestWinsPublisher({ publish, delayMs: 150 });
+		const inFlight = createLatestWinsPublisher<TestSnapshot>({ publish, delayMs: 150 });
 		inFlight.set(a);
 		await vi.advanceTimersByTimeAsync(150);
 		inFlight.set(b);
@@ -226,11 +229,11 @@ describe("createLatestWinsPublisher", () => {
 	});
 
 	it("publishes the empty snapshot after state returns to empty during the first publish", async () => {
-		const empty = { stale: false, entries: [] } satisfies MulticaStatusSnapshot;
+		const empty = { stale: false, entries: [] } satisfies TestSnapshot;
 		const nonEmpty = snapshot("Linked");
-		const firstResult = deferred<MulticaStatusPublishResult>();
+		const firstResult = deferred<PublishResult>();
 		const publish = vi.fn().mockReturnValueOnce(firstResult.promise).mockResolvedValue({ ok: true });
-		const publisher = createLatestWinsPublisher({
+		const publisher = createLatestWinsPublisher<TestSnapshot>({
 			publish,
 			delayMs: 150,
 			initialAcceptedKey: JSON.stringify(empty),

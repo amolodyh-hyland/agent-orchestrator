@@ -16,7 +16,7 @@ export type MulticaSendToAoOptions = {
 	readSettings: () => Promise<MulticaSettings>;
 };
 
-export type MulticaSendToAo = { request: () => void; dispose: () => void };
+export type MulticaSendToAo = { request: (options?: { projectId?: string }) => void; dispose: () => void };
 
 export function createMulticaSendToAo(options: MulticaSendToAoOptions): MulticaSendToAo {
 	let disposed = false;
@@ -38,7 +38,7 @@ export function createMulticaSendToAo(options: MulticaSendToAoOptions): MulticaS
 		}
 	};
 
-	const requestIssue = async (): Promise<void> => {
+	const requestIssue = async (projectId?: string): Promise<void> => {
 		try {
 			const issue = options.getCurrentIssue();
 			if (!issue) {
@@ -89,6 +89,7 @@ export function createMulticaSendToAo(options: MulticaSendToAoOptions): MulticaS
 			}
 			deliver({
 				ok: true,
+				...(projectId !== undefined ? { projectId } : {}),
 				issue: {
 					workspaceSlug: issueRef.workspaceSlug,
 					issueIdentifier: issueRef.issueIdentifier,
@@ -105,10 +106,10 @@ export function createMulticaSendToAo(options: MulticaSendToAoOptions): MulticaS
 	};
 
 	return {
-		request: () => {
+		request: (requestOptions) => {
 			if (disposed || inFlight) return;
 			inFlight = true;
-			void requestIssue();
+			void requestIssue(requestOptions?.projectId);
 		},
 		dispose: () => {
 			disposed = true;

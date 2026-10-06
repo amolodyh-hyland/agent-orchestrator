@@ -95,18 +95,19 @@ An AO session can be linked to Multica issues. Nothing changes in the Multica re
 
 - Linking: the action cluster at the right of the session tab strip (alongside open-in-editor, cues and archive, shown for worker sessions once a Multica URL is set) has a chip. Paste an issue URL such as `http://localhost:3000/acme/issues/MUL-123`; the workspace slug and the identifier are stored. UUID URLs and bare identifiers are rejected, because the slug is needed to open the issue and the Multica page title only carries the identifier.
 - AO to Multica: choosing a linked issue switches to the Multica view and dispatches Multica's own `multica:navigate` window event with `/<slug>/issues/<IDENT>`. It waits for the `inbox:open` listener (`bridge.whenReady`), the same signed-in layout that handles the event.
-- Multica to AO: Multica's renderer uses an in-memory router, so the URL never shows the issue. The host listens to `page-title-updated`; an issue page sets `document.title` to `<IDENT>: <title>`. When that identifier has links, AO injects a small shadow-DOM pill (`multica-linked-sessions-pill.ts`) into the page. Clicking it calls `window.open("ao://sessions/<project>/<session>")`; the view's window-open handler offers the URL to the link service, which accepts only linked pairs, switches back to AO and asks the shell to open the session.
+- Multica to AO: Multica's renderer uses an in-memory router, so the URL never shows the issue. The host listens to `page-title-updated`; an issue page sets `document.title` to `<IDENT>: <title>`. AO adds an "Open in AO" action to the issue header. Choosing a worker links it to the issue and opens it in AO; the AO session header's links chip shows the link. The legacy `ao://sessions/<project>/<session>` handler still accepts only linked pairs and opens the session in AO.
 - Storage: `multica-issue-links.json` next to `multica-settings.json` in the AO state directory (`~/.ao` by default), written atomically with mode `0600`. Desktop only: the daemon, CLI and mobile do not see links, and links are not removed when a session is deleted.
-- Loading: the links store is loaded once by `MulticaPane` at the shell level, so the pill status badge and Send to AO duplicate check work even when the chip is not shown.
-- Fragile dependencies on Multica internals, each in one place with a unit test: the issue page title format (`parseMulticaIssueTitle`) and the `multica:navigate` event (`navigatePath` in `multica-view-host.ts`). If either changes, the pill disappears or opening an issue only surfaces Multica; nothing else breaks.
-- Not verified: behavior against a signed-in Multica server and the pill's position over Multica's UI. Verified in an Electron 33 probe: title events for page-initiated changes, `executeJavaScript` in the page main world, the pill rendering, and a click reaching the window-open handler.
-- Limits: lookups from the Multica page match on the identifier alone, so two workspaces with the same prefix would share links; the pill label is English only.
+- Loading: the links store is loaded once by `MulticaPane` at the shell level, so the Open in AO linked markers and Send to AO duplicate check work even when the session links chip is not shown.
+- Fragile dependencies on Multica internals, each in one place with a unit test: the issue page title format (`parseMulticaIssueTitle`) and the `multica:navigate` event (`navigatePath` in `multica-view-host.ts`). If either changes, the header action may not appear or opening a linked issue may only surface Multica; nothing else breaks.
+- Limits: lookups from the Multica page match on the identifier alone, so two workspaces with the same prefix share links.
 
 ## Send to AO
 
-The AO pill on every Multica issue page has a "Send to AO" button. It opens a dialog in AO's shell
-where the user chooses an AO project and optionally an agent (the project's worker agent is the
-default). AO creates a worker session seeded with the issue, links it to the issue, and opens it.
+The existing `ao://multica/send-issue` request still opens the Send to AO dialog in AO's shell, where
+the user chooses a project and optionally an agent (the project's worker agent is the default). In
+the Open in AO menu, "New task from this ticket" opens the same dialog with that project
+preselected through `MulticaSendRequest.projectId`. AO creates a worker session seeded with the
+issue, links it to the issue, and opens it.
 
 - Reading: main runs one async script in the Multica page with `webContents.executeJavaScript`
   (`main/multica-issue-reader.ts`). The script reads `localStorage.multica_token` and
@@ -116,8 +117,8 @@ default). AO creates a worker session seeded with the issue, links it to the iss
 - Multica internals that can change: `multica_token`, `multica_tabs` (zustand persist,
   `state.activeWorkspaceSlug`), `/api/issues/<IDENT>`, and the issue page title format.
 - Request: `ao://multica/send-issue` carries no data and is handled by
-  `multica-issue-link-service.ts`. Any page script can trigger it, but it only opens the dialog;
-  session creation always requires a click in AO.
+  `multica-issue-link-service.ts`. It remains unchanged and opens the dialog; session creation
+  always requires a click in AO.
 - Creation: the renderer sends `POST /api/v1/sessions` with `kind: worker`, `projectId`, optional
   `harness`, `prompt`, and `displayName`. It does not send `issueId`; that field is for GitHub and
   GitLab trackers.
@@ -129,33 +130,104 @@ default). AO creates a worker session seeded with the issue, links it to the iss
   slug is required to link the issue.
 - Live linked sessions for the same issue are listed as duplicates; the user can still choose
   "Send anyway".
-- Not verified: behavior against a signed-in live Multica server, pill placement, and localization
-  of the pill label (main uses English literals).
 
-## Status badges
+## Open in AO header menu
 
-The AO pill shows a colored dot and localized status label for each linked session. Its tooltip
-shows PR number and state, CI, and review. Tones are `ready`, `attention`, `pending`, `working`,
-`done`, and `unknown`, following AO's attention zones. Sessions are sorted by urgency; five are
-shown, followed by `+N` when more are linked.
+On an issue page, AO inserts an "Open in AO" button (small bot icon and label) as a sibling
+immediately before the pin button in the issue header action cluster, before the three-dot trigger
+and properties-panel toggle. The label is the single constant `OPEN_WITH_AO_LABEL` in
+`shared/multica-open-with-ao.ts` (it travels in the page payload; rename it there).
+If the cluster is missing or hidden, a floating button with the same menu appears bottom right
+above Multica's chat launcher after about 1.5 seconds. It moves back into the header when the
+cluster returns; both controls are never shown together.
 
-- Data: the AO shell renderer's workspace query, kept live by the daemon SSE stream.
-  `MulticaStatusPublisher` publishes a snapshot over `multicaStatus:publish` to the main-process
-  link service, which re-injects the pill. Publishing is debounced by 150 ms and unchanged
-  snapshots are skipped.
-- Nothing is written to Multica, and no Multica credential is used.
-- Position: the pill stack sits above Multica's chat launcher ("Ask Multica"), at `bottom: calc(var(--chat-launcher-clearance, 3.5rem) + 8px)` using Multica's clearance token with a fallback; it can still cover Multica's chat window while open, since the window floats bottom-right and is user-resizable.
-- A missing session shows "Session not found"; a terminated session shows its daemon status.
-  When the daemon or SSE stream is disconnected, the badge is dimmed and "offline" is appended.
-  Signed-out Multica and non-issue pages show no pill.
-- Freshness: activity updates within about a second. PR, CI, and review follow AO's SCM observer,
-  with a 30 s tick.
-- Limits: issue matching uses the identifier only, pill chrome text stays English, and behavior
-  has not been verified in a signed-in live Multica.
-- Files: `frontend/src/shared/multica-session-status.ts`,
-  `frontend/src/renderer/lib/multica-link-status.ts`,
-  `frontend/src/renderer/components/MulticaStatusPublisher.tsx`,
-  `main/multica-issue-link-service.ts`, `main/multica-linked-sessions-pill.ts`.
+- Look: the control is a subtle outlined rectangle that follows Multica's own `Button`
+  (`variant="outline"`, `size="sm"`; the same component as the Filter, Display and Board buttons of the
+  issue list toolbar) from Multica's CSS variables: 28 px high (`--button-height-sm`), 6 px radius
+  (`--radius-md`), a hairline border in the low-contrast `--border` token in both themes (1 px,
+  0.5 px on displays with at least 2 device pixels per CSS pixel), `--background` fill, `--muted-foreground`
+  text, 13/18 px weight 500 (`--text-label`), 10 px side padding, 4 px gap, 14 px icon, hover and expanded
+  `--muted` fill, focus ring `--ring`, disabled at 50 % opacity; the dark theme (`html.dark`) uses the
+  `--input`-based fill like the native button. The controller injects one
+  `<style id="ao-open-with-ao-style">` scoped to `button[data-ao-open-with-ao="trigger"]` (so it does not
+  depend on Multica's compiled Tailwind utilities, which only exist when used) and removes it with the
+  controller. The fallback uses the same rules inside its shadow root (`:host-context(html.dark)`).
+- Menus: the dropdown and submenus follow Multica's menu component (8 px radius, 4 px padding, 28 px rows
+  with 6 px radius and 4px 6px padding, `--menu-shadow`, `--accent` highlight, `--border` separators,
+  `min-width` 8 rem) with a hairline `--surface-border` ring (no borders around options; separators are a
+  hairline), 12 px weight 400 option text (`--text-caption`; state and section label text 11 px,
+  `--text-micro`; 14 px chevrons, 12 px link marker) and a maximum height of 218 px (about 7 rows plus a
+  peek of the next) for the dropdown and every submenu, scrolling inside and never leaving the viewport
+  (checked at 1000x700 and 1320x860).
+- Style tokens: every tunable value lives in one object, `OPEN_WITH_AO_STYLE` in
+  `shared/multica-open-with-ao.ts` (`borderWidth` 1px, `borderWidthHiDpi` 0.5px, `menuFontSize`,
+  `menuStateFontSize`, `menuLabelFontSize`, `menuFontWeight` 400, `menuLineHeight` 20px, `menuMaxHeightPx`
+  218). It travels in the page payload as `payload.style`, so the injected controller and menu need no
+  imports and a change is one line.
+- Anchor: the first locator layer looks for the three-dot trigger (`button[data-slot=dropdown-menu-trigger]`
+  with `svg.lucide-ellipsis`) inside `span.relative.inline-flex` inside
+  `div.flex.items-center.shrink-0` inside a `<header>`. The second layer uses the same structure
+  without the icon class constraints. The tab strip also has `svg.lucide-pin`, so lookup starts at
+  the three-dot trigger. The locator was checked against saved real header markup in
+  `frontend/src/main/fixtures/`.
+- Recovery: a `<body>` MutationObserver, throttled to 32 ms, and a 2 s validity interval re-anchor
+  after React re-renders, route or tab changes, and header hiding. More than 5 relocations in 1 s
+  switch to the fallback for 5 s.
+- Menu: clicking the button opens a scrollable AO project list, with linked projects first and
+  marked. Hovering for 100 ms or pressing ArrowRight opens a scrollable submenu. A project submenu
+  shows its orchestrator first, or a disabled "No orchestrator running" row, then tasks, then the
+  sticky "New task from this ticket" footer. Tasks sort linked first, active before terminated,
+  then by tone urgency and recency. When AO deduces a project, the first level is skipped and the
+  dropdown shows that project's content with an "All projects" submenu. Panels flip left near the
+  right edge of the window and above the trigger near the bottom.
+- Keyboard: ArrowUp/Down, Home/End, ArrowRight/Left, Enter/Space, Escape, and Tab are supported.
+  Escape closes the submenu first, then the menu, and returns focus to the trigger; Tab closes the
+  menu. Rows show a state dot and text, a "Linked" icon and screen-reader text, and dim stale or
+  terminated sessions.
+- Project deduction: all issue links point to one AO project -> that project; no links and exactly
+  one eligible AO project -> that project; links in several projects -> the project list, linked
+  projects first.
+- Not implemented: remembered Multica workspace-to-AO project mapping, exact name matching,
+  "Start orchestrator", "Send this ticket to the orchestrator" (the daemon `send` route limits its
+  message to 4,096 characters), and a toast when linking fails.
+- Clicks: choosing a task links the current issue to the worker session (idempotently), then opens
+  it in AO. Orchestrators are never linked and open only. The session still opens if linking fails
+  or the click-time workspace cannot be confirmed.
+- Data: the renderer (`MulticaOpenWithAoPublisher`) publishes a project/session snapshot with a
+  150 ms latest-wins publisher. It includes up to 50 projects and 40 workers per project; projects
+  and sessions linked anywhere survive those caps. Standalone and cloud projects are excluded. The
+  `multicaOpenWithAo:publish` IPC is sender-checked and strictly validates the snapshot. Main builds
+  the page payload and runs the controller in AO's isolated page world with `runInAoWorld` on every
+  title event, link change, and changed snapshot. Offline, starting, and no-projects states appear
+  inside the menu.
+- Actions: the page opens `ao://multica/open-with-ao/open/<project>/<session>?n=<nonce>[&w=<workspace slug>]`
+  or `ao://multica/open-with-ao/new-task/<project>?n=<nonce>`. The view host offers these URLs to
+  the link service, which validates the nonce and snapshot membership. For a task link, it also
+  checks that the click-time workspace slug matches the slug and issue title read from the page just
+  before saving. The legacy `ao://sessions/<project>/<session>` guard (linked pairs only) and
+  `ao://multica/send-issue` are unchanged.
+- Security: the controller and nonce live in Electron's isolated world (`MULTICA_AO_WORLD_ID` =
+  1001, `executeJavaScriptInIsolatedWorld`), so Multica's page script cannot read or wrap them.
+  Action rows run only for trusted events (`event.isTrusted`), so page script cannot synthesize
+  clicks. The nonce is per main-process instance and never written to the DOM. Menu text uses
+  `textContent` only.
+- Limits: labels are English only (the injected script has no i18n); "Linked" marks and matching
+  use the issue identifier only, so two Multica workspaces with the same issue prefix share marks.
+  A project list over 50 or a project with over 40 workers is truncated ("+N more in AO"). Recovery
+  after an AO daemon restart follows the renderer's workspace refetch, about 10–15 s. Menu status
+  is the renderer's derived status, using the same tone, label, and detail helpers as before.
+- Not verified: Windows and Linux; a native Enter/Space keypress on the header trigger (the live
+  check used synthetic CDP key events, which do not produce click activation); screen-reader
+  announcements (ARIA uses `menu`, `menuitem`, `aria-haspopup`, and `aria-expanded`; `aria-controls`
+  is intentionally omitted because the menu is in a shadow root); the packaged build (the controller
+  is serialized with `Function.prototype.toString`; a Vite-minified standalone script module was
+  exercised in a review probe, but the packaged Electron main bundle was not run); Multica builds
+  other than bundled `b2561aad`; very large (100+) project lists.
+- Files: `frontend/src/shared/multica-open-with-ao.ts`,
+  `frontend/src/main/multica-open-with-ao.ts`, `...-anchor.ts`, `...-menu.ts`, `...-script.ts`,
+  `frontend/src/main/multica-issue-link-service.ts`, `frontend/src/main/multica-view-host.ts`,
+  `frontend/src/renderer/lib/multica-open-with-ao-feed.ts`,
+  `frontend/src/renderer/components/MulticaOpenWithAoPublisher.tsx`.
 
 ## Security model
 
@@ -167,6 +239,10 @@ Multica's preload also exposes a generic `window.electron.ipcRenderer`, and seve
 - `src/main/multica-ipc-jail.ts` writes a small preload that runs before Multica's own and limits every outbound `ipcRenderer` method to the bridge's channel list.
 
 `webSecurity` stays on (`MULTICA_WEB_SECURITY` in `src/shared/multica.ts`). Multica's cloud API and a default local self-host both accept REST calls from the `file://` renderer.
+
+The Open in AO controller runs in Electron's isolated world (`MULTICA_AO_WORLD_ID` = 1001),
+separate from Multica's page script. Its per-process nonce is not written to the DOM, menu labels
+use `textContent`, and action rows require trusted events.
 
 The WebSocket is different: the handshake carries `Origin: file://`, and a Multica server checks it by exact match against `FRONTEND_ORIGIN`/`CORS_ALLOWED_ORIGINS`, so it answers 403. The view's session therefore replaces `file://`/`null` with the configured Multica app origin on WebSocket handshakes to the configured API origin only (`multicaWebSocketHeaders`). Normal requests are not touched, so no server config is needed.
 
@@ -237,6 +313,6 @@ in the report are best effort (calls made inside module-level helper functions a
 - Windows packaging of the Multica bundle is not verified; the `postPackage` resource check runs on macOS and Linux only.
 - A build is only as new as the AO base it was packaged from.
 - Windows: AO's frameless window has no native controls under the Multica view.
-- Not verified: macOS traffic-light placement and drag regions with real mouse input, and Electron 33 against Multica's screens beyond sign-in, onboarding and the empty workspace.
+- Not verified: macOS traffic-light placement and drag regions with real mouse input. Open in AO's platform, packaged-build, keyboard-trigger, screen-reader, and large-list verification gaps are listed above.
 - The banner, click-through and badge path is covered by unit tests and was verified on macOS in the dev app against a signed-in local Multica server (real inbox events, OS banners, clicks that open the item, combined badge, sign-out). It has not been verified on Windows or Linux.
 - No CLI install or update, no auto-start, and no issue windows.
