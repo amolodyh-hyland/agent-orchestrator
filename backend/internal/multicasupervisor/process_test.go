@@ -6,15 +6,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -39,63 +35,59 @@ func TestRealChildExitCodes(t *testing.T) {
 	}
 }
 
-func TestRealChildShutdownAndStdinEOF(t *testing.T) {
-	supervisor := newRealSupervisor(t, "wait", "", 0, nil, 100*time.Millisecond)
+func TestAllowedEnvironmentKeyIsPlatformAware(t *testing.T) {
+	for _, test := range []struct {
+		key  string
+		goos string
+		want bool
+	}{
+		{key: "Path", goos: "windows", want: true},
+		{key: "USERPROFILE", goos: "windows", want: true},
+		{key: "Path", goos: "darwin", want: false},
+		{key: "USERPROFILE", goos: "darwin", want: false},
+		{key: "CODEX_HOME", goos: "darwin", want: true},
+		{key: "ANTHROPIC_API_KEY", goos: "windows", want: false},
+		{key: "AO_TEST_SECRET", goos: "darwin", want: false},
+	} {
+		if got := allowedEnvironmentKey(test.key, test.goos); got != test.want {
+			t.Errorf("allowedEnvironmentKey(%q, %q) = %v, want %v", test.key, test.goos, got, test.want)
+		}
+	}
+}
+
+func TestRealChildStdinEOFExitsZero(t *testing.T) {
+	supervisor := newRealSupervisor(t, "wait", "", 0, nil, 2*time.Second)
 	awaitState(t, supervisor, StateRunning)
 	if err := supervisor.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	status := supervisor.Status()
-	if status.State != StateStopped || status.LastExit == nil || !status.LastExit.Graceful {
+	if status.State != StateStopped || status.LastExit == nil || status.LastExit.Code != 0 || status.LastExit.Signal != "" || !status.LastExit.Graceful {
 		t.Fatalf("stdin EOF did not stop child gracefully: %+v", status)
 	}
 }
 
-func TestRealChildThatIgnoresShutdownIsKilled(t *testing.T) {
-	supervisor := newRealSupervisor(t, "ignore", "", 0, nil, 50*time.Millisecond)
+func TestRealChildThatIgnoresStdinIsKilled(t *testing.T) {
+	bound := 50 * time.Millisecond
+	supervisor := newRealSupervisor(t, "ignore", "", 0, nil, bound)
 	awaitState(t, supervisor, StateRunning)
 	start := time.Now()
 	if err := supervisor.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("bounded stop took %s", elapsed)
+	if elapsed := time.Since(start); elapsed < bound || elapsed > time.Second {
+		t.Fatalf("bounded stop took %s, want at least %s and under 1s", elapsed, bound)
 	}
 	status := supervisor.Status()
-	if status.State != StateStopped || status.LastExit == nil || status.LastExit.Code != -1 || status.LastExit.Signal == "" {
+	if status.State != StateStopped || status.LastExit == nil || status.LastExit.Code != -1 || status.LastExit.Signal == "" || status.LastExit.Graceful {
 		t.Fatalf("child was not killed after stop bound: %+v", status)
 	}
 }
 
-func TestRealChildShutdownRequestAndLogsAndEnvironment(t *testing.T) {
-	shutdownSeen := make(chan struct{}, 1)
-	var childPID atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/health":
-			// Answer as the child only once its pid is known: before that the
-			// start probe must not mistake the stub for an external daemon.
-			if pid := childPID.Load(); pid > 0 {
-				_, _ = fmt.Fprintf(w, `{"status":"running","pid":%d,"daemon_id":"test"}`, pid)
-				return
-			}
-			_, _ = io.WriteString(w, `{}`)
-		case "/shutdown":
-			select {
-			case shutdownSeen <- struct{}{}:
-			default:
-			}
-			_, _ = io.WriteString(w, `{"status":"shutting down"}`)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-	port := server.Listener.Addr().(*net.TCPAddr).Port
+func TestRealChildLogsAndEnvironment(t *testing.T) {
 	handler := &recordingHandler{records: make(chan slog.Record, 8)}
-	supervisor := newRealSupervisor(t, "logs-env", "", port, slog.New(handler), time.Second)
+	supervisor := newRealSupervisor(t, "logs-env", "", 0, slog.New(handler), 2*time.Second)
 	awaitState(t, supervisor, StateRunning)
-	childPID.Store(int64(supervisor.Status().PID))
 	var messages []string
 	deadline := time.After(2 * time.Second)
 	for len(messages) < 2 {
@@ -117,7 +109,7 @@ func TestRealChildShutdownRequestAndLogsAndEnvironment(t *testing.T) {
 		}
 	}
 	joined := strings.Join(messages, "\n")
-	for _, expected := range []string{"AO_TEST_SECRET=\"\"", "AO_MULTICA_DAEMON=\"1\"", "profile=\"test-profile\"", "health=\"" + fmt.Sprint(port) + "\""} {
+	for _, expected := range []string{"AO_TEST_SECRET=\"\"", "AO_MULTICA_DAEMON=\"1\"", "profile=\"test-profile\"", "health=\"0\""} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("child environment output missing %q: %s", expected, joined)
 		}
@@ -125,10 +117,9 @@ func TestRealChildShutdownRequestAndLogsAndEnvironment(t *testing.T) {
 	if err := supervisor.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-shutdownSeen:
-	case <-time.After(time.Second):
-		t.Fatal("supervisor did not POST /shutdown before closing stdin")
+	status := supervisor.Status()
+	if status.LastExit == nil || status.LastExit.Code != 0 || !status.LastExit.Graceful {
+		t.Fatalf("closing stdin did not stop the child with exit code 0: %+v", status.LastExit)
 	}
 }
 

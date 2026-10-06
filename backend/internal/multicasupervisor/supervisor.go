@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os/exec"
 	"sort"
 	"strconv"
@@ -79,14 +78,14 @@ type startResult struct {
 }
 
 type processExit struct {
-	generation uint64
-	result     ProcessExit
+	child  *childRun
+	result ProcessExit
 }
 
 type stopResult struct {
-	generation uint64
-	result     ProcessExit
-	err        error
+	child  *childRun
+	result ProcessExit
+	err    error
 }
 
 type healthResult struct{ health *Health }
@@ -115,7 +114,9 @@ type ownerState struct {
 	startReplies    []chan error
 	outbox          []pendingReply
 	stopReplies     []chan error
+	deferredStart   []chan error
 	restartReply    chan error
+	stopErr         error
 	closing         bool
 	healthInFlight  bool
 	lastHealthFetch time.Time
@@ -327,7 +328,8 @@ func (s *Supervisor) handleRequest(state *ownerState, req request) {
 			s.answer(state, req.resp, ErrExternal)
 			return
 		}
-		s.stop(state, req.resp, req.ctx, false)
+		s.cancelPendingStarts(state)
+		s.stop(state, req.resp, req.ctx)
 	case requestRestart:
 		s.restart(state, req.resp, req.ctx)
 	case requestShutdown:
@@ -341,10 +343,14 @@ func (s *Supervisor) start(state *ownerState, reply chan error) {
 		return
 	}
 	if state.closing {
-		reply <- ErrStopped
+		state.deferredStart = append(state.deferredStart, reply)
 		return
 	}
-	if state.status.State == StateRunning {
+	if s.stopPending(state) {
+		state.deferredStart = append(state.deferredStart, reply)
+		return
+	}
+	if state.status.State == StateRunning && (state.child == nil || !state.child.stopping) {
 		reply <- nil
 		return
 	}
@@ -382,10 +388,27 @@ func (s *Supervisor) restart(state *ownerState, reply chan error, ctx context.Co
 	state.fastCrashes = 0
 	state.status.LastError = ""
 	state.restartReply = reply
-	s.stop(state, nil, ctx, true)
+	if s.stopPending(state) {
+		return
+	}
+	s.stop(state, nil, ctx)
 }
 
-func (s *Supervisor) stop(state *ownerState, reply chan error, ctx context.Context, forRestart bool) {
+func (s *Supervisor) stopPending(state *ownerState) bool {
+	return state.closing || state.child != nil && state.child.stopping ||
+		state.spawnInFlight && state.status.Desired == DesiredStopped || len(state.stopReplies) > 0
+}
+
+func (s *Supervisor) cancelPendingStarts(state *ownerState) {
+	err := fmt.Errorf("%w (cancelled by a later stop)", ErrStopped)
+	state.deferredStart = s.resolveReplies(state, state.deferredStart, err)
+	if state.restartReply != nil {
+		s.answer(state, state.restartReply, err)
+		state.restartReply = nil
+	}
+}
+
+func (s *Supervisor) stop(state *ownerState, reply chan error, ctx context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -409,20 +432,14 @@ func (s *Supervisor) stop(state *ownerState, reply chan error, ctx context.Conte
 		state.operationCancel = nil
 		state.startReplies = s.resolveReplies(state, state.startReplies, ErrStopped)
 	}
+	if reply != nil {
+		state.stopReplies = append(state.stopReplies, reply)
+	}
 	if state.status.State == StateExternal || state.child == nil && !state.spawnInFlight {
 		state.status.State = StateStopped
 		state.status.PID = 0
-		if !forRestart {
-			if reply != nil {
-				s.answer(state, reply, nil)
-			}
-		} else {
-			s.startAfterStop(state)
-		}
+		s.completeStop(state)
 		return
-	}
-	if reply != nil {
-		state.stopReplies = append(state.stopReplies, reply)
 	}
 	state.status.State = StateStopped
 	state.status.PID = 0
@@ -437,7 +454,6 @@ func (s *Supervisor) stop(state *ownerState, reply chan error, ctx context.Conte
 	}
 	state.child.stopping = true
 	child := state.child
-	childGeneration := state.generation
 	bound := s.cfg.StopTimeout
 	if state.closing {
 		bound = s.cfg.ShutdownTimeout
@@ -447,17 +463,46 @@ func (s *Supervisor) stop(state *ownerState, reply chan error, ctx context.Conte
 	go func() {
 		result, err := s.stopProcess(stopCtx, child, bound)
 		stopCancel()
-		s.events <- stopResult{generation: childGeneration, result: result, err: err}
+		s.events <- stopResult{child: child, result: result, err: err}
 	}()
 }
 
-func (s *Supervisor) startAfterStop(state *ownerState) {
+func (s *Supervisor) completeStop(state *ownerState) {
+	state.status.State = StateStopped
+	state.status.Desired = DesiredStopped
+	state.status.PID = 0
+	for _, reply := range state.stopReplies {
+		s.answer(state, reply, state.stopErr)
+	}
+	state.stopReplies = nil
+	state.stopErr = nil
+	s.publish(state)
+	s.flushReplies(state)
+
+	if state.closing {
+		state.deferredStart = s.resolveReplies(state, state.deferredStart, ErrStopped)
+		if state.restartReply != nil {
+			s.answer(state, state.restartReply, ErrStopped)
+			state.restartReply = nil
+		}
+		s.flushReplies(state)
+		return
+	}
+	if len(state.deferredStart) == 0 && state.restartReply == nil {
+		return
+	}
 	state.status.Desired = DesiredRunning
 	state.status.State = StateStarting
 	state.status.Restarts = 0
 	state.fastCrashes = 0
-	state.startReplies = append(state.startReplies, state.restartReply)
-	state.restartReply = nil
+	state.status.LastError = ""
+	s.clearRetry(state)
+	state.startReplies = append(state.startReplies, state.deferredStart...)
+	state.deferredStart = nil
+	if state.restartReply != nil {
+		state.startReplies = append(state.startReplies, state.restartReply)
+		state.restartReply = nil
+	}
 	s.beginStart(state)
 }
 
@@ -487,29 +532,23 @@ func (s *Supervisor) beginShutdown(state *ownerState, reply chan error, ctx cont
 	if state.status.State == StateExternal || state.child == nil && !state.spawnInFlight {
 		state.status.State = StateStopped
 		state.status.PID = 0
+		s.completeStop(state)
 		return
 	}
 	if state.child != nil && state.child.stopping && state.child.stopCancel != nil {
 		state.child.stopCancel()
 	}
-	s.stop(state, nil, ctx, false)
+	s.stop(state, nil, ctx)
 }
 
 func (s *Supervisor) finishClosing(state *ownerState) {
+	s.completeStop(state)
 	s.publish(state)
 	s.flushReplies(state)
-	for _, reply := range state.stopReplies {
-		reply <- nil
-	}
-	state.stopReplies = nil
 	for _, reply := range state.startReplies {
 		reply <- ErrStopped
 	}
 	state.startReplies = nil
-	if state.restartReply != nil {
-		state.restartReply <- ErrStopped
-		state.restartReply = nil
-	}
 	close(s.logQueue)
 }
 
@@ -577,15 +616,18 @@ func (s *Supervisor) handleEvent(state *ownerState, event any) {
 		state.status.StartedAt = child.startedAt
 		state.status.NextRetryAt = time.Time{}
 		state.status.LastError = ""
-		state.startReplies = s.resolveReplies(state, state.startReplies, nil)
-		generation := state.generation
+		if state.status.Desired == DesiredStopped || state.closing {
+			state.startReplies = s.resolveReplies(state, state.startReplies, ErrStopped)
+		} else {
+			state.startReplies = s.resolveReplies(state, state.startReplies, nil)
+		}
 		go func() {
 			child.result = child.process.Wait()
 			close(child.done)
-			s.events <- processExit{generation: generation, result: child.result}
+			s.events <- processExit{child: child, result: child.result}
 		}()
 		if state.status.Desired == DesiredStopped || state.closing {
-			s.stop(state, nil, context.Background(), false)
+			s.stop(state, nil, context.Background())
 		}
 	case processExit:
 		s.handleExit(state, value)
@@ -664,32 +706,29 @@ func (s *Supervisor) handleStartFailure(state *ownerState, err error) {
 	if err == nil {
 		err = errors.New("Multica host process did not start")
 	}
-	state.status.LastError = err.Error()
-	state.startReplies = s.resolveReplies(state, state.startReplies, err)
 	if state.status.Desired != DesiredRunning || state.closing {
 		state.status.State = StateStopped
-		for _, reply := range state.stopReplies {
-			s.answer(state, reply, nil)
-		}
-		state.stopReplies = nil
-		if state.restartReply != nil && !state.closing {
-			s.startAfterStop(state)
-		}
+		state.status.LastError = err.Error()
+		state.startReplies = s.resolveReplies(state, state.startReplies, ErrStopped)
+		state.stopErr = nil
+		s.completeStop(state)
 		return
 	}
+	state.status.LastError = err.Error()
+	state.startReplies = s.resolveReplies(state, state.startReplies, err)
 	s.scheduleCrash(state, err, false)
 }
 
 func (s *Supervisor) handleExit(state *ownerState, event processExit) {
 	child := state.child
-	if child == nil || event.generation != state.generation {
+	if child == nil || child != event.child {
 		return
 	}
 	state.status.PID = 0
 	state.status.StartedAt = child.startedAt
 	result := event.result
 	stoppedBySupervisor := child.stopping || state.status.Desired == DesiredStopped || state.closing
-	status := &ExitStatus{Code: result.Code, Signal: result.Signal, At: s.cfg.Clock.Now(), Graceful: stoppedBySupervisor || result.Code == multicahost.ExitOK}
+	status := &ExitStatus{Code: result.Code, Signal: result.Signal, At: s.cfg.Clock.Now(), Graceful: result.Code == multicahost.ExitOK && result.Signal == ""}
 	state.status.LastExit = status
 	if stoppedBySupervisor {
 		state.status.State = StateStopped
@@ -697,9 +736,9 @@ func (s *Supervisor) handleExit(state *ownerState, event processExit) {
 		if result.Err != nil {
 			state.status.LastError = result.Err.Error()
 		}
-		if !child.stopping {
-			state.child = nil
-		}
+		state.child = nil
+		state.stopErr = nil
+		s.completeStop(state)
 		return
 	}
 	state.child = nil
@@ -754,7 +793,7 @@ func (s *Supervisor) scheduleCrash(state *ownerState, err error, stable bool) {
 }
 
 func (s *Supervisor) handleStopResult(state *ownerState, event stopResult) {
-	if state.child == nil || event.generation != state.generation {
+	if state.child == nil || state.child != event.child {
 		return
 	}
 	if state.closing && errors.Is(event.err, context.Canceled) {
@@ -764,7 +803,7 @@ func (s *Supervisor) handleStopResult(state *ownerState, event stopResult) {
 	if state.child.doneClosed() {
 		result = state.child.result
 	}
-	state.status.LastExit = &ExitStatus{Code: result.Code, Signal: result.Signal, At: s.cfg.Clock.Now(), Graceful: true}
+	state.status.LastExit = &ExitStatus{Code: result.Code, Signal: result.Signal, At: s.cfg.Clock.Now(), Graceful: result.Code == multicahost.ExitOK && result.Signal == ""}
 	state.child = nil
 	state.status.State = StateStopped
 	state.status.Desired = DesiredStopped
@@ -772,13 +811,8 @@ func (s *Supervisor) handleStopResult(state *ownerState, event stopResult) {
 	if event.err != nil {
 		state.status.LastError = event.err.Error()
 	}
-	for _, reply := range state.stopReplies {
-		s.answer(state, reply, event.err)
-	}
-	state.stopReplies = nil
-	if state.restartReply != nil && !state.closing {
-		s.startAfterStop(state)
-	}
+	state.stopErr = event.err
+	s.completeStop(state)
 }
 
 func (c *childRun) doneClosed() bool {
@@ -877,7 +911,6 @@ func (s *Supervisor) stopProcess(ctx context.Context, child *childRun, bound tim
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	s.requestChildShutdown(ctx, child)
 	if stdin := child.process.Stdin(); stdin != nil {
 		_ = stdin.Close()
 	}
@@ -892,28 +925,6 @@ func (s *Supervisor) stopProcess(ctx context.Context, child *childRun, bound tim
 	case <-timer.C():
 		_ = child.process.Kill()
 		return s.waitAfterKill(child), nil
-	}
-}
-
-// requestChildShutdown POSTs /shutdown to the health port, but only when the
-// daemon answering there is this child: after the child died or while another
-// daemon holds the port, the request would stop someone else's daemon.
-func (s *Supervisor) requestChildShutdown(ctx context.Context, child *childRun) {
-	bound := min(s.cfg.HealthTimeout, time.Second)
-	shutdownCtx, cancel := context.WithTimeout(ctx, 2*bound)
-	defer cancel()
-	health, err := s.fetchHealth(shutdownCtx)
-	if err != nil || health == nil || health.PID != child.process.PID() {
-		return
-	}
-	requestURL := (&url.URL{Scheme: "http", Host: "127.0.0.1:" + strconv.Itoa(s.cfg.HealthPort), Path: "/shutdown"}).String()
-	req, err := http.NewRequestWithContext(shutdownCtx, http.MethodPost, requestURL, nil)
-	if err != nil {
-		return
-	}
-	response, err := (&http.Client{Timeout: bound}).Do(req)
-	if err == nil {
-		_ = response.Body.Close()
 	}
 }
 

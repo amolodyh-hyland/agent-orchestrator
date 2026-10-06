@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -130,7 +131,7 @@ func BuildEnvironment(environ []string) []string {
 	allowed := make(map[string]string)
 	for _, entry := range environ {
 		key, value, ok := strings.Cut(entry, "=")
-		if !ok || !allowedEnvironmentKey(key) {
+		if !ok || !allowedEnvironmentKey(key, runtime.GOOS) {
 			continue
 		}
 		allowed[key] = value
@@ -147,13 +148,37 @@ func BuildEnvironment(environ []string) []string {
 	return result
 }
 
-func allowedEnvironmentKey(key string) bool {
-	if key == multicahost.FlagEnv || key == multicahost.ProfileEnv || key == multicahost.HealthPortEnv || key == multicahost.CLIPathEnv {
+func allowedEnvironmentKey(key, goos string) bool {
+	if goos == "windows" {
+		key = strings.ToUpper(key)
+	}
+	if key == strings.ToUpper(multicahost.FlagEnv) || key == strings.ToUpper(multicahost.ProfileEnv) || key == strings.ToUpper(multicahost.HealthPortEnv) || key == strings.ToUpper(multicahost.CLIPathEnv) {
 		return true
 	}
 	switch key {
-	case "HOME", "PATH", "TMPDIR", "USER", "LOGNAME", "SHELL", "LANG", "TERM", "TZ":
+	case "HOME", "PATH", "TMPDIR", "USER", "LOGNAME", "SHELL", "LANG", "TERM", "TZ",
+		"CODEX_HOME", "OPENCLAW_STATE_DIR", "OPENCLAW_HOME", "OPENCLAW_CONFIG_PATH", "OPENCLAW_INCLUDE_ROOTS",
+		"CLAWDBOT_CONFIG_PATH", "KIMI_CODE_HOME", "DSH_HOME", "REASONIX_HOME", "QWEN_HOME", "QWENPAW_WORKING_DIR",
+		"COPAW_WORKING_DIR", "HERMES_HOME", "GROK_HOME", "CODEBUDDY_CONFIG_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+		"XDG_CACHE_HOME", "XDG_STATE_HOME":
 		return true
 	}
-	return strings.HasPrefix(key, "LC_") || strings.HasPrefix(key, "MULTICA_")
+	if goos == "windows" {
+		switch key {
+		case "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC",
+			"PATHEXT", "TEMP", "TMP", "HOMEDRIVE", "HOMEPATH", "PROGRAMFILES", "PROGRAMFILES(X86)", "COMMONPROGRAMFILES":
+			return true
+		}
+	}
+	if strings.HasPrefix(key, "MULTICA_") {
+		// Multica's own settings (server URL, workspaces root, agent paths, daemon
+		// toggles) are configuration; anything that looks like a credential is not.
+		for _, suffix := range []string{"_TOKEN", "_SECRET", "_KEY", "_PASSWORD", "_PAT"} {
+			if strings.HasSuffix(key, suffix) {
+				return false
+			}
+		}
+		return true
+	}
+	return strings.HasPrefix(key, "LC_")
 }

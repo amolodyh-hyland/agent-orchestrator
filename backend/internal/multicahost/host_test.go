@@ -146,6 +146,32 @@ func TestRunChildRefusals(t *testing.T) {
 	}
 }
 
+func TestRunChildLoadConfigFailureIsConfigurationRefusal(t *testing.T) {
+	deps, stateDir := testDependencies(t, t.TempDir(), map[string]string{FlagEnv: "1", HealthPortEnv: "19617"})
+	deps.loadConfig = func(daemonhost.Overrides) (daemonhost.Config, error) {
+		return daemonhost.Config{}, errors.New("no agent CLI found\nfor configured agent")
+	}
+	var stderr bytes.Buffer
+	err := runChildWith(context.Background(), strings.NewReader(""), false, slog.New(slog.NewTextHandler(&stderr, nil)), deps)
+	var configErr *ErrConfiguration
+	if !errors.As(err, &configErr) {
+		t.Fatalf("error = %v, want ErrConfiguration", err)
+	}
+	if ExitConfig != 78 {
+		t.Fatalf("configuration exit code = %d, want 78", ExitConfig)
+	}
+	if strings.ContainsAny(err.Error(), "\r\n") {
+		t.Fatalf("configuration refusal is not one line: %q", err)
+	}
+	fmt.Fprintln(&stderr, err)
+	if lines := strings.Count(strings.TrimSpace(stderr.String()), "\n") + 1; lines != 1 {
+		t.Fatalf("stderr lines = %d, want one: %q", lines, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "daemon.pid")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("daemon.pid exists after config refusal: %v", err)
+	}
+}
+
 func TestRunChildServerURLPrecedence(t *testing.T) {
 	const profileURL = "http://127.0.0.1:8080"
 	tests := []struct {

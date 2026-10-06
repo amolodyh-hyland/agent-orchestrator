@@ -1,6 +1,9 @@
 package multicahost
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 func envFrom(values map[string]string) func(string) string {
 	return func(key string) string { return values[key] }
@@ -33,10 +36,11 @@ func TestContractHealthPort(t *testing.T) {
 }
 
 func TestContractStateDir(t *testing.T) {
-	if dir, err := StateDir("/h", ""); err != nil || dir != "/h/.multica" {
+	home := filepath.Join(string(filepath.Separator), "h")
+	if dir, err := StateDir(home, ""); err != nil || dir != filepath.Join(home, ".multica") {
 		t.Errorf("default: %q %v", dir, err)
 	}
-	if dir, err := StateDir("/h", "p"); err != nil || dir != "/h/.multica/profiles/p" {
+	if dir, err := StateDir(home, "p"); err != nil || dir != filepath.Join(home, ".multica", "profiles", "p") {
 		t.Errorf("named: %q %v", dir, err)
 	}
 	for _, bad := range []string{".", "..", "a/b", `a\b`} {

@@ -18,7 +18,7 @@ Electron app  --HTTP-->  AO daemon (ao daemon)  --supervises-->  child: ao __mul
 
 - **One binary, two processes.** `ao daemon` starts the same `ao` executable with the hidden command `__multica_daemon --watch-stdin`. The child runs Multica's own daemon (`server/internal/daemon`, reached through a one-file facade package on the pinned fork) with auto-update and auto-reload off and `LaunchedBy` set to `desktop`. Nothing of the daemon is reimplemented.
 - **Same files as the Multica CLI.** The child writes `daemon.pid` and `daemon.log` in the profile directory and listens on the profile's health port, so `multica daemon status|stop|restart` work against it.
-- **Environment.** The child receives an allowlist of AO's environment, not all of it: `HOME`, `PATH`, `TMPDIR`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TERM`, `TZ`, `MULTICA_*`, and the four AO variables `AO_MULTICA_DAEMON`, `AO_MULTICA_PROFILE`, `AO_MULTICA_HEALTH_PORT` and `AO_MULTICA_CLI`. Variables such as `SSH_AUTH_SOCK`, proxy settings and provider API keys are **not** passed on; agents that need them must get them through Multica's own agent settings.
+- **Environment.** The child receives an allowlist of AO's environment, not all of it: `HOME`, `PATH`, `TMPDIR`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TERM`, `TZ`, the Windows profile and system variables, `MULTICA_*` settings (names that look like credentials, ending in `_TOKEN`, `_SECRET`, `_KEY`, `_PASSWORD` or `_PAT`, are dropped), the four AO variables `AO_MULTICA_DAEMON`, `AO_MULTICA_PROFILE`, `AO_MULTICA_HEALTH_PORT` and `AO_MULTICA_CLI`, and the location variables the Multica daemon and its agents read (`CODEX_HOME`, `OPENCLAW_*`, `HERMES_HOME`, `GROK_HOME`, `XDG_*_HOME` and similar). Provider API keys, `SSH_AUTH_SOCK`, proxy and certificate settings are **not** passed on; agents that need them must get them through Multica's own agent settings.
 - **Hidden helpers do nothing while the flag is off.** `ao __multica_daemon` is always registered but refuses to run without the flag (it prints one line and exits 78 without creating any file), and the execution-environment helper `__multica_execenv_prepare` (Multica's daemon re-executes its own binary for it) is dispatched only while the flag is on, so otherwise it is an unknown command.
 
 ## State outside `~/.ao` (an exception to AO's rule)
@@ -36,10 +36,10 @@ AO's daemon owns a desired state (`running` or `stopped`) and watches the child:
 | The child crashes (any other exit, or a signal) | Restart with exponential backoff, 1 s doubling to 60 s, reset after the child has run 2 minutes |
 | 8 crashes in a row, each shorter than 2 minutes | `failed` until an explicit start or restart |
 | Another daemon already answers on the profile's health port | `external`: AO does not start, stop or restart it, shows it, and takes over only on an explicit start after the port is free |
-| AO's daemon stops | The child is asked to stop (`/shutdown`, then its stdin is closed), waited for up to about 20 s, then that child, and only it, is killed |
+| AO's daemon stops | The child's stdin is closed (it then drains and exits 0), AO waits up to about 20 s, then kills that child, and only it |
 | AO's daemon dies abruptly | The child sees its stdin close and stops on its own |
 
-The shutdown request is sent to the health port only when the daemon answering there reports the child's own pid, so AO can never stop somebody else's daemon.
+AO stops the child by closing the stdin pipe it holds, never by sending anything to the health port: a port can change owners between a check and a request, a pipe cannot. A start that arrives while the child is still draining waits for the drain, and a later stop cancels a pending restart.
 
 ## Start, stop, restart: what works where
 
@@ -76,6 +76,8 @@ Bumping the pin:
 
 - Verified only on macOS, in an isolated environment (scratch `HOME`, data directory, ports and tmux socket; a throwaway Multica account; the real `multica` CLI; a stub agent instead of a real model). Checked live: the child registers and `multica daemon status` reports the child's pid, not AO's; a task whose agent runs `multica issue get` finds the CLI on its `PATH` and reads the issue with the task's own credentials; five tasks complete (the daemon ran two at once); `multica daemon stop` stops only the child and AO stands down without restarting it; `ao multica start|restart` supervise a new child; `multica daemon restart` leaves a standalone daemon that AO shows as `external` and refuses to touch, and an explicit start takes over once it is stopped; an invalid token crash-loops with the 1, 2, 4, 8, 16 s backoff and ends as `failed` after 8 crashes; a missing token is `failed` at once with no retry (exit 78); stopping AO's daemon stops the child within a fraction of a second and removes its pid file; the child stops by itself when its stdin pipe closes; a secret in AO's environment does not reach the child; with hosting off the status is `disabled`, `start` is refused and the hidden command exits 78. Windows and Linux have not been run; the supervisor kills only its own child and uses `/shutdown` and stdin close, which are not platform specific.
 - The child's environment is an allowlist (see above), so agent tooling that relies on inherited variables must be configured through Multica.
+- If the hosted daemon is killed after the stop bound, or crashes, the agents it started on Linux and macOS run in their own process groups and are not stopped with it. This is how the Multica daemon behaves when run on its own as well; AO does not widen what it kills (only its own child), so such agents can keep running until they finish.
+- The status `logLines` are the child's recent output as it wrote it, unredacted; they are served only on the loopback listener.
 - `multica daemon restart` run directly leaves a standalone daemon outside AO's supervision (see the table above).
 - The Multica daemon's auto-update and auto-reload are off; updating the Multica code means bumping the pin.
 - Multica Cloud is out of scope: the server must be local.

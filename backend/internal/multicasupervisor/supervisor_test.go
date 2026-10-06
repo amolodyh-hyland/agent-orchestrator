@@ -25,16 +25,19 @@ func TestBuildEnvironmentAllowlist(t *testing.T) {
 		"HOME=/home/test", "PATH=/bin", "TMPDIR=/tmp", "USER=test", "LOGNAME=test",
 		"SHELL=/bin/zsh", "LANG=en_US.UTF-8", "LC_ALL=C", "TERM=xterm", "TZ=UTC",
 		"AO_MULTICA_DAEMON=1", "AO_MULTICA_PROFILE=dev", "AO_MULTICA_HEALTH_PORT=1234",
-		"AO_MULTICA_CLI=/bin/multica", "MULTICA_TOKEN=allowed", "AO_TEST_SECRET=secret",
+		"AO_MULTICA_CLI=/bin/multica", "CODEX_HOME=/home/test/.codex", "MULTICA_TOKEN=secret",
+		"ANTHROPIC_API_KEY=secret", "AO_TEST_SECRET=secret",
 	})
 	joined := strings.Join(env, "\n")
-	for _, value := range []string{"HOME=/home/test", "LC_ALL=C", "MULTICA_TOKEN=allowed", "AO_MULTICA_PROFILE=dev"} {
+	for _, value := range []string{"HOME=/home/test", "LC_ALL=C", "CODEX_HOME=/home/test/.codex", "AO_MULTICA_PROFILE=dev"} {
 		if !strings.Contains(joined, value) {
 			t.Fatalf("allowlisted environment missing %q in %q", value, joined)
 		}
 	}
-	if strings.Contains(joined, "AO_TEST_SECRET") {
-		t.Fatalf("secret variable leaked to child: %q", joined)
+	for _, secret := range []string{"MULTICA_TOKEN", "ANTHROPIC_API_KEY", "AO_TEST_SECRET"} {
+		if strings.Contains(joined, secret) {
+			t.Fatalf("secret variable %q leaked to child: %q", secret, joined)
+		}
 	}
 }
 
@@ -65,7 +68,7 @@ func TestSpawnSpecUsesContractCommandAndFilteredEnvironment(t *testing.T) {
 	}
 	supervisor := newTestSupervisorWithConfig(t, Config{
 		Enabled: true, Profile: "dev", HealthPort: 0, Executable: "/tmp/ao", CLIPath: "/tmp/multica",
-		Environment:    BuildEnvironment([]string{"HOME=/tmp/home", "AO_TEST_SECRET=secret", "MULTICA_TOKEN=token", "LC_ALL=C"}),
+		Environment:    BuildEnvironment([]string{"HOME=/tmp/home", "AO_TEST_SECRET=secret", "MULTICA_SERVER_URL=http://localhost:8080", "MULTICA_WORKSPACES_ROOT=/tmp/ws", "MULTICA_TOKEN=secret", "LC_ALL=C"}),
 		ProcessFactory: factory,
 	})
 	awaitState(t, supervisor, StateRunning)
@@ -73,10 +76,13 @@ func TestSpawnSpecUsesContractCommandAndFilteredEnvironment(t *testing.T) {
 		t.Fatalf("child process spec = %+v", spec)
 	}
 	environment := strings.Join(spec.Environment, "\n")
-	for _, expected := range []string{"HOME=/tmp/home", "LC_ALL=C", "MULTICA_TOKEN=token", multicahost.FlagEnv + "=1", multicahost.ProfileEnv + "=dev", multicahost.HealthPortEnv + "=0", multicahost.CLIPathEnv + "=/tmp/multica"} {
+	for _, expected := range []string{"HOME=/tmp/home", "LC_ALL=C", "MULTICA_SERVER_URL=http://localhost:8080", "MULTICA_WORKSPACES_ROOT=/tmp/ws", multicahost.FlagEnv + "=1", multicahost.ProfileEnv + "=dev", multicahost.HealthPortEnv + "=0", multicahost.CLIPathEnv + "=/tmp/multica"} {
 		if !strings.Contains(environment, expected) {
 			t.Errorf("child environment missing %q: %s", expected, environment)
 		}
+	}
+	if strings.Contains(environment, "MULTICA_TOKEN") {
+		t.Fatalf("child environment included a credential-looking MULTICA_ variable: %s", environment)
 	}
 	if strings.Contains(environment, "AO_TEST_SECRET") {
 		t.Fatalf("child environment included a non-allowlisted variable: %s", environment)
@@ -93,6 +99,7 @@ func TestUnsolicitedExitPolicy(t *testing.T) {
 		wantCrash bool
 	}{
 		{name: "ok stands down", exit: ProcessExit{Code: 0}, wantState: StateStopped, wantGrace: true},
+		{name: "signal exit is not graceful", exit: ProcessExit{Code: -1, Signal: "SIGTERM"}, wantState: StateBackoff, wantErr: "SIGTERM", wantCrash: true},
 		{name: "config fails permanently", exit: ProcessExit{Code: 78}, wantState: StateFailed, wantErr: "configuration refused", wantCrash: false},
 		{name: "other exit backs off", exit: ProcessExit{Code: 1}, wantState: StateBackoff, wantErr: "code 1", wantCrash: true},
 	}
@@ -543,13 +550,11 @@ func (h blockingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
 
 func (h blockingHandler) WithGroup(string) slog.Handler { return h }
 
-// healthStub answers /health as a daemon with the given pid while online is set,
-// and counts the /shutdown requests it receives.
+// healthStub answers /health as a daemon with the given pid while online is set.
 type healthStub struct {
-	server    *httptest.Server
-	online    atomic.Bool
-	pid       atomic.Int64
-	shutdowns atomic.Int32
+	server *httptest.Server
+	online atomic.Bool
+	pid    atomic.Int64
 }
 
 func newHealthStub(t *testing.T, pid int) *healthStub {
@@ -559,10 +564,6 @@ func newHealthStub(t *testing.T, pid int) *healthStub {
 	stub.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !stub.online.Load() {
 			http.Error(w, "gone", http.StatusServiceUnavailable)
-			return
-		}
-		if r.URL.Path == "/shutdown" {
-			stub.shutdowns.Add(1)
 			return
 		}
 		_, _ = fmt.Fprintf(w, `{"status":"running","pid":%d,"daemon_id":"stub-daemon"}`, stub.pid.Load())
@@ -623,33 +624,6 @@ func TestStoppedProfileNoticesExternalDaemon(t *testing.T) {
 	}
 	if factory.count() != 1 {
 		t.Fatalf("starts = %d, want only the initial child", factory.count())
-	}
-}
-
-func TestShutdownIsOnlyRequestedFromTheOwnChild(t *testing.T) {
-	for _, test := range []struct {
-		name          string
-		healthPID     int
-		wantShutdowns int32
-	}{
-		{name: "daemon on the port is the child", healthPID: 77, wantShutdowns: 1},
-		{name: "another daemon holds the port", healthPID: 42, wantShutdowns: 0},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			stub := newHealthStub(t, test.healthPID)
-			factory := &fakeFactory{create: func(int, func(string, string)) *fakeProcess {
-				return newFakeProcess(77, true)
-			}}
-			supervisor := newTestSupervisorWithConfig(t, Config{Enabled: true, HealthPort: stub.port(), ProcessFactory: factory.factory, StopTimeout: 100 * time.Millisecond, HealthTimeout: 100 * time.Millisecond})
-			awaitState(t, supervisor, StateRunning)
-			stub.online.Store(true)
-			if err := supervisor.Stop(context.Background()); err != nil {
-				t.Fatal(err)
-			}
-			if got := stub.shutdowns.Load(); got != test.wantShutdowns {
-				t.Fatalf("/shutdown requests = %d, want %d", got, test.wantShutdowns)
-			}
-		})
 	}
 }
 

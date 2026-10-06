@@ -54,7 +54,7 @@ func runChildWith(ctx context.Context, stdin io.Reader, watchStdin bool, logger 
 	}
 	cfg, err := deps.loadConfig(overrides)
 	if err != nil {
-		return fmt.Errorf("load Multica daemon config: %w", err)
+		return &ErrConfiguration{Err: fmt.Errorf("load Multica daemon config: %w", err)}
 	}
 	if err := requireLocalServer(cfg.ServerBaseURL); err != nil {
 		return &ErrConfiguration{Err: err}
