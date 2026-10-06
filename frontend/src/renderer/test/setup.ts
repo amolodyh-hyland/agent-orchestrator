@@ -359,7 +359,7 @@ if (typeof window !== "undefined") {
 			onOpenSession: () => () => undefined,
 		},
 		multicaSend: { onRequest: vi.fn(() => () => undefined) },
-		multicaStatus: { publish: vi.fn(async () => ({ ok: true })) },
+		multicaOpenWithAo: { publish: vi.fn(async () => ({ ok: true })) },
 		keybindings: {
 			get: async () => ({}),
 			set: async (overrides) => overrides,

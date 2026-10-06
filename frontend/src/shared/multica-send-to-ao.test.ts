@@ -180,10 +180,16 @@ describe("isMulticaSendRequest", () => {
 
 	it("accepts success and failure shapes", () => {
 		expect(isMulticaSendRequest({ ok: true, issue: validIssue })).toBe(true);
+		expect(isMulticaSendRequest({ ok: true, issue: validIssue, projectId: "project-one" })).toBe(true);
 		expect(isMulticaSendRequest({ ok: true, issue: { ...validIssue, url: "https://multica.example.com/" } })).toBe(true);
 		expect(isMulticaSendRequest({ ok: false, reason: "signed_out" })).toBe(true);
 		expect(isMulticaSendRequest({ ok: false, reason: "no_issue" })).toBe(true);
 		expect(isMulticaSendRequest({ ok: false, reason: "unreadable" })).toBe(true);
+	});
+
+	it("limits project ids by code points", () => {
+		expect(isMulticaSendRequest({ ok: true, issue: validIssue, projectId: "😀".repeat(200) })).toBe(true);
+		expect(isMulticaSendRequest({ ok: true, issue: validIssue, projectId: "😀".repeat(201) })).toBe(false);
 	});
 
 	it.each([
@@ -196,6 +202,10 @@ describe("isMulticaSendRequest", () => {
 		{ ok: true, issue: { workspaceSlug: "acme", issueIdentifier: "MUL-1", description: "Details", url: null } },
 		{ ok: true, issue: { workspaceSlug: "acme", issueIdentifier: "MUL-1", title: "Fix it", url: null } },
 		{ ok: true, issue: { ...validIssue, url: 42 } },
+		{ ok: true, issue: validIssue, projectId: "" },
+		{ ok: true, issue: validIssue, projectId: 42 },
+		{ ok: true, issue: validIssue, projectId: undefined },
+		{ ok: false, reason: "signed_out", projectId: "project-one" },
 	])("rejects invalid request %s", (value) => {
 		expect(isMulticaSendRequest(value)).toBe(false);
 	});
