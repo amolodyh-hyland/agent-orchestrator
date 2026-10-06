@@ -117,3 +117,27 @@ describe("buildMacAppMenuTemplate", () => {
 	});
 
 });
+
+describe("Multica switch menu item", () => {
+	const label = "Switch AO / Multica";
+	const builders = {
+		macOS: (onToggleMultica?: () => void) => buildMacAppMenuTemplate(() => undefined, onToggleMultica),
+		Windows: (onToggleMultica?: () => void) => buildWindowsAppMenuTemplate(() => undefined, onToggleMultica),
+		Linux: (onToggleMultica?: () => void) => buildLinuxAppMenuTemplate(() => undefined, onToggleMultica),
+	};
+
+	it.each(Object.entries(builders))("adds a View menu item on %s that runs the handler", (_platform, build) => {
+		const onToggleMultica = vi.fn();
+		const item = viewSubmenu(build(onToggleMultica)).find((entry) => entry.label === label);
+
+		expect(item).toBeDefined();
+		// The chord is a customizable app shortcut; a fixed accelerator would drift from it.
+		expect(item?.accelerator).toBeUndefined();
+		item?.click?.(undefined as never, undefined as never, undefined as never);
+		expect(onToggleMultica).toHaveBeenCalledOnce();
+	});
+
+	it.each(Object.entries(builders))("leaves the View menu unchanged on %s when no handler is given", (_platform, build) => {
+		expect(viewSubmenu(build()).find((entry) => entry.label === label)).toBeUndefined();
+	});
+});

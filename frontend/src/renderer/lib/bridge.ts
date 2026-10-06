@@ -1,5 +1,6 @@
 import type { AoBridge } from "../../preload";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
+import { DEFAULT_MULTICA_SETTINGS } from "../../shared/multica";
 export type { FeatureBuild } from "../../main/feature-builds";
 
 
@@ -269,6 +270,25 @@ export const aoBridge: AoBridge =
 			get: async () => ({ ...DEFAULT_UI_SETTINGS }),
 			set: async (settings) => coerceUiSettings({ ...DEFAULT_UI_SETTINGS, ...settings }),
 		},
+		multica: {
+			getState: async () => ({ active: false, status: "unconfigured", url: "" }),
+			setActive: async () => ({ active: false, status: "unconfigured", url: "" }),
+			reload: async () => ({ active: false, status: "unconfigured", url: "" }),
+			getSettings: async () => ({ ...DEFAULT_MULTICA_SETTINGS }),
+			setSettings: async (url) => ({ url }),
+			onState: () => () => undefined,
+			onToggleShortcut: () => () => undefined,
+		},
+		multicaLinks: {
+			list: async () => [],
+			add: async () => ({ ok: false, reason: "save_failed" }),
+			remove: async () => [],
+			openIssue: async () => false,
+			onChanged: () => () => undefined,
+			onOpenSession: () => () => undefined,
+		},
+		multicaSend: { onRequest: () => () => undefined },
+		multicaOpenWithAo: { publish: async () => ({ ok: false }) },
 		keybindings: {
 			get: async () => ({}),
 			set: async (overrides) => overrides,

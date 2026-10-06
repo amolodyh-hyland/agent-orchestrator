@@ -126,6 +126,8 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 	useMatchRoute: () => (options: { to: string }) => shellMocks.state.matchRouteTarget === options.to,
 	useNavigate: () => shellMocks.navigate,
 	useParams: () => shellMocks.state.routeParams,
+	useRouterState: ({ select }: { select: (state: { location: { pathname: string } }) => unknown }) =>
+		select({ location: { pathname: "/" } }),
 	useSearch: () => shellMocks.state.routeSearch,
 }));
 
@@ -147,6 +149,16 @@ vi.mock("../lib/bridge", () => ({
 			set: shellMocks.setKeybindings,
 			setRecording: shellMocks.setKeybindingRecording,
 		},
+		multica: {
+			getState: async () => ({ active: false, status: "unconfigured", url: "" }),
+			onState: () => () => undefined,
+			onToggleShortcut: () => () => undefined,
+		},
+		multicaLinks: {
+			onOpenSession: () => () => undefined,
+		},
+		multicaSend: { onRequest: () => () => undefined },
+		multicaOpenWithAo: { publish: async () => ({ ok: true }) },
 		window: {},
 		tray: {
 			setAttentionState: () => undefined,
@@ -181,6 +193,8 @@ vi.mock("../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloud
 vi.mock("../hooks/useDaemonStatus", () => ({
 	useDaemonStatus: () => shellMocks.state.daemonStatus,
 }));
+
+vi.mock("../components/MulticaOpenWithAoPublisher", () => ({ MulticaOpenWithAoPublisher: () => null }));
 
 vi.mock("../lib/api-client", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../lib/api-client")>()),
