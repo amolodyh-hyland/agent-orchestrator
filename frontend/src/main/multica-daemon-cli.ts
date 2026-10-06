@@ -3,6 +3,7 @@ import { accessSync, constants, statSync } from "node:fs";
 import { open, stat } from "node:fs/promises";
 import path from "node:path";
 import { daemonStatusKey, mapDaemonStatus, probeFromStatus, type DaemonStatus, type LocalRuntimeProbe } from "../shared/multica-daemon";
+import type { RunningMulticaDaemon } from "./multica-daemon-guard";
 
 // A minimal daemon control surface for the embedded Multica UI. It shells out to
 // the installed `multica` CLI (fixed argument arrays through execFile, never a
@@ -97,6 +98,9 @@ export type MulticaDaemonServiceOptions = {
 	findBinary: () => string | null;
 	logPath: string;
 	isOwnedDaemon?: (status: DaemonStatus) => boolean;
+	listRunningDaemons?: () => Promise<RunningMulticaDaemon[]>;
+	writeOwnerMarker?: (status: DaemonStatus) => Promise<void>;
+	removeOwnerMarker?: () => Promise<void>;
 	execFile?: ExecFileLike;
 	pollMs?: number;
 };
@@ -145,17 +149,67 @@ export function createMulticaDaemonService(options: MulticaDaemonServiceOptions)
 		options.emit("daemon:status", status);
 	};
 
-	const lifecycle = async (args: string[], timeout: number, transient: "starting" | "stopping"): Promise<DaemonResult> => {
+	const lifecycle = async (
+		args: string[],
+		timeout: number,
+		transient: "starting" | "stopping",
+		action: "start" | "stop" | "restart",
+	): Promise<DaemonResult> => {
 		const bin = locate();
 		if (!bin) return { success: false, error: "multica CLI is not installed" };
 		if (lifecycleBusy) return { success: false, error: DAEMON_BUSY_MESSAGE };
 		lifecycleBusy = true;
 		try {
+			if (action === "stop" && options.isOwnedDaemon) {
+				const status = await readStatus();
+				if ((status.state === "running" || status.state === "starting") && !options.isOwnedDaemon(status)) {
+					return { success: false, error: "This Multica daemon was not started by AO; stop it where it was started" };
+				}
+			}
+			if ((action === "start" || action === "restart") && options.listRunningDaemons) {
+				let daemons: RunningMulticaDaemon[];
+				try {
+					daemons = await options.listRunningDaemons();
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					return { success: false, error: `Unable to check for running Multica daemons: ${message}` };
+				}
+				const other = daemons.find((daemon) => !options.isOwnedDaemon?.({ state: "running", pid: daemon.pid }));
+				if (other) {
+					const profile = other.profiles.map((name) => name || "default").join(", ");
+					return {
+						success: false,
+						error: `A Multica daemon is already running (profile ${profile}, port ${other.port}); AO will not start a second one`,
+					};
+				}
+			}
 			push({ state: transient });
 			const result = await run(bin, args, timeout);
 			const failure = result.error ? (result.stderr.trim() || result.error.message).slice(0, 300) : undefined;
-			if (!disposed) push(await readStatus());
-			return failure ? { success: false, error: failure } : { success: true };
+			let status: DaemonStatus | undefined;
+			let markerFailure: string | undefined;
+			if (!failure && action === "stop") {
+				try {
+					await options.removeOwnerMarker?.();
+				} catch (error) {
+					markerFailure = error instanceof Error ? error.message : String(error);
+				}
+			}
+			if (!failure && (action === "start" || action === "restart")) {
+				status = await readStatus();
+			}
+			if (!failure && (action === "start" || action === "restart") && status?.state === "running" && status.pid !== undefined) {
+				try {
+					await options.writeOwnerMarker?.(status);
+					if (options.isOwnedDaemon) status.externallyManaged = !options.isOwnedDaemon(status);
+				} catch (error) {
+					markerFailure = error instanceof Error ? error.message : String(error);
+				}
+			}
+			if (!disposed) push(status ?? (status = await readStatus()));
+			if (failure) return { success: false, error: failure };
+			if (markerFailure) return { success: false, error: `Multica daemon operation succeeded but AO could not update its ownership marker: ${markerFailure}` };
+			return { success: true };
 		} finally {
 			lifecycleBusy = false;
 		}
@@ -241,9 +295,9 @@ export function createMulticaDaemonService(options: MulticaDaemonServiceOptions)
 
 	return {
 		getStatus: readStatus,
-		start: () => lifecycle(["daemon", "start"], START_TIMEOUT_MS, "starting"),
-		stop: () => lifecycle(["daemon", "stop"], STOP_TIMEOUT_MS, "stopping"),
-		restart: () => lifecycle(["daemon", "restart"], RESTART_TIMEOUT_MS, "starting"),
+		start: () => lifecycle(["daemon", "start"], START_TIMEOUT_MS, "starting", "start"),
+		stop: () => lifecycle(["daemon", "stop"], STOP_TIMEOUT_MS, "stopping", "stop"),
+		restart: () => lifecycle(["daemon", "restart"], RESTART_TIMEOUT_MS, "starting", "restart"),
 		isInstalled: async () => locate() !== null,
 		refreshBinary: () => {
 			binary = undefined;

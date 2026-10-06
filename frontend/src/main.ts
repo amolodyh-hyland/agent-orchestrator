@@ -60,8 +60,9 @@ import {
 } from "./main/ui-settings";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
+import { get as httpGet } from "node:http";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { chmod, copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -169,6 +170,7 @@ import {
 import { buildLinuxAppMenuTemplate, buildMacAppMenuTemplate, buildWindowsAppMenuTemplate } from "./main/menu";
 import { readMulticaSettings, writeMulticaUrl } from "./main/multica-settings";
 import { createMulticaDaemonService, findMulticaBinary } from "./main/multica-daemon-cli";
+import { createMulticaDaemonOwnerStore, listRunningMulticaDaemons, type MulticaHealthPayload } from "./main/multica-daemon-guard";
 import { multicaBridgeChannels } from "./main/multica-desktop-bridge";
 import { resolveMulticaDesktopBundle } from "./main/multica-desktop-bundle";
 import { createMulticaIssueLinkService, type MulticaIssueLinkService } from "./main/multica-issue-link-service";
@@ -188,6 +190,41 @@ declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
 
 const execFileAsync = promisify(execFile);
+
+function probeMulticaHealth(port: number, timeoutMs: number): Promise<MulticaHealthPayload | null> {
+	return new Promise((resolve) => {
+		let settled = false;
+		const finish = (payload: MulticaHealthPayload | null): void => {
+			if (settled) return;
+			settled = true;
+			resolve(payload);
+		};
+		const request = httpGet({ host: "127.0.0.1", port, path: "/health", timeout: timeoutMs }, (response) => {
+			if (response.statusCode === undefined || response.statusCode < 200 || response.statusCode >= 300) {
+				response.resume();
+				finish(null);
+				return;
+			}
+			let body = "";
+			response.setEncoding("utf8");
+			response.on("data", (chunk: string) => {
+				body += chunk;
+				if (body.length > 256 * 1024) finish({});
+			});
+			response.on("end", () => {
+				try {
+					const parsed: unknown = JSON.parse(body);
+					finish(parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as MulticaHealthPayload) : {});
+				} catch {
+					finish({});
+				}
+			});
+			response.on("error", () => finish(null));
+		});
+		request.setTimeout(timeoutMs, () => request.destroy(new Error("Multica health probe timed out")));
+		request.on("error", () => finish(null));
+	});
+}
 
 // Windows GUI launches (e.g. from a Start-menu/desktop shortcut) have no attached
 // console, so process.stdout and process.stderr are dead pipes. The daemon-output
@@ -867,8 +904,38 @@ async function createWindowInternal(): Promise<void> {
 		hostName: () => os.hostname(),
 		// The daemon is driven through the installed multica CLI (AO_MULTICA_CLI
 		// overrides where it is found).
-		createDaemonService: (emit) =>
-			createMulticaDaemonService({
+		createDaemonService: (emit) => {
+			const homeDirectory = os.homedir();
+			const ownerStore = createMulticaDaemonOwnerStore(app.getPath("userData"));
+			const guardOptions = {
+				homeDirectory,
+				probeHealth: probeMulticaHealth,
+				readFile: async (file: string): Promise<string | null> => {
+					try {
+						return await readFile(file, "utf8");
+					} catch (error) {
+						if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+						throw error;
+					}
+				},
+				listDirectories: async (directory: string): Promise<string[]> => {
+					try {
+						return (await readdir(directory, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+					} catch (error) {
+						if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+						throw error;
+					}
+				},
+				isPidAlive: (pid: number): boolean => {
+					try {
+						process.kill(pid, 0);
+						return true;
+					} catch (error) {
+						return (error as NodeJS.ErrnoException).code === "EPERM";
+					}
+				},
+			};
+			return createMulticaDaemonService({
 				emit,
 				findBinary: () =>
 					findMulticaBinary({
@@ -877,8 +944,13 @@ async function createWindowInternal(): Promise<void> {
 						home: os.homedir(),
 						platform: process.platform,
 					}),
-				logPath: path.join(os.homedir(), ".multica", "daemon.log"),
-			}),
+				logPath: path.join(homeDirectory, ".multica", "daemon.log"),
+				isOwnedDaemon: ownerStore.isOwnedDaemon,
+				listRunningDaemons: () => listRunningMulticaDaemons(guardOptions),
+				writeOwnerMarker: ownerStore.write,
+				removeOwnerMarker: ownerStore.remove,
+			});
+		},
 		onPageTitleChange: (title) => multicaIssueLinkService?.handlePageTitle(title),
 		onAoSessionLink: (url) => multicaIssueLinkService?.handleAoSessionLink(url) ?? false,
 		notifications: createMulticaNotifications({
