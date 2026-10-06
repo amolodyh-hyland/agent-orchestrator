@@ -170,6 +170,67 @@ Multica's preload also exposes a generic `window.electron.ipcRenderer`, and seve
 
 The WebSocket is different: the handshake carries `Origin: file://`, and a Multica server checks it by exact match against `FRONTEND_ORIGIN`/`CORS_ALLOWED_ORIGINS`, so it answers 403. The view's session therefore replaces `file://`/`null` with the configured Multica app origin on WebSocket handshakes to the configured API origin only (`multicaWebSocketHeaders`). Normal requests are not touched, so no server config is needed.
 
+## Checking bridge drift when multica changes
+
+The embedded Multica UI calls channels served by AO's `multicaBridgeChannels()` list. The IPC jail
+uses that list to limit outbound IPC. A renamed, added or removed channel in Multica's
+`apps/desktop/src/preload/index.ts` can stop working in the embed or be blocked by the jail.
+
+Run the check on every Multica submodule bump, and before building or packaging the embed against a
+newer Multica checkout. In the noetaxis workspace, the checkout is `repos/multica` beside the AO
+checkout.
+
+From AO's `frontend/` directory, run:
+
+```sh
+npm run check:multica-bridge
+```
+
+Use `npm run check:multica-bridge -- --multica <dir>` or set `MULTICA_DIR` to select another
+checkout. The default is `../../multica`, relative to `frontend/`. The check requires Node 24. It
+reads the Multica checkout without executing or writing to it; its only Git operation there is
+the read-only `git rev-parse HEAD` used to report the commit.
+
+Exit codes:
+
+- `0`: no drift; warnings are allowed.
+- `1`: channel drift was found.
+- `2`: an error or setup problem, including a missing checkout or baseline, unsupported preload
+  construct, or unsupported Node version.
+
+Read the report sections as follows:
+
+| Section | Meaning and action |
+| --- | --- |
+| `ADDED` | Multica uses an outbound channel AO does not serve, so the jail blocks it. Add it to the bridge as a real handler or stub; this also adds it to the jail list. |
+| `REMOVED` | AO serves an outbound channel Multica no longer uses. Delete the stale handler or stub. |
+| `CHANGED` | The channel's IPC kind differs. Match the bridge kind; a `sendSync` listener must set `event.returnValue`. |
+| `RENAMED` | The same API member now uses a different channel. Update the bridge to the new channel. |
+| `INBOUND` | Main-to-renderer channels differ from the baseline. Decide whether AO delivers, stubs or ignores each change, and record that in “What is real and what is a stub.” |
+| `WARNINGS` | Globals or API members changed, declarations disagree, or AO's allowlist differs from registered bridge handlers. Review each warning; warnings alone do not fail the check. |
+| `NOTES` | The baseline is missing or behind the current preload. Follow the note before accepting the change. |
+
+`scripts/multica-bridge-baseline.json` records the accepted Multica commit (`multicaCommit`),
+preload path, exposed globals and members, and entries with `api`, `channel` and `kind`. It enables
+channel-rename detection and comparison of inbound changes. After resolving outbound drift and
+reviewing inbound changes, refresh it with:
+
+```sh
+npm run check:multica-bridge -- --update-baseline
+```
+
+The command refuses to update while outbound differences remain. Inbound-only differences do not
+block the write, so decide and record their disposition before refreshing. Commit the baseline
+together with the submodule bump so reviewers can inspect the accepted surface change.
+
+The check does not compare arguments or payload shapes for unchanged channels, does not read
+Multica's main-process registrations, and does not cover AO's own shell IPC. A preload construct
+the extractor cannot resolve is an error, not a silently omitted channel. The extractor follows
+string literals, shared constants, one-level helper functions and API members written as inline
+values or inline functions, and treats any other way to reach `ipcRenderer` as an error, so ordinary
+refactors are caught and unusual code makes the check fail loudly rather than pass. API member labels
+in the report are best effort (calls made inside module-level helper functions are labelled `(module) <function>`); AO serves channels by name, so only channels and IPC kinds decide whether the check passes.
+
 ## Known gaps
 
 - No updater for this build, by design.
