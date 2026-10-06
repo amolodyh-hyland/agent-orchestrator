@@ -5833,3 +5833,16 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 		animation: none;
 	}
 }
+
+/* The embedded Multica page is a native WebContentsView over the center panel,
+ * like the live Browser page above. While a dialog raises the transparent shell
+ * above it, every shell layer over the slot must be transparent or the page
+ * blanks out. Only applies once the page is live; empty/error states stay opaque. */
+html[data-native-browser-composition="true"] body:has([data-multica-native-page="live"]),
+html[data-native-browser-composition="true"] #root:has([data-multica-native-page="live"]),
+html[data-native-browser-composition="true"] .app-shell-root:has([data-multica-native-page="live"]),
+html[data-native-browser-composition="true"] .center-panel-shell:has([data-multica-native-page="live"]),
+html[data-native-browser-composition="true"] .center-panel-shell:has([data-multica-native-page="live"]) > .center-panel-surface,
+html[data-native-browser-composition="true"] [data-multica-native-page="live"] {
+	background: transparent;
+}

@@ -48,6 +48,42 @@ import type {
 } from "./main/cloud-cp-proxy";
 import type { UpdateOutcome } from "./shared/update-telemetry";
 import type { UiSettings } from "./main/ui-settings";
+import {
+	MULTICA_GET_SETTINGS_CHANNEL,
+	MULTICA_GET_STATE_CHANNEL,
+	MULTICA_RELOAD_CHANNEL,
+	MULTICA_SET_ACTIVE_CHANNEL,
+	MULTICA_SET_SETTINGS_CHANNEL,
+	MULTICA_STATE_CHANNEL,
+	TOGGLE_MULTICA_SHORTCUT_CHANNEL,
+	type MulticaSettings,
+	type MulticaViewState,
+} from "./shared/multica";
+import {
+	MULTICA_LINKS_ADD_CHANNEL,
+	MULTICA_LINKS_CHANGED_CHANNEL,
+	MULTICA_LINKS_LIST_CHANNEL,
+	MULTICA_LINKS_OPEN_ISSUE_CHANNEL,
+	MULTICA_LINKS_OPEN_SESSION_CHANNEL,
+	MULTICA_LINKS_REMOVE_CHANNEL,
+	type MulticaIssueLink,
+	type MulticaIssueLinkAddRequest,
+	type MulticaIssueLinkAddResult,
+	type MulticaIssueLinkOpenRequest,
+	type MulticaIssueLinkRemoveRequest,
+	type MulticaOpenSessionTarget,
+} from "./shared/multica-issue-links";
+import {
+	MULTICA_SEND_REQUEST_CHANNEL,
+	isMulticaSendRequest,
+	type AoMulticaSendBridge,
+} from "./shared/multica-send-to-ao";
+import {
+	MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL,
+	type AoMulticaOpenWithAoBridge,
+	type OpenWithAoPublishResult,
+	type OpenWithAoSnapshot,
+} from "./shared/multica-open-with-ao";
 import type { UpdateCheckOptions } from "./main/auto-updater";
 import type { FeatureBuild } from "./main/feature-builds";
 import {
@@ -601,6 +637,62 @@ const api = {
 		get: () => ipcRenderer.invoke("uiSettings:get") as Promise<UiSettings>,
 		set: (settings: Partial<UiSettings>) => ipcRenderer.invoke("uiSettings:set", settings) as Promise<UiSettings>,
 	},
+	multica: {
+		getState: () => ipcRenderer.invoke(MULTICA_GET_STATE_CHANNEL) as Promise<MulticaViewState>,
+		setActive: (active: boolean) => ipcRenderer.invoke(MULTICA_SET_ACTIVE_CHANNEL, active) as Promise<MulticaViewState>,
+		reload: () => ipcRenderer.invoke(MULTICA_RELOAD_CHANNEL) as Promise<MulticaViewState>,
+		getSettings: () => ipcRenderer.invoke(MULTICA_GET_SETTINGS_CHANNEL) as Promise<MulticaSettings>,
+		setSettings: (url: string) => ipcRenderer.invoke(MULTICA_SET_SETTINGS_CHANNEL, url) as Promise<MulticaSettings>,
+		onState: (listener: (state: MulticaViewState) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, state: MulticaViewState) => listener(state);
+			ipcRenderer.on(MULTICA_STATE_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(MULTICA_STATE_CHANNEL, wrapped);
+			};
+		},
+		onToggleShortcut: (listener: () => void) => {
+			const wrapped = () => listener();
+			ipcRenderer.on(TOGGLE_MULTICA_SHORTCUT_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(TOGGLE_MULTICA_SHORTCUT_CHANNEL, wrapped);
+			};
+		},
+	},
+	multicaLinks: {
+		list: () => ipcRenderer.invoke(MULTICA_LINKS_LIST_CHANNEL) as Promise<MulticaIssueLink[]>,
+		add: (request: MulticaIssueLinkAddRequest) => ipcRenderer.invoke(MULTICA_LINKS_ADD_CHANNEL, request) as Promise<MulticaIssueLinkAddResult>,
+		remove: (request: MulticaIssueLinkRemoveRequest) => ipcRenderer.invoke(MULTICA_LINKS_REMOVE_CHANNEL, request) as Promise<MulticaIssueLink[]>,
+		openIssue: (request: MulticaIssueLinkOpenRequest) => ipcRenderer.invoke(MULTICA_LINKS_OPEN_ISSUE_CHANNEL, request) as Promise<boolean>,
+		onChanged: (listener: (links: MulticaIssueLink[]) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, links: MulticaIssueLink[]) => listener(links);
+			ipcRenderer.on(MULTICA_LINKS_CHANGED_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(MULTICA_LINKS_CHANGED_CHANNEL, wrapped);
+			};
+		},
+		onOpenSession: (listener: (target: MulticaOpenSessionTarget) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, target: MulticaOpenSessionTarget) => listener(target);
+			ipcRenderer.on(MULTICA_LINKS_OPEN_SESSION_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(MULTICA_LINKS_OPEN_SESSION_CHANNEL, wrapped);
+			};
+		},
+	},
+	multicaSend: {
+		onRequest: (listener) => {
+			const wrapped = (_event: unknown, request: unknown) => {
+				if (isMulticaSendRequest(request)) listener(request);
+			};
+			ipcRenderer.on(MULTICA_SEND_REQUEST_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(MULTICA_SEND_REQUEST_CHANNEL, wrapped);
+			};
+		},
+	} satisfies AoMulticaSendBridge,
+	multicaOpenWithAo: {
+		publish: (snapshot: OpenWithAoSnapshot) =>
+			ipcRenderer.invoke(MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL, snapshot) as Promise<OpenWithAoPublishResult>,
+	} satisfies AoMulticaOpenWithAoBridge,
 	keybindings: {
 		get: () => ipcRenderer.invoke("keybindings:get") as Promise<KeybindingOverrides>,
 		set: (overrides: KeybindingOverrides) =>

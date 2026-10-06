@@ -1,0 +1,333 @@
+{
+  "multicaCommit": "b2561aad61055dd9937fc08f6497846b1458d018",
+  "preload": "apps/desktop/src/preload/index.ts",
+  "globals": [
+    "daemonAPI",
+    "desktopAPI",
+    "electron",
+    "updater"
+  ],
+  "members": {
+    "daemonAPI": [
+      "autoStart",
+      "clearToken",
+      "getHostName",
+      "getPrefs",
+      "getStatus",
+      "isCliInstalled",
+      "onLogLine",
+      "onStatusChange",
+      "openLogFile",
+      "probeRuntimes",
+      "reauthenticate",
+      "restart",
+      "retryInstall",
+      "setPrefs",
+      "setTargetApiUrl",
+      "start",
+      "startLogStream",
+      "stop",
+      "stopLogStream",
+      "syncToken"
+    ],
+    "desktopAPI": [
+      "ackFreeze",
+      "appInfo",
+      "closeWindow",
+      "downloadURL",
+      "getLastFreeze",
+      "onAuthToken",
+      "onCloseActiveTab",
+      "onInboxOpen",
+      "onInviteOpen",
+      "onNavigationGesture",
+      "onOpenSettings",
+      "onSelectTabShortcut",
+      "onSystemLocaleChanged",
+      "openExternal",
+      "openIssueWindow",
+      "pickDirectory",
+      "reportAuthSession",
+      "runtimeConfig",
+      "setImmersiveMode",
+      "setRendererRouteContext",
+      "setUnreadBadge",
+      "showNotification",
+      "systemLocale",
+      "validateLocalDirectory",
+      "windowContext"
+    ],
+    "updater": [
+      "checkForUpdates",
+      "downloadUpdate",
+      "getPreferences",
+      "installUpdate",
+      "onDownloadProgress",
+      "onUpdateAvailable",
+      "onUpdateDownloaded",
+      "setAutomaticUpdates"
+    ]
+  },
+  "entries": [
+    {
+      "api": "(module) fetchAppInfo",
+      "channel": "app:get-info",
+      "kind": "sendSync"
+    },
+    {
+      "api": "desktopAPI.reportAuthSession",
+      "channel": "auth:session-state",
+      "kind": "send"
+    },
+    {
+      "api": "desktopAPI.onAuthToken",
+      "channel": "auth:token",
+      "kind": "on"
+    },
+    {
+      "api": "desktopAPI.setUnreadBadge",
+      "channel": "badge:set",
+      "kind": "send"
+    },
+    {
+      "api": "daemonAPI.autoStart",
+      "channel": "daemon:auto-start",
+      "kind": "invoke"
+    },
+    {
+      "api": "daemonAPI.clearToken",
+      "channel": "daemon:clear-token",
+      "kind": "invoke"
+    },
+    {
+      "api": "daemonAPI.getHostName",
+      "channel": "daemon:get-host-name",
+      "kind": "invoke"
+    },
+    {
+      "api": "daemonAPI.getPrefs",
+      "channel": "daemon:get-prefs",
+      "kind": "invoke"
+    },
+    {
+      "api": "daemonAPI.getStatus",
+      "channel": "daemon:get-status",
+      "kind": "invoke"
+    },
+    {
+      "api": "daemonAPI.isCliInstalled",
+      "channel": "daemon:is-cli-installed",
+      "kind": "invoke"
+    },
+    {
+      "api": "daemonAPI.onLogLine",
+      "channel": "daemon:log-line",
+      "kind": "on"
+    },
+    {
+      "api": "daemonAPI.openLogFile",
+      "channel": "daemon:open-log-file",
+      "kind": "invoke"
+    },
+    {
+      "api": "daemonAPI.probeRuntimes",
+      "channel": "daemon:probe-runtimes",
+      "kind": "invoke"
+    },
+    {
+      "api": "daemonAPI.reauthenticate",
+      "channel": "daemon:reauthenticate",
+      "kind": "invoke"
+    },
+    {
+      "api": "daemonAPI.restart",
+      "channel": "daemon:restart",
+      "kind": "invoke"
+    },
+    {
+      "api": "daemonAPI.retryInstall",
+      "channel": "daemon:retry-install",
+      "kind": "invoke"
+    },
+    {
+      "api": "daemonAPI.setPrefs",
+      "channel": "daemon:set-prefs",
+      "kind": "invoke"
+    },
+    {
+      "api": "daemonAPI.setTargetApiUrl",
+      "channel": "daemon:set-target-api-url",
+      "kind": "invoke"
+    },
+    {
+      "api": "daemonAPI.start",
+      "channel": "daemon:start",
+      "kind": "invoke"
+    },
+    {
+      "api": "daemonAPI.startLogStream",
+      "channel": "daemon:start-log-stream",
+      "kind": "send"
+    },
+    {
+      "api": "daemonAPI.onStatusChange",
+      "channel": "daemon:status",
+      "kind": "on"
+    },
+    {
+      "api": "daemonAPI.stop",
+      "channel": "daemon:stop",
+      "kind": "invoke"
+    },
+    {
+      "api": "daemonAPI.stopLogStream",
+      "channel": "daemon:stop-log-stream",
+      "kind": "send"
+    },
+    {
+      "api": "daemonAPI.syncToken",
+      "channel": "daemon:sync-token",
+      "kind": "invoke"
+    },
+    {
+      "api": "desktopAPI.downloadURL",
+      "channel": "file:download-url",
+      "kind": "invoke"
+    },
+    {
+      "api": "desktopAPI.ackFreeze",
+      "channel": "freeze:ack",
+      "kind": "send"
+    },
+    {
+      "api": "desktopAPI.getLastFreeze",
+      "channel": "freeze:get-last",
+      "kind": "sendSync"
+    },
+    {
+      "api": "desktopAPI.onInboxOpen",
+      "channel": "inbox:open",
+      "kind": "on"
+    },
+    {
+      "api": "desktopAPI.onInviteOpen",
+      "channel": "invite:open",
+      "kind": "on"
+    },
+    {
+      "api": "desktopAPI.pickDirectory",
+      "channel": "local-directory:pick",
+      "kind": "invoke"
+    },
+    {
+      "api": "desktopAPI.validateLocalDirectory",
+      "channel": "local-directory:validate",
+      "kind": "invoke"
+    },
+    {
+      "api": "desktopAPI.onSystemLocaleChanged",
+      "channel": "locale:system-changed",
+      "kind": "on"
+    },
+    {
+      "api": "(helper) subscribeToMainRendererChannel",
+      "channel": "main-renderer:channel-state",
+      "kind": "send"
+    },
+    {
+      "api": "desktopAPI.onNavigationGesture",
+      "channel": "navigation:gesture",
+      "kind": "on"
+    },
+    {
+      "api": "desktopAPI.showNotification",
+      "channel": "notification:show",
+      "kind": "send"
+    },
+    {
+      "api": "desktopAPI.setRendererRouteContext",
+      "channel": "renderer:route-context",
+      "kind": "send"
+    },
+    {
+      "api": "(module) fetchRuntimeConfig",
+      "channel": "runtime-config:get",
+      "kind": "sendSync"
+    },
+    {
+      "api": "desktopAPI.onOpenSettings",
+      "channel": "settings:open",
+      "kind": "on"
+    },
+    {
+      "api": "desktopAPI.openExternal",
+      "channel": "shell:openExternal",
+      "kind": "invoke"
+    },
+    {
+      "api": "desktopAPI.onCloseActiveTab",
+      "channel": "tab:close-active",
+      "kind": "on"
+    },
+    {
+      "api": "desktopAPI.onSelectTabShortcut",
+      "channel": "tab:select-by-shortcut",
+      "kind": "on"
+    },
+    {
+      "api": "updater.checkForUpdates",
+      "channel": "updater:check",
+      "kind": "invoke"
+    },
+    {
+      "api": "updater.downloadUpdate",
+      "channel": "updater:download",
+      "kind": "invoke"
+    },
+    {
+      "api": "updater.onDownloadProgress",
+      "channel": "updater:download-progress",
+      "kind": "on"
+    },
+    {
+      "api": "updater.getPreferences",
+      "channel": "updater:get-preferences",
+      "kind": "invoke"
+    },
+    {
+      "api": "updater.installUpdate",
+      "channel": "updater:install",
+      "kind": "invoke"
+    },
+    {
+      "api": "updater.setAutomaticUpdates",
+      "channel": "updater:set-automatic-updates",
+      "kind": "invoke"
+    },
+    {
+      "api": "updater.onUpdateAvailable",
+      "channel": "updater:update-available",
+      "kind": "on"
+    },
+    {
+      "api": "updater.onUpdateDownloaded",
+      "channel": "updater:update-downloaded",
+      "kind": "on"
+    },
+    {
+      "api": "desktopAPI.closeWindow",
+      "channel": "window:close",
+      "kind": "send"
+    },
+    {
+      "api": "desktopAPI.openIssueWindow",
+      "channel": "window:open-issue",
+      "kind": "invoke"
+    },
+    {
+      "api": "desktopAPI.setImmersiveMode",
+      "channel": "window:setImmersive",
+      "kind": "invoke"
+    }
+  ]
+}

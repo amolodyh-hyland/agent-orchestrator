@@ -1,6 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, FOCUS_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL } from "./shared/shortcuts";
 import { SET_CHAT_DRAFT_RISK_CHANNEL } from "./shared/chat-draft-risk";
+import {
+	MULTICA_GET_SETTINGS_CHANNEL,
+	MULTICA_GET_STATE_CHANNEL,
+	MULTICA_RELOAD_CHANNEL,
+	MULTICA_SET_ACTIVE_CHANNEL,
+	MULTICA_SET_SETTINGS_CHANNEL,
+	MULTICA_STATE_CHANNEL,
+	TOGGLE_MULTICA_SHORTCUT_CHANNEL,
+} from "./shared/multica";
 import type { AoBridge } from "./preload";
 
 const electronMocks = vi.hoisted(() => {
@@ -423,5 +432,51 @@ describe("preload browser downloads bridge", () => {
 		expect(listener).toHaveBeenCalledWith({ downloads: [] });
 		dispose();
 		expect(electronMocks.off).toHaveBeenCalledWith("browser:downloadsChanged", wrapped);
+	});
+});
+
+describe("preload multica bridge", () => {
+	it("invokes state, activation, reload and settings over IPC", async () => {
+		const bridge = exposedBridge().multica;
+		electronMocks.invoke.mockResolvedValue({ active: false });
+
+		await bridge.getState();
+		await bridge.setActive(true);
+		await bridge.reload();
+		await bridge.getSettings();
+		await bridge.setSettings("http://localhost:3000");
+
+		expect(electronMocks.invoke.mock.calls).toEqual([
+			[MULTICA_GET_STATE_CHANNEL],
+			[MULTICA_SET_ACTIVE_CHANNEL, true],
+			[MULTICA_RELOAD_CHANNEL],
+			[MULTICA_GET_SETTINGS_CHANNEL],
+			[MULTICA_SET_SETTINGS_CHANNEL, "http://localhost:3000"],
+		]);
+	});
+
+	it("delivers pushed state without the IPC event and disposes the listener", () => {
+		const listener = vi.fn();
+		const dispose = exposedBridge().multica.onState(listener);
+		const wrapped = electronMocks.listeners.get(MULTICA_STATE_CHANNEL);
+		const state = { active: true, status: "ready", url: "http://localhost:3000/" };
+
+		wrapped?.({}, state);
+		expect(listener).toHaveBeenCalledExactlyOnceWith(state);
+
+		dispose();
+		expect(electronMocks.off).toHaveBeenCalledWith(MULTICA_STATE_CHANNEL, wrapped);
+	});
+
+	it("delivers and disposes the switch shortcut", () => {
+		const listener = vi.fn();
+		const dispose = exposedBridge().multica.onToggleShortcut(listener);
+		const wrapped = electronMocks.listeners.get(TOGGLE_MULTICA_SHORTCUT_CHANNEL);
+
+		wrapped?.({});
+		expect(listener).toHaveBeenCalledOnce();
+
+		dispose();
+		expect(electronMocks.off).toHaveBeenCalledWith(TOGGLE_MULTICA_SHORTCUT_CHANNEL, wrapped);
 	});
 });
