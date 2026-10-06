@@ -257,7 +257,7 @@ describe("buildOpenWithAoPagePayload", () => {
 			projects: [],
 		});
 		expect(OPEN_WITH_AO_LABEL).toBe("Open in AO");
-		expect(MENU_MAX_HEIGHT_PX).toBe(208);
+		expect(MENU_MAX_HEIGHT_PX).toBe(270);
 		expect(MENU_BORDER_WIDTH).toBe("1px");
 		expect(MENU_BORDER_WIDTH_HIDPI).toBe("0.5px");
 		expect(MENU_BORDER_COLOR_MIX_PERCENT).toBe(55);

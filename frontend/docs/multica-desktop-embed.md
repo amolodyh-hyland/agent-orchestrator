@@ -157,11 +157,11 @@ cluster returns; both controls are never shown together.
   they differ: a hairline ring in `color-mix(in oklab, var(--surface-border) 55%, transparent)` and hairline
   separators in the same mix of `--border` (no borders around options), 12 px weight 400 options with a
   16 px line box and 6 px vertical padding (rows stay 28 px high; state and section label text 11 px,
-  14 px chevrons, 12 px link marker) and a fixed maximum height of 208 px (about 7 rows) for the dropdown
+  14 px chevrons, 12 px link marker) and a fixed maximum height of 270 px (about 9 rows) for the dropdown
   and every submenu, scrolling inside and additionally clamped to the viewport (checked at 1000x700 and
   1320x860, with 14 projects and a 24-task submenu).
 - Style constants: every tunable value is a named export of `shared/multica-open-with-ao.ts`:
-  `MENU_MAX_HEIGHT_PX` (208), `MENU_BORDER_WIDTH` ("1px"), `MENU_BORDER_WIDTH_HIDPI` ("0.5px"),
+  `MENU_MAX_HEIGHT_PX` (270), `MENU_BORDER_WIDTH` ("1px"), `MENU_BORDER_WIDTH_HIDPI` ("0.5px"),
   `MENU_BORDER_COLOR_MIX_PERCENT` (55), `OPTION_FONT_SIZE` ("12px"), `OPTION_FONT_WEIGHT` ("400"),
   `OPTION_LINE_HEIGHT` ("16px") and `OPTION_PADDING_Y` ("6px"), collected in `OPEN_WITH_AO_STYLE` and carried
   in the page payload as `payload.style`, so the injected controller and menu need no imports and a change
