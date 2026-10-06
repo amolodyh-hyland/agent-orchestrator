@@ -12,6 +12,7 @@ import { CliLinkSettings } from "./CliLinkSettingsRow";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { DefaultCloudSandboxSection } from "./DefaultCloudSandboxRow";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
+import { MulticaSettingsSection } from "./MulticaSettingsSection";
 import { SettingsInputRow, SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 import { ThemePaletteSwatch } from "./ThemePaletteSwatch";
@@ -247,6 +248,7 @@ export function GeneralSettingsSection({
 				) : null}
 			</SettingsSection>
 
+			<MulticaSettingsSection />
 			<DefaultCloudSandboxSection />
 
 			<SettingsSection title={t("settings.privacy")} grouped>
