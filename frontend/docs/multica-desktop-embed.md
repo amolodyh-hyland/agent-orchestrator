@@ -144,26 +144,28 @@ cluster returns; both controls are never shown together.
 - Look: the control is a subtle outlined rectangle that follows Multica's own `Button`
   (`variant="outline"`, `size="sm"`; the same component as the Filter, Display and Board buttons of the
   issue list toolbar) from Multica's CSS variables: 28 px high (`--button-height-sm`), 6 px radius
-  (`--radius-md`), a hairline border in the low-contrast `--border` token in both themes (1 px,
-  0.5 px on displays with at least 2 device pixels per CSS pixel), `--background` fill, `--muted-foreground`
-  text, 13/18 px weight 500 (`--text-label`), 10 px side padding, 4 px gap, 14 px icon, hover and expanded
-  `--muted` fill, focus ring `--ring`, disabled at 50 % opacity; the dark theme (`html.dark`) uses the
-  `--input`-based fill like the native button. The controller injects one
-  `<style id="ao-open-with-ao-style">` scoped to `button[data-ao-open-with-ao="trigger"]` (so it does not
-  depend on Multica's compiled Tailwind utilities, which only exist when used) and removes it with the
-  controller. The fallback uses the same rules inside its shadow root (`:host-context(html.dark)`).
-- Menus: the dropdown and submenus follow Multica's menu component (8 px radius, 4 px padding, 28 px rows
-  with 6 px radius and 4px 6px padding, `--menu-shadow`, `--accent` highlight, `--border` separators,
-  `min-width` 8 rem) with a hairline `--surface-border` ring (no borders around options; separators are a
-  hairline), 12 px weight 400 option text (`--text-caption`; state and section label text 11 px,
-  `--text-micro`; 14 px chevrons, 12 px link marker) and a maximum height of 218 px (about 7 rows plus a
-  peek of the next) for the dropdown and every submenu, scrolling inside and never leaving the viewport
-  (checked at 1000x700 and 1320x860).
-- Style tokens: every tunable value lives in one object, `OPEN_WITH_AO_STYLE` in
-  `shared/multica-open-with-ao.ts` (`borderWidth` 1px, `borderWidthHiDpi` 0.5px, `menuFontSize`,
-  `menuStateFontSize`, `menuLabelFontSize`, `menuFontWeight` 400, `menuLineHeight` 20px, `menuMaxHeightPx`
-  218). It travels in the page payload as `payload.style`, so the injected controller and menu need no
-  imports and a change is one line.
+  (`--radius-md`), `--background` fill, `--muted-foreground` text, 13/18 px weight 500 (`--text-label`),
+  10 px side padding, 4 px gap, 14 px icon, hover and expanded `--muted` fill, focus ring `--ring`, disabled
+  at 50 % opacity; the dark theme (`html.dark`) uses the `--input`-based fill like the native button. The
+  border is deliberately lighter than Multica's: a hairline (1 px, 0.5 px on displays with at least 2
+  device pixels per CSS pixel) in `color-mix(in oklab, var(--border) 55%, transparent)`. The controller
+  injects one `<style id="ao-open-with-ao-style">` scoped to `button[data-ao-open-with-ao="trigger"]` (so
+  it does not depend on Multica's compiled Tailwind utilities, which only exist when used) and removes it
+  with the controller. The fallback uses the same rules inside its shadow root (`:host-context(html.dark)`).
+- Menus: the dropdown and submenus keep Multica's menu component look (8 px radius, 4 px padding, 6 px row
+  radius, `--menu-shadow`, `--accent` highlight, `min-width` 8 rem) with the user's compact numbers where
+  they differ: a hairline ring in `color-mix(in oklab, var(--surface-border) 55%, transparent)` and hairline
+  separators in the same mix of `--border` (no borders around options), 12 px weight 400 options with a
+  16 px line box and 6 px vertical padding (rows stay 28 px high; state and section label text 11 px,
+  14 px chevrons, 12 px link marker) and a fixed maximum height of 283 px (about 10 rows) for the dropdown
+  and every submenu, scrolling inside and additionally clamped to the viewport (checked at 1000x700 and
+  1320x860, with 14 projects and a 24-task submenu).
+- Style constants: every tunable value is a named export of `shared/multica-open-with-ao.ts`:
+  `MENU_MAX_HEIGHT_PX` (283), `MENU_BORDER_WIDTH` ("1px"), `MENU_BORDER_WIDTH_HIDPI` ("0.5px"),
+  `MENU_BORDER_COLOR_MIX_PERCENT` (55), `OPTION_FONT_SIZE` ("12px"), `OPTION_FONT_WEIGHT` ("400"),
+  `OPTION_LINE_HEIGHT` ("16px") and `OPTION_PADDING_Y` ("6px"), collected in `OPEN_WITH_AO_STYLE` and carried
+  in the page payload as `payload.style`, so the injected controller and menu need no imports and a change
+  is one line. The control label is `OPEN_WITH_AO_LABEL` ("Open in AO") in the same file.
 - Anchor: the first locator layer looks for the three-dot trigger (`button[data-slot=dropdown-menu-trigger]`
   with `svg.lucide-ellipsis`) inside `span.relative.inline-flex` inside
   `div.flex.items-center.shrink-0` inside a `<header>`. The second layer uses the same structure
