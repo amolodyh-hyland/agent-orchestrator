@@ -37,6 +37,7 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 		stale?: boolean;
 		terminated?: boolean;
 		disabled?: boolean;
+		footer?: boolean;
 	};
 	type PanelRecord = {
 		level: number;
@@ -45,6 +46,7 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 		element: HTMLDivElement;
 		anchor: HTMLElement;
 		opener: HTMLElement | null;
+		side: "left" | "right" | null;
 		scrollHandler: EventListener;
 	};
 
@@ -68,6 +70,16 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 	overflow-y: auto;
 	overflow-x: hidden;
 	overscroll-behavior: contain;
+	outline: none;
+}
+.panel:focus { outline: none; }
+.footer {
+	position: sticky;
+	bottom: -4px;
+	margin: 0 -4px -4px;
+	padding: 0 4px 4px;
+	background: var(--surface-raised, #fff);
+	border-radius: 0 0 var(--radius, 0.5rem) var(--radius, 0.5rem);
 }
 .item {
 	display: flex;
@@ -83,7 +95,7 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 	background: var(--accent, #f4f4f5);
 	color: var(--accent-foreground, #18181b);
 }
-.item:focus-visible { box-shadow: inset 0 0 0 2px var(--ring, #a1a1aa); }
+.panel[data-nav="keyboard"] .item:focus-visible { box-shadow: inset 0 0 0 2px var(--ring, #a1a1aa); }
 .item[aria-disabled="true"] { opacity: .5; }
 .item[aria-disabled="true"]:hover, .item[aria-disabled="true"][data-highlighted="true"], .item[aria-disabled="true"]:focus {
 	background: transparent;
@@ -116,12 +128,13 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 	let shadow: ShadowRoot | null = null;
 	let trigger: HTMLElement | null = null;
 	let panels: PanelRecord[] = [];
+	let navMode: "pointer" | "keyboard" = "pointer";
 	let destroyed = false;
 	const timers = new Map<string, number>();
 	const expectedScroll = new Map<HTMLElement, number>();
 
-	function separator(key: string): Entry {
-		return { display: "separator", key, kind: "info", label: "" };
+	function separator(key: string, footer = false): Entry {
+		return { display: "separator", key, kind: "info", label: "", ...(footer ? { footer: true } : {}) };
 	}
 
 	function labelEntry(key: string, label: string): Entry {
@@ -148,13 +161,14 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 		}
 		if (project.moreCount > 0) rows.push(infoEntry("tasks:more", `+${project.moreCount} more in AO`));
 		if (currentPayload.issue !== null) {
-			rows.push(separator("separator:actions"));
+			rows.push(separator("separator:actions", true));
 			rows.push({
 				display: "item",
 				key: `new-task:${project.id}`,
 				kind: "action",
 				label: "New task from this ticket",
 				projectId: project.id,
+				footer: true,
 			});
 		}
 		return rows;
@@ -207,13 +221,14 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 		if (deduced) {
 			return [
 				...projectContent(deduced, currentPayload),
-				separator("separator:all-projects"),
+				separator("separator:all-projects", true),
 				{
 					display: "item",
 					key: "all-projects",
 					kind: "submenu",
 					label: "All projects",
 					children: currentPayload.projects.map((project) => projectRow(project, currentPayload)),
+					footer: true,
 				},
 			];
 		}
@@ -374,20 +389,26 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 	}
 
 	function rowPanel(row: HTMLElement): PanelRecord | undefined {
-		return panels.find((panel) => panel.element === row.parentElement);
+		const element = row.closest<HTMLElement>(".panel");
+		return panels.find((panel) => panel.element === element);
 	}
 
 	function revealRow(row: HTMLElement): void {
 		const panel = rowPanel(row)?.element;
-		if (!panel) return;
+		if (!panel || row.closest(".footer")) return;
 		const previousScrollTop = panel.scrollTop;
 		const panelRect = panel.getBoundingClientRect();
 		const rowRect = row.getBoundingClientRect();
 		const padding = 4;
+		const footer = panel.querySelector<HTMLElement>(".footer");
+		const footerRect = footer?.getBoundingClientRect();
+		const visibleBottom = footerRect && footerRect.height > 0
+			? Math.min(panelRect.bottom - padding, footerRect.top)
+			: panelRect.bottom - padding;
 		if (rowRect.top < panelRect.top + padding) {
 			panel.scrollTop = Math.max(0, panel.scrollTop - (panelRect.top + padding - rowRect.top));
-		} else if (rowRect.bottom > panelRect.bottom - padding) {
-			panel.scrollTop += rowRect.bottom - (panelRect.bottom - padding);
+		} else if (rowRect.bottom > visibleBottom) {
+			panel.scrollTop += rowRect.bottom - visibleBottom;
 		}
 		if (panel.scrollTop !== previousScrollTop) expectedScroll.set(panel, panel.scrollTop);
 	}
@@ -438,6 +459,7 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 	}
 
 	function onPanelPointerEnter(level: number): void {
+		setNavMode("pointer");
 		clearTimers((key) => {
 			const separatorIndex = key.indexOf(":");
 			const kind = key.slice(0, separatorIndex);
@@ -445,6 +467,12 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 			if (kind === "open") return timerLevel < level;
 			return kind === "close" && timerLevel >= level;
 		});
+	}
+
+	function setNavMode(mode: "pointer" | "keyboard"): void {
+		if (navMode === mode) return;
+		navMode = mode;
+		for (const panel of panels) panel.element.setAttribute("data-nav", mode);
 	}
 
 	function fullText(entry: Entry): string {
@@ -488,6 +516,7 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 		panel.setAttribute("tabindex", "-1");
 		panel.setAttribute("data-level", String(level));
 		panel.setAttribute("aria-label", ariaLabel);
+		panel.setAttribute("data-nav", navMode);
 		panel.id = `ao-menu-${level}`;
 		panel.style.visibility = "hidden";
 		const record: PanelRecord = {
@@ -497,11 +526,22 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 			element: panel,
 			anchor,
 			opener,
-		scrollHandler: () => onPanelScroll(record),
+			side: null,
+			scrollHandler: () => onPanelScroll(record),
 		};
 		panel.addEventListener("pointerenter", () => onPanelPointerEnter(level));
+		panel.addEventListener("pointermove", () => setNavMode("pointer"));
 		panel.addEventListener("scroll", record.scrollHandler, { passive: true });
-		for (const entry of rows) panel.appendChild(makeRow(entry));
+		for (const entry of rows) {
+			if (!entry.footer) panel.appendChild(makeRow(entry));
+		}
+		const footerRows = rows.filter((entry) => entry.footer);
+		if (footerRows.length > 0) {
+			const footer = document.createElement("div");
+			footer.className = "footer";
+			for (const entry of footerRows) footer.appendChild(makeRow(entry));
+			panel.appendChild(footer);
+		}
 		shadow.appendChild(panel);
 		panels.push(record);
 		place(record);
@@ -540,12 +580,39 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 		} else {
 			const panelRect = record.element.getBoundingClientRect();
 			const panelWidth = panelRect.width;
-			left = rect.right;
-			if (left + panelWidth > window.innerWidth - margin) left = rect.left - panelWidth;
+			if (record.level === 1) {
+				record.side = "right";
+				left = rect.right;
+				if (left + panelWidth > window.innerWidth - margin) {
+					left = rect.left - panelWidth;
+					record.side = "left";
+				}
+			} else {
+				const parent = panels.find((candidate) => candidate.level === record.level - 1);
+				const preferredSide = parent?.side ?? "right";
+				const candidateLeft = (side: "left" | "right"): number =>
+					side === "left" ? rect.left - panelWidth : rect.right;
+				const fits = (candidate: number): boolean =>
+					candidate >= margin && candidate + panelWidth <= window.innerWidth - margin;
+				let side = preferredSide;
+				left = candidateLeft(side);
+				if (!fits(left)) {
+					const otherSide = side === "left" ? "right" : "left";
+					const otherLeft = candidateLeft(otherSide);
+					if (fits(otherLeft)) {
+						side = otherSide;
+						left = otherLeft;
+					}
+				}
+				record.side = side;
+			}
 			const height = panelRect.height;
 			top = Math.max(margin, rect.top - 4);
 			record.element.style.maxHeight = `${Math.max(0, window.innerHeight - 16)}px`;
 			if (top + height > window.innerHeight - margin) top = Math.max(margin, window.innerHeight - margin - height);
+		}
+		if (record.level > 0) {
+			left = Math.min(left, window.innerWidth - margin - record.element.getBoundingClientRect().width);
 		}
 		left = Math.max(margin, left);
 		record.element.style.left = `${left}px`;
@@ -680,6 +747,7 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 		const row = focusedRow(panel);
 		const rows = enabledRows(panel);
 		const handle = (): void => {
+			setNavMode("keyboard");
 			clearTimers();
 			event.preventDefault();
 			event.stopPropagation();
@@ -758,6 +826,7 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 	function open(openTrigger: HTMLElement, openOptions?: { viaKeyboard?: boolean }): void {
 		if (destroyed || host) return;
 		trigger = openTrigger;
+		navMode = openOptions?.viaKeyboard ? "keyboard" : "pointer";
 		host = document.createElement("div");
 		host.id = MENU_ID;
 		host.style.position = "fixed";

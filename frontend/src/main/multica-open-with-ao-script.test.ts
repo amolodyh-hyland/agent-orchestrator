@@ -352,6 +352,45 @@ describe("multica Open with AO page controller script", () => {
 		expect(document.getElementById("ao-open-with-ao-fallback")).not.toBeNull();
 	});
 
+	it("keeps fallback state and recovers after an attribute-only header restore", async () => {
+		const header = mountIssueHeader();
+		const locate = vi.fn(() => locateOpenWithAoAnchor());
+		const controller = createDirectController(payload(), locate);
+		header.style.display = "none";
+
+		await vi.advanceTimersByTimeAsync(1500);
+		await vi.advanceTimersByTimeAsync(2000);
+		await flushDebounce();
+
+		const fallback = document.getElementById("ao-open-with-ao-fallback");
+		const fallbackTrigger = fallback?.shadowRoot?.querySelector('[data-ao-open-with-ao="trigger"]');
+		expect(controller.getState()).toBe("FALLBACK");
+		expect(fallback).not.toBeNull();
+		expect(document.querySelectorAll('[data-ao-open-with-ao="trigger"]').length + (fallbackTrigger ? 1 : 0)).toBe(1);
+		const fallbackTimerCount = vi.getTimerCount();
+		expect(fallbackTimerCount).toBe(1);
+
+		controller.update(payload({ stale: true }));
+		expect(controller.getState()).toBe("FALLBACK");
+		expect(vi.getTimerCount()).toBe(fallbackTimerCount);
+
+		document.body.appendChild(document.createElement("aside"));
+		await flushDebounce();
+		expect(controller.getState()).toBe("FALLBACK");
+		expect(vi.getTimerCount()).toBe(fallbackTimerCount);
+
+		header.style.removeProperty("display");
+		await vi.advanceTimersByTimeAsync(468);
+
+		expect(controller.getState()).toBe("ANCHORED");
+		expect(document.getElementById("ao-open-with-ao-fallback")).toBeNull();
+		expect(getHeaderTrigger()?.parentElement).toBe(getActions(header));
+		expect(document.querySelectorAll('[data-ao-open-with-ao="trigger"]').length).toBe(1);
+
+		controller.destroy();
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
 	it("runs a throttled observer tick during a continuous mutation stream", async () => {
 		mountIssueHeader();
 		const locate = vi.fn(() => locateOpenWithAoAnchor());
