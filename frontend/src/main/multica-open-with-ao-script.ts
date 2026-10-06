@@ -36,7 +36,8 @@ export function createOpenWithAoController(options: {
 	const RELOCATION_WINDOW = 1000;
 	const RELOCATION_LIMIT = 5;
 	const RELOCATION_COOLDOWN = 5000;
-	const HEADER_STYLES = `
+	function buildHeaderStyles(style: OpenWithAoPagePayload["style"]): string {
+		return `
 button[data-ao-open-with-ao="trigger"] {
 	appearance: none;
 	display: inline-flex;
@@ -47,7 +48,7 @@ button[data-ao-open-with-ao="trigger"] {
 	height: var(--button-height-sm,1.75rem);
 	gap: var(--button-gap-sm,.25rem);
 	padding: 0 var(--button-padding-sm,.625rem);
-	border: 1px solid var(--border,rgba(0,0,0,.08));
+	border: ${style.borderWidth} solid var(--border, rgba(0,0,0,.08));
 	border-radius: var(--radius-md,.375rem);
 	background: var(--background,#fff);
 	background-clip: padding-box;
@@ -59,6 +60,9 @@ button[data-ao-open-with-ao="trigger"] {
 	outline: none;
 	-webkit-app-region: no-drag;
 	transition: color .15s,background-color .15s,border-color .15s,box-shadow .15s,transform .15s;
+}
+@media (min-resolution: 2dppx) {
+	button[data-ao-open-with-ao="trigger"] { border-width: ${style.borderWidthHiDpi}; }
 }
 button[data-ao-open-with-ao="trigger"]:hover,
 button[data-ao-open-with-ao="trigger"][aria-expanded="true"] {
@@ -72,7 +76,6 @@ button[data-ao-open-with-ao="trigger"]:focus-visible {
 button[data-ao-open-with-ao="trigger"]:disabled { pointer-events: none; opacity: .5; }
 button[data-ao-open-with-ao="trigger"] svg { width: 14px; height: 14px; flex: 0 0 14px; pointer-events: none; }
 .dark button[data-ao-open-with-ao="trigger"] {
-	border-color: var(--input,rgba(255,255,255,.15));
 	background: color-mix(in oklab,var(--input,rgba(255,255,255,.15)) 30%,transparent);
 }
 .dark button[data-ao-open-with-ao="trigger"]:hover,
@@ -82,7 +85,9 @@ button[data-ao-open-with-ao="trigger"] svg { width: 14px; height: 14px; flex: 0 
 }
 .dark button[data-ao-open-with-ao="trigger"]:focus-visible { border-color: var(--ring, #a1a1aa); }
 `;
-	const FALLBACK_STYLES = `
+	}
+	function buildFallbackStyles(style: OpenWithAoPagePayload["style"]): string {
+		return `
 :host { all: initial; }
 button {
 	appearance: none;
@@ -94,7 +99,7 @@ button {
 	height: var(--button-height-sm,1.75rem);
 	gap: var(--button-gap-sm,.25rem);
 	padding: 0 var(--button-padding-sm,.625rem);
-	border: 1px solid var(--border,rgba(0,0,0,.08));
+	border: ${style.borderWidth} solid var(--border, rgba(0,0,0,.08));
 	border-radius: var(--radius-md,.375rem);
 	background: var(--background,#fff);
 	background-clip: padding-box;
@@ -108,15 +113,19 @@ button {
 	box-shadow: var(--menu-shadow, 0 2px 8px rgba(0,0,0,.12));
 	transition: color .15s,background-color .15s,border-color .15s,box-shadow .15s,transform .15s;
 }
+@media (min-resolution: 2dppx) {
+	button { border-width: ${style.borderWidthHiDpi}; }
+}
 button:hover, button[aria-expanded="true"] { background: var(--muted,#f4f4f5); color: var(--foreground,#111827); }
 button:focus-visible { border-color: var(--ring,#a1a1aa); box-shadow: 0 0 0 3px color-mix(in oklab,var(--ring,#a1a1aa) 50%,transparent),var(--menu-shadow, 0 2px 8px rgba(0,0,0,.12)); }
 button:disabled { pointer-events: none; opacity: .5; }
 svg { width: 14px; height: 14px; flex: 0 0 14px; pointer-events: none; }
 span { white-space: nowrap; }
-:host-context(html.dark) button { border-color: var(--input,rgba(255,255,255,.15)); background: color-mix(in oklab,var(--input,rgba(255,255,255,.15)) 30%,transparent); }
+:host-context(html.dark) button { background: color-mix(in oklab,var(--input,rgba(255,255,255,.15)) 30%,transparent); }
 :host-context(html.dark) button:hover, :host-context(html.dark) button[aria-expanded="true"] { background: color-mix(in oklab,var(--input,rgba(255,255,255,.15)) 50%,transparent); color: var(--foreground,#fafafa); }
 :host-context(html.dark) button:focus-visible { border-color: var(--ring, #a1a1aa); }
 `;
+	}
 
 	let payload = options.payload;
 	const readWorkspaceSlug = (): string | null => {
@@ -162,9 +171,16 @@ span { white-space: nowrap; }
 		if (!style) {
 			style = document.createElement("style");
 			style.id = STYLE_ID;
-			style.textContent = HEADER_STYLES;
 		}
+		style.textContent = buildHeaderStyles(payload.style);
 		if (!style.isConnected) (document.head ?? document.documentElement).appendChild(style);
+	}
+
+	function refreshStyles(): void {
+		const headerStyle = document.querySelector<HTMLStyleElement>(`style#${STYLE_ID}`);
+		if (headerStyle) headerStyle.textContent = buildHeaderStyles(payload.style);
+		const fallbackStyle = fallbackHost?.shadowRoot?.querySelector("style");
+		if (fallbackStyle) fallbackStyle.textContent = buildFallbackStyles(payload.style);
 	}
 
 	function removeStyle(): void {
@@ -305,7 +321,7 @@ span { white-space: nowrap; }
 			host.style.cssText = "position:fixed; right:16px; bottom:calc(var(--chat-launcher-clearance, 3.5rem) + 8px); z-index:2147483000; pointer-events:auto";
 			const shadow = host.attachShadow({ mode: "open" });
 			const style = document.createElement("style");
-			style.textContent = FALLBACK_STYLES;
+			style.textContent = buildFallbackStyles(payload.style);
 			shadow.appendChild(style);
 			trigger = createTrigger(payload.label);
 			shadow.appendChild(trigger);
@@ -427,6 +443,7 @@ span { white-space: nowrap; }
 		if (destroyed) return;
 		payload = nextPayload;
 		menu.update(payload);
+		refreshStyles();
 		if (payload.issue === null) {
 			removeCurrentTrigger();
 			removeFallback();
