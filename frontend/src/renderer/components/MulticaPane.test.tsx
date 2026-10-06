@@ -248,7 +248,7 @@ describe("MulticaPane", () => {
 		expect(screen.getByRole("alert")).toHaveTextContent("Open a Multica issue, then try again.");
 	});
 
-	it("mounts the Open with AO publisher", () => {
+	it("mounts the Open in AO publisher", () => {
 		renderPane();
 		expect(screen.getByTestId("multica-open-with-ao-publisher")).toBeInTheDocument();
 	});

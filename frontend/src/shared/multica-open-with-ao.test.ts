@@ -127,7 +127,7 @@ describe("isOpenWithAoSnapshot", () => {
 	});
 });
 
-describe("Open with AO action URLs", () => {
+describe("Open in AO action URLs", () => {
 	it("round trips open actions with and without a workspace slug and new-task actions", () => {
 		const open: OpenWithAoAction = { kind: "open", projectId: "a project%雪", sessionId: "session %😀", nonce: NONCE };
 		const openWithWorkspace: OpenWithAoAction = { ...open, workspaceSlug: "acme_workspace-2" };
@@ -246,7 +246,7 @@ describe("buildOpenWithAoPagePayload", () => {
 			deduction: null,
 			projects: [],
 		});
-		expect(OPEN_WITH_AO_LABEL).toBe("Open with AO");
+		expect(OPEN_WITH_AO_LABEL).toBe("Open in AO");
 	});
 
 	it("does not mark sessions linked when there is no issue", () => {
