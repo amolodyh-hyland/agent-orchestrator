@@ -148,6 +148,36 @@ describe("MulticaSendToAoDialog", () => {
 		expect(screen.getByRole("combobox", { name: "Project" })).toHaveTextContent("Beta");
 	});
 
+	it("preselects the requested project and submits with it", async () => {
+		window.localStorage.setItem("ao.project-history", JSON.stringify({
+			"project-one": "2026-10-01T00:00:00.000Z",
+			"project-two": "2026-10-02T00:00:00.000Z",
+		}));
+		renderDialog();
+		sendRequest({ ok: true, issue, projectId: "project-one" });
+
+		expect(screen.getByRole("combobox", { name: "Project" })).toHaveTextContent("Alpha");
+		await userEvent.click(screen.getByRole("button", { name: "Create session" }));
+		await waitFor(() => expect(mocks.create).toHaveBeenCalledOnce());
+		expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ projectId: "project-one" }));
+	});
+
+	it.each(["unknown-project", "cloud-project"])("falls back to the recent project for an ineligible requested project %s", (projectId) => {
+		mocks.workspaces = [
+			workspace("cloud-project", "Cloud", [], CLOUD_PROJECT_KIND),
+			workspace("project-one", "Alpha"),
+			workspace("project-two", "Beta"),
+		];
+		window.localStorage.setItem("ao.project-history", JSON.stringify({
+			"project-one": "2026-10-01T00:00:00.000Z",
+			"project-two": "2026-10-02T00:00:00.000Z",
+		}));
+		renderDialog();
+		sendRequest({ ok: true, issue, projectId });
+
+		expect(screen.getByRole("combobox", { name: "Project" })).toHaveTextContent("Beta");
+	});
+
 	it("offers only local projects and defaults to the most recently opened local project", async () => {
 		mocks.workspaces = [
 			workspace("cloud-project", "Cloud", [session("cloud-session", "Cloud worker")], CLOUD_PROJECT_KIND),
