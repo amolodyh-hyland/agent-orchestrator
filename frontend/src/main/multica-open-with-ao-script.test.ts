@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenWithAoPagePayload } from "../shared/multica-open-with-ao";
-import { parseOpenWithAoActionUrl } from "../shared/multica-open-with-ao";
+import { OPEN_WITH_AO_LABEL, parseOpenWithAoActionUrl } from "../shared/multica-open-with-ao";
 import { locateOpenWithAoAnchor, type OpenWithAoAnchor } from "./multica-open-with-ao-anchor";
 import { createOpenWithAoMenu, type OpenWithAoMenu } from "./multica-open-with-ao-menu";
 import {
@@ -18,6 +18,7 @@ const controllers: OpenWithAoController[] = [];
 
 function payload(overrides: Partial<OpenWithAoPagePayload> = {}): OpenWithAoPagePayload {
 	return {
+		label: OPEN_WITH_AO_LABEL,
 		nonce: NONCE,
 		issue: { identifier: "SPIK-7", title: "Fix issue" },
 		daemon: "ready",
@@ -196,7 +197,7 @@ describe("multica Open with AO page controller script", () => {
 		expect(vi.getTimerCount()).toBe(0);
 	});
 
-	it("inserts a native-class trigger immediately before pin without copying neighbor attributes", () => {
+	it("inserts a native-styled trigger immediately before pin without copying neighbor attributes", () => {
 		const header = mountIssueHeader();
 		const actions = getActions(header);
 		const menuTrigger = actions.querySelector<HTMLElement>('button[data-slot="dropdown-menu-trigger"]')!;
@@ -206,7 +207,8 @@ describe("multica Open with AO page controller script", () => {
 
 		expect(trigger?.parentElement).toBe(actions);
 		expect(trigger?.nextElementSibling).toBe(pin);
-		expect(trigger?.className).toBe(menuTrigger.className);
+		expect(trigger?.className).toBe("");
+		expect(trigger?.className).not.toBe(menuTrigger.className);
 		expect(trigger?.type).toBe("button");
 		expect(trigger?.getAttribute("aria-label")).toBe("Open with AO");
 		expect(trigger?.getAttribute("title")).toBe("Open with AO");
@@ -215,10 +217,56 @@ describe("multica Open with AO page controller script", () => {
 		expect(trigger?.hasAttribute("id")).toBe(false);
 		expect(trigger?.hasAttribute("data-slot")).toBe(false);
 		expect(trigger?.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+		expect(trigger?.querySelector("svg")?.getAttribute("width")).toBe("14");
+		expect(trigger?.querySelector("svg")?.getAttribute("height")).toBe("14");
+		expect(trigger?.querySelector("svg")?.getAttribute("stroke-width")).toBe("2");
 		expect(trigger?.querySelector("svg")?.className.baseVal ?? "").not.toMatch(/size-/);
 		expect(trigger?.querySelector("span")?.textContent).toBe("Open with AO");
-		expect(trigger?.style.width).toBe("auto");
-		expect(trigger?.style.height).toBe("var(--button-height-sm, 28px)");
+		expect(trigger?.getAttribute("style")).toBeNull();
+		expect(document.querySelectorAll("style#ao-open-with-ao-style")).toHaveLength(1);
+	});
+
+	it("uses and updates the payload label for accessible and visible button text", () => {
+		mountIssueHeader();
+		const controller = createDirectController(payload(), locateOpenWithAoAnchor);
+		const trigger = getHeaderTrigger()!;
+		expect(trigger.getAttribute("aria-label")).toBe("Open with AO");
+		expect(trigger.getAttribute("title")).toBe("Open with AO");
+		expect(trigger.querySelector("span")?.textContent).toBe("Open with AO");
+
+		controller.update(payload({ label: "Send to AO" }));
+
+		expect(trigger.getAttribute("aria-label")).toBe("Send to AO");
+		expect(trigger.getAttribute("title")).toBe("Send to AO");
+		expect(trigger.querySelector("span")?.textContent).toBe("Send to AO");
+	});
+
+	it("keeps one header style across re-anchoring and removes it on destroy", async () => {
+		const header = mountIssueHeader();
+		const actions = getActions(header);
+		const controller = createDirectController(payload(), locateOpenWithAoAnchor);
+		const style = document.querySelector<HTMLStyleElement>("style#ao-open-with-ao-style")!;
+		expect(style.textContent).toContain("var(--button-height-sm");
+		expect(style.textContent).toContain("var(--border");
+		expect(style.textContent).toContain("var(--radius-md");
+		expect(style.textContent).toContain("var(--muted-foreground");
+		expect(style.textContent).toContain("--text-label");
+		expect(style.textContent).toContain("color-mix(in oklab");
+		expect(style.textContent).toContain('.dark button[data-ao-open-with-ao="trigger"]');
+		const headerStyles = style.textContent ?? "";
+		const darkBaseRule = headerStyles.indexOf('.dark button[data-ao-open-with-ao="trigger"] {');
+		const darkFocusRule = headerStyles.indexOf('.dark button[data-ao-open-with-ao="trigger"]:focus-visible');
+		expect(darkBaseRule).toBeGreaterThanOrEqual(0);
+		expect(darkFocusRule).toBeGreaterThan(darkBaseRule);
+		expect(headerStyles.slice(darkFocusRule)).toContain("border-color: var(--ring");
+
+		actions.replaceWith(actions.cloneNode(true));
+		await flushDebounce();
+		expect(document.querySelectorAll("style#ao-open-with-ao-style")).toHaveLength(1);
+		expect(document.querySelector("style#ao-open-with-ao-style")).toBe(style);
+
+		controller.destroy();
+		expect(document.querySelector("style#ao-open-with-ao-style")).toBeNull();
 	});
 
 	it("toggles the menu from click and opens it from ArrowDown", () => {
@@ -246,7 +294,16 @@ describe("multica Open with AO page controller script", () => {
 		expect(fallback?.parentElement).toBe(document.documentElement);
 		expect(fallback?.getAttribute("style")).toContain("right: 16px");
 		expect(fallback?.getAttribute("style")).toContain("z-index: 2147483000");
-		expect(fallback?.shadowRoot?.querySelector("style")?.textContent).toContain("var(--surface-raised, #fff)");
+		const fallbackStyles = fallback?.shadowRoot?.querySelector("style")?.textContent ?? "";
+		expect(fallbackStyles).toContain("var(--button-height-sm");
+		expect(fallbackStyles).toContain("var(--radius-md");
+		expect(fallbackStyles).toContain(":host-context(html.dark)");
+		const darkBaseRule = fallbackStyles.indexOf(":host-context(html.dark) button {");
+		const darkFocusRule = fallbackStyles.indexOf(":host-context(html.dark) button:focus-visible");
+		expect(darkBaseRule).toBeGreaterThanOrEqual(0);
+		expect(darkFocusRule).toBeGreaterThan(darkBaseRule);
+		expect(fallbackStyles.slice(darkFocusRule)).toContain("border-color: var(--ring");
+		expect(fallbackStyles).not.toContain("999px");
 		expect(
 			(document.querySelectorAll('[data-ao-open-with-ao="trigger"]').length ?? 0) +
 			(fallback?.shadowRoot?.querySelectorAll('[data-ao-open-with-ao="trigger"]').length ?? 0),
@@ -279,6 +336,7 @@ describe("multica Open with AO page controller script", () => {
 		expect(originalTrigger?.nextElementSibling).toBe(newActions.querySelector("button:has(svg.lucide-pin)"));
 		expect(originalTrigger?.getAttribute("aria-expanded")).toBe("true");
 		expect(document.getElementById("ao-open-with-ao-menu")).not.toBeNull();
+		expect(document.querySelectorAll("style#ao-open-with-ao-style")).toHaveLength(1);
 	});
 
 	it("revalidates the located anchor after unrelated mutations", async () => {
@@ -477,6 +535,7 @@ describe("multica Open with AO page controller script", () => {
 		expect(controller.getState()).toBe("NO_ISSUE");
 		expect(getHeaderTrigger()).toBeNull();
 		expect(document.getElementById("ao-open-with-ao-fallback")).toBeNull();
+		expect(document.getElementById("ao-open-with-ao-style")).toBeNull();
 		expect(locate).toHaveBeenCalledTimes(callsAfterUpdate);
 		expect(menu.update).toHaveBeenCalledTimes(1);
 		expect(menu.close).toHaveBeenCalledWith({ restoreFocus: false });
@@ -502,6 +561,7 @@ describe("multica Open with AO page controller script", () => {
 		controller.destroy();
 
 		expect(vi.getTimerCount()).toBe(0);
+		expect(document.getElementById("ao-open-with-ao-style")).toBeNull();
 	});
 
 	it("remove script destroys the controller and removes its DOM", () => {

@@ -35,6 +35,7 @@ function project(id: string, overrides: Partial<OpenWithAoPageProject> = {}): Op
 
 function payload(overrides: Partial<OpenWithAoPagePayload> = {}): OpenWithAoPagePayload {
 	return {
+		label: "Multica",
 		nonce: NONCE,
 		issue: { identifier: "APP-12", title: "Ticket" },
 		daemon: "ready",
@@ -174,7 +175,8 @@ function openThreeLevelMenu() {
 describe("multica Open with AO menu", () => {
 	it("renders list mode projects as submenu rows in an open shadow root", () => {
 		mockGeometry();
-		const { menu, trigger, host, shadow } = openMenu(payload({ projects: [project("alpha"), project("beta")] }));
+		const menuPayload = payload({ projects: [project("alpha"), project("beta")] });
+		const { menu, trigger, host, shadow } = openMenu(menuPayload);
 
 		expect(menu.isOpen()).toBe(true);
 		expect(host?.parentElement).toBe(document.body);
@@ -187,7 +189,19 @@ describe("multica Open with AO menu", () => {
 			["project:beta", "Project beta"],
 		]);
 		expect(menuRows(shadow).every((row) => row.getAttribute("aria-haspopup") === "menu")).toBe(true);
-		expect(shadow?.querySelector('.panel[role="menu"][data-level="0"]')?.getAttribute("aria-label")).toBe("Open with AO");
+		expect(shadow?.querySelector('.panel[role="menu"][data-level="0"]')?.getAttribute("aria-label")).toBe(menuPayload.label);
+	});
+
+	it("updates the root aria-label from the latest payload and has no hard-coded root label", () => {
+		mockGeometry();
+		const { menu, shadow } = openMenu(payload({ label: "Initial label" }));
+		const root = panel(shadow, 0);
+
+		expect(root?.getAttribute("aria-label")).toBe("Initial label");
+		expect(createOpenWithAoMenu.toString()).not.toContain("Open with AO");
+
+		menu.update(payload({ label: "Updated label" }));
+		expect(panel(shadow, 0)?.getAttribute("aria-label")).toBe("Updated label");
 	});
 
 	it("renders deduced project content before All projects and opens its nested project panel", () => {
@@ -250,6 +264,21 @@ describe("multica Open with AO menu", () => {
 		expect(panel(shadow, 1)?.getAttribute("data-nav")).toBe("keyboard");
 		panel(shadow, 1)?.dispatchEvent(new Event("pointermove", { bubbles: true }));
 		expect(Array.from(shadow?.querySelectorAll<HTMLElement>(".panel") ?? []).every((entry) => entry.getAttribute("data-nav") === "pointer")).toBe(true);
+	});
+
+	it("uses Multica menu typography, width, and chevron sizing", () => {
+		mockGeometry();
+		const { shadow } = openMenu();
+		const style = shadow?.querySelector("style")?.textContent ?? "";
+		const projectRow = shadow?.querySelector<HTMLElement>('[data-key="project:alpha"]');
+
+		expect(style).toContain("min-width: 8rem;");
+		expect(style).toContain("width: max-content;");
+		expect(style).toContain("var(--text-body--line-height, 20px)");
+		expect(style).toContain("font: var(--text-body, 14px)/var(--text-body--line-height, 20px) var(--font-sans, system-ui, sans-serif)");
+		expect(style).toContain(".chev { width: 16px; height: 16px; flex: 0 0 16px; }");
+		expect(projectRow?.querySelector("svg.chev")?.getAttribute("width")).toBe("16");
+		expect(projectRow?.querySelector("svg.chev")?.getAttribute("height")).toBe("16");
 	});
 
 	it("renders project content, disabled empty states, overflow, and conditionally includes New task", () => {
@@ -354,10 +383,12 @@ describe("multica Open with AO menu", () => {
 
 		expect(projectRow?.getAttribute("data-linked")).toBe("true");
 		expect(projectRow?.querySelector("svg.link")).not.toBeNull();
+		expect(projectRow?.querySelector("svg.chev")?.getAttribute("width")).toBe("16");
 		expect(task?.getAttribute("data-tone")).toBe("working");
 		expect(task?.querySelector('.dot[aria-hidden="true"]')?.getAttribute("data-tone")).toBe("working");
 		expect(task?.getAttribute("data-linked")).toBe("true");
 		expect(task?.querySelector("svg.link")?.getAttribute("aria-hidden")).toBe("true");
+		expect(task?.querySelector("svg.link")?.getAttribute("width")).toBe("14");
 		expect(task?.querySelector(".sr")?.textContent).toBe("Linked");
 		expect(task?.getAttribute("data-stale")).toBe("true");
 		expect(task?.getAttribute("data-terminated")).toBe("true");

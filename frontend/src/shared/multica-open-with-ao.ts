@@ -2,6 +2,8 @@ import { MULTICA_STATUS_TONES, MULTICA_STATUS_TONE_ORDER, type MulticaStatusTone
 
 export const MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL = "multicaOpenWithAo:publish";
 export const OPEN_WITH_AO_ACTION_PREFIX = "ao://multica/open-with-ao/";
+// This is the single place to rename the Open with AO control.
+export const OPEN_WITH_AO_LABEL = "Open with AO";
 export const MAX_OPEN_WITH_AO_PROJECTS = 50;
 export const MAX_OPEN_WITH_AO_SESSIONS = 40;
 export const MAX_OPEN_WITH_AO_ID = 200;
@@ -274,6 +276,7 @@ export type OpenWithAoPageProject = {
 	moreCount: number;
 };
 export type OpenWithAoPagePayload = {
+	label: string;
 	nonce: string;
 	issue: { identifier: string; title: string } | null;
 	daemon: OpenWithAoDaemonState | "unknown";
@@ -291,6 +294,7 @@ export function buildOpenWithAoPagePayload(input: {
 }): OpenWithAoPagePayload {
 	if (input.snapshot === null) {
 		return {
+			label: OPEN_WITH_AO_LABEL,
 			nonce: input.nonce,
 			issue: input.issue,
 			daemon: "unknown",
@@ -332,6 +336,7 @@ export function buildOpenWithAoPagePayload(input: {
 		eligibleProjectIds: projects.map((project) => project.id),
 	});
 	return {
+		label: OPEN_WITH_AO_LABEL,
 		nonce: input.nonce,
 		issue: input.issue,
 		daemon: input.snapshot.daemon,
