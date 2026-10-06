@@ -646,3 +646,31 @@ func TestShutdownIsOnlyRequestedFromTheOwnChild(t *testing.T) {
 		})
 	}
 }
+
+func TestActionsReturnOnlyAfterTheirStateIsPublished(t *testing.T) {
+	factory := &fakeFactory{create: func(index int, _ func(string, string)) *fakeProcess {
+		return newFakeProcess(index+100, true)
+	}}
+	supervisor := newTestSupervisor(t, newFakeClock(), factory.factory)
+	awaitState(t, supervisor, StateRunning)
+	for round := 0; round < 25; round++ {
+		if err := supervisor.Stop(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if status := supervisor.Status(); status.State != StateStopped || status.PID != 0 {
+			t.Fatalf("round %d: status after Stop = %+v", round, status)
+		}
+		if err := supervisor.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if status := supervisor.Status(); status.State != StateRunning || status.PID == 0 {
+			t.Fatalf("round %d: status after Start = %+v", round, status)
+		}
+		if err := supervisor.Restart(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if status := supervisor.Status(); status.State != StateRunning || status.PID == 0 {
+			t.Fatalf("round %d: status after Restart = %+v", round, status)
+		}
+	}
+}

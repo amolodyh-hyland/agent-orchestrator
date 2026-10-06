@@ -100,6 +100,11 @@ type childRun struct {
 	stopCancel context.CancelFunc
 }
 
+type pendingReply struct {
+	ch  chan error
+	err error
+}
+
 type ownerState struct {
 	status          Status
 	generation      uint64
@@ -108,6 +113,7 @@ type ownerState struct {
 	child           *childRun
 	spawnInFlight   bool
 	startReplies    []chan error
+	outbox          []pendingReply
 	stopReplies     []chan error
 	restartReply    chan error
 	closing         bool
@@ -306,6 +312,7 @@ func (s *Supervisor) runOwner(ctx context.Context) {
 			return
 		}
 		s.publish(&state)
+		s.flushReplies(&state)
 	}
 }
 
@@ -378,7 +385,7 @@ func (s *Supervisor) stop(state *ownerState, reply chan error, ctx context.Conte
 	}
 	if !s.cfg.Enabled {
 		if reply != nil {
-			reply <- nil
+			s.answer(state, reply, nil)
 		}
 		return
 	}
@@ -394,14 +401,14 @@ func (s *Supervisor) stop(state *ownerState, reply chan error, ctx context.Conte
 		}
 		state.operation = ""
 		state.operationCancel = nil
-		state.startReplies = failReplies(state.startReplies, ErrStopped)
+		state.startReplies = s.resolveReplies(state, state.startReplies, ErrStopped)
 	}
 	if state.status.State == StateExternal || state.child == nil && !state.spawnInFlight {
 		state.status.State = StateStopped
 		state.status.PID = 0
 		if !forRestart {
 			if reply != nil {
-				reply <- nil
+				s.answer(state, reply, nil)
 			}
 		} else {
 			s.startAfterStop(state)
@@ -466,7 +473,7 @@ func (s *Supervisor) beginShutdown(state *ownerState, reply chan error, ctx cont
 		}
 		state.operation = ""
 		state.operationCancel = nil
-		state.startReplies = failReplies(state.startReplies, ErrStopped)
+		state.startReplies = s.resolveReplies(state, state.startReplies, ErrStopped)
 	}
 	if reply != nil {
 		state.stopReplies = append(state.stopReplies, reply)
@@ -484,6 +491,7 @@ func (s *Supervisor) beginShutdown(state *ownerState, reply chan error, ctx cont
 
 func (s *Supervisor) finishClosing(state *ownerState) {
 	s.publish(state)
+	s.flushReplies(state)
 	for _, reply := range state.stopReplies {
 		reply <- nil
 	}
@@ -530,7 +538,7 @@ func (s *Supervisor) handleEvent(state *ownerState, event any) {
 		state.operationCancel = nil
 		if state.status.Desired != DesiredRunning || state.closing {
 			state.status.State = StateStopped
-			state.startReplies = failReplies(state.startReplies, ErrStopped)
+			state.startReplies = s.resolveReplies(state, state.startReplies, ErrStopped)
 			return
 		}
 		if validHealth(value.health) {
@@ -538,7 +546,7 @@ func (s *Supervisor) handleEvent(state *ownerState, event any) {
 			state.status.Health = cloneHealth(value.health)
 			state.status.HealthFetchedAt = s.cfg.Clock.Now()
 			state.lastHealthFetch = state.status.HealthFetchedAt
-			state.startReplies = resolveReplies(state.startReplies, ErrExternal)
+			state.startReplies = s.resolveReplies(state, state.startReplies, ErrExternal)
 			return
 		}
 		s.spawn(state)
@@ -563,7 +571,7 @@ func (s *Supervisor) handleEvent(state *ownerState, event any) {
 		state.status.StartedAt = child.startedAt
 		state.status.NextRetryAt = time.Time{}
 		state.status.LastError = ""
-		state.startReplies = resolveReplies(state.startReplies, nil)
+		state.startReplies = s.resolveReplies(state, state.startReplies, nil)
 		generation := state.generation
 		go func() {
 			child.result = child.process.Wait()
@@ -651,11 +659,11 @@ func (s *Supervisor) handleStartFailure(state *ownerState, err error) {
 		err = errors.New("Multica host process did not start")
 	}
 	state.status.LastError = err.Error()
-	state.startReplies = resolveReplies(state.startReplies, err)
+	state.startReplies = s.resolveReplies(state, state.startReplies, err)
 	if state.status.Desired != DesiredRunning || state.closing {
 		state.status.State = StateStopped
 		for _, reply := range state.stopReplies {
-			reply <- nil
+			s.answer(state, reply, nil)
 		}
 		state.stopReplies = nil
 		if state.restartReply != nil && !state.closing {
@@ -759,7 +767,7 @@ func (s *Supervisor) handleStopResult(state *ownerState, event stopResult) {
 		state.status.LastError = event.err.Error()
 	}
 	for _, reply := range state.stopReplies {
-		reply <- event.err
+		s.answer(state, reply, event.err)
 	}
 	state.stopReplies = nil
 	if state.restartReply != nil && !state.closing {
@@ -1028,11 +1036,25 @@ func cloneHealth(health *Health) *Health {
 	return &copy
 }
 
-func resolveReplies(replies []chan error, err error) []chan error {
+// answer queues a reply that is sent only after the owner has published the
+// state the request produced, so the caller never reads a snapshot from before
+// its own request took effect.
+func (s *Supervisor) answer(state *ownerState, ch chan error, err error) {
+	if ch != nil {
+		state.outbox = append(state.outbox, pendingReply{ch: ch, err: err})
+	}
+}
+
+func (s *Supervisor) flushReplies(state *ownerState) {
+	for _, pending := range state.outbox {
+		pending.ch <- pending.err
+	}
+	state.outbox = nil
+}
+
+func (s *Supervisor) resolveReplies(state *ownerState, replies []chan error, err error) []chan error {
 	for _, reply := range replies {
-		reply <- err
+		s.answer(state, reply, err)
 	}
 	return nil
 }
-
-func failReplies(replies []chan error, err error) []chan error { return resolveReplies(replies, err) }
