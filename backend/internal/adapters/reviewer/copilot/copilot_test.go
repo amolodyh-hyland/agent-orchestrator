@@ -272,3 +272,46 @@ func TestNewReviewerRealCommandSelectsCustomAgent(t *testing.T) {
 		t.Fatalf("custom agent missing from %#v", spec.Argv)
 	}
 }
+
+func TestNewReviewerRealCommandFiltersReasoningEffort(t *testing.T) {
+	binDir := t.TempDir()
+	binaryName := "copilot"
+	if runtime.GOOS == "windows" {
+		binaryName = "copilot.cmd"
+	}
+	if err := os.WriteFile(filepath.Join(binDir, binaryName), []byte(""), 0o755); err != nil {
+		t.Fatalf("write fake copilot: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	for _, tc := range []struct {
+		name       string
+		effort     string
+		wantEffort bool
+	}{
+		{name: "supported", effort: "high", wantEffort: true},
+		{name: "unsupported", effort: "ultra"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec, err := New().ReviewCommand(context.Background(), ports.ReviewInvocation{
+				Prompt: "review",
+				Config: ports.AgentConfig{Effort: tc.effort},
+			})
+			if err != nil {
+				t.Fatalf("ReviewCommand: %v", err)
+			}
+			found := false
+			for i := 0; i+1 < len(spec.Argv); i++ {
+				if spec.Argv[i] == "--reasoning-effort" && spec.Argv[i+1] == "high" {
+					found = true
+				}
+			}
+			if found != tc.wantEffort {
+				t.Fatalf("ReviewCommand argv = %#v, reasoning effort present = %t, want %t", spec.Argv, found, tc.wantEffort)
+			}
+			if !tc.wantEffort && slices.Contains(spec.Argv, "--reasoning-effort") {
+				t.Fatalf("ReviewCommand argv = %#v, unexpectedly contains --reasoning-effort", spec.Argv)
+			}
+		})
+	}
+}

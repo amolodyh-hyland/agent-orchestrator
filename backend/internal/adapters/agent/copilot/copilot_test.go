@@ -256,8 +256,112 @@ func TestGetLaunchCommandOmitsBlankModel(t *testing.T) {
 	}
 }
 
-// Restore path intentionally does not forward a configured model override —
-// see appendModelFlag's doc comment (issue #2895; --model + --resume
+func TestGetLaunchCommandAppendsModelAndReasoningEffortFlags(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "copilot"}
+
+	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		Config: ports.AgentConfig{Model: "gpt-5-mini", Effort: "high"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"copilot", "--model", "gpt-5-mini", "--reasoning-effort", "high"}
+	if !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("cmd = %#v, want %#v", cmd, want)
+	}
+}
+
+func TestGetLaunchCommandAppendsTrimmedReasoningEffort(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "copilot"}
+
+	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		Config: ports.AgentConfig{Effort: " xhigh "},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"copilot", "--reasoning-effort", "xhigh"}
+	if !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("cmd = %#v, want %#v", cmd, want)
+	}
+}
+
+func TestEffortLevels(t *testing.T) {
+	want := []string{"low", "medium", "high", "xhigh", "max"}
+	if !reflect.DeepEqual(EffortLevels, want) {
+		t.Fatalf("EffortLevels = %#v, want %#v", EffortLevels, want)
+	}
+}
+
+func TestGetLaunchCommandAppendsEveryReasoningEffortLevel(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "copilot"}
+	for _, effort := range EffortLevels {
+		t.Run(effort, func(t *testing.T) {
+			cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+				Config: ports.AgentConfig{Effort: effort},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{"copilot", "--reasoning-effort", effort}
+			if !reflect.DeepEqual(cmd, want) {
+				t.Fatalf("cmd = %#v, want %#v", cmd, want)
+			}
+		})
+	}
+}
+
+func TestGetLaunchCommandOmitsUnsupportedReasoningEffort(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "copilot"}
+	for _, effort := range []string{"ultra", "--bad", "high; rm", "HIGH"} {
+		t.Run(effort, func(t *testing.T) {
+			cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+				Config: ports.AgentConfig{Effort: effort},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{"copilot"}
+			if !reflect.DeepEqual(cmd, want) {
+				t.Fatalf("cmd = %#v, want %#v", cmd, want)
+			}
+		})
+	}
+}
+
+func TestGetLaunchCommandOmitsBlankReasoningEffort(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "copilot"}
+
+	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		Config: ports.AgentConfig{Effort: "   "},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"copilot"}
+	if !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("cmd = %#v, want %#v", cmd, want)
+	}
+}
+
+func TestGetLaunchCommandAppendsReasoningEffortBeforePrompt(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "copilot"}
+
+	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		Config: ports.AgentConfig{Model: "m", Effort: "low"},
+		Prompt: "do it",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"copilot", "--model", "m", "--reasoning-effort", "low", "--interactive", "do it"}
+	if !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("cmd = %#v, want %#v", cmd, want)
+	}
+}
+
+// Restore path intentionally does not forward configured model or effort
+// overrides — see appendModelFlag's doc comment (issue #2895; --model + --resume
 // composition could not be verified — the test account's Copilot Free plan
 // only grants "auto" regardless of --model). This test locks that decision
 // in so a future "just mirror the launch path" edit doesn't silently wire
@@ -266,7 +370,7 @@ func TestGetRestoreCommandDoesNotForwardModelOverride(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "copilot"}
 
 	cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
-		Config: ports.AgentConfig{Model: "claude-sonnet-4.5"},
+		Config: ports.AgentConfig{Model: "m", Effort: "high"},
 		Session: ports.SessionRef{
 			Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "uuid-123"},
 		},
@@ -279,7 +383,10 @@ func TestGetRestoreCommandDoesNotForwardModelOverride(t *testing.T) {
 	}
 	want := []string{"copilot", "--resume", "uuid-123"}
 	if !reflect.DeepEqual(cmd, want) {
-		t.Fatalf("cmd = %#v, want %#v (model override must not be forwarded on restore)", cmd, want)
+		t.Fatalf("cmd = %#v, want %#v (model and effort overrides must not be forwarded on restore)", cmd, want)
+	}
+	if contains(cmd, "--reasoning-effort") {
+		t.Fatalf("command %#v unexpectedly contains --reasoning-effort on restore", cmd)
 	}
 }
 
