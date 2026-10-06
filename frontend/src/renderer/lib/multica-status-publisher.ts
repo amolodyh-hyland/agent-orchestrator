@@ -1,16 +1,14 @@
-import type { MulticaStatusPublishResult, MulticaStatusSnapshot } from "../../shared/multica-session-status";
-
-export type LatestWinsPublisher = {
-	set: (snapshot: MulticaStatusSnapshot) => void;
+export type LatestWinsPublisher<T> = {
+	set: (snapshot: T) => void;
 	dispose: () => void;
 };
 
-export function createLatestWinsPublisher(options: {
-	publish: (snapshot: MulticaStatusSnapshot) => Promise<MulticaStatusPublishResult>;
+export function createLatestWinsPublisher<T>(options: {
+	publish: (snapshot: T) => Promise<{ ok: boolean }>;
 	delayMs: number;
 	initialAcceptedKey?: string;
-}): LatestWinsPublisher {
-	let desired: { key: string; snapshot: MulticaStatusSnapshot } | null = null;
+}): LatestWinsPublisher<T> {
+	let desired: { key: string; snapshot: T } | null = null;
 	let accepted: string | null = options.initialAcceptedKey ?? null;
 	let inFlight = false;
 	let failedKey: string | null = null;

@@ -13,7 +13,9 @@ export type MulticaSendIssue = {
 	url: string | null;
 };
 export type MulticaSendFailureReason = "signed_out" | "no_issue" | "unreadable";
-export type MulticaSendRequest = { ok: true; issue: MulticaSendIssue } | { ok: false; reason: MulticaSendFailureReason };
+export type MulticaSendRequest =
+	| { ok: true; issue: MulticaSendIssue; projectId?: string }
+	| { ok: false; reason: MulticaSendFailureReason };
 export type AoMulticaSendBridge = { onRequest: (listener: (request: MulticaSendRequest) => void) => () => void };
 
 const SEND_TO_AO_DESCRIPTION_TRUNCATION_MARKER = "\n[description truncated]";
@@ -23,7 +25,14 @@ const MULTICA_MENTION_LINK = /\[([^\]]*)\]\(mention:\/\/[^)]*\)/g;
 export function isMulticaSendRequest(value: unknown): value is MulticaSendRequest {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
 	const request = value as Record<string, unknown>;
+	const hasProjectId = Object.prototype.hasOwnProperty.call(request, "projectId");
+	if (hasProjectId) {
+		if (typeof request.projectId !== "string") return false;
+		const projectIdLength = Array.from(request.projectId).length;
+		if (projectIdLength < 1 || projectIdLength > 200) return false;
+	}
 	if (request.ok === false) {
+		if (hasProjectId) return false;
 		return request.reason === "signed_out" || request.reason === "no_issue" || request.reason === "unreadable";
 	}
 	if (request.ok !== true || !request.issue || typeof request.issue !== "object" || Array.isArray(request.issue)) return false;
