@@ -4,15 +4,33 @@ export const MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL = "multicaOpenWithAo:publish";
 export const OPEN_WITH_AO_ACTION_PREFIX = "ao://multica/open-with-ao/";
 // This is the single place to rename the Open in AO control.
 export const OPEN_WITH_AO_LABEL = "Open in AO";
+// Fixed cap for the dropdown and every submenu; panels scroll inside and clamp to the viewport.
+export const MENU_MAX_HEIGHT_PX = 208;
+// Hairline border, ring, and separator width on standard-density displays.
+export const MENU_BORDER_WIDTH = "1px";
+// Hairline border, ring, and separator width on displays with >= 2 device pixels per CSS pixel.
+export const MENU_BORDER_WIDTH_HIDPI = "0.5px";
+// Share of the Multica border token kept by the border color mix; the rest is transparent.
+export const MENU_BORDER_COLOR_MIX_PERCENT = 55;
+// Dropdown option text size, independent of page token lookups.
+export const OPTION_FONT_SIZE = "12px";
+// Dropdown option text weight.
+export const OPTION_FONT_WEIGHT = "400";
+// Dropdown option line box height.
+export const OPTION_LINE_HEIGHT = "16px";
+// Vertical padding for 28px dropdown rows with the option line height.
+export const OPTION_PADDING_Y = "6px";
 export const OPEN_WITH_AO_STYLE = {
-	borderWidth: "1px", // hairline border of the trigger and the menu panels
-	borderWidthHiDpi: "0.5px", // same on displays with >= 2 device pixels per CSS pixel
-	menuFontSize: "var(--text-caption, 12px)", // dropdown option text, one step below 14px menu rows
-	menuStateFontSize: "var(--text-micro, 11px)", // secondary text in a row
-	menuLabelFontSize: "var(--text-micro, 11px)", // section labels
-	menuFontWeight: "400", // normal dropdown option weight
-	menuLineHeight: "20px", // keeps rows 28px high with 4px row padding
-	menuMaxHeightPx: 218, // ~7 rows plus a peek of the next; panels scroll inside
+	borderWidth: MENU_BORDER_WIDTH,
+	borderWidthHiDpi: MENU_BORDER_WIDTH_HIDPI,
+	borderColorMixPercent: MENU_BORDER_COLOR_MIX_PERCENT,
+	menuFontSize: OPTION_FONT_SIZE,
+	menuFontWeight: OPTION_FONT_WEIGHT,
+	menuLineHeight: OPTION_LINE_HEIGHT,
+	menuRowPaddingY: OPTION_PADDING_Y,
+	menuStateFontSize: "11px",
+	menuLabelFontSize: "11px",
+	menuMaxHeightPx: MENU_MAX_HEIGHT_PX,
 } as const;
 export type OpenWithAoStyleTokens = {
 	[K in keyof typeof OPEN_WITH_AO_STYLE]: (typeof OPEN_WITH_AO_STYLE)[K] extends number ? number : string;

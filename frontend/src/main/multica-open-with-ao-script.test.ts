@@ -255,7 +255,7 @@ describe("multica Open in AO page controller script", () => {
 		expect(style.textContent).toContain("color-mix(in oklab");
 		expect(style.textContent).toContain('.dark button[data-ao-open-with-ao="trigger"]');
 		const headerStyles = style.textContent ?? "";
-		expect(headerStyles).toContain("border: 1px solid var(--border, rgba(0,0,0,.08));");
+		expect(headerStyles).toContain("border: 1px solid color-mix(in oklab, var(--border, rgba(0,0,0,.08)) 55%, transparent);");
 		expect(headerStyles).toContain("@media (min-resolution: 2dppx)");
 		expect(headerStyles.slice(headerStyles.indexOf("@media (min-resolution: 2dppx)"))).toContain("border-width: 0.5px;");
 		expect(headerStyles).not.toContain("border-color: var(--input");
@@ -278,11 +278,11 @@ describe("multica Open in AO page controller script", () => {
 		mountIssueHeader();
 		let hasAnchor = true;
 		const locate = () => hasAnchor ? locateOpenWithAoAnchor() : null;
-		const initialStyle = { ...OPEN_WITH_AO_STYLE, borderWidth: "2px", borderWidthHiDpi: "1px" };
+		const initialStyle = { ...OPEN_WITH_AO_STYLE, borderWidth: "2px", borderWidthHiDpi: "1px", borderColorMixPercent: 30 };
 		const controller = createDirectController(payload({ style: initialStyle }), locate);
 		const headerStyle = document.querySelector<HTMLStyleElement>("style#ao-open-with-ao-style")!;
 		const initialHeaderCss = headerStyle.textContent ?? "";
-		expect(initialHeaderCss).toContain("border: 2px solid var(--border, rgba(0,0,0,.08));");
+		expect(initialHeaderCss).toContain("border: 2px solid color-mix(in oklab, var(--border, rgba(0,0,0,.08)) 30%, transparent);");
 		expect(initialHeaderCss.slice(initialHeaderCss.indexOf("@media (min-resolution: 2dppx)"))).toContain("border-width: 1px;");
 
 		const updatedStyle = { ...initialStyle, borderWidth: "3px", borderWidthHiDpi: "1.5px" };
@@ -290,21 +290,22 @@ describe("multica Open in AO page controller script", () => {
 		controller.update(payload({ style: updatedStyle }));
 		expect(document.querySelectorAll("style#ao-open-with-ao-style")).toHaveLength(1);
 		expect(document.querySelector("style#ao-open-with-ao-style")).toBe(headerStyle);
-		expect(headerStyle.textContent).toContain("border: 3px solid var(--border, rgba(0,0,0,.08));");
+		expect(headerStyle.textContent).toContain("border: 3px solid color-mix(in oklab, var(--border, rgba(0,0,0,.08)) 30%, transparent);");
 		expect(headerStyle.textContent).toContain("border-width: 1.5px;");
 
 		await vi.advanceTimersByTimeAsync(1500);
 		const fallbackStyle = document.querySelector<HTMLDivElement>("#ao-open-with-ao-fallback")?.shadowRoot?.querySelector("style");
-		expect(fallbackStyle?.textContent).toContain("border: 3px solid var(--border, rgba(0,0,0,.08));");
+		expect(fallbackStyle?.textContent).toContain("border: 3px solid color-mix(in oklab, var(--border, rgba(0,0,0,.08)) 30%, transparent);");
 		expect(fallbackStyle?.textContent).toContain("border-width: 1.5px;");
+		expect(fallbackStyle?.textContent).not.toContain("border-color: var(--input");
 
 		const finalStyle = { ...updatedStyle, borderWidth: "4px", borderWidthHiDpi: "2px" };
 		controller.update(payload({ style: finalStyle }));
 		expect(document.querySelectorAll("style#ao-open-with-ao-style")).toHaveLength(1);
 		expect(document.querySelector("style#ao-open-with-ao-style")).toBe(headerStyle);
-		expect(headerStyle.textContent).toContain("border: 4px solid var(--border, rgba(0,0,0,.08));");
+		expect(headerStyle.textContent).toContain("border: 4px solid color-mix(in oklab, var(--border, rgba(0,0,0,.08)) 30%, transparent);");
 		expect(headerStyle.textContent).toContain("border-width: 2px;");
-		expect(fallbackStyle?.textContent).toContain("border: 4px solid var(--border, rgba(0,0,0,.08));");
+		expect(fallbackStyle?.textContent).toContain("border: 4px solid color-mix(in oklab, var(--border, rgba(0,0,0,.08)) 30%, transparent);");
 		expect(fallbackStyle?.textContent).toContain("border-width: 2px;");
 		expect(fallbackStyle?.textContent).not.toContain("border-color: var(--input");
 	});
@@ -337,7 +338,7 @@ describe("multica Open in AO page controller script", () => {
 		const fallbackStyles = fallback?.shadowRoot?.querySelector("style")?.textContent ?? "";
 		expect(fallbackStyles).toContain("var(--button-height-sm");
 		expect(fallbackStyles).toContain("var(--radius-md");
-		expect(fallbackStyles).toContain("border: 1px solid var(--border, rgba(0,0,0,.08));");
+		expect(fallbackStyles).toContain("border: 1px solid color-mix(in oklab, var(--border, rgba(0,0,0,.08)) 55%, transparent);");
 		expect(fallbackStyles).toContain("@media (min-resolution: 2dppx)");
 		expect(fallbackStyles.slice(fallbackStyles.indexOf("@media (min-resolution: 2dppx)"))).toContain("border-width: 0.5px;");
 		expect(fallbackStyles).not.toContain("border-color: var(--input");
