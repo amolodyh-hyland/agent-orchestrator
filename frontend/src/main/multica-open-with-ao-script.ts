@@ -48,7 +48,7 @@ button[data-ao-open-with-ao="trigger"] {
 	height: var(--button-height-sm,1.75rem);
 	gap: var(--button-gap-sm,.25rem);
 	padding: 0 var(--button-padding-sm,.625rem);
-	border: ${style.borderWidth} solid var(--border, rgba(0,0,0,.08));
+	border: ${style.borderWidth} solid color-mix(in oklab, var(--border, rgba(0,0,0,.08)) ${style.borderColorMixPercent}%, transparent);
 	border-radius: var(--radius-md,.375rem);
 	background: var(--background,#fff);
 	background-clip: padding-box;
@@ -99,7 +99,7 @@ button {
 	height: var(--button-height-sm,1.75rem);
 	gap: var(--button-gap-sm,.25rem);
 	padding: 0 var(--button-padding-sm,.625rem);
-	border: ${style.borderWidth} solid var(--border, rgba(0,0,0,.08));
+	border: ${style.borderWidth} solid color-mix(in oklab, var(--border, rgba(0,0,0,.08)) ${style.borderColorMixPercent}%, transparent);
 	border-radius: var(--radius-md,.375rem);
 	background: var(--background,#fff);
 	background-clip: padding-box;
