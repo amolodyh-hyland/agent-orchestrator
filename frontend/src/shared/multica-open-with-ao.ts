@@ -4,6 +4,19 @@ export const MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL = "multicaOpenWithAo:publish";
 export const OPEN_WITH_AO_ACTION_PREFIX = "ao://multica/open-with-ao/";
 // This is the single place to rename the Open in AO control.
 export const OPEN_WITH_AO_LABEL = "Open in AO";
+export const OPEN_WITH_AO_STYLE = {
+	borderWidth: "1px", // hairline border of the trigger and the menu panels
+	borderWidthHiDpi: "0.5px", // same on displays with >= 2 device pixels per CSS pixel
+	menuFontSize: "var(--text-caption, 12px)", // dropdown option text, one step below 14px menu rows
+	menuStateFontSize: "var(--text-micro, 11px)", // secondary text in a row
+	menuLabelFontSize: "var(--text-micro, 11px)", // section labels
+	menuFontWeight: "400", // normal dropdown option weight
+	menuLineHeight: "20px", // keeps rows 28px high with 4px row padding
+	menuMaxHeightPx: 218, // ~7 rows plus a peek of the next; panels scroll inside
+} as const;
+export type OpenWithAoStyleTokens = {
+	[K in keyof typeof OPEN_WITH_AO_STYLE]: (typeof OPEN_WITH_AO_STYLE)[K] extends number ? number : string;
+};
 export const MAX_OPEN_WITH_AO_PROJECTS = 50;
 export const MAX_OPEN_WITH_AO_SESSIONS = 40;
 export const MAX_OPEN_WITH_AO_ID = 200;
@@ -277,6 +290,7 @@ export type OpenWithAoPageProject = {
 };
 export type OpenWithAoPagePayload = {
 	label: string;
+	style: OpenWithAoStyleTokens;
 	nonce: string;
 	issue: { identifier: string; title: string } | null;
 	daemon: OpenWithAoDaemonState | "unknown";
@@ -295,6 +309,7 @@ export function buildOpenWithAoPagePayload(input: {
 	if (input.snapshot === null) {
 		return {
 			label: OPEN_WITH_AO_LABEL,
+			style: OPEN_WITH_AO_STYLE,
 			nonce: input.nonce,
 			issue: input.issue,
 			daemon: "unknown",
@@ -337,6 +352,7 @@ export function buildOpenWithAoPagePayload(input: {
 	});
 	return {
 		label: OPEN_WITH_AO_LABEL,
+		style: OPEN_WITH_AO_STYLE,
 		nonce: input.nonce,
 		issue: input.issue,
 		daemon: input.snapshot.daemon,

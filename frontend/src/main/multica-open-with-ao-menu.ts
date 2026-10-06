@@ -53,7 +53,10 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 	const MENU_ID = "ao-open-with-ao-menu";
 	const OPEN_DELAY = 100;
 	const CLOSE_GRACE = 150;
-	const styles = `
+	const menuStyleTokens = (currentPayload: OpenWithAoPagePayload) => currentPayload.style;
+	const buildStyles = (currentPayload: OpenWithAoPagePayload): string => {
+		const tokens = menuStyleTokens(currentPayload);
+		return `
 :host { all: initial; }
 .panel {
 	position: fixed;
@@ -65,9 +68,9 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 	padding: 4px;
 	background: var(--surface-raised, #fff);
 	color: var(--popover-foreground, #111827);
-	border-radius: var(--radius, 0.5rem);
-	box-shadow: 0 0 0 1px var(--surface-border, rgba(0,0,0,.1)), var(--menu-shadow, 0 8px 24px rgba(15,23,42,.08));
-	font: var(--text-body, 14px)/var(--text-body--line-height, 20px) var(--font-sans, system-ui, sans-serif);
+	border-radius: 8px;
+	box-shadow: 0 0 0 ${tokens.borderWidth} var(--surface-border, rgba(0,0,0,.1)), var(--menu-shadow, 0 8px 24px rgba(15,23,42,.08));
+	font: ${tokens.menuFontWeight} ${tokens.menuFontSize}/${tokens.menuLineHeight} var(--font-sans, system-ui, sans-serif);
 	overflow-y: auto;
 	overflow-x: hidden;
 	overscroll-behavior: contain;
@@ -80,7 +83,7 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 	margin: 0 -4px -4px;
 	padding: 0 4px 4px;
 	background: var(--surface-raised, #fff);
-	border-radius: 0 0 var(--radius, 0.5rem) var(--radius, 0.5rem);
+	border-radius: 0 0 8px 8px;
 }
 .item {
 	display: flex;
@@ -88,6 +91,9 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 	gap: 6px;
 	padding: 4px 6px;
 	border-radius: 6px;
+	font-size: ${tokens.menuFontSize};
+	font-weight: ${tokens.menuFontWeight};
+	line-height: ${tokens.menuLineHeight};
 	cursor: default;
 	user-select: none;
 	outline: none;
@@ -96,16 +102,16 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 	background: var(--accent, #f4f4f5);
 	color: var(--accent-foreground, #18181b);
 }
-.panel[data-nav="keyboard"] .item:focus-visible { box-shadow: inset 0 0 0 2px var(--ring, #a1a1aa); }
+.panel[data-nav="keyboard"] .item:focus-visible { box-shadow: inset 0 0 0 1px var(--ring, #a1a1aa); }
 .item[aria-disabled="true"] { opacity: .5; }
 .item[aria-disabled="true"]:hover, .item[aria-disabled="true"][data-highlighted="true"], .item[aria-disabled="true"]:focus {
 	background: transparent;
 	color: inherit;
 }
 .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.state { font-size: var(--text-caption, 12px); color: var(--muted-foreground, #6b7280); white-space: nowrap; }
-.label { padding: 4px 6px; font-size: var(--text-caption, 12px); font-weight: 500; color: var(--muted-foreground, #6b7280); }
-.sep { height: 1px; margin: 4px -4px; background: var(--border, rgba(0,0,0,.08)); }
+.state { font-size: ${tokens.menuStateFontSize}; color: var(--muted-foreground, #6b7280); white-space: nowrap; }
+.label { padding: 4px 6px; font-size: ${tokens.menuLabelFontSize}; font-weight: 500; color: var(--muted-foreground, #6b7280); }
+.sep { height: ${tokens.borderWidth}; margin: 4px -4px; background: var(--border, rgba(0,0,0,.08)); }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .dot { display: inline-block; width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; }
 .dot[data-tone="ready"] { background: #16a34a; }
@@ -115,13 +121,18 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 .dot[data-tone="done"] { background: #6b7280; }
 .dot[data-tone="unknown"] { background: #9ca3af; }
 .item[data-stale="true"], .item[data-terminated="true"] { opacity: .6; }
-.icon { width: 14px; height: 14px; flex: 0 0 14px; }
-.chev { width: 16px; height: 16px; flex: 0 0 16px; }
+.icon { width: 12px; height: 12px; flex: 0 0 12px; }
+.chev { width: 14px; height: 14px; flex: 0 0 14px; }
+@media (min-resolution: 2dppx) {
+	.panel { box-shadow: 0 0 0 ${tokens.borderWidthHiDpi} var(--surface-border, rgba(0,0,0,.1)), var(--menu-shadow, 0 8px 24px rgba(15,23,42,.08)); }
+	.sep { height: ${tokens.borderWidthHiDpi}; }
+}
 @media (prefers-reduced-motion: no-preference) {
 	.panel { animation: ao-menu-fade-in 100ms ease-out; }
 	@keyframes ao-menu-fade-in { from { opacity: 0; } to { opacity: 1; } }
 }
 `;
+	};
 
 	let payload = options.payload;
 	const onAction = options.onAction;
@@ -242,7 +253,7 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 		svg.setAttribute("class", `icon ${className}`);
 		svg.setAttribute("aria-hidden", "true");
 		svg.setAttribute("viewBox", "0 0 24 24");
-		const size = className === "chev" ? "16" : "14";
+		const size = className === "chev" ? "14" : "12";
 		svg.setAttribute("width", size);
 		svg.setAttribute("height", size);
 		svg.setAttribute("fill", "none");
@@ -561,26 +572,29 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 			record.element.style.maxHeight = "";
 			const panelRect = record.element.getBoundingClientRect();
 			const panelWidth = panelRect.width;
-			const naturalHeight = panelRect.height || record.element.scrollHeight;
+			const maxHeight = menuStyleTokens(payload).menuMaxHeightPx;
+			const naturalHeight = Math.min(panelRect.height || record.element.scrollHeight, maxHeight);
 			const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - 4 - margin);
 			const spaceAbove = Math.max(0, rect.top - 4 - margin);
 			left = rect.left + panelWidth > window.innerWidth - margin ? rect.right - panelWidth : rect.left;
 			if (naturalHeight <= spaceBelow) {
 				top = rect.bottom + 4;
-				record.element.style.maxHeight = `${spaceBelow}px`;
+				record.element.style.maxHeight = `${Math.min(maxHeight, spaceBelow)}px`;
 				record.element.setAttribute("data-placement", "below");
 			} else if (spaceAbove > spaceBelow) {
-				const used = Math.min(naturalHeight, spaceAbove);
+				const availableHeight = Math.min(maxHeight, spaceAbove);
+				const used = Math.min(naturalHeight, availableHeight);
 				top = rect.top - 4 - used;
-				record.element.style.maxHeight = `${spaceAbove}px`;
+				record.element.style.maxHeight = `${availableHeight}px`;
 				record.element.setAttribute("data-placement", "above");
 			} else {
 				top = rect.bottom + 4;
-				record.element.style.maxHeight = `${spaceBelow}px`;
+				record.element.style.maxHeight = `${Math.min(maxHeight, spaceBelow)}px`;
 				record.element.setAttribute("data-placement", "below");
 			}
 			top = Math.max(margin, top);
 		} else {
+			record.element.style.maxHeight = "";
 			const panelRect = record.element.getBoundingClientRect();
 			const panelWidth = panelRect.width;
 			if (record.level === 1) {
@@ -609,10 +623,14 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 				}
 				record.side = side;
 			}
-			const height = panelRect.height;
+			const menuMaxHeightPx = menuStyleTokens(payload).menuMaxHeightPx;
+			const viewportMaxHeight = Math.max(0, window.innerHeight - 16);
+			const availableHeight = Math.min(menuMaxHeightPx, viewportMaxHeight);
+			const naturalHeight = panelRect.height || record.element.scrollHeight;
+			const height = Math.min(naturalHeight, menuMaxHeightPx, viewportMaxHeight);
 			top = Math.max(margin, rect.top - 4);
-			record.element.style.maxHeight = `${Math.max(0, window.innerHeight - 16)}px`;
 			if (top + height > window.innerHeight - margin) top = Math.max(margin, window.innerHeight - margin - height);
+			record.element.style.maxHeight = `${availableHeight}px`;
 		}
 		if (record.level > 0) {
 			left = Math.min(left, window.innerWidth - margin - record.element.getBoundingClientRect().width);
@@ -841,7 +859,7 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 		host.style.pointerEvents = "none";
 		shadow = host.attachShadow({ mode: "open" });
 		const style = document.createElement("style");
-		style.textContent = styles;
+		style.textContent = buildStyles(payload);
 		shadow.appendChild(style);
 		document.body.appendChild(host);
 		trigger.setAttribute("aria-expanded", "true");
@@ -884,6 +902,8 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 		if (destroyed) return;
 		payload = nextPayload;
 		if (!host || !trigger || !shadow) return;
+		const style = shadow.querySelector("style");
+		if (style) style.textContent = buildStyles(payload);
 		const focusedElement = shadow.activeElement as HTMLElement | null;
 		const focusedKey = focusedElement?.getAttribute("data-key") ?? null;
 		const focusWasInMenu = focusedElement !== null && panels.some((panel) => panel.element.contains(focusedElement));
