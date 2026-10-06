@@ -28,10 +28,12 @@ import type { MulticaInboxTarget, MulticaNotifications } from "./multica-notific
 
 const CLOSE_ACTIVE_TAB_CHANNEL = "tab:close-active";
 const BUNDLE_MISSING_MESSAGE = "Multica desktop bundle not found. Build it and set AO_MULTICA_DESKTOP_OUT.";
+// Electron reserves 999 for context isolation and 1<<20.. for extensions.
+export const MULTICA_AO_WORLD_ID = 1001;
 
 type MulticaWebContents = Pick<
 	WebContents,
-	"id" | "on" | "loadURL" | "executeJavaScript" | "focus" | "close" | "isDestroyed" | "setWindowOpenHandler" | "send" | "ipc"
+	"id" | "on" | "loadURL" | "executeJavaScript" | "executeJavaScriptInIsolatedWorld" | "focus" | "close" | "isDestroyed" | "setWindowOpenHandler" | "send" | "ipc"
 > & {
 	session: Pick<Session, "setPermissionRequestHandler" | "setPermissionCheckHandler" | "setPreloads" | "webRequest">;
 };
@@ -82,6 +84,8 @@ export type MulticaViewHost = {
 	navigatePath: (path: string) => boolean;
 	/** Runs a script in the Multica page's main world. Does nothing without a live view. */
 	runInPage: (script: string) => void;
+	/** Runs a script in AO's isolated world, sharing the DOM but not page globals. */
+	runInAoWorld: (script: string) => void;
 	evaluateInPage: (script: string) => Promise<unknown>;
 	/** Surfaces Multica and asks its renderer to open an inbox item. False when ignored (no Multica URL, no view). */
 	openInboxItem: (target: MulticaInboxTarget) => boolean;
@@ -129,6 +133,10 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 	const runInPage = (script: string): void => {
 		if (!view || view.webContents.isDestroyed()) return;
 		void view.webContents.executeJavaScript(script).catch(() => undefined);
+	};
+	const runInAoWorld = (script: string): void => {
+		if (!view || view.webContents.isDestroyed()) return;
+		void view.webContents.executeJavaScriptInIsolatedWorld(MULTICA_AO_WORLD_ID, [{ code: script }]).catch(() => undefined);
 	};
 	const evaluateInPage = async (script: string): Promise<unknown> => {
 		if (!view || view.webContents.isDestroyed()) return undefined;
@@ -423,6 +431,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 			return true;
 		},
 		runInPage,
+		runInAoWorld,
 		evaluateInPage,
 		openInboxItem: (target) => {
 			if (!url) return false;

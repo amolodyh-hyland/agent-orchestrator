@@ -9,7 +9,12 @@ import {
 	MULTICA_LINKS_REMOVE_CHANNEL,
 	type MulticaIssueLink,
 } from "../shared/multica-issue-links";
-import { MULTICA_STATUS_PUBLISH_CHANNEL } from "../shared/multica-session-status";
+import {
+	buildOpenWithAoActionUrl,
+	MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL,
+	OPEN_WITH_AO_ACTION_PREFIX,
+	type OpenWithAoSnapshot,
+} from "../shared/multica-open-with-ao";
 import { AO_SEND_ISSUE_URL, MULTICA_SEND_REQUEST_CHANNEL } from "../shared/multica-send-to-ao";
 import type { MulticaIssueLinkStore } from "./multica-issue-links";
 import { createMulticaIssueLinkService, type MulticaIssueLinkServiceOptions } from "./multica-issue-link-service";
@@ -53,17 +58,46 @@ function deferred<T>() {
 	return { promise, resolve };
 }
 
-type PillEntry = { label: string; url: string; status?: { tone: string; label: string; detail: string; stale: boolean } };
-type PillPayload = { entries: PillEntry[]; overflow: number };
-
-function pillPayload(script: string): PillPayload {
-	const match = script.match(/const payload = (.*);\n\tif \(payload\.entries\.length/);
-	if (!match) throw new Error("Pill payload was not found");
-	return JSON.parse(match[1]) as PillPayload;
+function openWithAoSession(id: string, projectId: string): OpenWithAoSnapshot["projects"][number]["sessions"][number] {
+	return {
+		id,
+		projectId,
+		label: id,
+		tone: "ready",
+		stateLabel: "Ready",
+		detail: "",
+		stale: false,
+		terminated: false,
+		updatedAt: 1,
+	};
 }
 
-function pillEntries(script: string): PillEntry[] {
-	return pillPayload(script).entries;
+function snapshot(projectId = "project-1", sessionIds = ["worker-1"]): OpenWithAoSnapshot {
+	return {
+		daemon: "ready",
+		stale: false,
+		projects: [
+			{
+				id: projectId,
+				name: "Project",
+				orchestrator: null,
+				sessions: sessionIds.map((sessionId) => openWithAoSession(sessionId, projectId)),
+				moreCount: 0,
+			},
+		],
+	};
+}
+
+function actionNonce(script: string): string {
+	const match = script.match(/"nonce":"([^"]+)"/);
+	if (!match) throw new Error("Open in AO nonce was not found");
+	return match[1];
+}
+
+function pagePayload(script: string): { projects: Array<{ id: string; linked: boolean }> } {
+	const match = script.match(/const payload = (.*);\n\tconst version/);
+	if (!match) throw new Error("Open in AO payload was not found");
+	return JSON.parse(match[1]) as { projects: Array<{ id: string; linked: boolean }> };
 }
 
 async function setup(initial: MulticaIssueLink[] = [], withHost = true, initialList?: Promise<MulticaIssueLink[]>) {
@@ -72,6 +106,7 @@ async function setup(initial: MulticaIssueLink[] = [], withHost = true, initialL
 	const host = {
 		navigatePath: vi.fn(() => true),
 		runInPage: vi.fn(),
+		runInAoWorld: vi.fn(),
 		setActive: vi.fn(),
 		evaluateInPage: vi.fn(async (_script: string) =>
 			JSON.stringify({ ok: true, workspaceSlug: "acme", issueIdentifier: "MUL-1", title: "Fix from page", description: "Description" }),
@@ -108,7 +143,7 @@ async function setup(initial: MulticaIssueLink[] = [], withHost = true, initialL
 		readSettings: async () => ({ url: "https://multica.example.com" }),
 	} as unknown as MulticaIssueLinkServiceOptions);
 	await Promise.resolve();
-	host.runInPage.mockClear();
+	host.runInAoWorld.mockClear();
 	const shellEvent = { sender: shell } as FakeEvent;
 	return {
 		ipc,
@@ -135,7 +170,7 @@ describe("multica issue link service: IPC trust", () => {
 			MULTICA_LINKS_ADD_CHANNEL,
 			MULTICA_LINKS_REMOVE_CHANNEL,
 			MULTICA_LINKS_OPEN_ISSUE_CHANNEL,
-			MULTICA_STATUS_PUBLISH_CHANNEL,
+			MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL,
 		];
 		vi.mocked(t.store.list).mockClear();
 		vi.mocked(t.store.add).mockClear();
@@ -253,283 +288,242 @@ describe("multica issue link service: issue navigation", () => {
 	});
 });
 
-describe("multica issue link service: linked sessions pill", () => {
-	it("shows links for the current issue and removes the pill for other pages", async () => {
-		const t = await setup([link(), link({ sessionId: "b-9", projectId: "b", issueIdentifier: "MUL-2" })]);
-
-		t.service.handlePageTitle("MUL-1: Fix login");
-		expect(t.host.runInPage.mock.calls[0][0]).toContain("ao://sessions/a/a-1");
-		expect(t.host.runInPage.mock.calls[0][0]).not.toContain("b-9");
-		expect(t.host.runInPage.mock.calls[0][0]).not.toContain("ao://sessions/b/b-9");
-
-		t.service.handlePageTitle("MUL-3: Another issue");
-		expect(t.host.runInPage.mock.calls[1][0]).toContain(AO_SEND_ISSUE_URL);
-		expect(t.host.runInPage.mock.calls[1][0]).not.toContain("ao://sessions/");
-		t.service.handlePageTitle("Inbox");
-		expect(t.host.runInPage.mock.calls[2][0]).not.toContain("ao://");
-	});
-
-	it("offers Send to AO only on an issue page", async () => {
+describe("multica issue link service: Open in AO page integration", () => {
+	it("refreshes on every title event and removes the controller outside issues", async () => {
 		const t = await setup();
 
-		t.service.handlePageTitle("MUL-1: Fix");
-		expect(t.host.runInPage.mock.calls[0][0]).toContain(AO_SEND_ISSUE_URL);
+		t.service.handlePageTitle("MUL-1: Fix login");
+		expect(t.host.runInAoWorld.mock.calls[0]?.[0]).toContain("__aoOpenWithAo");
+		expect(t.host.runInAoWorld.mock.calls[0]?.[0]).toContain("MUL-1");
 
-		t.service.handlePageTitle("Issue");
-		expect(t.host.runInPage.mock.calls[1][0]).not.toContain(AO_SEND_ISSUE_URL);
-		expect(t.host.runInPage.mock.calls[1][0]).not.toContain("ao://");
+		t.service.handlePageTitle("Inbox");
+		expect(t.host.runInAoWorld.mock.calls[1]?.[0]).toContain("delete window.__aoOpenWithAo");
+
+		t.service.handlePageTitle("MUL-1: Fix login");
+		t.service.handlePageTitle("MUL-1: Updated title");
+		expect(t.host.runInAoWorld).toHaveBeenCalledTimes(4);
+		expect(t.host.runInAoWorld.mock.calls[3]?.[0]).toContain("Updated title");
 	});
 
-	it("refreshes the pill after each add and remove on the current issue", async () => {
-		const t = await setup([link()]);
+	it("validates published snapshots and skips duplicate snapshots", async () => {
+		const t = await setup();
 		t.service.handlePageTitle("MUL-1: Fix login");
+		t.host.runInAoWorld.mockClear();
+		const stranger = { sender: { id: 8 } };
+
+		expect(t.ipc.invoke(MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL, stranger, snapshot())).toEqual({ ok: false });
+		expect(t.ipc.invoke(MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL, t.shellEvent, { stale: false, projects: [] })).toEqual({ ok: false });
+		expect(t.host.runInAoWorld).not.toHaveBeenCalled();
+
+		const published = snapshot("project-from-snapshot");
+		expect(t.ipc.invoke(MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL, t.shellEvent, published)).toEqual({ ok: true });
+		expect(t.host.runInAoWorld).toHaveBeenCalledTimes(1);
+		expect(t.host.runInAoWorld.mock.calls[0]?.[0]).toContain("project-from-snapshot");
+		expect(t.ipc.invoke(MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL, t.shellEvent, published)).toEqual({ ok: true });
+		expect(t.host.runInAoWorld).toHaveBeenCalledTimes(1);
+	});
+
+	it("refreshes the page script when a link is added or removed", async () => {
+		const t = await setup();
+		t.service.handlePageTitle("MUL-1: Fix login");
+		expect(t.ipc.invoke(MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL, t.shellEvent, snapshot())).toEqual({ ok: true });
+		t.host.runInAoWorld.mockClear();
+
 		await t.ipc.invoke(MULTICA_LINKS_ADD_CHANNEL, t.shellEvent, {
-			sessionId: "b-2",
-			projectId: "b",
+			sessionId: "worker-1",
+			projectId: "project-1",
 			issue: "/acme/issues/MUL-1",
 		});
-
-		expect(t.host.runInPage).toHaveBeenCalledTimes(2);
-		expect(t.host.runInPage.mock.calls[1][0]).toContain("ao://sessions/b/b-2");
+		expect(t.host.runInAoWorld).toHaveBeenCalledTimes(1);
+		expect(t.host.runInAoWorld.mock.calls[0]?.[0]).toContain("\"linked\":true");
 
 		await t.ipc.invoke(MULTICA_LINKS_REMOVE_CHANNEL, t.shellEvent, {
-			sessionId: "b-2",
+			sessionId: "worker-1",
 			workspaceSlug: "acme",
 			issueIdentifier: "MUL-1",
 		});
-
-		expect(t.host.runInPage).toHaveBeenCalledTimes(3);
-		expect(t.host.runInPage.mock.calls[2][0]).not.toContain("ao://sessions/b/b-2");
-		expect(t.host.runInPage.mock.calls[2][0]).toContain("ao://sessions/a/a-1");
+		expect(t.host.runInAoWorld).toHaveBeenCalledTimes(2);
+		expect(t.host.runInAoWorld.mock.calls[1]?.[0]).toContain("\"linked\":false");
 	});
 
-	it("refreshes the current issue pill when LIST replaces the cache", async () => {
+	it("refreshes after LIST replaces the link cache", async () => {
 		const t = await setup([link()]);
 		t.service.handlePageTitle("MUL-1: Fix login");
-		vi.mocked(t.store.list).mockResolvedValueOnce([link({ sessionId: "listed", projectId: "listed" })]);
+		t.host.runInAoWorld.mockClear();
 
-		await expect(t.ipc.invoke(MULTICA_LINKS_LIST_CHANNEL, t.shellEvent)).resolves.toEqual([
-			link({ sessionId: "listed", projectId: "listed" }),
-		]);
+		await t.ipc.invoke(MULTICA_LINKS_LIST_CHANNEL, t.shellEvent);
 
-		expect(t.host.runInPage).toHaveBeenCalledTimes(2);
-		expect(t.host.runInPage.mock.calls[1][0]).toContain("ao://sessions/listed/listed");
+		expect(t.host.runInAoWorld).toHaveBeenCalledTimes(1);
+		expect(t.host.runInAoWorld.mock.calls[0]?.[0]).toContain("__aoOpenWithAo");
 	});
 
-	it("refreshes the pill when the initial cache load finishes after a title event", async () => {
-		const initialLoad = deferred<MulticaIssueLink[]>();
-		const t = await setup([], true, initialLoad.promise);
+	it("routes Open in AO action URLs and swallows malformed prefixed URLs", async () => {
+		const t = await setup();
 
-		t.service.handlePageTitle("MUL-1: T");
-		expect(t.host.runInPage).toHaveBeenCalledTimes(1);
-		expect(t.host.runInPage.mock.calls[0][0]).toContain(AO_SEND_ISSUE_URL);
-
-		initialLoad.resolve([link({ sessionId: "late", projectId: "late" })]);
-		await initialLoad.promise;
-		await Promise.resolve();
-
-		expect(t.host.runInPage).toHaveBeenCalledTimes(2);
-		expect(t.host.runInPage.mock.calls[1][0]).toContain("ao://sessions/late/late");
+		expect(t.service.handleAoSessionLink(`${OPEN_WITH_AO_ACTION_PREFIX}not-an-action`)).toBe(true);
+		expect(t.host.evaluateInPage).not.toHaveBeenCalled();
+		expect(t.shell.send).not.toHaveBeenCalled();
 	});
-});
 
-describe("multica issue link service: status publish", () => {
-	it("rejects an untrusted sender and an invalid snapshot", async () => {
-		const t = await setup([link()]);
+	it("links an unlinked worker before opening it in AO", async () => {
+		const t = await setup();
 		t.service.handlePageTitle("MUL-1: Fix login");
-		t.host.runInPage.mockClear();
+		expect(t.ipc.invoke(MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL, t.shellEvent, snapshot())).toEqual({ ok: true });
+		const nonce = actionNonce(t.host.runInAoWorld.mock.calls.at(-1)?.[0] ?? "");
+		vi.mocked(t.host.evaluateInPage).mockResolvedValueOnce(JSON.stringify({ slug: "acme", title: "MUL-1: Fix login" }));
 
-		expect(
-			t.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, { sender: { id: 8 } }, { stale: false, entries: [] }),
-		).toEqual({ ok: false });
-		expect(t.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, t.shellEvent, { stale: false, entries: [{ sessionId: "a-1" }] })).toEqual({
-			ok: false,
+		const url = buildOpenWithAoActionUrl({
+			kind: "open",
+			projectId: "project-1",
+			sessionId: "worker-1",
+			nonce,
+			workspaceSlug: "acme",
 		});
-		expect(t.host.runInPage).not.toHaveBeenCalled();
-	});
-
-	it("publishes statuses for linked sessions, skips other issues and avoids duplicate refreshes", async () => {
-		const t = await setup([
-			link(),
-			link({ sessionId: "b-2", projectId: "b" }),
-			link({ sessionId: "elsewhere", projectId: "other", issueIdentifier: "MUL-2" }),
-		]);
-		t.service.handlePageTitle("MUL-1: Fix login");
-		t.host.runInPage.mockClear();
-		const snapshot = {
-			stale: false,
-			entries: [
-				{ sessionId: "a-1", tone: "ready" as const, label: "Ready A", detail: "All clear" },
-				{ sessionId: "b-2", tone: "attention" as const, label: "Review B", detail: "Needs review" },
-				{ sessionId: "elsewhere", tone: "done" as const, label: "Wrong issue", detail: "Hidden" },
-			],
-		};
-
-		expect(t.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, t.shellEvent, snapshot)).toEqual({ ok: true });
-		expect(t.host.runInPage).toHaveBeenCalledTimes(1);
-		expect(t.host.runInPage.mock.calls[0][0]).toContain("Ready A");
-		expect(t.host.runInPage.mock.calls[0][0]).toContain("Review B");
-		expect(t.host.runInPage.mock.calls[0][0]).not.toContain("Wrong issue");
-
-		expect(t.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, t.shellEvent, snapshot)).toEqual({ ok: true });
-		expect(t.host.runInPage).toHaveBeenCalledTimes(1);
-		expect(
-			t.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, t.shellEvent, {
-				...snapshot,
-				entries: snapshot.entries.map((entry) => (entry.sessionId === "a-1" ? { ...entry, label: "Updated A" } : entry)),
+		expect(t.service.handleAoSessionLink(url)).toBe(true);
+		await vi.waitFor(() =>
+			expect(t.shell.send).toHaveBeenCalledWith(MULTICA_LINKS_OPEN_SESSION_CHANNEL, {
+				projectId: "project-1",
+				sessionId: "worker-1",
 			}),
-		).toEqual({ ok: true });
-		expect(t.host.runInPage).toHaveBeenCalledTimes(2);
+		);
+
+		expect(t.store.add).toHaveBeenCalledExactlyOnceWith({
+			sessionId: "worker-1",
+			projectId: "project-1",
+			workspaceSlug: "acme",
+			issueIdentifier: "MUL-1",
+		});
+		expect(t.host.setActive).toHaveBeenCalledExactlyOnceWith(false);
+		const openSessionCall = t.shell.send.mock.calls.findIndex(([channel]) => channel === MULTICA_LINKS_OPEN_SESSION_CHANNEL);
+		expect(t.store.add.mock.invocationCallOrder[0]!).toBeLessThan(t.host.setActive.mock.invocationCallOrder[0]!);
+		expect(t.host.setActive.mock.invocationCallOrder[0]!).toBeLessThan(t.shell.send.mock.invocationCallOrder[openSessionCall]!);
 	});
 
-	it("stores snapshots while no issue is shown and applies them on the next issue title", async () => {
-		const t = await setup([link()]);
-		t.service.handlePageTitle("Inbox");
-		t.host.runInPage.mockClear();
-		const snapshot = {
-			stale: false,
-			entries: [{ sessionId: "a-1", tone: "working" as const, label: "Building", detail: "Tests" }],
-		};
-
-		expect(t.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, t.shellEvent, snapshot)).toEqual({ ok: true });
-		expect(t.host.runInPage).not.toHaveBeenCalled();
+	it("opens an unlinked worker without linking when the action URL has no workspace slug", async () => {
+		const t = await setup();
 		t.service.handlePageTitle("MUL-1: Fix login");
-		expect(t.host.runInPage).toHaveBeenCalledTimes(1);
-		expect(t.host.runInPage.mock.calls[0][0]).toContain("Building");
+		expect(t.ipc.invoke(MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL, t.shellEvent, snapshot())).toEqual({ ok: true });
+		const nonce = actionNonce(t.host.runInAoWorld.mock.calls.at(-1)?.[0] ?? "");
+		vi.mocked(t.host.evaluateInPage).mockResolvedValueOnce(JSON.stringify({ slug: "acme", title: "MUL-1: Fix login" }));
 
-		const beforeTitle = await setup([link()]);
-		expect(beforeTitle.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, beforeTitle.shellEvent, snapshot)).toEqual({ ok: true });
-		expect(beforeTitle.host.runInPage).not.toHaveBeenCalled();
-		beforeTitle.service.handlePageTitle("MUL-1: Fix login");
-		expect(beforeTitle.host.runInPage.mock.calls[0][0]).toContain("Building");
-	});
-
-	it("deduplicates sessions, sorts by tone, preserves unpublished order and passes through stale", async () => {
-		const t = await setup([
-			link({ sessionId: "working", projectId: "working" }),
-			link({ sessionId: "ready", projectId: "ready" }),
-			link({ sessionId: "done", projectId: "done" }),
-			link({ sessionId: "attention", projectId: "attention" }),
-			link({ sessionId: "unpublished-2", projectId: "unpublished-2" }),
-			link({ sessionId: "unpublished-1", projectId: "unpublished-1" }),
-			link({ sessionId: "ready", projectId: "duplicate", workspaceSlug: "other" }),
-		]);
-		t.service.handlePageTitle("MUL-1: Fix login");
-		t.host.runInPage.mockClear();
-		expect(
-			t.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, t.shellEvent, {
-				stale: true,
-				entries: [
-					{ sessionId: "working", tone: "working", label: "Working", detail: "Build" },
-					{ sessionId: "ready", tone: "ready", label: "Ready", detail: "" },
-					{ sessionId: "done", tone: "done", label: "Done", detail: "" },
-					{ sessionId: "attention", tone: "attention", label: "Attention", detail: "Review" },
-				],
+		const url = buildOpenWithAoActionUrl({ kind: "open", projectId: "project-1", sessionId: "worker-1", nonce });
+		expect(t.service.handleAoSessionLink(url)).toBe(true);
+		await vi.waitFor(() =>
+			expect(t.shell.send).toHaveBeenCalledWith(MULTICA_LINKS_OPEN_SESSION_CHANNEL, {
+				projectId: "project-1",
+				sessionId: "worker-1",
 			}),
-		).toEqual({ ok: true });
+		);
 
-		const entries = pillEntries(t.host.runInPage.mock.calls[0][0]);
-		expect(entries.map((entry) => entry.label)).toEqual([
-			"ready",
-			"attention",
-			"working",
-			"done",
-			"unpublished-2",
-		]);
-		expect(entries[0]?.url).toBe("ao://sessions/ready/ready");
-		expect(entries.slice(0, 4).every((entry) => entry.status?.stale === true)).toBe(true);
-		expect(entries[4]?.status).toBeUndefined();
+		expect(t.store.add).not.toHaveBeenCalled();
+		expect(t.host.setActive).toHaveBeenCalledExactlyOnceWith(false);
+		expect(t.shell.send).toHaveBeenCalledExactlyOnceWith(MULTICA_LINKS_OPEN_SESSION_CHANNEL, {
+			projectId: "project-1",
+			sessionId: "worker-1",
+		});
 	});
 
-	it("keeps unpublished sessions in their original order without adding status", async () => {
-		const t = await setup([
-			link({ sessionId: "unpublished-2", projectId: "unpublished-2" }),
-			link({ sessionId: "unpublished-1", projectId: "unpublished-1" }),
-		]);
+	it("opens an unlinked worker without linking when the action workspace differs from the page", async () => {
+		const t = await setup();
 		t.service.handlePageTitle("MUL-1: Fix login");
-		t.host.runInPage.mockClear();
+		expect(t.ipc.invoke(MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL, t.shellEvent, snapshot())).toEqual({ ok: true });
+		const nonce = actionNonce(t.host.runInAoWorld.mock.calls.at(-1)?.[0] ?? "");
+		vi.mocked(t.host.evaluateInPage).mockResolvedValueOnce(JSON.stringify({ slug: "acme", title: "MUL-1: Fix login" }));
 
-		expect(t.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, t.shellEvent, { stale: false, entries: [] })).toEqual({ ok: true });
+		const url = buildOpenWithAoActionUrl({
+			kind: "open",
+			projectId: "project-1",
+			sessionId: "worker-1",
+			nonce,
+			workspaceSlug: "other-workspace",
+		});
+		expect(t.service.handleAoSessionLink(url)).toBe(true);
+		await vi.waitFor(() =>
+			expect(t.shell.send).toHaveBeenCalledWith(MULTICA_LINKS_OPEN_SESSION_CHANNEL, {
+				projectId: "project-1",
+				sessionId: "worker-1",
+			}),
+		);
 
-		const entries = pillEntries(t.host.runInPage.mock.calls[0][0]);
-		expect(entries.map((entry) => entry.label)).toEqual(["unpublished-2", "unpublished-1"]);
-		expect(entries.every((entry) => entry.status === undefined)).toBe(true);
+		expect(t.store.add).not.toHaveBeenCalled();
+		expect(t.host.setActive).toHaveBeenCalledExactlyOnceWith(false);
+		expect(t.shell.send).toHaveBeenCalledExactlyOnceWith(MULTICA_LINKS_OPEN_SESSION_CHANNEL, {
+			projectId: "project-1",
+			sessionId: "worker-1",
+		});
 	});
 
-	it("sorts all six published tones in urgency order", async () => {
-		const sessions = ["done", "unknown", "working", "pending", "attention", "ready"];
-		const t = await setup(sessions.map((sessionId) => link({ sessionId, projectId: sessionId })));
+	it("opens without linking when the page title changes during the workspace read", async () => {
+		const pending = deferred<unknown>();
+		const t = await setup();
 		t.service.handlePageTitle("MUL-1: Fix login");
-		t.host.runInPage.mockClear();
+		expect(t.ipc.invoke(MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL, t.shellEvent, snapshot())).toEqual({ ok: true });
+		const nonce = actionNonce(t.host.runInAoWorld.mock.calls.at(-1)?.[0] ?? "");
+		vi.mocked(t.host.evaluateInPage).mockImplementationOnce(() => pending.promise);
+
+		t.service.handleAoSessionLink(
+			buildOpenWithAoActionUrl({ kind: "open", projectId: "project-1", sessionId: "worker-1", nonce }),
+		);
+		t.service.handlePageTitle("BETA-9: Another issue");
+		pending.resolve(JSON.stringify({ slug: "acme", title: "MUL-1: Fix login" }));
+
+		await vi.waitFor(() => expect(t.shell.send).toHaveBeenCalledWith(MULTICA_LINKS_OPEN_SESSION_CHANNEL, {
+			projectId: "project-1",
+			sessionId: "worker-1",
+		}));
+		expect(t.store.add).not.toHaveBeenCalled();
+	});
+
+	it("opens an orchestrator without adding an issue link", async () => {
+		const t = await setup();
+		t.service.handlePageTitle("MUL-1: Fix login");
+		const published = snapshot("project-1", []);
+		published.projects[0]!.orchestrator = openWithAoSession("orchestrator-1", "project-1");
+		expect(t.ipc.invoke(MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL, t.shellEvent, published)).toEqual({ ok: true });
+		const nonce = actionNonce(t.host.runInAoWorld.mock.calls.at(-1)?.[0] ?? "");
 
 		expect(
-			t.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, t.shellEvent, {
-				stale: false,
-				entries: sessions.map((sessionId) => ({
-					sessionId,
-					tone: sessionId,
-					label: sessionId,
-					detail: "",
-				})),
-			}),
-		).toEqual({ ok: true });
-
-		const payload = pillPayload(t.host.runInPage.mock.calls[0][0]);
-		expect(payload.entries.map((entry) => entry.status?.tone)).toEqual(["ready", "attention", "pending", "working", "done"]);
-		expect(payload.overflow).toBe(1);
+			t.service.handleAoSessionLink(
+				buildOpenWithAoActionUrl({ kind: "open", projectId: "project-1", sessionId: "orchestrator-1", nonce }),
+			),
+		).toBe(true);
+		expect(t.store.add).not.toHaveBeenCalled();
+		expect(t.host.setActive).toHaveBeenCalledExactlyOnceWith(false);
+		expect(t.shell.send).toHaveBeenCalledExactlyOnceWith(MULTICA_LINKS_OPEN_SESSION_CHANNEL, {
+			projectId: "project-1",
+			sessionId: "orchestrator-1",
+		});
 	});
 
-	it("preserves link order for tone ties, unknown statuses, and unpublished sessions", async () => {
-		const sessions = ["attention-1", "unknown", "unpublished-1", "attention-2", "unpublished-2"];
-		const t = await setup(sessions.map((sessionId) => link({ sessionId, projectId: sessionId })));
+	it("ignores an action URL with the wrong nonce", async () => {
+		const t = await setup();
 		t.service.handlePageTitle("MUL-1: Fix login");
-		t.host.runInPage.mockClear();
+		expect(t.ipc.invoke(MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL, t.shellEvent, snapshot())).toEqual({ ok: true });
+		const url = buildOpenWithAoActionUrl({
+			kind: "open",
+			projectId: "project-1",
+			sessionId: "worker-1",
+			nonce: "wrong-nonce-000000",
+		});
 
-		expect(
-			t.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, t.shellEvent, {
-				stale: false,
-				entries: [
-					{ sessionId: "attention-1", tone: "attention", label: "Attention 1", detail: "" },
-					{ sessionId: "unknown", tone: "unknown", label: "Unknown", detail: "" },
-					{ sessionId: "attention-2", tone: "attention", label: "Attention 2", detail: "" },
-				],
-			}),
-		).toEqual({ ok: true });
-
-		const entries = pillEntries(t.host.runInPage.mock.calls[0][0]);
-		expect(entries.map((entry) => entry.label)).toEqual([
-			"attention-1",
-			"attention-2",
-			"unknown",
-			"unpublished-1",
-			"unpublished-2",
-		]);
-		expect(entries.map((entry) => entry.status?.tone)).toEqual(["attention", "attention", "unknown", undefined, undefined]);
+		expect(t.service.handleAoSessionLink(url)).toBe(true);
+		expect(t.store.add).not.toHaveBeenCalled();
+		expect(t.host.setActive).not.toHaveBeenCalled();
+		expect(t.shell.send).not.toHaveBeenCalled();
 	});
 
-	it("deduplicates seven linked sessions and reports overflow after showing the most urgent five", async () => {
-		const sessions = ["unknown-1", "ready", "done", "pending", "unknown-2", "working", "attention"];
-		const links = sessions.map((sessionId) => link({ sessionId, projectId: sessionId }));
-		links.push(link({ sessionId: "ready", projectId: "duplicate", workspaceSlug: "other" }));
-		const t = await setup(links);
+	it("requests a new task for the selected project", async () => {
+		const t = await setup();
 		t.service.handlePageTitle("MUL-1: Fix login");
-		t.host.runInPage.mockClear();
+		expect(t.ipc.invoke(MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL, t.shellEvent, snapshot())).toEqual({ ok: true });
+		const nonce = actionNonce(t.host.runInAoWorld.mock.calls.at(-1)?.[0] ?? "");
 
-		expect(
-			t.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, t.shellEvent, {
-				stale: false,
-				entries: sessions.map((sessionId) => ({
-					sessionId,
-					tone: sessionId.replace(/-\d$/, ""),
-					label: sessionId,
-					detail: "",
-				})),
-			}),
-		).toEqual({ ok: true });
-
-		const payload = pillPayload(t.host.runInPage.mock.calls[0][0]);
-		expect(payload.entries.map((entry) => entry.label)).toEqual(["ready", "attention", "pending", "working", "done"]);
-		expect(payload.overflow).toBe(2);
+		const url = buildOpenWithAoActionUrl({ kind: "new-task", projectId: "project-1", nonce });
+		expect(t.service.handleAoSessionLink(url)).toBe(true);
+		await vi.waitFor(() => expect(t.shell.send).toHaveBeenCalledWith(MULTICA_SEND_REQUEST_CHANNEL, expect.objectContaining({
+			ok: true,
+			projectId: "project-1",
+		})));
 	});
 });
 
@@ -555,10 +549,13 @@ describe("multica issue link service: initial cache version", () => {
 		await initialLoad.promise;
 		await Promise.resolve();
 		t.service.handlePageTitle("MUL-1: Fix login");
+		const published = snapshot("fresh", ["fresh"]);
+		published.projects.push({ ...snapshot("stale", ["stale"]).projects[0]! });
+		expect(t.ipc.invoke(MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL, t.shellEvent, published)).toEqual({ ok: true });
 
-		const script = t.host.runInPage.mock.calls.at(-1)?.[0] ?? "";
-		expect(script).toContain("ao://sessions/fresh/fresh");
-		expect(script).not.toContain("ao://sessions/stale/stale");
+		const projects = pagePayload(t.host.runInAoWorld.mock.calls.at(-1)?.[0] ?? "").projects;
+		expect(projects.find((project) => project.id === "fresh")?.linked).toBe(true);
+		expect(projects.find((project) => project.id === "stale")?.linked).toBe(false);
 	});
 });
 
@@ -643,21 +640,19 @@ describe("multica issue link service: lifecycle", () => {
 		expect(t.ipc.handlers.size).toBe(0);
 	});
 
-	it("removes the status handler and ignores publishes after disposal", async () => {
+	it("removes the Open in AO handler and ignores publishes after disposal", async () => {
 		const t = await setup([link()]);
 		t.service.handlePageTitle("MUL-1: Fix login");
-		t.host.runInPage.mockClear();
+		t.host.runInAoWorld.mockClear();
 
 		t.service.dispose();
 
-		expect(t.ipc.handlers.has(MULTICA_STATUS_PUBLISH_CHANNEL)).toBe(false);
+		expect(t.ipc.handlers.has(MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL)).toBe(false);
 		expect(
-			t.ipc.invoke(MULTICA_STATUS_PUBLISH_CHANNEL, t.shellEvent, {
-				stale: false,
-				entries: [{ sessionId: "a-1", tone: "ready", label: "Ready", detail: "" }],
-			}),
+			t.ipc.invoke(MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL, t.shellEvent, snapshot()),
 		).toBeUndefined();
-		expect(t.host.runInPage).not.toHaveBeenCalled();
+		t.service.handlePageTitle("MUL-1: Reloaded");
+		expect(t.host.runInAoWorld).not.toHaveBeenCalled();
 	});
 
 	it("does not apply an in-flight add or handle events after disposal", async () => {
@@ -672,6 +667,7 @@ describe("multica issue link service: lifecycle", () => {
 		const replacementHost = {
 			navigatePath: vi.fn(() => true),
 			runInPage: vi.fn(),
+			runInAoWorld: vi.fn(),
 			setActive: vi.fn(),
 			evaluateInPage: vi.fn(),
 		};
@@ -681,12 +677,12 @@ describe("multica issue link service: lifecycle", () => {
 		pendingAdd.resolve([link({ sessionId: "late", projectId: "late" })]);
 		await add;
 
-		expect(replacementHost.runInPage).not.toHaveBeenCalled();
+		expect(replacementHost.runInAoWorld).not.toHaveBeenCalled();
 		expect(replacementHost.setActive).not.toHaveBeenCalled();
 		expect(t.shell.send).not.toHaveBeenCalled();
 		t.service.handlePageTitle("MUL-1: T");
 		expect(t.service.handleAoSessionLink("ao://sessions/a/a-1")).toBe(false);
-		expect(replacementHost.runInPage).not.toHaveBeenCalled();
+		expect(replacementHost.runInAoWorld).not.toHaveBeenCalled();
 		expect(replacementHost.setActive).not.toHaveBeenCalled();
 		expect(t.shell.send).not.toHaveBeenCalled();
 	});
@@ -709,7 +705,7 @@ describe("multica issue link service: lifecycle", () => {
 				issueIdentifier: "MUL-1",
 			}),
 		).resolves.toHaveLength(1);
-		expect(t.host.runInPage).not.toHaveBeenCalled();
+		expect(t.host.runInAoWorld).not.toHaveBeenCalled();
 		expect(t.host.navigatePath).not.toHaveBeenCalled();
 		expect(t.host.setActive).not.toHaveBeenCalled();
 	});
