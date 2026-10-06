@@ -90,13 +90,13 @@ function snapshot(projectId = "project-1", sessionIds = ["worker-1"]): OpenWithA
 
 function actionNonce(script: string): string {
 	const match = script.match(/"nonce":"([^"]+)"/);
-	if (!match) throw new Error("Open with AO nonce was not found");
+	if (!match) throw new Error("Open in AO nonce was not found");
 	return match[1];
 }
 
 function pagePayload(script: string): { projects: Array<{ id: string; linked: boolean }> } {
 	const match = script.match(/const payload = (.*);\n\tconst version/);
-	if (!match) throw new Error("Open with AO payload was not found");
+	if (!match) throw new Error("Open in AO payload was not found");
 	return JSON.parse(match[1]) as { projects: Array<{ id: string; linked: boolean }> };
 }
 
@@ -288,7 +288,7 @@ describe("multica issue link service: issue navigation", () => {
 	});
 });
 
-describe("multica issue link service: Open with AO page integration", () => {
+describe("multica issue link service: Open in AO page integration", () => {
 	it("refreshes on every title event and removes the controller outside issues", async () => {
 		const t = await setup();
 
@@ -357,7 +357,7 @@ describe("multica issue link service: Open with AO page integration", () => {
 		expect(t.host.runInAoWorld.mock.calls[0]?.[0]).toContain("__aoOpenWithAo");
 	});
 
-	it("routes Open with AO action URLs and swallows malformed prefixed URLs", async () => {
+	it("routes Open in AO action URLs and swallows malformed prefixed URLs", async () => {
 		const t = await setup();
 
 		expect(t.service.handleAoSessionLink(`${OPEN_WITH_AO_ACTION_PREFIX}not-an-action`)).toBe(true);
@@ -640,7 +640,7 @@ describe("multica issue link service: lifecycle", () => {
 		expect(t.ipc.handlers.size).toBe(0);
 	});
 
-	it("removes the Open with AO handler and ignores publishes after disposal", async () => {
+	it("removes the Open in AO handler and ignores publishes after disposal", async () => {
 		const t = await setup([link()]);
 		t.service.handlePageTitle("MUL-1: Fix login");
 		t.host.runInAoWorld.mockClear();
