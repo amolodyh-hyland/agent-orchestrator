@@ -7,7 +7,9 @@ const NONCE = "0123456789abcdef0123456789abcdef";
 type MenuStyleTokens = {
 	borderWidth: string;
 	borderWidthHiDpi: string;
+	borderColorMixPercent: number;
 	menuFontSize: string;
+	menuRowPaddingY: string;
 	menuStateFontSize: string;
 	menuLabelFontSize: string;
 	menuFontWeight: string;
@@ -17,12 +19,14 @@ type MenuStyleTokens = {
 const DEFAULT_MENU_STYLE: MenuStyleTokens = {
 	borderWidth: "1px",
 	borderWidthHiDpi: "0.5px",
-	menuFontSize: "var(--text-caption, 12px)",
-	menuStateFontSize: "var(--text-micro, 11px)",
-	menuLabelFontSize: "var(--text-micro, 11px)",
+	borderColorMixPercent: 55,
+	menuFontSize: "12px",
+	menuRowPaddingY: "6px",
+	menuStateFontSize: "11px",
+	menuLabelFontSize: "11px",
 	menuFontWeight: "400",
-	menuLineHeight: "20px",
-	menuMaxHeightPx: 218,
+	menuLineHeight: "16px",
+	menuMaxHeightPx: 283,
 };
 
 function session(id: string, projectId: string, overrides: Partial<OpenWithAoPageSession> = {}): OpenWithAoPageSession {
@@ -120,7 +124,7 @@ function mockCappedPanelGeometry(input?: { trigger?: DOMRect; panels?: Record<st
 	Object.defineProperty(window, "innerHeight", { configurable: true, value: 600 });
 }
 
-function mockScrollableMenuGeometry(panelRect = rect(0, 100, 240, 218)): void {
+function mockScrollableMenuGeometry(panelRect = rect(0, 100, 240, 283)): void {
 	vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
 		if (this.id === "menu-trigger") return rect(40, 20, 150, 30);
 		if (this.classList.contains("panel")) return panelRect;
@@ -330,14 +334,17 @@ describe("multica Open in AO menu", () => {
 		expect(style).toContain("width: max-content;");
 		expect(style).toContain("border-radius: 8px;");
 		expect(style).toContain("border-radius: 6px;");
-		expect(style).toContain("padding: 4px 6px;");
+		expect(style).toContain("padding: 6px 6px;");
 		expect(style).toContain("var(--menu-shadow,");
-		expect(style).toContain("font: 400 var(--text-caption, 12px)/20px var(--font-sans, system-ui, sans-serif)");
-		expect(style).toContain("font-size: var(--text-caption, 12px);");
+		expect(style).toContain("font: 400 12px/16px var(--font-sans, system-ui, sans-serif)");
+		expect(style).toContain("font-size: 12px;");
 		expect(style).toContain("font-weight: 400;");
-		expect(style).toContain("line-height: 20px;");
-		expect(style).toContain(".state { font-size: var(--text-micro, 11px);");
-		expect(style).toContain(".label { padding: 4px 6px; font-size: var(--text-micro, 11px); font-weight: 500;");
+		expect(style).toContain("line-height: 16px;");
+		expect(style).toContain(".state { font-size: 11px;");
+		expect(style).toContain(".label { padding: 6px 6px; font-size: 11px; font-weight: 500; line-height: 16px;");
+		expect(style).toContain("box-shadow: 0 0 0 1px color-mix(in oklab, var(--surface-border, rgba(0,0,0,.1)) 55%, transparent)");
+		expect(style).toContain("color-mix(in oklab, var(--surface-border, rgba(0,0,0,.1)) 55%, transparent)");
+		expect(style).toContain("color-mix(in oklab, var(--border, rgba(0,0,0,.08)) 55%, transparent)");
 		expect(style).toContain(".chev { width: 14px; height: 14px; flex: 0 0 14px; }");
 		expect(style).toContain(".icon { width: 12px; height: 12px; flex: 0 0 12px; }");
 		expect(projectRow?.querySelector("svg.chev")?.getAttribute("width")).toBe("14");
@@ -347,13 +354,16 @@ describe("multica Open in AO menu", () => {
 	it("builds hairline and typography CSS from payload style tokens", () => {
 		mockGeometry();
 		const menuStyle: MenuStyleTokens = {
+			...DEFAULT_MENU_STYLE,
 			borderWidth: "2px",
 			borderWidthHiDpi: "1px",
+			borderColorMixPercent: 30,
 			menuFontSize: "13px",
+			menuRowPaddingY: "5px",
 			menuStateFontSize: "12px",
 			menuLabelFontSize: "11px",
 			menuFontWeight: "400",
-			menuLineHeight: "20px",
+			menuLineHeight: "18px",
 			menuMaxHeightPx: 150,
 		};
 		const { menu, shadow } = openMenu(payload({ style: menuStyle }));
@@ -361,23 +371,97 @@ describe("multica Open in AO menu", () => {
 		const style = styleElement?.textContent ?? "";
 		const itemRule = style.match(/\.item \{([\s\S]*?)\n\}/)?.[1] ?? "";
 
-		expect(style).toContain("box-shadow: 0 0 0 2px var(--surface-border");
-		expect(style).toContain("font: 400 13px/20px var(--font-sans");
+		expect(style).toContain("box-shadow: 0 0 0 2px color-mix(in oklab, var(--surface-border, rgba(0,0,0,.1)) 30%, transparent)");
+		expect(style).toContain("font: 400 13px/18px var(--font-sans");
+		expect(itemRule).toContain("padding: 5px 6px;");
 		expect(style).toContain("font-size: 13px;");
+		expect(itemRule).toContain("line-height: 18px;");
 		expect(style).toContain(".state { font-size: 12px;");
-		expect(style).toContain(".label { padding: 4px 6px; font-size: 11px; font-weight: 500;");
-		expect(style).toContain(".sep { height: 2px; margin: 4px -4px; background: var(--border");
+		expect(style).toContain(".label { padding: 5px 6px; font-size: 11px; font-weight: 500; line-height: 18px;");
+		expect(style).toContain(".sep { height: 2px; margin: 4px -4px; background: color-mix(in oklab, var(--border, rgba(0,0,0,.08)) 30%, transparent);");
 		expect(style).toContain("@media (min-resolution: 2dppx)");
-		expect(style).toContain("box-shadow: 0 0 0 1px var(--surface-border");
+		expect(style).toContain("box-shadow: 0 0 0 1px color-mix(in oklab, var(--surface-border, rgba(0,0,0,.1)) 30%, transparent)");
 		expect(style).toContain(".sep { height: 1px; }");
 		expect(itemRule).not.toContain("border:");
+		expect(itemRule).not.toContain("1px solid");
 		expect(itemRule).not.toContain("box-shadow:");
 		expect(panel(shadow, 0)?.style.maxHeight).toBe("150px");
 
-		menu.update(payload({ style: { ...menuStyle, borderWidth: "3px", menuFontSize: "14px", menuMaxHeightPx: 160 } }));
-		expect(styleElement?.textContent).toContain("box-shadow: 0 0 0 3px var(--surface-border");
-		expect(styleElement?.textContent).toContain("font: 400 14px/20px var(--font-sans");
+		menu.update(payload({ style: { ...menuStyle, borderWidth: "3px", borderColorMixPercent: 42, menuFontSize: "14px", menuRowPaddingY: "7px", menuLineHeight: "19px", menuMaxHeightPx: 160 } }));
+		expect(styleElement?.textContent).toContain("box-shadow: 0 0 0 3px color-mix(in oklab, var(--surface-border, rgba(0,0,0,.1)) 42%, transparent)");
+		expect(styleElement?.textContent).toContain("font: 400 14px/19px var(--font-sans");
+		expect(styleElement?.textContent).toContain("padding: 7px 6px;");
 		expect(panel(shadow, 0)?.style.maxHeight).toBe("160px");
+	});
+
+	// Actual rendered row heights are verified live in Chromium.
+	it("emits shared row geometry from tokens for every variant", () => {
+		mockGeometry();
+		const { menu, shadow } = openMenu(payload({
+			deducedProjectId: "alpha",
+			projects: [project("alpha", { moreCount: 2 })],
+		}));
+		const styleElement = shadow?.querySelector("style");
+		const getItemRules = () => {
+			const css = styleElement?.textContent ?? "";
+			const rules = Array.from(css.matchAll(/([^{}]+)\{([^{}]*)\}/g), ([, selectorText, declarations]) => ({
+				selectors: (selectorText ?? "").trim().split(",").map((selector) => selector.trim()),
+				declarations: declarations ?? "",
+			}));
+			return rules.filter((rule) => rule.selectors.some((selector) => selector.includes(".item")));
+		};
+		const assertItemCSS = (padding: string, fontSize: string, fontWeight: string, lineHeight: string) => {
+			const itemRules = getItemRules();
+			const baseRule = itemRules.find((rule) => rule.selectors.includes(".item"));
+			const overrides = itemRules
+				.filter((rule) => rule !== baseRule)
+				.flatMap((rule) => Array.from(rule.declarations.matchAll(/(?:^|;)\s*(padding(?:-[a-z-]+)?|line-height)\s*:/g)));
+
+			expect(baseRule?.declarations).toContain(`padding: ${padding} 6px;`);
+			expect(baseRule?.declarations).toContain(`font-size: ${fontSize};`);
+			expect(baseRule?.declarations).toContain(`font-weight: ${fontWeight};`);
+			expect(baseRule?.declarations).toContain(`line-height: ${lineHeight};`);
+			expect(overrides).toEqual([]);
+		};
+
+		assertItemCSS("6px", "12px", "400", "16px");
+		const initialCSS = styleElement?.textContent ?? "";
+
+		menu.openSubmenu("all-projects");
+		menu.openSubmenu("project:alpha");
+		const root = panel(shadow, 0);
+		const allProjects = panel(shadow, 1);
+		const projectContent = panel(shadow, 2);
+		const panels = [root, allProjects, projectContent];
+		const rows = panels.flatMap((entry) => Array.from(entry?.querySelectorAll<HTMLElement>(".item[data-key]") ?? []));
+		const rootRows = Array.from(root?.querySelectorAll<HTMLElement>(".item[data-key]") ?? []);
+		const rootFooterRows = Array.from(root?.querySelectorAll<HTMLElement>(".footer > .item[data-key]") ?? []);
+
+		expect(panels.every((entry) => entry !== null)).toBe(true);
+		expect(rows.length).toBeGreaterThan(0);
+		expect(rootRows.map((row) => row.dataset.kind)).toEqual(expect.arrayContaining([
+			"orchestrator",
+			"task",
+			"info",
+			"action",
+			"submenu",
+		]));
+		expect(allProjects?.querySelector('[data-kind="project"]')).not.toBeNull();
+		expect(rootFooterRows.map((row) => row.dataset.key)).toEqual(expect.arrayContaining([
+			"new-task:alpha",
+			"all-projects",
+		]));
+		expect(rows.every((row) => row.classList.contains("item"))).toBe(true);
+		expect(rows.every((row) => row.style.getPropertyValue("padding") === "" && row.style.getPropertyValue("height") === "")).toBe(true);
+
+		menu.update(payload({
+			deducedProjectId: "alpha",
+			projects: [project("alpha", { moreCount: 2 })],
+			style: { ...DEFAULT_MENU_STYLE, menuRowPaddingY: "9px", menuLineHeight: "21px" },
+		}));
+		const updatedCSS = shadow?.querySelector("style")?.textContent ?? "";
+		assertItemCSS("9px", "12px", "400", "21px");
+		expect(updatedCSS).not.toBe(initialCSS);
 	});
 
 	it("renders project content, disabled empty states, overflow, and conditionally includes New task", () => {
@@ -871,7 +955,7 @@ describe("multica Open in AO menu", () => {
 		const footer = root?.querySelector<HTMLElement>(".footer");
 		const newTask = shadow?.querySelector<HTMLElement>('[data-key="new-task:alpha"]');
 		const allProjects = shadow?.querySelector<HTMLElement>('[data-key="all-projects"]');
-		expect(root?.style.maxHeight).toBe("218px");
+		expect(root?.style.maxHeight).toBe("283px");
 		expect(shadow?.querySelector("style")?.textContent).toMatch(/\.footer\s*\{[^}]*position:\s*sticky;[^}]*bottom:\s*-4px;/);
 
 		key(newTask, "End");
@@ -1207,7 +1291,7 @@ describe("multica Open in AO menu", () => {
 		const root = shadow?.querySelector<HTMLElement>('.panel[data-level="0"]');
 		expect(root?.style.left).toBe("530px");
 		expect(root?.style.top).toBe("64px");
-		expect(root?.style.maxHeight).toBe("218px");
+		expect(root?.style.maxHeight).toBe("283px");
 		expect(root?.getAttribute("data-placement")).toBe("below");
 	});
 
@@ -1216,7 +1300,7 @@ describe("multica Open in AO menu", () => {
 		const { shadow } = openMenu();
 		const root = shadow?.querySelector<HTMLElement>('.panel[data-level="0"]');
 		expect(root?.style.top).toBe("406px");
-		expect(root?.style.maxHeight).toBe("218px");
+		expect(root?.style.maxHeight).toBe("283px");
 		expect(root?.getAttribute("data-placement")).toBe("above");
 	});
 
@@ -1224,8 +1308,8 @@ describe("multica Open in AO menu", () => {
 		mockGeometry({ trigger: rect(40, 400, 150, 30), panels: { "0": rect(0, 0, 240, 700) } });
 		const { shadow } = openMenu();
 		const root = shadow?.querySelector<HTMLElement>('.panel[data-level="0"]');
-		expect(root?.style.top).toBe("178px");
-		expect(root?.style.maxHeight).toBe("218px");
+		expect(root?.style.top).toBe("113px");
+		expect(root?.style.maxHeight).toBe("283px");
 		expect(root?.getAttribute("data-placement")).toBe("above");
 		expect(shadow?.querySelector("style")?.textContent).toContain("overflow-y: auto");
 	});
@@ -1235,7 +1319,7 @@ describe("multica Open in AO menu", () => {
 		const { shadow } = openMenu();
 		const root = shadow?.querySelector<HTMLElement>('.panel[data-level="0"]');
 		expect(root?.style.top).toBe("184px");
-		expect(root?.style.maxHeight).toBe("218px");
+		expect(root?.style.maxHeight).toBe("283px");
 		expect(root?.getAttribute("data-placement")).toBe("below");
 		expect(shadow?.querySelector("style")?.textContent).toContain("overflow-y: auto");
 	});
@@ -1268,29 +1352,42 @@ describe("multica Open in AO menu", () => {
 		submenu = shadow?.querySelector<HTMLElement>('.panel[data-level="1"]');
 		expect(submenu?.style.left).toBe("500px");
 		expect(submenu?.style.top).toBe("452px");
-		expect(submenu?.style.maxHeight).toBe("218px");
+		expect(submenu?.style.maxHeight).toBe("283px");
 	});
 
 	it.each([
 		[1320, 860],
 		[1000, 700],
-	])("caps tall root panels and submenus at 218px in a %ipx by %ipx viewport", (width, height) => {
+	])("caps tall root panels and submenus at 283px in a %ipx by %ipx viewport", (width, height) => {
 		mockGeometry({ panels: { "0": rect(0, 0, 240, 500), "1": rect(0, 0, 200, 400) } });
 		Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
 		Object.defineProperty(window, "innerHeight", { configurable: true, value: height });
-		const { shadow } = openMenu();
+		const { menu, shadow } = openMenu();
 		shadow?.querySelector<HTMLElement>('[data-key="project:alpha"]')?.click();
 		const root = panel(shadow, 0);
 		const submenu = panel(shadow, 1);
 
-		expect(root?.style.maxHeight).toBe("218px");
-		expect(submenu?.style.maxHeight).toBe("218px");
+		expect(root?.style.maxHeight).toBe("283px");
+		expect(submenu?.style.maxHeight).toBe("283px");
 		for (const openedPanel of [root, submenu]) {
 			const left = Number.parseFloat(openedPanel?.style.left ?? "0");
 			const top = Number.parseFloat(openedPanel?.style.top ?? "0");
 			const maxHeight = Number.parseFloat(openedPanel?.style.maxHeight ?? "0");
 			expect(left).toBeGreaterThanOrEqual(8);
 			expect(left + (openedPanel?.getBoundingClientRect().width ?? 0)).toBeLessThanOrEqual(width - 8);
+			expect(top + maxHeight).toBeLessThanOrEqual(height - 8);
+		}
+
+		menu.close();
+		const overridden = openMenu(payload({ style: { ...DEFAULT_MENU_STYLE, menuMaxHeightPx: 150 } }));
+		overridden.shadow?.querySelector<HTMLElement>('[data-key="project:alpha"]')?.click();
+		const overriddenRoot = panel(overridden.shadow, 0);
+		const overriddenSubmenu = panel(overridden.shadow, 1);
+		expect(overriddenRoot?.style.maxHeight).toBe("150px");
+		expect(overriddenSubmenu?.style.maxHeight).toBe("150px");
+		for (const openedPanel of [overriddenRoot, overriddenSubmenu]) {
+			const top = Number.parseFloat(openedPanel?.style.top ?? "0");
+			const maxHeight = Number.parseFloat(openedPanel?.style.maxHeight ?? "0");
 			expect(top + maxHeight).toBeLessThanOrEqual(height - 8);
 		}
 	});
@@ -1330,7 +1427,7 @@ describe("multica Open in AO menu", () => {
 		window.dispatchEvent(new Event("resize"));
 		top = Number.parseFloat(submenu?.style.top ?? "0");
 		height = submenu?.getBoundingClientRect().height ?? 0;
-		expect(submenu?.style.maxHeight).toBe("218px");
+		expect(submenu?.style.maxHeight).toBe("283px");
 		expect(top + height).toBeLessThanOrEqual(window.innerHeight - 8);
 	});
 
@@ -1341,8 +1438,8 @@ describe("multica Open in AO menu", () => {
 		const root = panel(shadow, 0);
 
 		expect(root?.getAttribute("data-placement")).toBe("above");
-		expect(root?.style.top).toBe("538px");
-		expect(root?.style.maxHeight).toBe("218px");
+		expect(root?.style.top).toBe("473px");
+		expect(root?.style.maxHeight).toBe("283px");
 	});
 
 	it("bounds root and submenu heights to the available space in a tiny viewport", () => {
