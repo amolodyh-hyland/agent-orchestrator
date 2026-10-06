@@ -13,6 +13,7 @@ import {
 	MAX_OPEN_WITH_AO_STATE_LABEL,
 	OPEN_WITH_AO_ACTION_PREFIX,
 	OPEN_WITH_AO_LABEL,
+	OPEN_WITH_AO_STYLE,
 	parseOpenWithAoActionUrl,
 	sortOpenWithAoSessions,
 	type OpenWithAoAction,
@@ -238,6 +239,7 @@ describe("buildOpenWithAoPagePayload", () => {
 			buildOpenWithAoPagePayload({ snapshot: null, links: [], issue: null, nonce: NONCE }),
 		).toEqual({
 			label: OPEN_WITH_AO_LABEL,
+			style: OPEN_WITH_AO_STYLE,
 			nonce: NONCE,
 			issue: null,
 			daemon: "unknown",
@@ -247,6 +249,16 @@ describe("buildOpenWithAoPagePayload", () => {
 			projects: [],
 		});
 		expect(OPEN_WITH_AO_LABEL).toBe("Open in AO");
+		expect(OPEN_WITH_AO_STYLE).toEqual({
+			borderWidth: "1px",
+			borderWidthHiDpi: "0.5px",
+			menuFontSize: "var(--text-caption, 12px)",
+			menuStateFontSize: "var(--text-micro, 11px)",
+			menuLabelFontSize: "var(--text-micro, 11px)",
+			menuFontWeight: "400",
+			menuLineHeight: "20px",
+			menuMaxHeightPx: 218,
+		});
 	});
 
 	it("does not mark sessions linked when there is no issue", () => {
@@ -256,6 +268,7 @@ describe("buildOpenWithAoPagePayload", () => {
 			issue: null,
 			nonce: NONCE,
 		});
+		expect(result.style).toBe(OPEN_WITH_AO_STYLE);
 		expect(result.projects[0].linked).toBe(false);
 		expect(result.projects[0].sessions[0].linked).toBe(false);
 	});

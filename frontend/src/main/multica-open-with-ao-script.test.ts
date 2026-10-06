@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenWithAoPagePayload } from "../shared/multica-open-with-ao";
-import { OPEN_WITH_AO_LABEL, parseOpenWithAoActionUrl } from "../shared/multica-open-with-ao";
+import { OPEN_WITH_AO_LABEL, OPEN_WITH_AO_STYLE, parseOpenWithAoActionUrl } from "../shared/multica-open-with-ao";
 import { locateOpenWithAoAnchor, type OpenWithAoAnchor } from "./multica-open-with-ao-anchor";
 import { createOpenWithAoMenu, type OpenWithAoMenu } from "./multica-open-with-ao-menu";
 import {
@@ -19,6 +19,7 @@ const controllers: OpenWithAoController[] = [];
 function payload(overrides: Partial<OpenWithAoPagePayload> = {}): OpenWithAoPagePayload {
 	return {
 		label: OPEN_WITH_AO_LABEL,
+		style: OPEN_WITH_AO_STYLE,
 		nonce: NONCE,
 		issue: { identifier: "SPIK-7", title: "Fix issue" },
 		daemon: "ready",
@@ -254,6 +255,10 @@ describe("multica Open in AO page controller script", () => {
 		expect(style.textContent).toContain("color-mix(in oklab");
 		expect(style.textContent).toContain('.dark button[data-ao-open-with-ao="trigger"]');
 		const headerStyles = style.textContent ?? "";
+		expect(headerStyles).toContain("border: 1px solid var(--border, rgba(0,0,0,.08));");
+		expect(headerStyles).toContain("@media (min-resolution: 2dppx)");
+		expect(headerStyles.slice(headerStyles.indexOf("@media (min-resolution: 2dppx)"))).toContain("border-width: 0.5px;");
+		expect(headerStyles).not.toContain("border-color: var(--input");
 		const darkBaseRule = headerStyles.indexOf('.dark button[data-ao-open-with-ao="trigger"] {');
 		const darkFocusRule = headerStyles.indexOf('.dark button[data-ao-open-with-ao="trigger"]:focus-visible');
 		expect(darkBaseRule).toBeGreaterThanOrEqual(0);
@@ -267,6 +272,41 @@ describe("multica Open in AO page controller script", () => {
 
 		controller.destroy();
 		expect(document.querySelector("style#ao-open-with-ao-style")).toBeNull();
+	});
+
+	it("builds and refreshes header and fallback borders from the style tokens", async () => {
+		mountIssueHeader();
+		let hasAnchor = true;
+		const locate = () => hasAnchor ? locateOpenWithAoAnchor() : null;
+		const initialStyle = { ...OPEN_WITH_AO_STYLE, borderWidth: "2px", borderWidthHiDpi: "1px" };
+		const controller = createDirectController(payload({ style: initialStyle }), locate);
+		const headerStyle = document.querySelector<HTMLStyleElement>("style#ao-open-with-ao-style")!;
+		const initialHeaderCss = headerStyle.textContent ?? "";
+		expect(initialHeaderCss).toContain("border: 2px solid var(--border, rgba(0,0,0,.08));");
+		expect(initialHeaderCss.slice(initialHeaderCss.indexOf("@media (min-resolution: 2dppx)"))).toContain("border-width: 1px;");
+
+		const updatedStyle = { ...initialStyle, borderWidth: "3px", borderWidthHiDpi: "1.5px" };
+		hasAnchor = false;
+		controller.update(payload({ style: updatedStyle }));
+		expect(document.querySelectorAll("style#ao-open-with-ao-style")).toHaveLength(1);
+		expect(document.querySelector("style#ao-open-with-ao-style")).toBe(headerStyle);
+		expect(headerStyle.textContent).toContain("border: 3px solid var(--border, rgba(0,0,0,.08));");
+		expect(headerStyle.textContent).toContain("border-width: 1.5px;");
+
+		await vi.advanceTimersByTimeAsync(1500);
+		const fallbackStyle = document.querySelector<HTMLDivElement>("#ao-open-with-ao-fallback")?.shadowRoot?.querySelector("style");
+		expect(fallbackStyle?.textContent).toContain("border: 3px solid var(--border, rgba(0,0,0,.08));");
+		expect(fallbackStyle?.textContent).toContain("border-width: 1.5px;");
+
+		const finalStyle = { ...updatedStyle, borderWidth: "4px", borderWidthHiDpi: "2px" };
+		controller.update(payload({ style: finalStyle }));
+		expect(document.querySelectorAll("style#ao-open-with-ao-style")).toHaveLength(1);
+		expect(document.querySelector("style#ao-open-with-ao-style")).toBe(headerStyle);
+		expect(headerStyle.textContent).toContain("border: 4px solid var(--border, rgba(0,0,0,.08));");
+		expect(headerStyle.textContent).toContain("border-width: 2px;");
+		expect(fallbackStyle?.textContent).toContain("border: 4px solid var(--border, rgba(0,0,0,.08));");
+		expect(fallbackStyle?.textContent).toContain("border-width: 2px;");
+		expect(fallbackStyle?.textContent).not.toContain("border-color: var(--input");
 	});
 
 	it("toggles the menu from click and opens it from ArrowDown", () => {
@@ -297,6 +337,10 @@ describe("multica Open in AO page controller script", () => {
 		const fallbackStyles = fallback?.shadowRoot?.querySelector("style")?.textContent ?? "";
 		expect(fallbackStyles).toContain("var(--button-height-sm");
 		expect(fallbackStyles).toContain("var(--radius-md");
+		expect(fallbackStyles).toContain("border: 1px solid var(--border, rgba(0,0,0,.08));");
+		expect(fallbackStyles).toContain("@media (min-resolution: 2dppx)");
+		expect(fallbackStyles.slice(fallbackStyles.indexOf("@media (min-resolution: 2dppx)"))).toContain("border-width: 0.5px;");
+		expect(fallbackStyles).not.toContain("border-color: var(--input");
 		expect(fallbackStyles).toContain(":host-context(html.dark)");
 		const darkBaseRule = fallbackStyles.indexOf(":host-context(html.dark) button {");
 		const darkFocusRule = fallbackStyles.indexOf(":host-context(html.dark) button:focus-visible");
