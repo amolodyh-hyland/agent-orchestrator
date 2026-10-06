@@ -299,7 +299,6 @@ func Run() error {
 		return fmt.Errorf("wire Multica supervisor: %w", err)
 	}
 	defer multicaStop()
-	_ = multicaService // available to the API dependency wiring when its route lands
 	policyCoordinator.StartWatcher(ctx)
 	defer func() { _ = policyCoordinator.CloseAndDrain(context.Background()) }()
 	// Constructing the synchronous sender performs no I/O. The hard production
@@ -817,6 +816,7 @@ func Run() error {
 		GitHub:             githubpat.New(cfg.DataDir),
 		Conversations:      chatSvc,
 		Settings:           settingsSvc,
+		Multica:            multicaService,
 		CDC:                store,
 		Events:             cdcPipe.Broadcaster,
 		Activity:           lcStack.LCM,
