@@ -95,9 +95,9 @@ An AO session can be linked to Multica issues. Nothing changes in the Multica re
 
 - Linking: the action cluster at the right of the session tab strip (alongside open-in-editor, cues and archive, shown for worker sessions once a Multica URL is set) has a chip. Paste an issue URL such as `http://localhost:3000/acme/issues/MUL-123`; the workspace slug and the identifier are stored. UUID URLs and bare identifiers are rejected, because the slug is needed to open the issue and the Multica page title only carries the identifier.
 - AO to Multica: choosing a linked issue switches to the Multica view and dispatches Multica's own `multica:navigate` window event with `/<slug>/issues/<IDENT>`. It waits for the `inbox:open` listener (`bridge.whenReady`), the same signed-in layout that handles the event.
-- Multica to AO: Multica's renderer uses an in-memory router, so the URL never shows the issue. The host listens to `page-title-updated`; an issue page sets `document.title` to `<IDENT>: <title>`. AO adds an "Open with AO" action to the issue header. Choosing a worker links it to the issue and opens it in AO; the AO session header's links chip shows the link. The legacy `ao://sessions/<project>/<session>` handler still accepts only linked pairs and opens the session in AO.
+- Multica to AO: Multica's renderer uses an in-memory router, so the URL never shows the issue. The host listens to `page-title-updated`; an issue page sets `document.title` to `<IDENT>: <title>`. AO adds an "Open in AO" action to the issue header. Choosing a worker links it to the issue and opens it in AO; the AO session header's links chip shows the link. The legacy `ao://sessions/<project>/<session>` handler still accepts only linked pairs and opens the session in AO.
 - Storage: `multica-issue-links.json` next to `multica-settings.json` in the AO state directory (`~/.ao` by default), written atomically with mode `0600`. Desktop only: the daemon, CLI and mobile do not see links, and links are not removed when a session is deleted.
-- Loading: the links store is loaded once by `MulticaPane` at the shell level, so the Open with AO linked markers and Send to AO duplicate check work even when the session links chip is not shown.
+- Loading: the links store is loaded once by `MulticaPane` at the shell level, so the Open in AO linked markers and Send to AO duplicate check work even when the session links chip is not shown.
 - Fragile dependencies on Multica internals, each in one place with a unit test: the issue page title format (`parseMulticaIssueTitle`) and the `multica:navigate` event (`navigatePath` in `multica-view-host.ts`). If either changes, the header action may not appear or opening a linked issue may only surface Multica; nothing else breaks.
 - Limits: lookups from the Multica page match on the identifier alone, so two workspaces with the same prefix share links.
 
@@ -105,7 +105,7 @@ An AO session can be linked to Multica issues. Nothing changes in the Multica re
 
 The existing `ao://multica/send-issue` request still opens the Send to AO dialog in AO's shell, where
 the user chooses a project and optionally an agent (the project's worker agent is the default). In
-the Open with AO menu, "New task from this ticket" opens the same dialog with that project
+the Open in AO menu, "New task from this ticket" opens the same dialog with that project
 preselected through `MulticaSendRequest.projectId`. AO creates a worker session seeded with the
 issue, links it to the issue, and opens it.
 
@@ -131,9 +131,9 @@ issue, links it to the issue, and opens it.
 - Live linked sessions for the same issue are listed as duplicates; the user can still choose
   "Send anyway".
 
-## Open with AO header menu
+## Open in AO header menu
 
-On an issue page, AO inserts an "Open with AO" button (small bot icon and label) as a sibling
+On an issue page, AO inserts an "Open in AO" button (small bot icon and label) as a sibling
 immediately before the pin button in the issue header action cluster, before the three-dot trigger
 and properties-panel toggle. The label is the single constant `OPEN_WITH_AO_LABEL` in
 `shared/multica-open-with-ao.ts` (it travels in the page payload; rename it there).
@@ -232,7 +232,7 @@ Multica's preload also exposes a generic `window.electron.ipcRenderer`, and seve
 
 `webSecurity` stays on (`MULTICA_WEB_SECURITY` in `src/shared/multica.ts`). Multica's cloud API and a default local self-host both accept REST calls from the `file://` renderer.
 
-The Open with AO controller runs in Electron's isolated world (`MULTICA_AO_WORLD_ID` = 1001),
+The Open in AO controller runs in Electron's isolated world (`MULTICA_AO_WORLD_ID` = 1001),
 separate from Multica's page script. Its per-process nonce is not written to the DOM, menu labels
 use `textContent`, and action rows require trusted events.
 
@@ -244,6 +244,6 @@ The WebSocket is different: the handshake carries `Origin: file://`, and a Multi
 - Windows packaging of the Multica bundle is not verified; the `postPackage` resource check runs on macOS and Linux only.
 - A build is only as new as the AO base it was packaged from.
 - Windows: AO's frameless window has no native controls under the Multica view.
-- Not verified: macOS traffic-light placement and drag regions with real mouse input. Open with AO's platform, packaged-build, keyboard-trigger, screen-reader, and large-list verification gaps are listed above.
+- Not verified: macOS traffic-light placement and drag regions with real mouse input. Open in AO's platform, packaged-build, keyboard-trigger, screen-reader, and large-list verification gaps are listed above.
 - The banner, click-through and badge path is covered by unit tests and was verified on macOS in the dev app against a signed-in local Multica server (real inbox events, OS banners, clicks that open the item, combined badge, sign-out). It has not been verified on Windows or Linux.
 - No CLI install or update, no auto-start, and no issue windows.
