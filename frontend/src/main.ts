@@ -169,6 +169,7 @@ import {
 import { buildLinuxAppMenuTemplate, buildMacAppMenuTemplate, buildWindowsAppMenuTemplate } from "./main/menu";
 import { readMulticaSettings, writeMulticaUrl } from "./main/multica-settings";
 import { createMulticaDaemonService, findMulticaBinary } from "./main/multica-daemon-cli";
+import { createHostedMulticaDaemonControl, createModeAwareMulticaDaemonService, hostedMulticaCliEnv, isMulticaHostingEnabled } from "./main/multica-daemon-hosted";
 import { createMulticaDaemonOwnerStore, listRunningMulticaDaemons } from "./main/multica-daemon-guard";
 import { probeMulticaHealth } from "./main/multica-health-probe";
 import { multicaBridgeChannels } from "./main/multica-desktop-bridge";
@@ -880,9 +881,7 @@ async function createWindowInternal(): Promise<void> {
 					return (error as NodeJS.ErrnoException).code === "EPERM";
 				}
 			};
-			const bundledMulticaBinary = app.isPackaged
-				? path.resolve(process.resourcesPath, "multica-cli", process.platform === "win32" ? "multica.exe" : "multica")
-				: undefined;
+			const bundledMulticaBinary = multicaBinaryOptions().bundledPath;
 			const guardOptions = {
 				homeDirectory,
 				probeHealth: probeMulticaHealth,
@@ -896,16 +895,9 @@ async function createWindowInternal(): Promise<void> {
 				},
 				isPidAlive,
 			};
-			return createMulticaDaemonService({
+			const cli = createMulticaDaemonService({
 				emit,
-				findBinary: () =>
-					findMulticaBinary({
-						override: process.env.AO_MULTICA_CLI?.trim() || undefined,
-						bundledPath: bundledMulticaBinary,
-						pathEnv: process.env.PATH,
-						home: os.homedir(),
-						platform: process.platform,
-					}),
+				findBinary: () => findMulticaBinary(multicaBinaryOptions()),
 				cliNotFoundMessage: app.isPackaged ? "The Multica CLI isn't bundled with this build and was not found on PATH" : undefined,
 				logPath: path.join(homeDirectory, ".multica", "daemon.log"),
 				isOwnedDaemon: ownerStore.isOwnedDaemon,
@@ -916,6 +908,21 @@ async function createWindowInternal(): Promise<void> {
 				isBundledBinary: (binaryPath: string) =>
 					!process.env.AO_MULTICA_CLI?.trim() && bundledMulticaBinary !== undefined && path.resolve(binaryPath) === bundledMulticaBinary,
 			});
+			if (!isMulticaHostingEnabled(process.env)) return cli;
+			const hosted = createHostedMulticaDaemonControl({
+				baseUrl: () => (daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null),
+				timeoutMs: 75_000,
+				fetchJson: async (url, init, timeoutMs) => {
+					const controller = new AbortController();
+					const timer = setTimeout(() => controller.abort(), timeoutMs);
+					try {
+						return await net.fetch(url, { ...init, signal: controller.signal });
+					} finally {
+						clearTimeout(timer);
+					}
+				},
+			});
+			return createModeAwareMulticaDaemonService({ cli, hosted, hostingEnabled: () => isMulticaHostingEnabled(process.env), emit });
 		},
 		onPageTitleChange: (title) => multicaIssueLinkService?.handlePageTitle(title),
 		onAoSessionLink: (url) => multicaIssueLinkService?.handleAoSessionLink(url) ?? false,
@@ -1266,6 +1273,18 @@ async function ensureBundledTmuxStaged(): Promise<void> {
 	stagedBundledTmuxBinary = destination;
 }
 
+function multicaBinaryOptions() {
+	return {
+		override: process.env.AO_MULTICA_CLI?.trim() || undefined,
+		bundledPath: app.isPackaged
+			? path.resolve(process.resourcesPath, "multica-cli", process.platform === "win32" ? "multica.exe" : "multica")
+			: undefined,
+		pathEnv: process.env.PATH,
+		home: os.homedir(),
+		platform: process.platform,
+	};
+}
+
 function daemonEnv(forceKeep = keepDaemonAlive(process.env)): NodeJS.ProcessEnv {
 	// AO_OWNER is the daemon's durable spawn-mode record: the daemon writes it
 	// into running.json and the attach path reads it to decide the supervisor
@@ -1301,6 +1320,7 @@ function daemonEnv(forceKeep = keepDaemonAlive(process.env)): NodeJS.ProcessEnv 
 				? path.join(process.resourcesPath, "acp-runtime")
 				: path.join(app.getAppPath(), "resources", "acp-runtime")),
 		...(bundledTmuxBinary ? { AO_TMUX_BINARY: bundledTmuxBinary, AO_TMUX_SOCKET_NAME: "ao" } : {}),
+		...hostedMulticaCliEnv(process.env, () => findMulticaBinary(multicaBinaryOptions())),
 	};
 	// In dev mode, inject isolation defaults so the dev daemon never collides with
 	// the installed app. User-set env vars take priority (checked first).
