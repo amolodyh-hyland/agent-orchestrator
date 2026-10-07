@@ -63,7 +63,9 @@ AO keeps its four modes; no new mode or API enum was added.
   sends the Ask for approval posture explicitly (`on-request`, workspace-write,
   reviewer `user`), after which `default` sends nothing again. For the common setup
   that equals Codex's own default; for a user whose configuration is wider it is
-  deliberately safer. A thread that never overrode anything is never touched. A resumed
+  deliberately safer, and for one whose configuration is narrower (for example a
+  user-level `read-only` sandbox) it is wider than their default, a limitation of
+  Codex having no way to withdraw an override. A thread that never overrode anything is never touched. A resumed
   thread keeps the override its last turn left (checked live: a prior turn's automatic
   reviewer was still in effect after a plain `thread/resume` that sent nothing), and
   a host that survived a daemon restart keeps whatever posture it had, which this
