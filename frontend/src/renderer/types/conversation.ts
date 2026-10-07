@@ -438,7 +438,8 @@ export interface SystemEventDetail {
 		| "render"
 		| "artifact"
 		| "workspace.setup"
-		| "account.switched";
+		| "account.switched"
+		| "permission.fallback";
 	/** account.switched: the account a stopped turn's conversation continues on. */
 	accountId?: string;
 	/** workspace.setup: how the project's Setup commands ended (exitCode, durationMs and output carry the rest). */
@@ -452,6 +453,14 @@ export interface SystemEventDetail {
 	/** model.rerouted */
 	fromModel?: string;
 	toModel?: string;
+	/**
+	 * permission.fallback: the provider refused the requested permission mode, so
+	 * the session runs with a less permissive one. `rejected` lists each refused
+	 * mode with the provider's own reason, most permissive first.
+	 */
+	requested?: string;
+	effective?: string;
+	rejected?: Array<{ mode: string; reason: string }>;
 	/** provider.failure */
 	category?: string;
 	severity?: "warning" | "error" | (string & {});

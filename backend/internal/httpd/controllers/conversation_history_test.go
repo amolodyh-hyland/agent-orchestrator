@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
@@ -33,6 +34,7 @@ type fakeChatService struct {
 	activateErr error
 	retryTurn   domain.ConversationTurn
 	retryErr    error
+	sendErr     error
 
 	gotTurnID      string
 	gotTitle       string
@@ -57,7 +59,7 @@ func (f *fakeChatService) Snapshot(context.Context, domain.SessionID) (chatsvc.S
 }
 
 func (f *fakeChatService) Send(context.Context, domain.SessionID, ports.ChatUserMessage) (domain.ConversationTurn, error) {
-	return domain.ConversationTurn{}, nil
+	return domain.ConversationTurn{}, f.sendErr
 }
 
 func (f *fakeChatService) Resolve(context.Context, domain.SessionID, string, ports.ChatDecision) error {
@@ -275,6 +277,10 @@ func TestEditConversationRouteRefusalsUseEditCodes(t *testing.T) {
 		{"idempotency conflict", chatsvc.ErrEditIdempotencyConflict, http.StatusConflict, "CHAT_EDIT_IDEMPOTENCY_CONFLICT"},
 		{"legacy durable rejection", chatsvc.ErrEditDeliveryRejected, http.StatusConflict, "CHAT_EDIT_REJECTED"},
 		{"provider refused", chatsvc.ErrProviderRefused, http.StatusConflict, "CHAT_PROVIDER_REFUSED"},
+		{"permission rejected", &ports.PermissionRejectedError{Mode: ports.PermissionModeBypassPermissions, Reason: "not allowed"}, http.StatusConflict, "CHAT_PERMISSION_REJECTED"},
+		// The chat service wraps a permission refusal in the generic provider-refused
+		// sentinel as well; the specific code has to win.
+		{"permission rejected folded into a provider refusal", fmt.Errorf("%w: %w", chatsvc.ErrProviderRefused, &ports.PermissionRejectedError{Mode: ports.PermissionModeBypassPermissions, Reason: "not allowed"}), http.StatusConflict, "CHAT_PERMISSION_REJECTED"},
 		{"missing turn", fmt.Errorf("%w: %w", chatsvc.ErrEditTurnInvalid, domain.ErrNoConversationTurn), http.StatusNotFound, "CHAT_EDIT_TURN_INVALID"},
 		{"invalid stored content", chatsvc.ErrEditTurnInvalid, http.StatusBadRequest, "CHAT_EDIT_TURN_INVALID"},
 	}
@@ -351,6 +357,7 @@ func TestConversationHistoryRefusalsAreTypedNeverInternalErrors(t *testing.T) {
 		{"previous agent provider", chatsvc.ErrTurnProviderMismatch, http.StatusConflict, "CHAT_TURN_PROVIDER_MISMATCH"},
 		{"unsupported", chatsvc.ErrRollbackUnsupported, http.StatusConflict, "CHAT_ROLLBACK_UNSUPPORTED"},
 		{"provider refused", fmt.Errorf("%w: no", chatsvc.ErrProviderRefused), http.StatusConflict, "CHAT_PROVIDER_REFUSED"},
+		{"permission rejected", fmt.Errorf("send turn: %w", &ports.PermissionFallbackExhaustedError{Rejected: []ports.PermissionRejection{{Mode: ports.PermissionModeBypassPermissions, Reason: "not allowed"}}}), http.StatusConflict, "CHAT_PERMISSION_REJECTED"},
 		{"no controller", chatsvc.ErrNoController, http.StatusConflict, "CHAT_CONTROLLER_NOT_READY"},
 		{"stopped before queue append", chatsvc.ErrNotProvisioning, http.StatusConflict, "CHAT_CONTROLLER_NOT_READY"},
 		{"tui session", chatsvc.ErrNotChatMode, http.StatusConflict, "SESSION_MODE_MISMATCH"},
@@ -433,5 +440,33 @@ func TestConversationHistoryRoutesStubWithoutAService(t *testing.T) {
 		body, status, headers := doRequest(t, srv, tc.method, tc.path, tc.body)
 		assertJSON(t, headers)
 		assertErrorCode(t, body, status, http.StatusNotImplemented, "NOT_IMPLEMENTED")
+	}
+}
+
+// A provider's refusal of the permission mode is its own situation, not an AO fault:
+// sending a message into it must answer 409 with the provider's reason, never an
+// anonymous 500 that hides which mode was refused and why.
+func TestSendMessagePermissionRejectionCarriesTheProvidersReason(t *testing.T) {
+	const reason = "`DangerFullAccess` is not in the allowed set [ReadOnly, WorkspaceWrite]"
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"single refusal", fmt.Errorf("send turn: %w", &ports.PermissionRejectedError{Mode: ports.PermissionModeBypassPermissions, Reason: reason})},
+		{"every mode refused", fmt.Errorf("send turn: %w", &ports.PermissionFallbackExhaustedError{Rejected: []ports.PermissionRejection{
+			{Mode: ports.PermissionModeBypassPermissions, Reason: reason},
+			{Mode: ports.PermissionModeAuto, Reason: "no reviewer"},
+		}})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newChatTestServer(t, &fakeChatService{sendErr: tc.err})
+			body, status, headers := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/conversation/messages",
+				`{"text":"go","clientMessageId":"client-1"}`)
+			assertJSON(t, headers)
+			assertErrorCode(t, body, status, http.StatusConflict, "CHAT_PERMISSION_REJECTED")
+			if !strings.Contains(string(body), "not in the allowed set") {
+				t.Fatalf("the provider's reason was dropped from the response: %s", body)
+			}
+		})
 	}
 }
