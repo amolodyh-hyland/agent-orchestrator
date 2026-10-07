@@ -1,8 +1,8 @@
 github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERoyfY=
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
 github.com/RaveNoX/go-jsoncommentstrip v1.0.0/go.mod h1:78ihd09MekBnJnxpICcwzCMzGrKSKYe4AqU6PDYYpjk=
-github.com/amolodyh-hyland/multica/server v0.0.0-20261006175150-7c7da8104909 h1:fVzY2Fgkz49L/icLwu95fsdISDnL4C8MgxTNpCqTVJY=
-github.com/amolodyh-hyland/multica/server v0.0.0-20261006175150-7c7da8104909/go.mod h1:n4kK1p1xmcEljwXs1nG2RKOslFZtGOfzAkv+hNkkSfQ=
+github.com/amolodyh-hyland/multica/server v0.0.0-20261007172956-730184d835ff h1:CvUyDY9zxKDP4pqqIBkJV4fe9ZEKFvHFwAXXaXU1Id8=
+github.com/amolodyh-hyland/multica/server v0.0.0-20261007172956-730184d835ff/go.mod h1:n4kK1p1xmcEljwXs1nG2RKOslFZtGOfzAkv+hNkkSfQ=
 github.com/apapsch/go-jsonmerge/v2 v2.0.0 h1:axGnT1gRIfimI7gJifB699GoE/oq+F2MU7Dml6nw9rQ=
 github.com/apapsch/go-jsonmerge/v2 v2.0.0/go.mod h1:lvDnEdqiQrp0O42VQGgmlKpxL1AP2+08jFMw88y4klk=
 github.com/aws/aws-sdk-go-v2 v1.47.0 h1:0jsHallhJCeaU0Ko48c/3FK1ctOQ7NpzggxriJOQ8MQ=
