@@ -5,11 +5,13 @@ import { useEffect, useRef } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { shellTerminalsQueryKey, type ShellTerminal } from "../hooks/useShellTerminals";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { EMPTY_TOPBAR_TABS, findSession } from "../lib/topbar-tabs";
 import type { AttachableTerminal } from "../hooks/useTerminalSession";
 import type { TerminalMux } from "../lib/terminal-mux";
 import type { TerminalTarget } from "../types/terminal";
 import type { WorkspaceSession } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
+import { useTopbarTabsStore } from "../stores/topbar-tabs-store";
 import {
 	cloudTerminalKind,
 	TerminalCacheProvider,
@@ -51,6 +53,7 @@ const {
 		terminalSessionOptions: [] as Array<{
 			coverInitialReplay?: boolean;
 			createMux?: () => unknown;
+			onHumanInput?: () => void;
 			waitForInitialOutput?: boolean;
 			shellTerminalHandleId?: string;
 		}>,
@@ -147,7 +150,7 @@ vi.mock("./XtermTerminal", () => ({
 vi.mock("../hooks/useTerminalSession", () => ({
 	useTerminalSession: (
 		_session: WorkspaceSession | undefined,
-		options: { coverInitialReplay?: boolean; createMux?: () => unknown; waitForInitialOutput?: boolean; shellTerminalHandleId?: string },
+		options: { coverInitialReplay?: boolean; createMux?: () => unknown; onHumanInput?: () => void; waitForInitialOutput?: boolean; shellTerminalHandleId?: string },
 	) => {
 		terminalSessionOptions.push(options);
 		return {
@@ -181,6 +184,15 @@ const orchestrator = {
 } satisfies WorkspaceSession;
 
 beforeEach(() => {
+	localStorage.clear();
+	useTopbarTabsStore.setState({
+		tabs: EMPTY_TOPBAR_TABS,
+		overflow: "scroll",
+		density: "comfortable",
+		colorCoding: false,
+		projectColors: {},
+		lastEviction: null,
+	});
 	getMock.mockClear();
 	postMock.mockReset();
 	postMock.mockResolvedValue({ data: {} });
@@ -1015,6 +1027,52 @@ describe("TerminalCacheProvider", () => {
 });
 
 describe("terminal restore", () => {
+	it("marks session terminals and session shells while leaving standalone shells unmarked", () => {
+		useTopbarTabsStore.getState().activateSession({ sessionId: worker.id, groupId: "p", kind: "task" });
+		const sessionView = renderPane(worker);
+		try {
+			const onHumanInput = terminalSessionOptions.at(-1)?.onHumanInput;
+			expect(onHumanInput).toBeTypeOf("function");
+			onHumanInput?.();
+			expect(findSession(useTopbarTabsStore.getState().tabs, worker.id)?.mode).toBe("persistent");
+		} finally {
+			sessionView.unmount();
+			sessionView.restore();
+		}
+
+		useTopbarTabsStore.setState({ tabs: EMPTY_TOPBAR_TABS });
+		useTopbarTabsStore.getState().activateSession({ sessionId: worker.id, groupId: "p", kind: "task" });
+		const sessionShell = renderPane(worker, undefined, undefined, {
+			generation: "2026-06-10T00:00:00Z",
+			handleId: "shell-1",
+			kind: "shell",
+			sessionId: worker.id,
+			title: "Terminal 1",
+		});
+		try {
+			const onHumanInput = terminalSessionOptions.at(-1)?.onHumanInput;
+			expect(onHumanInput).toBeTypeOf("function");
+			onHumanInput?.();
+			expect(findSession(useTopbarTabsStore.getState().tabs, worker.id)?.mode).toBe("persistent");
+		} finally {
+			sessionShell.unmount();
+			sessionShell.restore();
+		}
+
+		const standaloneShell = renderPane(undefined, undefined, undefined, {
+			generation: "2026-06-10T00:00:00Z",
+			handleId: "shell-2",
+			kind: "shell",
+			title: "Terminal 2",
+		});
+		try {
+			expect(terminalSessionOptions.at(-1)?.onHumanInput).toBeUndefined();
+		} finally {
+			standaloneShell.unmount();
+			standaloneShell.restore();
+		}
+	});
+
 	it("does not show the terminal-ended strip for a Cloud agent", () => {
 		terminalState.value = "exited";
 		const view = renderPane({ ...worker, cloud: { orgId: "org-1" }, terminalHandleId: "term-1" });
@@ -1033,9 +1091,11 @@ describe("terminal restore", () => {
 	])("posts restore from the terminal-ended strip when mux state is %s", async (state, error) => {
 		terminalState.value = state;
 		terminalError.value = error;
+		useTopbarTabsStore.getState().activateSession({ sessionId: worker.id, groupId: "p", kind: "task" });
 		const view = renderPane({ ...worker, status: "terminated", terminalHandleId: "term-1" });
 		const invalidate = vi.spyOn(view.queryClient, "invalidateQueries").mockResolvedValue(undefined);
 		try {
+			expect(findSession(useTopbarTabsStore.getState().tabs, worker.id)?.mode).toBe("preview");
 			await userEvent.click(screen.getByRole("button", { name: "Restore session" }));
 
 			await waitFor(() =>

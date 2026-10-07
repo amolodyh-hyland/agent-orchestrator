@@ -9,6 +9,7 @@ import type { AgentSwitchSummary, WorkspaceSession } from "../../types/workspace
 import { useUiStore } from "../../stores/ui-store";
 import { workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
 import { useConversationConfigOptions, useConversationModels, useConversationSkills } from "../../hooks/useConversation";
+import type { SessionTabActions } from "../topbar-tabs/TopbarTab";
 
 const LINK = "http://localhost:5173";
 const REPORT_LINK = "reports/new-report.html";
@@ -128,7 +129,7 @@ vi.mock("./ChatWorkspace", async () => {
 		}: {
 			agentInputDisabled?: boolean;
 			headerActions?: ReactNode;
-			sessionTabAction?: ReactNode;
+			sessionTabAction?: SessionTabActions;
 			newWorkDisabled?: boolean;
 			onLinkOpen?: (url: string) => void;
 			onRememberPermissions?: unknown;
@@ -154,7 +155,7 @@ vi.mock("./ChatWorkspace", async () => {
 					<div data-testid="turn-settings-available">{String(Boolean(onChooseSettings))}</div>
 					<div data-testid="config-option-error">{configOptionError}</div>
 					{headerActions}
-					{sessionTabAction}
+					<div data-testid="session-tab-action-items">{sessionTabAction?.menuItems}</div>
 					<button type="button" onClick={() => onLinkOpen?.(LINK)}>
 						Open chat link
 					</button>
@@ -656,22 +657,21 @@ describe("SessionChatSurface link routing", () => {
 		expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/preview", expect.anything());
 	});
 
-	// SessionView owns the switch-agent control on the primary session tab; the chat
-	// surface forwards it into ChatWorkspace.
-	it("forwards session tab actions into the chat workspace", () => {
+	// SessionView owns the session menu items; the chat surface forwards them into ChatWorkspace.
+	it("forwards typed session tab actions into the chat workspace", () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
 		});
 		render(
-			<Wrapper client={queryClient}>
+		<Wrapper client={queryClient}>
 				<SessionChatSurface
 					session={session}
-					sessionTabAction={<button type="button">Session actions</button>}
+					sessionTabAction={{ menuItems: <span>Session tab action</span> }}
 				/>
 			</Wrapper>,
 		);
 
-		expect(screen.getByRole("button", { name: "Session actions" })).toBeInTheDocument();
+		expect(screen.getByTestId("session-tab-action-items")).toHaveTextContent("Session tab action");
 	});
 
 	it("fences new work without applying the decision-blocking agent lock", () => {

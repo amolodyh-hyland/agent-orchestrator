@@ -9,6 +9,7 @@ import { useSoundNotificationsStore } from "../stores/sound-notifications-store"
 import { useTerminalShellStore } from "../stores/terminal-shell-store";
 import { useUiStore } from "../stores/ui-store";
 import { useTelemetryPolicyStore } from "../stores/telemetry-policy-store";
+import { TOPBAR_TABS_STORAGE_KEYS, useTopbarTabsStore } from "../stores/topbar-tabs-store";
 import { TooltipProvider } from "./ui/tooltip";
 
 const { harnessSettingsSectionMock } = vi.hoisted(() => ({ harnessSettingsSectionMock: vi.fn() }));
@@ -204,6 +205,10 @@ beforeEach(async () => {
 		saveError: false,
 	});
 	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false });
+	useTopbarTabsStore.setState({ overflow: "scroll", density: "comfortable", colorCoding: false });
+	for (const key of [TOPBAR_TABS_STORAGE_KEYS.overflow, TOPBAR_TABS_STORAGE_KEYS.density, TOPBAR_TABS_STORAGE_KEYS.colorCoding]) {
+		window.localStorage.removeItem(key);
+	}
 	useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true, saving: false, saveError: false });
 	document.documentElement.lang = "en";
 });
@@ -241,6 +246,50 @@ describe("GlobalSettingsForm", () => {
 		expect(screen.getByText("Report a problem")).toBeInTheDocument();
 		// Report form is inline — no dialog, fields directly present.
 		expect(screen.getByLabelText("Title")).toBeInTheDocument();
+	});
+
+	it("updates and persists tab overflow and density choices", async () => {
+		const user = userEvent.setup();
+		renderForm("general");
+		expect(await screen.findByLabelText("Settings")).toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Tab overflow" }));
+		await user.click(await screen.findByRole("menuitem", { name: "Wrap" }));
+		expect(useTopbarTabsStore.getState().overflow).toBe("wrap");
+		expect(window.localStorage.getItem(TOPBAR_TABS_STORAGE_KEYS.overflow)).toBe("wrap");
+
+		await user.click(screen.getByRole("button", { name: "Tab density" }));
+		await user.click(await screen.findByRole("menuitem", { name: "Compact" }));
+		expect(useTopbarTabsStore.getState().density).toBe("compact");
+		expect(window.localStorage.getItem(TOPBAR_TABS_STORAGE_KEYS.density)).toBe("compact");
+	});
+
+	it("persists colour-coding when enabled", async () => {
+		const user = userEvent.setup();
+		renderForm("general");
+		const colorCoding = await screen.findByRole("switch", { name: "Colour-code projects" });
+		expect(colorCoding).toHaveAttribute("aria-checked", "false");
+
+		await user.click(colorCoding);
+		expect(useTopbarTabsStore.getState().colorCoding).toBe(true);
+		expect(window.localStorage.getItem(TOPBAR_TABS_STORAGE_KEYS.colorCoding)).toBe("on");
+	});
+
+	it("reflects the current tab preferences on render", async () => {
+		useTopbarTabsStore.setState({ overflow: "wrap", density: "compact", colorCoding: true });
+		renderForm("general");
+		expect(await screen.findByRole("button", { name: "Tab overflow" })).toHaveTextContent("Wrap");
+		expect(screen.getByRole("button", { name: "Tab density" })).toHaveTextContent("Compact");
+		expect(screen.getByRole("switch", { name: "Colour-code projects" })).toHaveAttribute("aria-checked", "true");
+		expect(screen.getByText("Give each project a colour on its tab group and in the sidebar.")).toBeInTheDocument();
+	});
+
+	it("localizes the colour-coding label in German", async () => {
+		const user = userEvent.setup();
+		renderForm("general");
+		await user.click(await screen.findByRole("button", { name: "Language" }));
+		await user.click(await screen.findByRole("menuitem", { name: "Deutsch" }));
+		expect(await screen.findByRole("switch", { name: "Projekte farblich kennzeichnen" })).toBeInTheDocument();
 	});
 
 	it("persists developer mode and reveals feature builds", async () => {

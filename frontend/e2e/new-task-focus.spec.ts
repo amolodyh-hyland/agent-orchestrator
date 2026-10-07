@@ -274,7 +274,7 @@ test("renderer: closing that dialog never strands focus on the page body @T0", a
 	await expect
 		.poll(async () => {
 			const { label, inTerminal } = await activeElementInfo(page);
-			return inTerminal || label === "Session actions";
+			return inTerminal || label === "Tab options";
 		})
 		.toBe(true);
 });
@@ -293,7 +293,7 @@ test("renderer: a chat session hands focus back to the menu trigger when its dia
 
 	await page.keyboard.press("Escape");
 	await expect(dialog).toBeHidden();
-	await expect.poll(async () => (await activeElementInfo(page)).label).toBe("Session actions");
+	await expect.poll(async () => (await activeElementInfo(page)).label).toBe("Tab options");
 });
 
 

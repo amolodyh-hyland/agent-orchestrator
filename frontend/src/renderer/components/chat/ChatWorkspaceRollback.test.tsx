@@ -8,17 +8,94 @@
  */
 
 import { render as rtlRender, screen, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
-import type { ReactElement } from "react";
-import { describe, expect, it, vi } from "vitest";
+import type { ComponentProps, ReactElement } from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { chatFixture } from "../../lib/chat-fixture";
 import type { ConversationSnapshot } from "../../types/conversation";
+import type { WorkspaceSession, WorkspaceSummary } from "../../types/workspace";
+import { useTopbarTabsStore } from "../../stores/topbar-tabs-store";
 import { TooltipProvider } from "../ui/tooltip";
 
-function render(ui: ReactElement) {
-	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
+const routeMocks = vi.hoisted(() => ({
+	navigate: vi.fn(),
+	params: { projectId: undefined as string | undefined, sessionId: undefined as string | undefined },
+}));
+const workspaceQueryMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@tanstack/react-router")>();
+	return {
+		...actual,
+		useNavigate: () => routeMocks.navigate,
+		useParams: () => routeMocks.params,
+	};
+});
+
+vi.mock("../../hooks/useWorkspaceQuery", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../hooks/useWorkspaceQuery")>();
+	return { ...actual, useWorkspaceQuery: workspaceQueryMock };
+});
+
+function seedChatToolbar(ui: ReactElement): void {
+	if (ui.type !== ChatWorkspace) return;
+	const props = ui.props as ComponentProps<typeof ChatWorkspace>;
+	const sessionId = props.snapshot.sessionId;
+	const session: WorkspaceSession = {
+		id: sessionId,
+		workspaceId: "project-1",
+		workspaceName: "Project One",
+		title: props.sessionTitle ?? props.snapshot.title ?? sessionId,
+		provider: props.snapshot.harness as WorkspaceSession["provider"],
+		kind: props.sessionRole ?? "worker",
+		branch: "ao/chat-session",
+		status: "working",
+		activity: { state: "active", lastActivityAt: "2026-10-01T00:00:00Z" },
+		updatedAt: "2026-10-01T00:00:00Z",
+		prs: [],
+	};
+	const workspace: WorkspaceSummary = {
+		id: session.workspaceId,
+		name: session.workspaceName,
+		path: "/tmp/workspace",
+		orchestratorAgent: session.provider,
+		kind: "single_repo",
+		sessions: [session],
+	};
+	routeMocks.params.projectId = session.workspaceId;
+	routeMocks.params.sessionId = sessionId;
+	workspaceQueryMock.mockReturnValue({ data: [workspace] });
+	useTopbarTabsStore.setState({
+		tabs: {
+			version: 1,
+			groups: [{
+				id: session.workspaceId,
+				collapsed: false,
+				head: { sessionId: null, mode: "persistent", lastActiveAt: 0 },
+				tabs: [{ sessionId, mode: "persistent", lastActiveAt: 0 }],
+			}],
+		},
+	});
 }
+
+function render(ui: ReactElement) {
+	seedChatToolbar(ui);
+	return rtlRender(
+		<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+			<TooltipProvider>{ui}</TooltipProvider>
+		</QueryClientProvider>,
+	);
+}
+
+beforeEach(() => {
+	routeMocks.navigate.mockReset();
+	routeMocks.params.projectId = undefined;
+	routeMocks.params.sessionId = undefined;
+	workspaceQueryMock.mockReset().mockReturnValue({ data: [] });
+	useTopbarTabsStore.setState({ tabs: { version: 1, groups: [] }, density: "comfortable", overflow: "scroll" });
+});
 
 /** A conversation with nothing in flight, which is when an undo is offered. */
 function idleSnapshot(): ConversationSnapshot {
@@ -133,16 +210,17 @@ describe("ChatWorkspace rollback", () => {
 		expect(screen.getByRole("alert").textContent).toContain("stop the agent");
 	});
 
-	it("shows the thread title in the primary agent tab when there is one", () => {
+	it("shows the thread title in its grouped route tab when there is one", () => {
 		render(<ChatWorkspace snapshot={{ ...chatFixture, title: "Fix OAuth Return URL Loss" }} />);
-		expect(screen.getByRole("tab", { name: "Fix OAuth Return URL Loss · Codex" })).toBeInTheDocument();
+		const routeTab = screen.getByRole("tab", { name: /^Fix OAuth Return URL Loss · Codex/ });
+		expect(routeTab.closest('[data-testid="topbar-tab"]')).toHaveAttribute("data-role", "task");
 		expect(screen.queryByText("Codex")).toBeNull();
 		expect(screen.queryByText(chatFixture.sessionId)).toBeNull();
 	});
 
 	it("falls back to the session id when the thread has no name", () => {
 		render(<ChatWorkspace snapshot={chatFixture} />);
-		expect(screen.getByRole("tab", { name: `${chatFixture.sessionId} · Codex` })).toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: new RegExp(`^${chatFixture.sessionId} · Codex`) })).toBeInTheDocument();
 		expect(screen.queryByText("Codex")).toBeNull();
 	});
 });

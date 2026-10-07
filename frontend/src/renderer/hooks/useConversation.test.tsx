@@ -3,6 +3,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
+import { findSession } from "../lib/topbar-tabs";
+import { resetTopbarTabsStoreForTests, useTopbarTabsStore } from "../stores/topbar-tabs-store";
 
 const { getMock, patchMock, postMock, apiErrorCodeMock, apiErrorMessageMock } = vi.hoisted(() => ({
 	getMock: vi.fn(),
@@ -11,6 +13,25 @@ const { getMock, patchMock, postMock, apiErrorCodeMock, apiErrorMessageMock } = 
 	apiErrorCodeMock: vi.fn(),
 	apiErrorMessageMock: vi.fn(),
 }));
+const routeMocks = vi.hoisted(() => ({
+	navigate: vi.fn(),
+	params: { projectId: undefined as string | undefined, sessionId: undefined as string | undefined },
+}));
+const workspaceQueryMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@tanstack/react-router")>();
+	return {
+		...actual,
+		useNavigate: () => routeMocks.navigate,
+		useParams: () => routeMocks.params,
+	};
+});
+
+vi.mock("../hooks/useWorkspaceQuery", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../hooks/useWorkspaceQuery")>();
+	return { ...actual, useWorkspaceQuery: workspaceQueryMock };
+});
 
 vi.mock("../lib/api-client", async (importOriginal) => ({
 	...await importOriginal<typeof import("../lib/api-client")>(),
@@ -44,6 +65,10 @@ function deferred<T>() {
 		resolve = resolvePromise;
 	});
 	return { promise, resolve };
+}
+
+function activatePreviewTab(sessionId: string): void {
+	useTopbarTabsStore.getState().activateSession({ sessionId, groupId: "p", kind: "task" });
 }
 
 it("preserves queued-edit API error codes for delivery recovery", async () => {
@@ -102,11 +127,37 @@ const WIRE = {
 };
 
 beforeEach(() => {
+	localStorage.clear();
+	resetTopbarTabsStoreForTests();
+	routeMocks.navigate.mockReset();
+	routeMocks.params.projectId = undefined;
+	routeMocks.params.sessionId = undefined;
+	workspaceQueryMock.mockReset().mockReturnValue({ data: [] });
 	getMock.mockReset();
 	patchMock.mockReset();
 	postMock.mockReset();
 	apiErrorCodeMock.mockReset().mockReturnValue(undefined);
 	apiErrorMessageMock.mockReset().mockReturnValue("failed");
+});
+
+it("marks a conversation tab when sending or interrupting, but not on mount", async () => {
+	const sessionId = "ao-interaction";
+	activatePreviewTab(sessionId);
+	postMock.mockResolvedValue({ data: {}, error: undefined });
+	const { result } = renderHook(() => useConversationCommands(sessionId), { wrapper });
+
+	expect(findSession(useTopbarTabsStore.getState().tabs, sessionId)?.mode).toBe("preview");
+	await act(async () => result.current.send("hello"));
+	expect(findSession(useTopbarTabsStore.getState().tabs, sessionId)?.mode).toBe("persistent");
+
+	resetTopbarTabsStoreForTests();
+	activatePreviewTab(sessionId);
+	act(() => result.current.interrupt());
+	await waitFor(() => expect(postMock).toHaveBeenCalledWith(
+		"/api/v1/sessions/{sessionId}/conversation/interrupt",
+		{ params: { path: { sessionId } } },
+	));
+	expect(findSession(useTopbarTabsStore.getState().tabs, sessionId)?.mode).toBe("persistent");
 });
 
 it("renders a retained-history boundary between exchanges from the daemon snapshot", async () => {
@@ -125,7 +176,12 @@ it("renders a retained-history boundary between exchanges from the daemon snapsh
 		const { snapshot } = useConversation("ao-1");
 		return snapshot ? <TooltipProvider><ChatWorkspace snapshot={snapshot} /></TooltipProvider> : null;
 	}
-	render(<LiveConversation />, { wrapper });
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	render(
+		<QueryClientProvider client={queryClient}>
+			<LiveConversation />
+		</QueryClientProvider>,
+	);
 	const boundary = await screen.findByText(/continuity with this agent's context is not verified/);
 	const old = screen.getByText("Earlier context answer");
 	const current = screen.getByText("Independent context answer");
@@ -649,6 +705,27 @@ describe("session-scoped conversation commands", () => {
 });
 
 describe("provider catalog controller epochs", () => {
+	it("marks provider option changes as an interaction", async () => {
+		const sessionId = "ao-option-interaction";
+		activatePreviewTab(sessionId);
+		patchMock.mockResolvedValue({ data: { options: [] }, error: undefined });
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+		});
+		const HookWrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { result } = renderHook(() => useConversationConfigOptions(sessionId, false), {
+			wrapper: HookWrapper,
+		});
+
+		await act(async () => {
+			await result.current.setOption("model", { value: "next" });
+		});
+
+		expect(findSession(useTopbarTabsStore.getState().tabs, sessionId)?.mode).toBe("persistent");
+	});
+
 	it("discards a config mutation response from before switch admission", async () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -1026,19 +1103,35 @@ describe("steering refusals", () => {
 		refresh.resolve();
 	});
 
-	it("promotes the selected durable queued turn through the turn-scoped route", async () => {
+	it("marks queued-turn steering as an interaction", async () => {
+		const sessionId = "ao-queued-steer-interaction";
+		activatePreviewTab(sessionId);
 		postMock.mockResolvedValue({
 			data: { sourceTurnId: "queued-2", providerTurnId: "provider-1", activityId: "activity-1" },
 			error: undefined,
 		});
-		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+		const { result } = renderHook(() => useConversationCommands(sessionId), { wrapper });
 		await act(async () => {
 			await result.current.promoteQueuedTurn("queued-2");
 		});
 		expect(postMock).toHaveBeenCalledWith(
 			"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/steer",
-			{ params: { path: { sessionId: "ao-1", turnId: "queued-2" } } },
+			{ params: { path: { sessionId, turnId: "queued-2" } } },
 		);
+		expect(findSession(useTopbarTabsStore.getState().tabs, sessionId)?.mode).toBe("persistent");
+	});
+
+	it("marks queued-turn edits as an interaction", async () => {
+		const sessionId = "ao-queued-edit-interaction";
+		activatePreviewTab(sessionId);
+		postMock.mockResolvedValue({ data: undefined, error: undefined });
+		const { result } = renderHook(() => useConversationCommands(sessionId), { wrapper });
+
+		await act(async () => {
+			await result.current.editQueuedTurn("queued-2", "edited prompt");
+		});
+
+		expect(findSession(useTopbarTabsStore.getState().tabs, sessionId)?.mode).toBe("persistent");
 	});
 
 	async function steerFailingWith(code: string) {
