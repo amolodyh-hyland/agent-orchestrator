@@ -970,10 +970,14 @@ function CodexPermissionDetails({
 	const { t } = useTranslation();
 	if (agentId !== "codex") return null;
 	const copy = codexPermissionCopy(mode);
+	// Only full access and approve-for-me have a less permissive mode to step down
+	// to; the toggle would do nothing for the other two. An unset mode shows as
+	// approve-for-me, which is what a new session starts with.
+	const canStepDown = mode === "" || mode === "auto" || mode === "bypass-permissions";
 	return (
 		<div className="space-y-1.5">
 			<p className="text-xs leading-normal text-settings-muted">{t(copy.help)}</p>
-			{onFallbackChange && fallbackLabel !== undefined && (
+			{canStepDown && onFallbackChange && fallbackLabel !== undefined && (
 				<div className="flex items-center justify-between gap-2">
 					<div className="flex min-w-0 items-center gap-1.5">
 						<span className="text-xs leading-5 text-settings-label">{t("settings.project.permissionFallbackToggle")}</span>

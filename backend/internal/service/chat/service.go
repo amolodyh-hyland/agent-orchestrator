@@ -679,17 +679,19 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	if fallbackOutcome.steppedDown(requestedPermissions) {
 		cfg.Permissions = effectivePermissions
 		conversation.Settings.ApprovalMode = effectivePermissions
-		if activityErr := s.store.UpsertActivity(ctx, conversation.ID, "",
-			permissionFallbackActivity(s.newID(), requestedPermissions, fallbackOutcome), s.now()); activityErr != nil {
-			s.log.Warn("could not record the permission fallback in the timeline",
-				"sessionID", cfg.SessionID, "effective", effectivePermissions, "error", activityErr)
-		}
 		if settingsErr := s.store.SetConversationSettings(ctx, conversation.ID, conversation.Settings, s.now()); settingsErr != nil {
 			s.log.Warn("could not record the permission fallback on the conversation",
 				"sessionID", cfg.SessionID, "effective", effectivePermissions, "error", settingsErr)
 		}
 		if s.onPermissionsChanged != nil {
 			s.onPermissionsChanged(cfg.SessionID, effectivePermissions)
+		}
+		// Last, for the same reason as on a turn: publishing the notice makes clients
+		// refetch, and the settings and session record must already be current.
+		if activityErr := s.store.UpsertActivity(ctx, conversation.ID, "",
+			permissionFallbackActivity(s.newID(), requestedPermissions, fallbackOutcome), s.now()); activityErr != nil {
+			s.log.Warn("could not record the permission fallback in the timeline",
+				"sessionID", cfg.SessionID, "effective", effectivePermissions, "error", activityErr)
 		}
 	}
 	if cfg.ProviderConversationID != "" &&

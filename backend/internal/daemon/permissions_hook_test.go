@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
 )
 
 type recordingPermissionsPersister struct {
@@ -53,5 +54,57 @@ func TestChatPermissionsRecorderLogsAFailedWrite(t *testing.T) {
 
 	if !strings.Contains(logs.String(), "disk full") || !strings.Contains(logs.String(), "ao-1") {
 		t.Fatalf("a failed write was not logged:\n%s", logs.String())
+	}
+}
+
+// recordingLifecycle is the Session Manager as the daemon hooks see it.
+type recordingLifecycle struct {
+	*fakeSessionLifecycle
+	permissions []string
+	models      []string
+}
+
+func (r *recordingLifecycle) PersistChatPermissions(_ context.Context, id domain.SessionID, permissions domain.PermissionMode) error {
+	r.permissions = append(r.permissions, string(id)+"="+string(permissions))
+	return nil
+}
+
+func (r *recordingLifecycle) PersistChatModel(_ context.Context, id domain.SessionID, model string) error {
+	r.models = append(r.models, string(id)+"="+model)
+	return nil
+}
+
+// newChatServiceOptions is where the daemon wires the Chat service to the Session
+// Manager. The two hooks that write session records have to be present and reach it,
+// and the Session Manager has to be read when the hook fires, because it is built
+// after the Chat service. A hook that is omitted, or that captured a nil Session
+// Manager, would leave sessions reading back a mode and model they are not using.
+func TestChatServiceOptionsWireTheSessionRecordHooksToTheSessionManager(t *testing.T) {
+	var current sessionLifecycle // not built yet, as at daemon startup
+	opts := newChatServiceOptions(context.Background(), chatServiceDeps{
+		Log:          slog.New(slog.DiscardHandler),
+		AgentService: func() *agentsvc.Service { return nil },
+		Sessions:     func() sessionLifecycle { return current },
+	})
+	if opts.OnPermissionsChanged == nil || opts.OnModelChanged == nil {
+		t.Fatalf("session record hooks missing: permissions=%t model=%t",
+			opts.OnPermissionsChanged != nil, opts.OnModelChanged != nil)
+	}
+
+	// Firing before the Session Manager exists is a quiet no-op.
+	opts.OnPermissionsChanged("ao-0", domain.PermissionModeAuto)
+	opts.OnModelChanged("ao-0", "early")
+
+	sessions := &recordingLifecycle{fakeSessionLifecycle: &fakeSessionLifecycle{}}
+	current = sessions // built later; the hooks must see it now
+
+	opts.OnPermissionsChanged("ao-1", domain.PermissionModeAuto)
+	opts.OnModelChanged("ao-1", "gpt-test")
+
+	if got, want := strings.Join(sessions.permissions, ","), "ao-1=auto"; got != want {
+		t.Fatalf("permissions persisted %q, want %q", got, want)
+	}
+	if got, want := strings.Join(sessions.models, ","), "ao-1=gpt-test"; got != want {
+		t.Fatalf("models persisted %q, want %q", got, want)
 	}
 }

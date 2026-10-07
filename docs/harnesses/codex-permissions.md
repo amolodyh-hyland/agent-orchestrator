@@ -128,14 +128,23 @@ Rules:
   (`ao session get` shows `permissions:`, the API reports `permissions`; written by
   the daemon's permissions hook with a targeted query, because the general session
   update does not write the pinned permissions), recorded as a timeline notice, and
-  used by restore.
+  used by restore. The notice is written last: it publishes an event that makes
+  clients refetch, so the conversation's mode and the session record are already
+  current when they do.
 - If every mode is refused the spawn or turn fails with a
   `PermissionFallbackExhaustedError` that lists each mode and its reason. A refusal
   with nothing below the requested mode (`accept-edits`, `default`) is reported as
   the provider's refusal itself, not as an exhausted ladder.
-- The conversation API answers a refused turn with `409 CHAT_PERMISSION_REJECTED`
-  carrying that message (the chat client treats it as a definitive non-acceptance of
-  a steer or an edit), never an anonymous `500`.
+- Every endpoint that starts, resumes or sends to a chat controller answers a
+  refusal with `409 CHAT_PERMISSION_REJECTED` carrying that message, never an
+  anonymous `500`: the conversation routes (send, steer, queue, retry, edit, branch
+  and the rest, through `writeConversationError`), and the session routes (spawn,
+  delegate, restore, restart, switch agent, through the session service's error
+  mapping, where the refusal wins over the stage it surfaced in, such as
+  `SPAWN_DELIVER_PROMPT_FAILED`). A switch to Chat is recorded with
+  `TARGET_PERMISSION_REJECTED`. Reviewer launches are read-only and never reach it.
+  Error codes are not enumerated in the OpenAPI spec, so it is unchanged. The chat
+  client treats the code as a definitive non-acceptance of a steer or an edit.
 - A lower mode that the provider cannot admit (it needs an approval channel the
   provider lacks) is treated as refused at launch, not launched.
 - A mode the user picks while a turn is being sent is not overwritten by the
@@ -178,8 +187,9 @@ generic names, and explains the selected one under the picker:
 Under each Codex worker/orchestrator picker, **Step down if rejected** is the
 `agentConfig.permissionFallback` toggle (on by default; only an explicit off is
 saved, in the role override). Its tooltip states that it only steps down, never up,
-and never bypasses managed policy. The toggle is hidden for other harnesses and for
-the read-only reviewer. A project-level `agentConfig.permissionFallback` set through
+and never bypasses managed policy. The toggle is hidden for other harnesses, for
+the read-only reviewer, and for the modes that have nothing less permissive to step
+down to (Codex defaults, Ask for approval). A project-level `agentConfig.permissionFallback` set through
 the CLI is moved into the role overrides when the form saves, like the other
 agent-config fields.
 

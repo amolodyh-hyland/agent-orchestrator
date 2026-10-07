@@ -3,6 +3,7 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -148,5 +149,25 @@ func TestPersistChatPermissionsIsANoOpWithoutStoreSupport(t *testing.T) {
 	}
 	if got := store.sessions["mer-1"].Metadata.Permissions; got != domain.PermissionModeBypassPermissions {
 		t.Fatalf("permissions = %q, want the pinned mode untouched", got)
+	}
+}
+
+// A switch to Chat that the provider refuses over the permission mode is recorded
+// with its own code, not the generic preflight failure, so the user is told why.
+func TestInterfaceTransitionErrorCodeNamesAPermissionRejection(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"single refusal", fmt.Errorf("start chat: %w", &ports.PermissionRejectedError{Mode: ports.PermissionModeBypassPermissions, Reason: "no"}), "TARGET_PERMISSION_REJECTED"},
+		{"every mode refused", &ports.PermissionFallbackExhaustedError{Rejected: []ports.PermissionRejection{{Mode: ports.PermissionModeAuto, Reason: "no"}}}, "TARGET_PERMISSION_REJECTED"},
+		{"an unrelated failure keeps the generic code", errors.New("boom"), "TARGET_PREFLIGHT_FAILED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := interfaceTransitionErrorCode(tc.err); got != tc.want {
+				t.Fatalf("interfaceTransitionErrorCode(%v) = %q, want %q", tc.err, got, tc.want)
+			}
+		})
 	}
 }

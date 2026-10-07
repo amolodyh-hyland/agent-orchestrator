@@ -1717,6 +1717,8 @@ func interfaceTransitionErrorCode(err error) string {
 		return "TARGET_INCOMPATIBLE"
 	case errors.Is(err, ports.ErrChatAuthRequired), errors.Is(err, ports.ErrAgentAuthRequired):
 		return "TARGET_AUTH_REQUIRED"
+	case errors.Is(err, ports.ErrPermissionRejected):
+		return "TARGET_PERMISSION_REJECTED"
 	case errors.Is(err, ErrInterfaceProviderHistoryRecoveryUnavailable):
 		return "PROVIDER_HISTORY_RECOVERY_UNAVAILABLE"
 	case errors.Is(err, ErrNativeConversationMissing):

@@ -71,6 +71,29 @@ type fallbackOptions struct {
 	caps  ports.ChatCapabilities
 	// readOnly starts a read-only conversation, as a reviewer does.
 	readOnly bool
+	// watchNotice records what was already durable when the timeline notice was
+	// written. Writing it publishes an event that makes clients refetch.
+	watchNotice bool
+}
+
+// noticeState is what was true at the moment the step-down notice was written.
+type noticeState struct {
+	persistedMode ports.PermissionMode
+	reported      []ports.PermissionMode
+}
+
+// noticeWatchStore reports the durable state just before the permission notice is
+// written, since that write is what clients react to.
+type noticeWatchStore struct {
+	chatsvc.Store
+	observe func(conversationID string)
+}
+
+func (s noticeWatchStore) UpsertActivity(ctx context.Context, conversationID, providerTurnID string, activity domain.ConversationActivity, now time.Time) error {
+	if bytes.Contains(activity.Detail, []byte("permission.fallback")) {
+		s.observe(conversationID)
+	}
+	return s.Store.UpsertActivity(ctx, conversationID, providerTurnID, activity, now)
 }
 
 type fallbackFixture struct {
@@ -81,6 +104,8 @@ type fallbackFixture struct {
 	logs *bytes.Buffer
 
 	startErr error
+	// atNotice is filled when the fixture watches the notice.
+	atNotice []noticeState
 
 	changedMu sync.Mutex
 	changed   []ports.PermissionMode
@@ -97,8 +122,22 @@ func newFallbackFixture(t *testing.T, opts fallbackOptions) *fallbackFixture {
 	if opts.start != nil {
 		start = func(cfg ports.ChatStartConfig) (ports.ChatConversation, error) { return opts.start(cfg, f.conv) }
 	}
+	var chatStore chatsvc.Store = st
+	if opts.watchNotice {
+		chatStore = noticeWatchStore{Store: st, observe: func(conversationID string) {
+			snapshot, err := st.LoadConversationSnapshot(context.Background(), conversationID)
+			if err != nil {
+				t.Errorf("load conversation: %v", err)
+				return
+			}
+			f.atNotice = append(f.atNotice, noticeState{
+				persistedMode: snapshot.Conversation.Settings.ApprovalMode,
+				reported:      f.changedModes(),
+			})
+		}}
+	}
 	f.svc = chatsvc.New(chatsvc.Options{
-		Store: st, Sessions: st,
+		Store: chatStore, Sessions: st,
 		Drivers: fakeRegistry{driver: fakeDriver{conv: f.conv, start: start, caps: opts.caps}},
 		Log:     slog.New(slog.NewTextHandler(&lockedWriter{w: f.logs}, nil)),
 		NewID: func() string {
@@ -728,5 +767,43 @@ func TestFallbackRunsWhenNothingConfiguresIt(t *testing.T) {
 	}
 	if got, want := f.conv.attemptedModes(), []ports.PermissionMode{bypass, autoMode}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("modes tried = %v, want a step-down with the fallback left at its default", got)
+	}
+}
+
+// Writing the notice publishes an event that makes clients refetch the conversation.
+// If the new mode were stored after it, the refetch would still show the refused mode
+// in the picker, and nothing would be published later to correct it. So the
+// conversation's mode and the session record have to be durable before the notice.
+func TestStepDownIsDurableBeforeTheNoticeIsPublished(t *testing.T) {
+	t.Run("turn", func(t *testing.T) {
+		f := newFallbackFixture(t, fallbackOptions{permissions: bypass, reject: reject(bypass), watchNotice: true})
+		if f.startErr != nil {
+			t.Fatalf("Start: %v", f.startErr)
+		}
+		if _, err := f.send("first"); err != nil {
+			t.Fatalf("Send: %v", err)
+		}
+		assertNoticeWrittenLast(t, f.atNotice)
+	})
+	t.Run("launch", func(t *testing.T) {
+		recorder := &launchRecorder{reject: reject(bypass)}
+		f := newFallbackFixture(t, fallbackOptions{permissions: bypass, start: recorder.start, watchNotice: true})
+		if f.startErr != nil {
+			t.Fatalf("Start: %v", f.startErr)
+		}
+		assertNoticeWrittenLast(t, f.atNotice)
+	})
+}
+
+func assertNoticeWrittenLast(t *testing.T, observed []noticeState) {
+	t.Helper()
+	if len(observed) != 1 {
+		t.Fatalf("notice was written %d times, want once", len(observed))
+	}
+	if observed[0].persistedMode != autoMode {
+		t.Errorf("when the notice was written the conversation's mode was %q, want the effective %q already stored", observed[0].persistedMode, autoMode)
+	}
+	if !reflect.DeepEqual(observed[0].reported, []ports.PermissionMode{autoMode}) {
+		t.Errorf("when the notice was written the session record had been told %v, want [%s]", observed[0].reported, autoMode)
 	}
 }

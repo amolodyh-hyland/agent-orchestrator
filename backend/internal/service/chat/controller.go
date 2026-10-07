@@ -1708,14 +1708,22 @@ func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (p
 // and is not repeated, and reports it for the session record. A choice the user
 // made while the turn was being sent is left alone.
 func (c *Controller) adoptEffectivePermission(ctx context.Context, requested ports.PermissionMode, outcome permissionFallbackOutcome) {
-	effective := outcome.Effective
-	// The timeline notice is recorded whatever the user chose meanwhile: the turn
-	// did run with the lower mode.
+	c.adoptEffectiveMode(ctx, requested, outcome.Effective)
+	// The notice goes last, and whatever the user chose meanwhile: the turn did run
+	// with the lower mode. Writing it publishes an event that makes clients refetch
+	// the conversation, so the settings (the picker's mode) and the session record
+	// must already say the new mode by then; nothing is published after them.
 	if err := c.store.UpsertActivity(ctx, c.conversation.ID, "",
 		permissionFallbackActivity(c.newID(), requested, outcome), c.now()); err != nil {
 		c.log.Warn("could not record the permission fallback in the timeline",
-			"sessionID", c.sessionID, "effective", effective, "error", err)
+			"sessionID", c.sessionID, "effective", outcome.Effective, "error", err)
 	}
+}
+
+// adoptEffectiveMode stores the mode a turn really ran with as the conversation's
+// approval mode and reports it for the session record, unless the user changed the
+// mode while the turn was being sent.
+func (c *Controller) adoptEffectiveMode(ctx context.Context, requested, effective ports.PermissionMode) {
 	c.configMu.Lock()
 	defer c.configMu.Unlock()
 	current := c.Settings()

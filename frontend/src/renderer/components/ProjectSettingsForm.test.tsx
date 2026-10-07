@@ -619,6 +619,39 @@ describe("ProjectSettingsForm", () => {
 		expect(putMock.mock.calls[0][1].body.config.worker.agentConfig).not.toHaveProperty("permissionFallback");
 	});
 
+	it("hides the permission fallback toggle for modes that have nothing less permissive to step down to", async () => {
+		mockProject({
+			id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+			repo: "", defaultBranch: "main", config: {
+				worker: { agent: "codex", agentConfig: { permissions: "default" } },
+				orchestrator: { agent: "codex", agentConfig: { permissions: "accept-edits" } },
+			},
+		});
+		renderSettings("proj-1", undefined, "agents");
+		const worker = await screen.findByRole("button", { name: "Worker approval" });
+		expect(screen.queryByRole("switch", { name: /Step down if rejected/ })).not.toBeInTheDocument();
+
+		// Choosing a mode that can step down brings the toggle back, and an unset
+		// mode (shown as approve-for-me) has one too.
+		await chooseOption(worker, "Approve for me");
+		expect(screen.getByRole("switch", { name: "Step down if rejected (Worker approval)" })).toBeInTheDocument();
+		await chooseOption(worker, "Ask for approval");
+		expect(screen.queryByRole("switch", { name: "Step down if rejected (Worker approval)" })).not.toBeInTheDocument();
+	});
+
+	it("shows the permission fallback toggle for an unset mode, which a new session treats as approve-for-me", async () => {
+		mockProject({
+			id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+			repo: "", defaultBranch: "main", config: {
+				worker: { agent: "codex", agentConfig: {} },
+				orchestrator: { agent: "claude-code", agentConfig: {} },
+			},
+		});
+		renderSettings("proj-1", undefined, "agents");
+		expect(await screen.findByRole("button", { name: "Worker approval" })).toHaveTextContent("Approve for me");
+		expect(screen.getByRole("switch", { name: "Step down if rejected (Worker approval)" })).toBeChecked();
+	});
+
 	it("saves an explicit off for the permission fallback and removes it when turned back on", async () => {
 		let savedConfig: Record<string, unknown> = {
 			worker: { agent: "codex", agentConfig: { permissions: "bypass-permissions" } },
