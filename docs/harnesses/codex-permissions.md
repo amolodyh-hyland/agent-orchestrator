@@ -199,19 +199,27 @@ provider refuses a mode. Only Codex does today.
 
 ## Verification
 
-Live, isolated daemon (own data dir, run file, port) against `codex-cli 0.159.2`
+Live, isolated daemon (own data dir, run file and port) against `codex-cli 0.159.2`
 with the managed requirements above:
 
 | Scenario | Result |
 | --- | --- |
-| `bypass-permissions`, fallback on | `turn/start` rejected with the managed error, stepped to `auto`, turn completed; `ao session get` shows `permissions: auto`. |
+| `bypass-permissions`, fallback on | `turn/start` rejected with the managed error, stepped to `auto`, turn completed; `ao session get` shows `permissions: auto`; the chat timeline has the **Permission mode lowered from bypass-permissions to auto** row with the provider's reason. |
 | `bypass-permissions`, fallback off | Spawn failed with the managed-requirement message surfaced in `SPAWN_DELIVER_PROMPT_FAILED`; no retry. |
 | `default` | No override sent, turn completed, no step-down, no `sandbox_mode` error. |
-| `auto` | Turn completed, no step-down. |
+| `auto`, then `default` chosen mid-thread | Both turns completed; the second carried the explicit Ask for approval posture, which the managed policy accepted. |
 | TUI flags | `codex` accepted the `auto`, `bypass` and no-flag launches; bypass printed the `approval_policy … falling back` warning. |
 
-Unit tests: launch-flag mapping (`pkg/agentruntime`, `adapters/agent/codex`), chat
-wire payloads and rejection classification (`codexappserver`), step-down per rung, no
-step-down on unrelated errors, no escalation, all-fail, disabled, launch-level and
-concurrent-choice cases (`service/chat`), config merge and persistence
-(`session_manager`), CLI flag and `session get` output, and the API field.
+Unit and integration tests: launch-flag mapping (`pkg/agentruntime`,
+`adapters/agent/codex`); chat wire payloads, rejection classification, the default
+mode reset and read-only handling (`codexappserver`); step-down per rung, no
+step-down on unrelated errors, no escalation and never to `default`, all-fail,
+disabled, launch and turn level, concurrent choice, cancellation, replacement
+controllers, review and read-only conversations, and persistence on a real SQLite
+store (`service/chat`); config merge, resume and agent-switch plumbing and the
+persistence method (`session_manager`); the daemon permissions hook (`daemon`); the
+CLI flag and `session get` output; the API field; and the settings form, timeline row
+and picker labels (frontend).
+
+Not verified: a Codex build that rejects `thread/start`, other operating systems, and
+the Cloud Codex worker.
