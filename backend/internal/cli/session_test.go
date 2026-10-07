@@ -422,6 +422,114 @@ func TestSessionGet_JSONOutputDecodes(t *testing.T) {
 	}
 }
 
+func TestSessionGet_ModelAndEffort(t *testing.T) {
+	t.Run("table output", func(t *testing.T) {
+		srv := sessionGetTestServer(t, "gpt-6-luna", "xhigh")
+		out, errOut, err := executeSessionGet(t, srv, "session", "get", "demo-1")
+		if err != nil {
+			t.Fatalf("session get failed: %v\nstderr=%s", err, errOut)
+		}
+		want := "harness: codex\nmodel: gpt-6-luna\neffort: xhigh\n"
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing model and effort after harness:\n%s", out)
+		}
+	})
+
+	t.Run("JSON output", func(t *testing.T) {
+		srv := sessionGetTestServer(t, "gpt-6-luna", "xhigh")
+		out, errOut, err := executeSessionGet(t, srv, "session", "get", "demo-1", "--json")
+		if err != nil {
+			t.Fatalf("session get --json failed: %v\nstderr=%s", err, errOut)
+		}
+		var got sessionResponse
+		if err := json.Unmarshal([]byte(out), &got); err != nil {
+			t.Fatalf("session get --json output is not decodable: %v\noutput=%s", err, out)
+		}
+		if got.Session.Model != "gpt-6-luna" || got.Session.Effort != "xhigh" {
+			t.Fatalf("model and effort = %q and %q, want %q and %q", got.Session.Model, got.Session.Effort, "gpt-6-luna", "xhigh")
+		}
+	})
+}
+
+func TestSessionGet_OmitsUnsetModelAndEffort(t *testing.T) {
+	t.Run("table output", func(t *testing.T) {
+		srv := sessionGetTestServer(t, "", "")
+		out, errOut, err := executeSessionGet(t, srv, "session", "get", "demo-1")
+		if err != nil {
+			t.Fatalf("session get failed: %v\nstderr=%s", err, errOut)
+		}
+		if strings.Contains(out, "model:") || strings.Contains(out, "effort:") {
+			t.Fatalf("output contains unset model or effort:\n%s", out)
+		}
+	})
+
+	t.Run("JSON output", func(t *testing.T) {
+		srv := sessionGetTestServer(t, "", "")
+		out, errOut, err := executeSessionGet(t, srv, "session", "get", "demo-1", "--json")
+		if err != nil {
+			t.Fatalf("session get --json failed: %v\nstderr=%s", err, errOut)
+		}
+		var got map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(out), &got); err != nil {
+			t.Fatalf("session get --json output is not decodable: %v\noutput=%s", err, out)
+		}
+		var session map[string]json.RawMessage
+		if err := json.Unmarshal(got["session"], &session); err != nil {
+			t.Fatalf("session get --json session is not decodable: %v\noutput=%s", err, out)
+		}
+		for _, key := range []string{"model", "effort"} {
+			if _, ok := session[key]; ok {
+				t.Errorf("session JSON contains unset %q: %s", key, out)
+			}
+		}
+	})
+}
+
+func sessionGetTestServer(t *testing.T, model, effort string) *httptest.Server {
+	t.Helper()
+	session := map[string]any{
+		"id":           "demo-1",
+		"projectId":    "demo",
+		"kind":         "worker",
+		"harness":      "codex",
+		"activity":     map[string]any{"state": "working", "lastActivityAt": "2026-06-02T12:00:00Z"},
+		"isTerminated": false,
+		"createdAt":    "2026-06-02T11:00:00Z",
+		"updatedAt":    "2026-06-02T12:00:00Z",
+		"status":       "working",
+		"prs":          []any{},
+	}
+	if model != "" {
+		session["model"] = model
+	}
+	if effort != "" {
+		session["effort"] = effort
+	}
+	body, err := json.Marshal(map[string]any{"session": session})
+	if err != nil {
+		t.Fatalf("marshal session response: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/sessions/demo-1" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func executeSessionGet(t *testing.T, srv *httptest.Server, args ...string) (string, string, error) {
+	t.Helper()
+	cfg := setConfigEnv(t)
+	writeRunFileFor(t, cfg, srv)
+	return executeCLI(t, Deps{
+		ProcessAlive: func(int) bool { return true },
+	}, args...)
+}
+
 func TestSessionKill_SuccessWithProjectScope(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv, log := sessionCommandServer(t)

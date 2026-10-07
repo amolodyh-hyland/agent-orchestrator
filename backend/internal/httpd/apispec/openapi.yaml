@@ -10845,6 +10845,8 @@ components:
           - Closed without merge
           - Terminated
           type: string
+        effort:
+          type: string
         harness:
           type: string
         hibernatedAt:
