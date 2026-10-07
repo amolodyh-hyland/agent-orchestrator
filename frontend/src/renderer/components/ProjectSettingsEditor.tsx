@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { MAX_PROJECT_DISPLAY_NAME_LEN, ProjectSettingsFormView, ProjectSettingsInputRow, ProjectSettingsRow, ProjectSettingsSection, ProjectSettingsValueRow } from "@aoagents/product-ui";
-import { Pencil } from "lucide-react";
+import { Info, Pencil } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { ProjectSettingsSaveState, ProjectSettingsSection as SettingsSection } from "./ProjectSettingsForm";
@@ -9,6 +9,8 @@ import { ProductExternalLink } from "./ProductExternalLink";
 import { AgentModelField, ProjectAutoReviewToggle, ProjectWorkersRequestReviewToggle } from "./settings/ProjectAgentRoleControls";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { Button } from "./ui/button";
+import { Switch } from "./ui/switch";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 export type ProjectSettingsDraft = {
 	displayName: string;
@@ -29,6 +31,9 @@ export type ProjectSettingsDraft = {
 	workerPermissions: string;
 	orchestratorPermissions: string;
 	reviewerPermissions: string;
+	/** Local-only: a refused Codex permission mode steps down to a less permissive one. Unset means on. */
+	workerPermissionFallback?: boolean;
+	orchestratorPermissionFallback?: boolean;
 	autoReview: boolean;
 	/** Local-only: workers may ask AO to review their own PRs. */
 	workersRequestReview?: boolean;
@@ -219,7 +224,9 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 							onModelChange={(value) => updateConfig(fields.model, value)} onModeChange={(value) => updateConfig(fields.mode, value)} onEffortChange={(value) => updateConfig(fields.effort, value)} onValidityChange={(valid) => setValidity((current) => current[role] === valid ? current : { ...current, [role]: valid })} />
 							{capabilities.runtimeDefaults && agent === "cursor" && <SettingsOptionMenu aria-label={t(`settings.models.${role}Mode`)} value={draft[fields.mode]} triggerClassName="w-fit" options={[{ value: "", label: t("settings.cloudProject.agentMode") }, { value: "plan", label: t("settings.cloudProject.plan") }, { value: "ask", label: t("settings.cloudProject.ask") }]} onChange={(value) => updateConfig(fields.mode, value)} />}
 						</div></div></ProjectSettingsRow>
-						<ProjectSettingsRow label={t("settings.project.approval")}><div className="min-w-0"><ProjectRolePermissions role={role} agent={agent} value={draft[fields.permissions]} runtimeDefaults={capabilities.runtimeDefaults} onChange={updatePermissions} /></div></ProjectSettingsRow>
+						<ProjectSettingsRow label={t("settings.project.approval")}><div className="min-w-0 space-y-1.5"><ProjectRolePermissions role={role} agent={agent} value={draft[fields.permissions]} runtimeDefaults={capabilities.runtimeDefaults} onChange={updatePermissions}
+							fallback={role === "worker" ? draft.workerPermissionFallback : role === "orchestrator" ? draft.orchestratorPermissionFallback : undefined}
+							onFallbackChange={role === "worker" ? (workerPermissionFallback) => patch({ workerPermissionFallback }) : role === "orchestrator" ? (orchestratorPermissionFallback) => patch({ orchestratorPermissionFallback }) : undefined} /></div></ProjectSettingsRow>
 					</ProjectSettingsSection>;
 				})}
 				{capabilities.requiredAgents && (!draft.workerAgent || !draft.orchestratorAgent) && <p className="pb-2 text-xs text-error" role="alert">{t("settings.project.agentsRequired")}</p>}
@@ -231,10 +238,83 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	</ProjectSettingsFormView>;
 }
 
-function ProjectRolePermissions({ role, agent, value, runtimeDefaults, onChange }: { role: ProjectSettingsRole; agent: string; value: string; runtimeDefaults?: boolean; onChange: (value: string) => void }) {
+const CODEX_PERMISSION_COPY = {
+	default: { label: "settings.project.permissionCodexDefault", help: "settings.project.permissionCodexDefaultHelp" },
+	auto: { label: "settings.project.permissionCodexAuto", help: "settings.project.permissionCodexAutoHelp" },
+	"accept-edits": { label: "settings.project.permissionCodexAcceptEdits", help: "settings.project.permissionCodexAcceptEditsHelp" },
+	"bypass-permissions": { label: "settings.project.permissionCodexBypass", help: "settings.project.permissionCodexBypassHelp" },
+} as const;
+
+function codexPermissionCopy(mode: string) {
+	return CODEX_PERMISSION_COPY[(mode || "auto") as keyof typeof CODEX_PERMISSION_COPY] ?? CODEX_PERMISSION_COPY.auto;
+}
+
+function ProjectRolePermissions({ role, agent, value, runtimeDefaults, onChange, fallback, onFallbackChange }: { role: ProjectSettingsRole; agent: string; value: string; runtimeDefaults?: boolean; onChange: (value: string) => void; fallback?: boolean; onFallbackChange?: (enabled: boolean) => void }) {
 	const { t } = useTranslation();
 	const label = t("settings.project.roleApproval", { role: t(`settings.models.${role}Role`) });
-	const values = runtimeDefaults ? ["", "default", "auto", ...(agent === "opencode" ? [] : ["accept-edits"]), "bypass-permissions"] : [...(agent === "codex" ? [] : ["default"]), "auto", "accept-edits", "bypass-permissions"];
-	const options = values.map((permission) => ({ value: permission, label: permission === "" ? t("settings.cloudProject.sessionPolicy") : permission === "default" ? t(agent === "claude-code" ? "settings.project.permissionUseClaude" : "settings.project.permissionUseAgent") : t(permission === "accept-edits" ? "settings.project.permissionAcceptEdits" : permission === "auto" ? "settings.project.permissionAuto" : "settings.project.permissionBypass") }));
-	return <SettingsOptionMenu aria-label={label} value={runtimeDefaults ? value : value === "default" && agent === "codex" ? "bypass-permissions" : value || "auto"} options={options} disabled={runtimeDefaults && !agent} placeholder={t("settings.project.permissionNotReported")} triggerClassName="w-fit" onChange={onChange} />;
+	const localCodex = agent === "codex" && !runtimeDefaults;
+	const values = runtimeDefaults ? ["", "default", "auto", ...(agent === "opencode" ? [] : ["accept-edits"]), "bypass-permissions"] : ["default", "auto", "accept-edits", "bypass-permissions"];
+	const options = values.map((permission) => ({ value: permission, label: localCodex && permission !== "" ? t(CODEX_PERMISSION_COPY[permission as keyof typeof CODEX_PERMISSION_COPY].label) : permission === "" ? t("settings.cloudProject.sessionPolicy") : permission === "default" ? t(agent === "claude-code" ? "settings.project.permissionUseClaude" : "settings.project.permissionUseAgent") : t(permission === "accept-edits" ? "settings.project.permissionAcceptEdits" : permission === "auto" ? "settings.project.permissionAuto" : "settings.project.permissionBypass") }));
+	return <>
+		<SettingsOptionMenu aria-label={label} value={runtimeDefaults ? value : value || "auto"} options={options} disabled={runtimeDefaults && !agent} placeholder={t("settings.project.permissionNotReported")} triggerClassName="w-fit" onChange={onChange} />
+		{localCodex && <CodexPermissionDetails mode={value} fallback={fallback} fallbackLabel={onFallbackChange ? label : undefined} onFallbackChange={onFallbackChange} />}
+	</>;
+}
+
+/**
+ * What the chosen Codex mode does, in words, plus the permission fallback toggle.
+ *
+ * Codex's four modes are genuinely different launches (no override, approve-for-me,
+ * ask, full access), so each one is explained under the picker instead of leaving
+ * the reader to infer them from a generic "Auto". Only roles that can step down
+ * (everything but the read-only reviewer) get the toggle.
+ */
+function CodexPermissionDetails({
+	mode,
+	fallback,
+	fallbackLabel,
+	onFallbackChange,
+}: {
+	mode: string;
+	fallback?: boolean;
+	fallbackLabel?: string;
+	onFallbackChange?: (enabled: boolean) => void;
+}) {
+	const { t } = useTranslation();
+	const copy = codexPermissionCopy(mode);
+	// Only full access and approve-for-me have a less permissive mode to step down
+	// to; the toggle would do nothing for the other two. An unset mode shows as
+	// approve-for-me, which is what a new session starts with.
+	const canStepDown = mode === "" || mode === "auto" || mode === "bypass-permissions";
+	return (
+		<div className="space-y-1.5">
+			<p className="text-xs leading-normal text-settings-muted">{t(copy.help)}</p>
+			{canStepDown && onFallbackChange && fallbackLabel !== undefined && (
+				<div className="flex items-center justify-between gap-2">
+					<div className="flex min-w-0 items-center gap-1.5">
+						<span className="text-xs leading-5 text-settings-label">{t("settings.project.permissionFallbackToggle")}</span>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<button
+									type="button"
+									className="inline-flex size-5 shrink-0 items-center justify-center rounded-md text-settings-muted transition-colors hover:bg-settings-menu-selected hover:text-settings-label focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+									aria-label={t("settings.project.permissionFallbackDescription")}
+								>
+									<Info className="size-icon-sm" aria-hidden="true" />
+								</button>
+							</TooltipTrigger>
+							<TooltipContent className="max-w-72 leading-normal" side="top">
+								{t("settings.project.permissionFallbackDescription")}
+							</TooltipContent>
+						</Tooltip>
+					</div>
+					<Switch
+						aria-label={t("settings.project.permissionFallbackSwitch", { role: fallbackLabel })}
+						checked={fallback ?? true}
+						onCheckedChange={onFallbackChange}
+					/>
+				</div>
+			)}
+		</div>
+	);
 }

@@ -61,7 +61,7 @@ func TestBuildLaunchCommands(t *testing.T) {
 				"-c", "check_for_update_on_startup=false",
 				"-c", "notice.hide_rate_limit_model_nudge=true",
 				"--dangerously-bypass-hook-trust",
-				"--ask-for-approval", "on-request",
+				"--ask-for-approval", "on-request", "--sandbox", "workspace-write",
 				"-c", `approvals_reviewer="auto_review"`,
 				"-c", "hooks.SessionStart=[]",
 				"-c", "projects={'/workspace'={trust_level=\"trusted\"}}",
@@ -184,7 +184,7 @@ func TestBuildRestoreCommands(t *testing.T) {
 				"-c", "check_for_update_on_startup=false",
 				"-c", "notice.hide_rate_limit_model_nudge=true",
 				"--dangerously-bypass-hook-trust",
-				"--ask-for-approval", "on-request",
+				"--ask-for-approval", "on-request", "--sandbox", "workspace-write",
 				"thread-1",
 			},
 		},
@@ -262,7 +262,7 @@ func TestBuildRestoreCommandAppliesModel(t *testing.T) {
 				"-c", "check_for_update_on_startup=false",
 				"-c", "notice.hide_rate_limit_model_nudge=true",
 				"--dangerously-bypass-hook-trust",
-				"--ask-for-approval", "on-request",
+				"--ask-for-approval", "on-request", "--sandbox", "workspace-write",
 				"-c", `approvals_reviewer="auto_review"`,
 				"--model", "gpt-5",
 				"thread-1",
@@ -304,6 +304,55 @@ func TestRestoreIdentityRequiresCapturedIDOutsideClaude(t *testing.T) {
 		if err != nil || ok || cmd != nil {
 			t.Fatalf("%s restore = (%#v, %v, %v), want unavailable", harness, cmd, ok, err)
 		}
+	}
+}
+
+// Codex has three distinct launches: AO's default sends no approval or sandbox
+// flag so Codex's own configuration (and any managed requirements over it) decide,
+// auto is approve-for-me with the workspace-write sandbox pinned, and
+// bypass-permissions is the explicit full-access flag. PermissionDefault keeps the
+// full-access launch Cloud workers rely on.
+func TestCodexPermissionArgs(t *testing.T) {
+	tests := []struct {
+		policy PermissionPolicy
+		want   []string
+	}{
+		{PermissionAgentDefault, nil},
+		{PermissionAcceptEdits, []string{"--ask-for-approval", "on-request", "--sandbox", "workspace-write"}},
+		{PermissionAuto, []string{"--ask-for-approval", "on-request", "--sandbox", "workspace-write", "-c", `approvals_reviewer="auto_review"`}},
+		{PermissionBypassPermissions, []string{"--dangerously-bypass-approvals-and-sandbox"}},
+		{PermissionDefault, []string{"--dangerously-bypass-approvals-and-sandbox"}},
+	}
+	for _, test := range tests {
+		t.Run(string(test.policy), func(t *testing.T) {
+			if got := CodexPermissionArgs(test.policy); !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("CodexPermissionArgs(%q) = %#v, want %#v", test.policy, got, test.want)
+			}
+		})
+	}
+}
+
+// Only the explicit bypass launch may name the dangerous sandbox; the approve-for-me
+// and no-override launches must never carry it or request danger-full-access.
+func TestCodexPermissionArgsOnlyBypassRequestsFullAccess(t *testing.T) {
+	for _, policy := range []PermissionPolicy{PermissionAgentDefault, PermissionAcceptEdits, PermissionAuto} {
+		for _, arg := range CodexPermissionArgs(policy) {
+			if arg == "--dangerously-bypass-approvals-and-sandbox" || arg == "danger-full-access" {
+				t.Fatalf("policy %q launches with %q", policy, arg)
+			}
+		}
+	}
+}
+
+func TestPermissionAgentDefaultAddsNoFlagForOtherHarnesses(t *testing.T) {
+	if got := ClaudePermissionArgs(PermissionAgentDefault); got != nil {
+		t.Fatalf("ClaudePermissionArgs(agent-default) = %#v, want none", got)
+	}
+	if got := CursorPermissionArgs(PermissionAgentDefault); got != nil {
+		t.Fatalf("CursorPermissionArgs(agent-default) = %#v, want none", got)
+	}
+	if got := NormalizePermissionPolicy(PermissionAgentDefault); got != PermissionAgentDefault {
+		t.Fatalf("NormalizePermissionPolicy(agent-default) = %q", got)
 	}
 }
 

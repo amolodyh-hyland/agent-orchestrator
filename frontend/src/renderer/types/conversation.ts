@@ -437,7 +437,8 @@ export interface SystemEventDetail {
 		| "context.boundary"
 		| "render"
 		| "artifact"
-		| "workspace.setup";
+		| "workspace.setup"
+		| "permission.fallback";
 	/** workspace.setup: how the project's Setup commands ended (exitCode, durationMs and output carry the rest). */
 	setupStatus?: "succeeded" | "failed" | "timed_out";
 	/** workspace.setup: the 1-based Setup step that failed or timed out. */
@@ -449,6 +450,14 @@ export interface SystemEventDetail {
 	/** model.rerouted */
 	fromModel?: string;
 	toModel?: string;
+	/**
+	 * permission.fallback: the provider refused the requested permission mode, so
+	 * the session runs with a less permissive one. `rejected` lists each refused
+	 * mode with the provider's own reason, most permissive first.
+	 */
+	requested?: string;
+	effective?: string;
+	rejected?: Array<{ mode: string; reason: string }>;
 	/** provider.failure */
 	category?: string;
 	severity?: "warning" | "error" | (string & {});
