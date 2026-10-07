@@ -334,7 +334,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	defer cancel()
 	if err := conv.conn.request(openCtx, "thread/start", params, &resp); err != nil {
 		_ = conv.Terminate()
-		if sentApprovalOverride(policy, sandbox, reviewer) {
+		if sentApprovalOverride(policy, sandbox, reviewer) && !cfg.ReadOnly {
 			err = permissionRejection(cfg.Permissions, err)
 		}
 		return nil, fmt.Errorf("thread/start: %w", err)
@@ -407,7 +407,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	err = conv.conn.request(resumeCtx, "thread/resume", params, &resp)
 	if err != nil {
 		_ = conv.Terminate()
-		if sentApprovalOverride(policy, sandbox, reviewer) {
+		if sentApprovalOverride(policy, sandbox, reviewer) && !cfg.ReadOnly {
 			err = permissionRejection(cfg.Permissions, err)
 		}
 		// Deliberately not falling back to thread/start: silently opening a new

@@ -619,7 +619,9 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	hostID := providerHostID(cfg)
 	requestedPermissions := cfg.Permissions
 	launchFallback := permissionFallback{
-		enabled: !cfg.DisablePermissionFallback, log: s.log, session: cfg.SessionID, stage: "launch",
+		// A read-only conversation has no permission mode to lower: its sandbox is
+		// forced regardless of the mode, so there is nothing for a step-down to do.
+		enabled: !cfg.DisablePermissionFallback && !cfg.ReadOnly, log: s.log, session: cfg.SessionID, stage: "launch",
 	}
 	fallbackOutcome, err := launchFallback.run(ctx, requestedPermissions, func(mode ports.PermissionMode) error {
 		if mode != requestedPermissions && caps != nil {

@@ -71,6 +71,8 @@ type fallbackOptions struct {
 	caps  ports.ChatCapabilities
 	// onReady, when set, receives what the controller reports to ControllerReady.
 	onReady func(ports.ChatControllerStarted)
+	// readOnly starts a read-only conversation, as a reviewer does.
+	readOnly bool
 }
 
 type fallbackFixture struct {
@@ -120,6 +122,7 @@ func newFallbackFixture(t *testing.T, opts fallbackOptions) *fallbackFixture {
 		SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex,
 		WorkspacePath: t.TempDir(), Permissions: opts.permissions,
 		DisablePermissionFallback: opts.disableFallback,
+		ReadOnly:                  opts.readOnly,
 	}
 	if opts.onReady != nil {
 		startCfg.ControllerReady = func(started ports.ChatControllerStarted) (ports.ChatControllerCommit, error) {
@@ -624,5 +627,18 @@ func TestLaunchReportsTheEffectiveModeToControllerReady(t *testing.T) {
 				t.Fatalf("ControllerReady effective permissions = %v, want [%q]", got, tc.want)
 			}
 		})
+	}
+}
+
+// A read-only conversation (a reviewer) never steps down: its sandbox does not
+// depend on the permission mode, so a lower mode could not change the outcome.
+func TestReadOnlyLaunchNeverStepsDown(t *testing.T) {
+	recorder := &launchRecorder{reject: reject(bypass)}
+	f := newFallbackFixture(t, fallbackOptions{permissions: bypass, readOnly: true, start: recorder.start})
+	if !errors.Is(f.startErr, ports.ErrPermissionRejected) {
+		t.Fatalf("Start error = %v, want the rejection reported as is", f.startErr)
+	}
+	if got, want := recorder.modes(), []ports.PermissionMode{bypass}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("launch modes tried = %v, want only %v for a read-only conversation", got, want)
 	}
 }

@@ -160,3 +160,35 @@ func TestThreadResumeRejectionKeepsResumeFailureAndMarksPermission(t *testing.T)
 		t.Fatalf("Resume error = %v, want both a resume failure and a permission rejection", err)
 	}
 }
+
+// A read-only launch always sends never/read-only whatever AO mode was asked for, so
+// a refusal of it says nothing about a permission mode AO could lower. Marking it
+// would send the fallback round a ladder that cannot change what was refused.
+func TestReadOnlyLaunchRefusalIsNotAPermissionRejection(t *testing.T) {
+	failure := `{"code":-32600,"message":` + strconv.Quote(managedSandboxRejection) + `}`
+	t.Run("start", func(t *testing.T) {
+		d, srv := newTestDriver(t)
+		srv.mu.Lock()
+		srv.failures["thread/start"] = failure
+		srv.mu.Unlock()
+		_, err := d.Start(context.Background(), ports.ChatStartConfig{
+			WorkspacePath: "/tmp/ws", ReadOnly: true, Permissions: ports.PermissionModeBypassPermissions,
+		})
+		if err == nil || errors.Is(err, ports.ErrPermissionRejected) {
+			t.Fatalf("read-only Start error = %v, want a plain failure", err)
+		}
+	})
+	t.Run("resume", func(t *testing.T) {
+		d, srv := newTestDriver(t)
+		srv.mu.Lock()
+		srv.failures["thread/resume"] = failure
+		srv.mu.Unlock()
+		_, err := d.Resume(context.Background(), ports.ChatResumeConfig{
+			SessionID: "ao-1", ProviderConversationID: "thread-1", WorkspacePath: "/tmp/ws",
+			ReadOnly: true, Permissions: ports.PermissionModeBypassPermissions,
+		})
+		if err == nil || errors.Is(err, ports.ErrPermissionRejected) {
+			t.Fatalf("read-only Resume error = %v, want a plain failure", err)
+		}
+	})
+}

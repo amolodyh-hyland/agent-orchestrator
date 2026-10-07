@@ -1689,7 +1689,8 @@ func (c *Controller) inheritPermissionFallback(source *Controller) {
 func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (ports.ChatTurnRef, error) {
 	requested := msg.Settings.Approval
 	var ref ports.ChatTurnRef
-	fallback := permissionFallback{enabled: !c.permissionFallbackOff, log: c.log, session: c.sessionID, stage: "turn"}
+	// A review conversation is read-only whatever its mode, so it never steps down.
+	fallback := permissionFallback{enabled: !c.permissionFallbackOff && c.reviewID == "", log: c.log, session: c.sessionID, stage: "turn"}
 	outcome, err := fallback.run(ctx, requested, func(mode ports.PermissionMode) error {
 		attempt := msg
 		attempt.Settings.Approval = mode
