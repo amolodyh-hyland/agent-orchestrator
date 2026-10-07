@@ -239,6 +239,25 @@ func notifyControllerReady(
 	return commit, nil
 }
 
+// recordEffectivePermissions is the hook a controller reports a permission step-down
+// through. Besides passing it on, it makes the mode the session settled on the one its
+// stored launch configuration asks for, so a branch launch (an edit, a branch switch, or
+// restoring the source after one fails) does not ask the provider for the mode it already
+// refused.
+func (s *Service) recordEffectivePermissions(owner domain.ConversationOwner) func(domain.SessionID, domain.PermissionMode) {
+	return func(id domain.SessionID, mode domain.PermissionMode) {
+		s.mu.Lock()
+		if cfg, ok := s.startConfigs[owner]; ok {
+			cfg.Permissions = mode
+			s.startConfigs[owner] = cfg
+		}
+		s.mu.Unlock()
+		if s.onPermissionsChanged != nil {
+			s.onPermissionsChanged(id, mode)
+		}
+	}
+}
+
 func cloneStartConfig(cfg StartConfig) StartConfig {
 	cloned := cfg
 	cloned.Env = make(map[string]string, len(cfg.Env))
@@ -810,7 +829,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	controller := newController(
 		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
 	controller.permissionFallbackOff = cfg.DisablePermissionFallback
-	controller.onPermissionsChanged = s.onPermissionsChanged
+	controller.onPermissionsChanged = s.recordEffectivePermissions(owner)
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {
 		providerTurnID := controller.restoreLiveTurnOwnership(liveRows.Turns)

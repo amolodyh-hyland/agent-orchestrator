@@ -112,3 +112,151 @@ func TestEditPermissionRefusalRestoresTheSourceBranch(t *testing.T) {
 		})
 	}
 }
+
+// An edit launches a replacement provider conversation, by a fresh start when the first
+// prompt is edited and by resuming a fork otherwise. If the provider refuses that launch
+// over the permission mode, nothing was delivered, so the edit settles as a definitive
+// refusal, the source branch is restored, and a delivery handle is spent.
+func TestEditLaunchRefusedOverThePermissionModeSettlesDefinitively(t *testing.T) {
+	for name, refusal := range permissionRefusals() {
+		for _, route := range []string{"fresh start", "fork resume"} {
+			for _, handle := range []string{"edit-launch-refused", ""} {
+				label := name + "/" + route + "/with a handle"
+				if handle == "" {
+					label = name + "/" + route + "/without a handle"
+				}
+				t.Run(label, func(t *testing.T) {
+					h, _, driver := newEditHarness(t, false)
+					ctx := context.Background()
+					first := completeTurn(t, h, "A", "provider-turn-1")
+					h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 2 })
+					target := first
+					if route == "fork resume" {
+						target = completeTurn(t, h, "B", "provider-turn-2")
+						h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 4 })
+					}
+					before, err := h.svc.Snapshot(ctx, testSession)
+					if err != nil {
+						t.Fatalf("Snapshot: %v", err)
+					}
+
+					driver.mu.Lock()
+					if route == "fresh start" {
+						driver.startErr = refusal
+					} else {
+						driver.beforeResume = func(cfg ports.ChatResumeConfig) error {
+							if cfg.ProviderConversationID == "thread-forked" {
+								return refusal
+							}
+							return nil
+						}
+					}
+					driver.mu.Unlock()
+					msg := ports.ChatUserMessage{Text: "edited", ClientMessageID: handle, Origin: domain.MessageOriginHuman}
+
+					_, err = h.svc.EditMessage(ctx, testSession, target, msg)
+					if errors.Is(err, chatsvc.ErrEditDeliveryUncertain) {
+						t.Fatalf("EditMessage error = %v; a refused launch delivered nothing, so it must not be uncertain", err)
+					}
+					if !errors.Is(err, ports.ErrPermissionRejected) || !errors.Is(err, chatsvc.ErrProviderRefused) {
+						t.Fatalf("EditMessage error = %v, want a definitive permission refusal", err)
+					}
+
+					// The source branch was restored and still takes messages.
+					driver.mu.Lock()
+					lastResume := driver.resumeCalls[len(driver.resumeCalls)-1].ProviderConversationID
+					driver.mu.Unlock()
+					if lastResume != "thread-1" {
+						t.Fatalf("last provider resume = %q, want the source thread-1 restored", lastResume)
+					}
+					after, err := h.svc.Snapshot(ctx, testSession)
+					if err != nil {
+						t.Fatalf("Snapshot: %v", err)
+					}
+					if after.ActiveBranch.ID != before.ActiveBranch.ID {
+						t.Fatalf("active branch after a refused launch = %q, want the source %q", after.ActiveBranch.ID, before.ActiveBranch.ID)
+					}
+					if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "source remains usable"}); err != nil {
+						t.Fatalf("Send on the restored source: %v", err)
+					}
+					if handle == "" {
+						return
+					}
+
+					// The handle is spent: replaying it, here or after a restart, launches nothing.
+					driver.mu.Lock()
+					driver.startErr, driver.beforeResume = nil, nil
+					startCalls, resumeCalls := driver.startCalls, len(driver.resumeCalls)
+					driver.mu.Unlock()
+					if _, err := h.svc.EditMessage(ctx, testSession, target, msg); !errors.Is(err, chatsvc.ErrProviderRefused) {
+						t.Fatalf("same-controller replay error = %v, want the stored refusal", err)
+					}
+					restarted, restartedProvider := restartEditService(t, h)
+					if _, err := restarted.EditMessage(ctx, testSession, target, msg); !errors.Is(err, chatsvc.ErrProviderRefused) {
+						t.Fatalf("restart replay error = %v, want the stored refusal", err)
+					}
+					driver.mu.Lock()
+					defer driver.mu.Unlock()
+					if driver.startCalls != startCalls || len(driver.resumeCalls) != resumeCalls {
+						t.Fatalf("replay launched again: starts %d→%d, resumes %d→%d",
+							startCalls, driver.startCalls, resumeCalls, len(driver.resumeCalls))
+					}
+					if restartedProvider.sendCallCount() != 0 {
+						t.Fatalf("restarted provider received %d sends for a refused edit replay", restartedProvider.sendCallCount())
+					}
+				})
+			}
+		}
+	}
+}
+
+// Once a turn has stepped down to a lower mode, that is the mode the conversation runs
+// with, so the replacement an edit launches must ask for it. Asking for the mode the
+// provider already refused would have the edit relaunch at a posture the conversation
+// no longer has, and fail outright wherever the provider validates a launch.
+func TestEditLaunchUsesTheModeAStepDownSettledOn(t *testing.T) {
+	for _, route := range []string{"fresh start", "fork resume"} {
+		t.Run(route, func(t *testing.T) {
+			h, source, driver := newEditHarnessWithOptions(t, false,
+				func(st *store.Store) chatsvc.Store { return st },
+				func(reader chatsvc.SnapshotReader) chatsvc.SnapshotReader { return reader }, nil,
+				func(cfg *chatsvc.StartConfig) { cfg.Permissions = ports.PermissionModeBypassPermissions })
+			ctx := context.Background()
+			source.mu.Lock()
+			source.refuseApproval = map[ports.PermissionMode]error{
+				ports.PermissionModeBypassPermissions: &ports.PermissionRejectedError{
+					Mode: ports.PermissionModeBypassPermissions, Reason: "`DangerFullAccess` is not in the allowed set"},
+			}
+			source.mu.Unlock()
+			first := completeTurn(t, h, "A", "provider-turn-1")
+			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 2 })
+			target := first
+			if route == "fork resume" {
+				target = completeTurn(t, h, "B", "provider-turn-2")
+				h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 4 })
+			}
+			// The turn stepped down from bypass-permissions to auto and said so.
+			if got := h.ctrl.Settings().ApprovalMode; got != ports.PermissionModeAuto {
+				t.Fatalf("conversation mode after the step-down = %q, want auto", got)
+			}
+
+			if _, err := h.svc.EditMessage(ctx, testSession, target, ports.ChatUserMessage{
+				Text: "edited", ClientMessageID: "edit-after-step-down", Origin: domain.MessageOriginHuman,
+			}); err != nil {
+				t.Fatalf("EditMessage: %v", err)
+			}
+
+			driver.mu.Lock()
+			defer driver.mu.Unlock()
+			var launched ports.PermissionMode
+			if route == "fresh start" {
+				launched = driver.startConfigs[len(driver.startConfigs)-1].Permissions
+			} else {
+				launched = driver.resumeCalls[0].Permissions
+			}
+			if launched != ports.PermissionModeAuto {
+				t.Fatalf("the edit launched its replacement with %q, want auto, the mode the conversation settled on", launched)
+			}
+		})
+	}
+}

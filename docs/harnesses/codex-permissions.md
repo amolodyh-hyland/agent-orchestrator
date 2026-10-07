@@ -172,7 +172,14 @@ Rules:
   carries a delivery handle settles as rejected rather than staying "uncertain", the
   source branch is restored, and replaying the handle never reaches the provider
   again (the replay reports the stored refusal with the generic
-  `CHAT_PROVIDER_REFUSED` code and the same message); steers settle the same way.
+  `CHAT_PROVIDER_REFUSED` code and the same message); steers settle the same way. The
+  same holds when the provider refuses the launch an edit makes (a fresh start for the
+  first prompt, a fork resume otherwise).
+- A step-down is also recorded in the session's stored launch configuration, which is
+  what an edit, a branch switch, and the restoring of the source after a failed edit
+  launch with. They therefore ask for the mode the conversation settled on, not the one
+  the provider already refused. (A launch step-down already stores it; a turn
+  step-down used to leave the original mode there.)
 - A lower mode that the provider cannot admit (it needs an approval channel the
   provider lacks) is treated as refused at launch, not launched.
 - A mode the user picks while a turn is being sent is not overwritten by the
