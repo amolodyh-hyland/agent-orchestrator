@@ -16,7 +16,8 @@ import (
 // leaves those hooks quietly doing nothing while every other test passes, so the calls
 // are checked in Run's source.
 func TestRunBindsTheLateServicesToTheChatHooks(t *testing.T) {
-	file, err := parser.ParseFile(token.NewFileSet(), "daemon.go", nil, 0)
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "daemon.go", nil, 0)
 	if err != nil {
 		t.Fatalf("parse daemon.go: %v", err)
 	}
@@ -90,6 +91,14 @@ func TestRunBindsTheLateServicesToTheChatHooks(t *testing.T) {
 		if i <= defined[wantArg] {
 			t.Errorf("Run calls %s before it has built %q", name, wantArg)
 		}
+		// Binding after the value is first put to use leaves the hooks dead for as long
+		// as whatever came first keeps running: a bind moved to the end of Run, past the
+		// startup reconcile and the server, would pass every other check. So the bind has
+		// to be the first thing Run does with the value once it exists.
+		if first := firstStatementUsing(run.Body.List, defined[wantArg]+1, wantArg); first != i {
+			t.Errorf("Run uses %q at statement %d before binding it to the chat hooks at statement %d (line %d)",
+				wantArg, first, i, fset.Position(run.Body.List[first].Pos()).Line)
+		}
 		if len(call.Args) != 1 {
 			t.Errorf("Run calls %s with %d arguments, want exactly %q", name, len(call.Args), wantArg)
 		} else if arg, ok := call.Args[0].(*ast.Ident); !ok || arg.Name != wantArg {
@@ -124,4 +133,22 @@ func identName(exprs []ast.Expr, index int) string {
 		return ident.Name
 	}
 	return ""
+}
+
+// firstStatementUsing is the index of the first of stmts, from start on, that mentions
+// the identifier name anywhere inside it, closures included. It is len(stmts) if none does.
+func firstStatementUsing(stmts []ast.Stmt, start int, name string) int {
+	for i := start; i < len(stmts); i++ {
+		used := false
+		ast.Inspect(stmts[i], func(n ast.Node) bool {
+			if ident, ok := n.(*ast.Ident); ok && ident.Name == name {
+				used = true
+			}
+			return !used
+		})
+		if used {
+			return i
+		}
+	}
+	return len(stmts)
 }

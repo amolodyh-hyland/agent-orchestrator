@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -210,37 +211,45 @@ func TestEditLaunchRefusedOverThePermissionModeSettlesDefinitively(t *testing.T)
 	}
 }
 
+// steppedDownEditHarness returns an edit harness whose conversation launched with
+// bypass-permissions and whose first turn the provider refused at that mode, so the
+// turn stepped down to auto. It returns the id of that turn.
+func steppedDownEditHarness(t *testing.T) (*harness, *editDriverState, string) {
+	t.Helper()
+	h, source, driver := newEditHarnessWithOptions(t, false,
+		func(st *store.Store) chatsvc.Store { return st },
+		func(reader chatsvc.SnapshotReader) chatsvc.SnapshotReader { return reader }, nil,
+		func(cfg *chatsvc.StartConfig) { cfg.Permissions = ports.PermissionModeBypassPermissions })
+	source.mu.Lock()
+	source.refuseApproval = map[ports.PermissionMode]error{
+		ports.PermissionModeBypassPermissions: &ports.PermissionRejectedError{
+			Mode: ports.PermissionModeBypassPermissions, Reason: "`DangerFullAccess` is not in the allowed set"},
+	}
+	source.mu.Unlock()
+	first := completeTurn(t, h, "A", "provider-turn-1")
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 2 })
+	if got := h.ctrl.Settings().ApprovalMode; got != ports.PermissionModeAuto {
+		t.Fatalf("conversation mode after the step-down = %q, want auto", got)
+	}
+	return h, driver, first
+}
+
 // Once a turn has stepped down to a lower mode, that is the mode the conversation runs
-// with, so the replacement an edit launches must ask for it. Asking for the mode the
-// provider already refused would have the edit relaunch at a posture the conversation
+// with, so every launch made on its behalf must ask for it: the replacement an edit
+// launches, the branch a switch resumes, and the source a failed edit restores. Asking
+// for the mode the provider already refused would relaunch at a posture the conversation
 // no longer has, and fail outright wherever the provider validates a launch.
 func TestEditLaunchUsesTheModeAStepDownSettledOn(t *testing.T) {
 	for _, route := range []string{"fresh start", "fork resume"} {
 		t.Run(route, func(t *testing.T) {
-			h, source, driver := newEditHarnessWithOptions(t, false,
-				func(st *store.Store) chatsvc.Store { return st },
-				func(reader chatsvc.SnapshotReader) chatsvc.SnapshotReader { return reader }, nil,
-				func(cfg *chatsvc.StartConfig) { cfg.Permissions = ports.PermissionModeBypassPermissions })
-			ctx := context.Background()
-			source.mu.Lock()
-			source.refuseApproval = map[ports.PermissionMode]error{
-				ports.PermissionModeBypassPermissions: &ports.PermissionRejectedError{
-					Mode: ports.PermissionModeBypassPermissions, Reason: "`DangerFullAccess` is not in the allowed set"},
-			}
-			source.mu.Unlock()
-			first := completeTurn(t, h, "A", "provider-turn-1")
-			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 2 })
+			h, driver, first := steppedDownEditHarness(t)
 			target := first
 			if route == "fork resume" {
 				target = completeTurn(t, h, "B", "provider-turn-2")
 				h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 4 })
 			}
-			// The turn stepped down from bypass-permissions to auto and said so.
-			if got := h.ctrl.Settings().ApprovalMode; got != ports.PermissionModeAuto {
-				t.Fatalf("conversation mode after the step-down = %q, want auto", got)
-			}
 
-			if _, err := h.svc.EditMessage(ctx, testSession, target, ports.ChatUserMessage{
+			if _, err := h.svc.EditMessage(context.Background(), testSession, target, ports.ChatUserMessage{
 				Text: "edited", ClientMessageID: "edit-after-step-down", Origin: domain.MessageOriginHuman,
 			}); err != nil {
 				t.Fatalf("EditMessage: %v", err)
@@ -258,5 +267,70 @@ func TestEditLaunchUsesTheModeAStepDownSettledOn(t *testing.T) {
 				t.Fatalf("the edit launched its replacement with %q, want auto, the mode the conversation settled on", launched)
 			}
 		})
+	}
+}
+
+func TestSourceRestoreAfterAFailedEditUsesTheModeAStepDownSettledOn(t *testing.T) {
+	h, driver, first := steppedDownEditHarness(t)
+	driver.mu.Lock()
+	driver.startErr = errors.New("branch start transport failed")
+	driver.mu.Unlock()
+
+	_, err := h.svc.EditMessage(context.Background(), testSession, first, ports.ChatUserMessage{
+		Text: "edited", ClientMessageID: "edit-fails-after-step-down", Origin: domain.MessageOriginHuman,
+	})
+	if err == nil {
+		t.Fatal("EditMessage succeeded although the branch could not be started")
+	}
+
+	driver.mu.Lock()
+	defer driver.mu.Unlock()
+	if len(driver.resumeCalls) != 1 || driver.resumeCalls[0].ProviderConversationID != "thread-1" {
+		t.Fatalf("resumes after the failed edit = %+v, want only the source thread-1 restored", driver.resumeCalls)
+	}
+	if got := driver.resumeCalls[0].Permissions; got != ports.PermissionModeAuto {
+		t.Fatalf("the source was restored with %q, want auto, the mode the conversation settled on", got)
+	}
+}
+
+func TestBranchSwitchUsesTheModeAStepDownSettledOn(t *testing.T) {
+	h, driver, first := steppedDownEditHarness(t)
+	ctx := context.Background()
+	edited, err := h.svc.EditMessage(ctx, testSession, first, ports.ChatUserMessage{
+		Text: "edited", ClientMessageID: "edit-before-switch", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatalf("EditMessage: %v", err)
+	}
+	driver.fresh.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-101"},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-101", TurnState: domain.TurnStateCompleted},
+	)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		controller, controllerErr := h.svc.Controller(testSession)
+		if controllerErr == nil && controller.State() == ports.ChatControllerReady {
+			if snapshot, snapshotErr := h.st.LoadConversationSnapshot(ctx, h.ctrl.ConversationID()); snapshotErr == nil &&
+				len(snapshot.Turns) == 1 && snapshot.Turns[0].State.Terminal() {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	driver.mu.Lock()
+	resumesBefore := len(driver.resumeCalls)
+	driver.mu.Unlock()
+
+	if _, err := h.svc.ActivateBranch(ctx, testSession, edited.SourceBranchID); err != nil {
+		t.Fatalf("ActivateBranch: %v", err)
+	}
+
+	driver.mu.Lock()
+	defer driver.mu.Unlock()
+	if len(driver.resumeCalls) != resumesBefore+1 {
+		t.Fatalf("branch switch made %d provider resumes, want 1", len(driver.resumeCalls)-resumesBefore)
+	}
+	if got := driver.resumeCalls[resumesBefore].Permissions; got != ports.PermissionModeAuto {
+		t.Fatalf("the branch was resumed with %q, want auto, the mode the conversation settled on", got)
 	}
 }
