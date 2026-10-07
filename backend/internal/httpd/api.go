@@ -45,6 +45,8 @@ type APIDeps struct {
 	// Conversations is nil until a Chat driver is wired; the controller then
 	// answers 501 rather than panicking, matching the other optional surfaces.
 	Conversations controllers.ConversationService
+	// Multica controls the optional AO-hosted Multica daemon.
+	Multica controllers.MulticaService
 	// Settings is the daemon-owned preference surface.
 	Settings            controllers.SettingsService
 	DevImport           controllers.DevImportService
@@ -132,6 +134,7 @@ type API struct {
 	conversations *controllers.ConversationsController
 	settings      *controllers.SettingsController
 	dev           *controllers.DevController
+	multica       *controllers.MulticaController
 	browser       *controllers.BrowserController
 	system        *controllers.SystemController
 	identity      *controllers.IdentityController
@@ -186,6 +189,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		conversations: &controllers.ConversationsController{Svc: deps.Conversations},
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},
+		multica:       &controllers.MulticaController{Svc: deps.Multica},
 		browser:       &controllers.BrowserController{Svc: deps.Browser},
 		system:        &controllers.SystemController{Checks: deps.SystemChecks},
 		identity:      &controllers.IdentityController{HostID: deps.HostID},
@@ -246,6 +250,7 @@ func (a *API) Register(root chi.Router) {
 			a.conversations.Register(r)
 			a.settings.Register(r)
 			a.dev.Register(r)
+			a.multica.Register(r)
 			a.browser.Register(r)
 			a.system.Register(r)
 			a.identity.Register(r)
