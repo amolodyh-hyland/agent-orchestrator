@@ -1,5 +1,7 @@
-import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, fireEvent, render as rtlRender, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { purgeFileAttachmentsForSession, useFileAttachments } from "../../hooks/useFileAttachments";
@@ -8,6 +10,31 @@ import { chatFixture } from "../../lib/chat-fixture";
 import { typeInLexicalEditor } from "../../test/lexical";
 import { TooltipProvider } from "../ui/tooltip";
 import type { ConversationContentSummary, ConversationSnapshot } from "../../types/conversation";
+
+const routeMocks = vi.hoisted(() => ({ navigate: vi.fn(), params: { projectId: undefined, sessionId: undefined } }));
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@tanstack/react-router")>();
+	return { ...actual, useNavigate: () => routeMocks.navigate, useParams: () => routeMocks.params };
+});
+vi.mock("../../hooks/useWorkspaceQuery", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../hooks/useWorkspaceQuery")>();
+	return { ...actual, useWorkspaceQuery: () => ({ data: [] }) };
+});
+vi.mock("../topbar-tabs/useTopbarTabsView", () => ({
+	useTopbarTabsView: () => ({ groups: [], activeSessionId: routeMocks.params.sessionId }),
+}));
+
+function render(ui: ReactElement) {
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const wrap = (content: ReactElement) => (
+		<QueryClientProvider client={queryClient}>{content}</QueryClientProvider>
+	);
+	const result = rtlRender(wrap(ui));
+	return {
+		...result,
+		rerender: (nextUi: ReactElement) => result.rerender(wrap(nextUi)),
+	};
+}
 
 beforeEach(() => {
 	window.localStorage.clear();

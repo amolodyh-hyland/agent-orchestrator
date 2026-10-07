@@ -40,6 +40,7 @@ vi.mock("./ShellTopbar", async (importOriginal) => ({ ...(await importOriginal<t
 
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
+	useParams: () => ({}),
 }));
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({

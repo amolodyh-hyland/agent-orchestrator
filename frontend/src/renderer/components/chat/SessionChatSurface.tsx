@@ -56,6 +56,7 @@ import { AgentSwitchProgressTrack } from "../AgentSwitchProgressTrack";
 import { useUiStore } from "../../stores/ui-store";
 import { CONTINUE_STOPPED_TURN_PROMPT, ChatWorkspace, continuableTurnId } from "./ChatWorkspace";
 import { startingConversationSnapshot } from "./OrchestratorStartingChat";
+import type { SessionTabActions } from "../topbar-tabs/TopbarTab";
 import { hasProviderPermissionMode } from "./TurnSettingsBar";
 
 export interface ConversationWorkState {
@@ -172,7 +173,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	/** Opens a chat link in the active blank tab or a new tab in this session's AO Browser. */
 	onOpenLinkInBrowser?: (uri: string) => Promise<void>;
 	headerActions?: ReactNode;
-	sessionTabAction?: ReactNode;
+	sessionTabAction?: SessionTabActions;
 	sessionTabActionWide?: boolean;
 	tabStripAction?: ReactNode;
 	handoffDialogOpen?: boolean;

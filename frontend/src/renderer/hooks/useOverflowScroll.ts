@@ -5,12 +5,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // scrolls the strip when an indicator is activated. `watch` should change
 // whenever the strip's children change (e.g. tab IDs/order) so measurements
 // and child observation stay current.
-export function useOverflowScroll<T extends HTMLElement>(watch: unknown) {
+export function useOverflowScroll<T extends HTMLElement>(watch: unknown, enabled = true) {
 	const ref = useRef<T | null>(null);
 	const [canScrollLeft, setCanScrollLeft] = useState(false);
 	const [canScrollRight, setCanScrollRight] = useState(false);
 
 	useEffect(() => {
+		if (!enabled) {
+			setCanScrollLeft(false);
+			setCanScrollRight(false);
+			return;
+		}
 		const el = ref.current;
 		if (!el) return;
 		const update = () => {
@@ -39,7 +44,7 @@ export function useOverflowScroll<T extends HTMLElement>(watch: unknown) {
 			el.removeEventListener("wheel", onWheel);
 			observer.disconnect();
 		};
-	}, [watch]);
+	}, [enabled, watch]);
 
 	const scrollByDirection = useCallback((direction: -1 | 1) => {
 		const el = ref.current;

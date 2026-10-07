@@ -4,6 +4,8 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { markTerminalHandleFresh } from "../lib/fresh-terminal-handles";
 import type { MuxConnectionState, TerminalMux } from "../lib/terminal-mux";
+import { EMPTY_TOPBAR_TABS, findSession } from "../lib/topbar-tabs";
+import { useTopbarTabsStore } from "../stores/topbar-tabs-store";
 import type { WorkspaceSession } from "../types/workspace";
 import { useTerminalSession, type AttachableTerminal } from "./useTerminalSession";
 import { workspaceQueryKey } from "./useWorkspaceQuery";
@@ -168,6 +170,7 @@ type SetupOptions = {
 	isVisible?: boolean;
 	inputDisabled?: boolean;
 	hasMeasuredGrid?: boolean;
+	onHumanInput?: () => void;
 };
 
 function setup({
@@ -179,6 +182,7 @@ function setup({
 	isVisible = true,
 	inputDisabled = false,
 	hasMeasuredGrid = true,
+	onHumanInput,
 }: SetupOptions = {}) {
 	const muxes: FakeMux[] = [];
 	const createMux = () => {
@@ -206,6 +210,7 @@ function setup({
 				createMux,
 				inputDisabled: blocked,
 				isVisible: visible,
+				onHumanInput,
 			}),
 		{ initialProps, wrapper },
 	);
@@ -219,6 +224,15 @@ function setup({
 }
 
 beforeEach(() => {
+	localStorage.clear();
+	useTopbarTabsStore.setState({
+		tabs: EMPTY_TOPBAR_TABS,
+		overflow: "scroll",
+		density: "comfortable",
+		colorCoding: false,
+		projectColors: {},
+		lastEviction: null,
+	});
 	vi.useFakeTimers();
 });
 
@@ -228,6 +242,45 @@ afterEach(() => {
 });
 
 describe("useTerminalSession", () => {
+	it("marks accepted keyboard input but ignores protocol, gated input, resize, and activation", async () => {
+		const sessionId = session.id;
+		const activatePreviewTab = () => useTopbarTabsStore.getState().activateSession({ sessionId, groupId: "p", kind: "task" });
+		activatePreviewTab();
+		const { view, terminal, muxes } = setup({
+			onHumanInput: () => useTopbarTabsStore.getState().markInteracted(sessionId),
+		});
+		act(() => muxes[0].emitOpened("handle-1"));
+		terminal.typeKeys("ls\\r");
+		expect(findSession(useTopbarTabsStore.getState().tabs, sessionId)?.mode).toBe("persistent");
+
+		useTopbarTabsStore.setState({ tabs: EMPTY_TOPBAR_TABS });
+		activatePreviewTab();
+		terminal.protocol("\\x1b[?997;2n");
+		expect(findSession(useTopbarTabsStore.getState().tabs, sessionId)?.mode).toBe("preview");
+		terminal.wheel("\\x1b[<64;1;1M");
+		expect(findSession(useTopbarTabsStore.getState().tabs, sessionId)?.mode).toBe("preview");
+
+		useTopbarTabsStore.setState({ tabs: EMPTY_TOPBAR_TABS });
+		activatePreviewTab();
+		view.rerender({ daemonReady: true, isVisible: true, inputDisabled: true });
+		terminal.typeKeys("blocked");
+		expect(findSession(useTopbarTabsStore.getState().tabs, sessionId)?.mode).toBe("preview");
+
+		useTopbarTabsStore.setState({ tabs: EMPTY_TOPBAR_TABS });
+		activatePreviewTab();
+		view.rerender({ daemonReady: true, isVisible: false, inputDisabled: false });
+		terminal.typeKeys("hidden");
+		expect(findSession(useTopbarTabsStore.getState().tabs, sessionId)?.mode).toBe("preview");
+
+		useTopbarTabsStore.setState({ tabs: EMPTY_TOPBAR_TABS });
+		activatePreviewTab();
+		view.rerender({ daemonReady: true, isVisible: true, inputDisabled: false });
+		terminal.emitResize(120, 40);
+		act(() => void vi.advanceTimersByTime(100));
+		await act(async () => terminal.prepareForActivation());
+		expect(findSession(useTopbarTabsStore.getState().tabs, sessionId)?.mode).toBe("preview");
+	});
+
 	it("opens the pane at the terminal's size and reaches attached on the server ack", () => {
 		const { view, muxes } = setup();
 		expect(view.result.current.state).toBe("connecting");

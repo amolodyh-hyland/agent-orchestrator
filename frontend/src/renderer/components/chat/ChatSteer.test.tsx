@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
@@ -9,11 +10,30 @@ import { chatFixture } from "../../lib/chat-fixture";
 import { typeInLexicalEditor } from "../../test/lexical";
 import { TooltipProvider } from "../ui/tooltip";
 
+const routeMocks = vi.hoisted(() => ({ navigate: vi.fn(), params: { projectId: undefined, sessionId: undefined } }));
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@tanstack/react-router")>();
+	return { ...actual, useNavigate: () => routeMocks.navigate, useParams: () => routeMocks.params };
+});
+vi.mock("../../hooks/useWorkspaceQuery", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../hooks/useWorkspaceQuery")>();
+	return { ...actual, useWorkspaceQuery: () => ({ data: [] }) };
+});
+vi.mock("../topbar-tabs/useTopbarTabsView", () => ({
+	useTopbarTabsView: () => ({ groups: [], activeSessionId: routeMocks.params.sessionId }),
+}));
+
 function render(ui: ReactElement) {
-	const result = rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const wrap = (content: ReactElement) => (
+		<QueryClientProvider client={queryClient}>
+			<TooltipProvider>{content}</TooltipProvider>
+		</QueryClientProvider>
+	);
+	const result = rtlRender(wrap(ui));
 	return {
 		...result,
-		rerender: (nextUi: ReactElement) => result.rerender(<TooltipProvider>{nextUi}</TooltipProvider>),
+		rerender: (nextUi: ReactElement) => result.rerender(wrap(nextUi)),
 	};
 }
 
