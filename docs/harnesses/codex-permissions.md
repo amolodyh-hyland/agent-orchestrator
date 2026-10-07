@@ -140,16 +140,19 @@ Rules:
   `PermissionFallbackExhaustedError` that lists each mode and its reason. A refusal
   with nothing below the requested mode (`accept-edits`, `default`) is reported as
   the provider's refusal itself, not as an exhausted ladder.
-- Every endpoint that starts, resumes or sends to a chat controller answers a
-  refusal with `409 CHAT_PERMISSION_REJECTED` carrying that message, never an
-  anonymous `500`: the conversation routes (send, steer, queue, retry, edit, branch
-  and the rest, through `writeConversationError`), and the session routes (spawn,
-  delegate, restore, restart, switch agent, through the session service's error
-  mapping, where the refusal wins over the stage it surfaced in, such as
-  `SPAWN_DELIVER_PROMPT_FAILED`). A switch to Chat is recorded with
-  `TARGET_PERMISSION_REJECTED`. Reviewer launches are read-only and never reach it.
-  Error codes are not enumerated in the OpenAPI spec, so it is unchanged. The chat
-  client treats the code as a definitive non-acceptance of a steer or an edit.
+- A refusal is reported with `409 CHAT_PERMISSION_REJECTED` carrying that message,
+  never an anonymous `500`, wherever an error is returned to the caller: the
+  conversation routes (send, steer, queue, retry, edit, branch and the rest, through
+  `writeConversationError`) and the session routes (spawn, delegate, restore,
+  restart, through the session service's error mapping, where the refusal wins over
+  the stage it surfaced in, such as `SPAWN_DELIVER_PROMPT_FAILED`). A switch of
+  interface (TUI to Chat) records a refused target controller as
+  `TARGET_PERMISSION_REJECTED` on the transition, both when the target is started and
+  when it is recovered. A switch of agent records its own provider-start failure
+  boundary and keeps that generic code. Reviewer launches are read-only and never
+  reach any of this. Error codes are not enumerated in the OpenAPI spec, so it is
+  unchanged. The chat client treats the code as a definitive non-acceptance of a
+  steer or an edit.
 - A lower mode that the provider cannot admit (it needs an approval channel the
   provider lacks) is treated as refused at launch, not launched.
 - A mode the user picks while a turn is being sent is not overwritten by the

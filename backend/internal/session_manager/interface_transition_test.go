@@ -1127,6 +1127,31 @@ func TestInterfaceTransitionTUIToChatStopsBeforeStartingAndReusesNativeConversat
 	}
 }
 
+// The refusal arrives from starting the target controller, not from the preflight
+// probe, so the transition has to record it where that failure is recorded. Without
+// this the user is told the conversation could not be resumed when the provider
+// actually refused the permission mode.
+func TestInterfaceTransitionRecordsAPermissionRefusalOfTheTarget(t *testing.T) {
+	manager, store, _, chat, _ := newTransitionManager(t, domain.SessionModeTUI)
+	reason := "`DangerFullAccess` is not in the allowed set [ReadOnly, WorkspaceWrite]"
+	chat.startErr = &ports.PermissionRejectedError{Mode: ports.PermissionModeBypassPermissions, Reason: reason}
+
+	transition, err := manager.StartInterfaceTransition(context.Background(), "session-1", domain.SessionModeChat, domain.SessionInterfaceTransitionDrain, domain.SessionInterfaceTransitionHistoryStrict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settled := awaitTransition(t, store, transition.ID)
+	if settled.Phase != domain.SessionInterfaceTransitionFailed || settled.ErrorCode != "TARGET_PERMISSION_REJECTED" {
+		t.Fatalf("transition = %+v, want a failed transition coded TARGET_PERMISSION_REJECTED", settled)
+	}
+	if !strings.Contains(settled.ErrorDetail, reason) {
+		t.Fatalf("error detail %q dropped the provider's reason", settled.ErrorDetail)
+	}
+	if got := store.sessions["session-1"].Mode; got != domain.SessionModeTUI {
+		t.Fatalf("mode = %s, want the session restored to TUI", got)
+	}
+}
+
 func TestInterfaceTransitionRollbackClearsStaleTUIRuntimeBeforeRestore(t *testing.T) {
 	manager, store, runtime, chat, log := newTransitionManager(t, domain.SessionModeTUI)
 	runtime.runtimeOccupied = true
