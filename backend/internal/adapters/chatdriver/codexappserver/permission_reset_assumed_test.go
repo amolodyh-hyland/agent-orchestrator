@@ -161,8 +161,12 @@ func TestUnrelatedFailureKeepsAssumingTheResumedPosture(t *testing.T) {
 	server.mu.Lock()
 	server.failTo = "Usage limit reached. Resets tomorrow."
 	server.mu.Unlock()
-	if err := sendDefault(conv); err == nil || errors.Is(err, ports.ErrPermissionRejected) {
+	err := sendDefault(conv)
+	if err == nil || errors.Is(err, ports.ErrPermissionRejected) {
 		t.Fatalf("error = %v, want the provider's plain failure", err)
+	}
+	if strings.Contains(err.Error(), resetExplanation) || strings.Contains(err.Error(), "may still carry the permission override") {
+		t.Fatalf("a plain failure of the reset was explained as a refusal: %v", err)
 	}
 	server.mu.Lock()
 	server.failTo = ""

@@ -14,6 +14,10 @@ import (
 
 // The wording is Codex's own, captured live from codex-cli 0.159.2 against an
 // enterprise-managed requirement that allows only ReadOnly and WorkspaceWrite.
+// resetExplanation is the text a refused return to the default mode adds, so the user
+// is told why a posture they did not choose was sent.
+const resetExplanation = "returning to Codex defaults sent the ask-for-approval posture"
+
 const managedSandboxRejection = "invalid thread settings override: invalid value for `sandbox_mode`: `DangerFullAccess` is not in the allowed set [ReadOnly, WorkspaceWrite] (set by enterprise-managed requirements Default requirements (6e1e489a-e29e-4073-8f8c-01fd3ae783df))"
 
 // assertLabelledRejection checks a marked refusal still says which request failed,
@@ -42,6 +46,10 @@ func TestPermissionConstraintMessages(t *testing.T) {
 		{"managed sandbox rejection", managedSandboxRejection, true},
 		{"approval policy outside the allowed set", "invalid value for `approval_policy`: `Never` is not in the allowed set [OnRequest, UnlessTrusted]", true},
 		{"disallowed by requirements", "Configured value for `approval_policy` is disallowed by requirements", true},
+		// The reviewer is the third field a mode sends (auto picks the automatic one), so a
+		// refusal naming only it must be recognised on its own.
+		{"approvals reviewer outside the allowed set", "invalid value for `approvals_reviewer`: `AutoReview` is not in the allowed set [User]", true},
+		{"approvals reviewer disallowed by requirements", "Configured value for `approvals_reviewer` is disallowed by requirements", true},
 		{"a constraint on something else", "invalid value for `features.ultrafast_mode`: `true` is not in the allowed set [false]", false},
 		{"usage limit", "Usage limit reached. Resets tomorrow.", false},
 		{"unknown thread", "unknown thread", false},
@@ -130,6 +138,11 @@ func TestTurnRejectionIsMarkedForEveryExplicitMode(t *testing.T) {
 				t.Fatalf("SendTurn error = %v, want a permission rejection for %q", err, mode)
 			}
 			assertLabelledRejection(t, err, "turn/start: ")
+			// Only a return to the default mode sends a posture the user did not pick, so only
+			// that refusal explains itself that way.
+			if strings.Contains(err.Error(), resetExplanation) {
+				t.Errorf("a refusal of the explicit mode %q was explained as a reset: %v", mode, err)
+			}
 		})
 	}
 }
@@ -394,8 +407,14 @@ func TestRefusedResetIsRetriedOnTheNextDefaultTurn(t *testing.T) {
 	srv.mu.Lock()
 	srv.failures["turn/start"] = `{"code":-32600,"message":"provider busy"}`
 	srv.mu.Unlock()
-	if err := sendWithMode(t, conv, ports.PermissionModeDefault); err == nil {
+	err = sendWithMode(t, conv, ports.PermissionModeDefault)
+	if err == nil {
 		t.Fatal("the refused reset reported success")
+	}
+	// The provider was merely busy, which says nothing about the posture: it must read
+	// as itself, not as a refusal of the reset.
+	if strings.Contains(err.Error(), resetExplanation) || errors.Is(err, ports.ErrPermissionRejected) {
+		t.Fatalf("a non-permission failure of the reset was labelled as a refusal: %v", err)
 	}
 	srv.mu.Lock()
 	delete(srv.failures, "turn/start")
@@ -549,7 +568,7 @@ func TestRefusedResetNamesThePostureThatWasSent(t *testing.T) {
 	if refused.Mode != ports.PermissionModeAcceptEdits {
 		t.Errorf("rejected mode = %q, want accept-edits: the posture AO actually sent", refused.Mode)
 	}
-	if !strings.Contains(err.Error(), "returning to Codex defaults sent the ask-for-approval posture") {
+	if !strings.Contains(err.Error(), resetExplanation) {
 		t.Errorf("error %q does not explain why that posture was sent", err.Error())
 	}
 }
