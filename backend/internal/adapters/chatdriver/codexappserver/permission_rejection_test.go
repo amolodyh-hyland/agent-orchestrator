@@ -395,22 +395,28 @@ func TestReadOnlyConversationNeverResets(t *testing.T) {
 	}
 }
 
-// Resuming a thread through a fresh thread/resume carries whatever mode the resume
-// sent, so a later drop to the default mode resets only when that mode was explicit.
-func TestResumeMarksThePostureItSent(t *testing.T) {
+// A resumed thread keeps the override its last turn left, even when the resume sends
+// none: Codex restores it (checked live, a prior turn's automatic reviewer survived a
+// plain thread/resume). So whatever mode a resume carries, the first default turn
+// afterwards resets rather than trusting the label; only a read-only conversation,
+// whose posture is fixed, has nothing to reset.
+func TestResumeAssumesThePriorPostureMayRemain(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		mode      ports.PermissionMode
+		readOnly  bool
 		wantReset bool
 	}{
-		{"resumed with an explicit mode", ports.PermissionModeBypassPermissions, true},
-		{"resumed with approve-for-me", ports.PermissionModeAuto, true},
-		{"resumed with the default mode", ports.PermissionModeDefault, false},
+		{"resumed with an explicit mode", ports.PermissionModeBypassPermissions, false, true},
+		{"resumed with approve-for-me", ports.PermissionModeAuto, false, true},
+		{"resumed with the default mode", ports.PermissionModeDefault, false, true},
+		{"read-only conversation", ports.PermissionModeDefault, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d, srv := newTestDriver(t)
 			conv, err := d.Resume(context.Background(), ports.ChatResumeConfig{
-				SessionID: "ao-1", ProviderConversationID: "thread-1", WorkspacePath: "/tmp/ws", Permissions: tc.mode,
+				SessionID: "ao-1", ProviderConversationID: "thread-1", WorkspacePath: "/tmp/ws",
+				Permissions: tc.mode, ReadOnly: tc.readOnly,
 			})
 			if err != nil {
 				t.Fatalf("Resume: %v", err)
@@ -423,8 +429,8 @@ func TestResumeMarksThePostureItSent(t *testing.T) {
 			if tc.wantReset && !posture.isAskForApproval() {
 				t.Errorf("first default turn sent %+v, want the reset posture", posture)
 			}
-			if !tc.wantReset && !posture.isEmpty() {
-				t.Errorf("first default turn sent %+v on a thread resumed with defaults", posture)
+			if !tc.wantReset && (posture.SandboxPolicy == nil || posture.SandboxPolicy.Type != "readOnly") {
+				t.Errorf("read-only turn sent %+v, want its fixed read-only posture", posture)
 			}
 		})
 	}

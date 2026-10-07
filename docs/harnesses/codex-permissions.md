@@ -63,9 +63,12 @@ AO keeps its four modes; no new mode or API enum was added.
   sends the Ask for approval posture explicitly (`on-request`, workspace-write,
   reviewer `user`), after which `default` sends nothing again. For the common setup
   that equals Codex's own default; for a user whose configuration is wider it is
-  deliberately safer. A thread that never overrode anything is never touched. After
-  a daemon restart a host that survived keeps whatever posture it had, which this
-  process never saw, so its first `default` turn resets too (unless read-only). If
+  deliberately safer. A thread that never overrode anything is never touched. A resumed
+  thread keeps the override its last turn left (checked live: a prior turn's automatic
+  reviewer was still in effect after a plain `thread/resume` that sent nothing), and
+  a host that survived a daemon restart keeps whatever posture it had, which this
+  process never saw. So after any resume the first `default` turn resets too, unless
+  the conversation is read-only. If
   a managed requirement refuses the reset posture, the error says so ("returning to
   Codex defaults sent the ask-for-approval posture, which was refused") and names
   `accept-edits`, the posture actually sent, rather than `default`.

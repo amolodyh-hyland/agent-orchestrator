@@ -427,7 +427,12 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		return nil, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, err)
 	}
 
-	conv.widerThanDefaults = sentApprovalOverride(policy, sandbox, reviewer) && !cfg.ReadOnly
+	// A resumed thread keeps the override its last turn left: Codex restores it even
+	// when the resume itself sends none (verified live: the automatic reviewer a
+	// prior turn set was still in effect after a plain thread/resume). So a resume
+	// with the default mode may still be on a wider posture, and the first default
+	// turn resets it. A resume that sent an override applied that one.
+	conv.widerThanDefaults = !cfg.ReadOnly
 	conv.start(cfg.ProviderConversationID, resp.Model, resp.ReasoningEffort)
 	return conv, nil
 }
