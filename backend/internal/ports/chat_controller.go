@@ -34,6 +34,9 @@ type ChatControllerStart struct {
 	Model         string
 	Effort        string
 	Permissions   PermissionMode
+	// DisablePermissionFallback turns off the step-down to a less permissive mode
+	// when the provider refuses Permissions. The zero value leaves the fallback on.
+	DisablePermissionFallback bool
 	// ReadOnly forces the provider's native sandbox to reject workspace writes.
 	// Reviewer-owned conversations set this independently of approval behavior.
 	ReadOnly              bool
