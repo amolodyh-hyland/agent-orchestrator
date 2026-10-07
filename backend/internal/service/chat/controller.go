@@ -1690,7 +1690,7 @@ func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (p
 	requested := msg.Settings.Approval
 	var ref ports.ChatTurnRef
 	fallback := permissionFallback{enabled: !c.permissionFallbackOff, log: c.log, session: c.sessionID, stage: "turn"}
-	effective, err := fallback.run(ctx, requested, func(mode ports.PermissionMode) error {
+	outcome, err := fallback.run(ctx, requested, func(mode ports.PermissionMode) error {
 		attempt := msg
 		attempt.Settings.Approval = mode
 		var sendErr error
@@ -1700,8 +1700,8 @@ func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (p
 	if err != nil {
 		return ports.ChatTurnRef{}, err
 	}
-	if effective != requested {
-		c.adoptEffectivePermission(ctx, requested, effective)
+	if outcome.steppedDown(requested) {
+		c.adoptEffectivePermission(ctx, requested, outcome)
 	}
 	return ref, nil
 }
@@ -1710,7 +1710,15 @@ func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (p
 // conversation shows and later turns start from, so the step-down is visible
 // and is not repeated, and reports it for the session record. A choice the user
 // made while the turn was being sent is left alone.
-func (c *Controller) adoptEffectivePermission(ctx context.Context, requested, effective ports.PermissionMode) {
+func (c *Controller) adoptEffectivePermission(ctx context.Context, requested ports.PermissionMode, outcome permissionFallbackOutcome) {
+	effective := outcome.Effective
+	// The timeline notice is recorded whatever the user chose meanwhile: the turn
+	// did run with the lower mode.
+	if err := c.store.UpsertActivity(ctx, c.conversation.ID, "",
+		permissionFallbackActivity(c.newID(), requested, outcome), c.now()); err != nil {
+		c.log.Warn("could not record the permission fallback in the timeline",
+			"sessionID", c.sessionID, "effective", effective, "error", err)
+	}
 	c.configMu.Lock()
 	defer c.configMu.Unlock()
 	current := c.Settings()

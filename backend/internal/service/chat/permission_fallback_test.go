@@ -3,6 +3,7 @@ package chat_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -159,6 +160,38 @@ func (f *fallbackFixture) persistedMode(t *testing.T) ports.PermissionMode {
 	return snapshot.Conversation.Settings.ApprovalMode
 }
 
+// fallbackNotice is the decoded detail of a permission.fallback timeline row.
+type fallbackNotice struct {
+	Event     string `json:"event"`
+	Requested string `json:"requested"`
+	Effective string `json:"effective"`
+	Rejected  []struct {
+		Mode   string `json:"mode"`
+		Reason string `json:"reason"`
+	} `json:"rejected"`
+}
+
+// fallbackNotices returns the durable timeline notices a step-down left, so the
+// step-down is visible to someone reading the conversation, not only the logs.
+func (f *fallbackFixture) fallbackNotices(t *testing.T) []fallbackNotice {
+	t.Helper()
+	snapshot, err := f.st.LoadConversationSnapshot(context.Background(), f.ctrl.ConversationID())
+	if err != nil {
+		t.Fatalf("load conversation: %v", err)
+	}
+	var notices []fallbackNotice
+	for _, activity := range snapshot.Activities {
+		var notice fallbackNotice
+		if json.Unmarshal(activity.Detail, &notice) == nil && notice.Event == "permission.fallback" {
+			if activity.Kind != domain.ActivityKindSystem {
+				t.Errorf("notice kind = %q, want system", activity.Kind)
+			}
+			notices = append(notices, notice)
+		}
+	}
+	return notices
+}
+
 func (f *fallbackFixture) changedModes() []ports.PermissionMode {
 	f.changedMu.Lock()
 	defer f.changedMu.Unlock()
@@ -221,6 +254,19 @@ func TestTurnStepsDownOneModeAtATimeUntilAccepted(t *testing.T) {
 			}
 			if !strings.Contains(logs, "permission fallback applied") || !strings.Contains(logs, "effective="+string(tc.wantRun)) {
 				t.Errorf("log does not record the effective mode %s:\n%s", tc.wantRun, logs)
+			}
+			// ...and it is a durable timeline row naming what was asked, what ran, and why.
+			notices := f.fallbackNotices(t)
+			if len(notices) != 1 {
+				t.Fatalf("timeline has %d permission notices, want 1", len(notices))
+			}
+			if notices[0].Requested != string(bypass) || notices[0].Effective != string(tc.wantRun) || len(notices[0].Rejected) != len(tc.refuse) {
+				t.Fatalf("notice = %+v, want requested bypass, effective %s and %d rejected modes", notices[0], tc.wantRun, len(tc.refuse))
+			}
+			for i, refused := range tc.refuse {
+				if notices[0].Rejected[i].Mode != string(refused) || !strings.Contains(notices[0].Rejected[i].Reason, "managed requirements do not allow") {
+					t.Errorf("notice rejected[%d] = %+v, want %s with the provider's reason", i, notices[0].Rejected[i], refused)
+				}
 			}
 		})
 	}
@@ -358,6 +404,31 @@ func TestEveryModeRejectedFailsClearlyListingThem(t *testing.T) {
 	}
 }
 
+// A turn that ran with the requested mode, or that failed outright, leaves no
+// notice: the timeline only says a mode was lowered when one really was.
+func TestNoTimelineNoticeWithoutAStepDown(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		reject map[ports.PermissionMode]error
+		fail   bool
+	}{
+		{"requested mode accepted", nil, false},
+		{"unrelated failure", map[ports.PermissionMode]error{bypass: errProviderBusy}, true},
+		{"every mode rejected", reject(bypass, autoMode, acceptEdit, defaultMod), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFallbackFixture(t, fallbackOptions{permissions: bypass, reject: tc.reject})
+			_, err := f.send("first")
+			if (err != nil) != tc.fail {
+				t.Fatalf("Send error = %v, want failure=%t", err, tc.fail)
+			}
+			if got := f.fallbackNotices(t); len(got) != 0 {
+				t.Fatalf("timeline has permission notices %+v, want none", got)
+			}
+		})
+	}
+}
+
 func TestFallbackDisabledSurfacesTheProviderRejection(t *testing.T) {
 	f := newFallbackFixture(t, fallbackOptions{
 		permissions: bypass, disableFallback: true, reject: reject(bypass),
@@ -460,6 +531,10 @@ func TestLaunchStepsDownWhenTheProviderRejectsTheMode(t *testing.T) {
 	}
 	if !strings.Contains(f.logs.String(), "stage=launch") {
 		t.Errorf("launch step-down was not logged:\n%s", f.logs.String())
+	}
+	notices := f.fallbackNotices(t)
+	if len(notices) != 1 || notices[0].Requested != string(bypass) || notices[0].Effective != string(acceptEdit) || len(notices[0].Rejected) != 2 {
+		t.Fatalf("timeline notices = %+v, want one bypass -> accept-edits notice listing two rejected modes", notices)
 	}
 }
 

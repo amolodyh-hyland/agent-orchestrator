@@ -98,8 +98,8 @@ Rules:
   (`permission fallback applied`, with `requested`, `effective`, `rejected`). The
   effective mode is stored as the conversation's approval mode (so the picker shows
   it and later turns start from it), stored as the session's pinned permissions
-  (`ao session get` shows `permissions:`, the API reports `permissions`), and used
-  by restore.
+  (`ao session get` shows `permissions:`, the API reports `permissions`), recorded as a
+  timeline notice, and used by restore.
 - If every mode is refused the spawn or turn fails with a
   `PermissionFallbackExhaustedError` that lists each mode and its reason.
 - A lower mode that the provider cannot admit (it needs an approval channel the
@@ -125,6 +125,32 @@ ao project set-config <id> --permission bypass-permissions --permission-fallback
 `turn/start: permission mode "bypass-permissions" rejected: invalid thread settings
 override: … (set by enterprise-managed requirements …)`. The setting is read when a
 controller starts or resumes, so a change applies to new and restarted sessions.
+
+### Settings UI
+
+Settings → Project → Agents shows the Codex modes by what they do, not by AO's
+generic names, and explains the selected one under the picker:
+
+| Setting value | Label | Meaning |
+| --- | --- | --- |
+| `default` | Codex defaults (no override) | Legacy launch: AO sends no sandbox or approval setting. |
+| `auto` | Approve for me | Auto review inside the workspace-write sandbox. |
+| `accept-edits` | Ask for approval | Workspace-write sandbox, you approve escalations. |
+| `bypass-permissions` | Full access (bypass) | Explicit full access; a managed policy can reject it. |
+
+Under each Codex worker/orchestrator picker, **Step down if rejected** is the
+`agentConfig.permissionFallback` toggle (on by default; only an explicit off is
+saved, in the role override). Its tooltip states that it only steps down, never up,
+and never bypasses managed policy. The toggle is hidden for other harnesses and for
+the read-only reviewer. A project-level `agentConfig.permissionFallback` set through
+the CLI is moved into the role overrides when the form saves, like the other
+agent-config fields.
+
+The mode actually in use is visible in three places: the chat's approval picker (the
+fallback stores the effective mode as the conversation's approval mode), a
+**Permission mode lowered to …** row in the chat timeline listing each refused mode
+with the provider's reason (a durable `permission.fallback` system activity), and
+`permissions` on the session API / `ao session get`.
 
 ### Other harnesses
 

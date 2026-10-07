@@ -621,7 +621,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	launchFallback := permissionFallback{
 		enabled: !cfg.DisablePermissionFallback, log: s.log, session: cfg.SessionID, stage: "launch",
 	}
-	effectivePermissions, err := launchFallback.run(ctx, requestedPermissions, func(mode ports.PermissionMode) error {
+	fallbackOutcome, err := launchFallback.run(ctx, requestedPermissions, func(mode ports.PermissionMode) error {
 		if mode != requestedPermissions && caps != nil {
 			// A lower mode can need more than the requested one did: an approval
 			// channel the provider may not have. Treat that as a refusal of the
@@ -672,9 +672,15 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	if err != nil {
 		return nil, err
 	}
-	if effectivePermissions != requestedPermissions {
+	effectivePermissions := fallbackOutcome.Effective
+	if fallbackOutcome.steppedDown(requestedPermissions) {
 		cfg.Permissions = effectivePermissions
 		conversation.Settings.ApprovalMode = effectivePermissions
+		if activityErr := s.store.UpsertActivity(ctx, conversation.ID, "",
+			permissionFallbackActivity(s.newID(), requestedPermissions, fallbackOutcome), s.now()); activityErr != nil {
+			s.log.Warn("could not record the permission fallback in the timeline",
+				"sessionID", cfg.SessionID, "effective", effectivePermissions, "error", activityErr)
+		}
 		if settingsErr := s.store.SetConversationSettings(ctx, conversation.ID, conversation.Settings, s.now()); settingsErr != nil {
 			s.log.Warn("could not record the permission fallback on the conversation",
 				"sessionID", cfg.SessionID, "effective", effectivePermissions, "error", settingsErr)
@@ -800,7 +806,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
 	controller.permissionFallbackOff = cfg.DisablePermissionFallback
 	controller.onPermissionsChanged = s.onPermissionsChanged
-	if effectivePermissions != requestedPermissions {
+	if fallbackOutcome.steppedDown(requestedPermissions) {
 		controller.launchPermissions = effectivePermissions
 	}
 	var commitProviderHistory func(context.Context) error

@@ -143,6 +143,8 @@ function SettingsBody({
 		orchestratorModel: config.orchestrator?.agentConfig?.model ?? config.agentConfig?.model ?? "",
 		orchestratorEffort: config.orchestrator?.agentConfig?.effort ?? config.agentConfig?.effort ?? "",
 		orchestratorPermissions: config.orchestrator?.agentConfig?.permissions ?? config.agentConfig?.permissions ?? "",
+		workerPermissionFallback: config.worker?.agentConfig?.permissionFallback ?? config.agentConfig?.permissionFallback ?? true,
+		orchestratorPermissionFallback: config.orchestrator?.agentConfig?.permissionFallback ?? config.agentConfig?.permissionFallback ?? true,
 		workerMode: config.worker?.agentConfig?.mode ?? config.agentConfig?.mode ?? "",
 		orchestratorMode: config.orchestrator?.agentConfig?.mode ?? config.agentConfig?.mode ?? "",
 		reviewerHarness: config.reviewers?.[0]?.harness ?? "",
@@ -200,7 +202,7 @@ function SettingsBody({
 				project_id: projectId,
 			});
 			const displayName = values.displayName.trim();
-			const { model: _legacyModel, mode: _legacyMode, effort: _legacyEffort, permissions: _legacyPermissions, ...sharedAgentConfig } = config.agentConfig ?? {};
+			const { model: _legacyModel, mode: _legacyMode, effort: _legacyEffort, permissions: _legacyPermissions, permissionFallback: _legacyPermissionFallback, ...sharedAgentConfig } = config.agentConfig ?? {};
 			const existingReviewer = config.reviewers?.[0];
 			const existingReviewerAgentConfig = existingReviewer?.harness === values.reviewerHarness ? existingReviewer.agentConfig : undefined;
 			const next: ProjectConfig = isScratchProject
@@ -209,7 +211,7 @@ function SettingsBody({
 						worker: {
 							...config.worker,
 							agent: values.workerAgent,
-							agentConfig: buildRoleAgentConfig(config.worker?.agentConfig, values.workerModel, values.workerMode, values.workerEffort, values.workerPermissions),
+							agentConfig: buildRoleAgentConfig(config.worker?.agentConfig, values.workerModel, values.workerMode, values.workerEffort, values.workerPermissions, values.workerPermissionFallback),
 						},
 						orchestrator: {
 							...config.orchestrator,
@@ -220,6 +222,7 @@ function SettingsBody({
 								values.orchestratorMode,
 								values.orchestratorEffort,
 								values.orchestratorPermissions,
+								values.orchestratorPermissionFallback,
 							),
 						},
 						agentConfig: blankToUndefined({
@@ -234,7 +237,7 @@ function SettingsBody({
 						worker: {
 							...config.worker,
 							agent: values.workerAgent,
-							agentConfig: buildRoleAgentConfig(config.worker?.agentConfig, values.workerModel, values.workerMode, values.workerEffort, values.workerPermissions),
+							agentConfig: buildRoleAgentConfig(config.worker?.agentConfig, values.workerModel, values.workerMode, values.workerEffort, values.workerPermissions, values.workerPermissionFallback),
 						},
 						orchestrator: {
 							...config.orchestrator,
@@ -245,6 +248,7 @@ function SettingsBody({
 								values.orchestratorMode,
 								values.orchestratorEffort,
 								values.orchestratorPermissions,
+								values.orchestratorPermissionFallback,
 							),
 						},
 						agentConfig: blankToUndefined({
@@ -713,15 +717,30 @@ function SettingsBody({
 						<div className="min-w-0 space-y-1.5">
 							<span className="text-xs text-settings-muted">{t("settings.project.roleApproval", { role: t("settings.models.workerRole") })}</span>
 							<PermissionModeSelect ariaLabel={t("settings.project.roleApproval", { role: t("settings.models.workerRole") })} value={form.workerPermissions} agentId={form.workerAgent} onChange={(workerPermissions) => setForm((f) => ({ ...f, workerPermissions }))} />
+							<CodexPermissionDetails
+								agentId={form.workerAgent}
+								mode={form.workerPermissions}
+								fallbackLabel={t("settings.project.roleApproval", { role: t("settings.models.workerRole") })}
+								fallback={form.workerPermissionFallback}
+								onFallbackChange={(workerPermissionFallback) => setForm((f) => ({ ...f, workerPermissionFallback }))}
+							/>
 						</div>
 						<div className="min-w-0 space-y-1.5">
 							<span className="text-xs text-settings-muted">{t("settings.project.roleApproval", { role: t("settings.models.orchestratorRole") })}</span>
 							<PermissionModeSelect ariaLabel={t("settings.project.roleApproval", { role: t("settings.models.orchestratorRole") })} value={form.orchestratorPermissions} agentId={form.orchestratorAgent} onChange={(orchestratorPermissions) => setForm((f) => ({ ...f, orchestratorPermissions }))} />
+							<CodexPermissionDetails
+								agentId={form.orchestratorAgent}
+								mode={form.orchestratorPermissions}
+								fallbackLabel={t("settings.project.roleApproval", { role: t("settings.models.orchestratorRole") })}
+								fallback={form.orchestratorPermissionFallback}
+								onFallbackChange={(orchestratorPermissionFallback) => setForm((f) => ({ ...f, orchestratorPermissionFallback }))}
+							/>
 						</div>
 						{!isScratchProject && (
 							<div className="min-w-0 space-y-1.5">
 								<span className="text-xs text-settings-muted">{t("settings.project.roleApproval", { role: t("settings.models.reviewerRole") })}</span>
 								<PermissionModeSelect ariaLabel={t("settings.project.roleApproval", { role: t("settings.models.reviewerRole") })} value={form.reviewerPermissions} agentId={form.reviewerHarness || defaultReviewerHarness} onChange={(reviewerPermissions) => setForm((f) => ({ ...f, reviewerHarness: f.reviewerHarness || defaultReviewerHarness, reviewerPermissions }))} />
+								<CodexPermissionDetails agentId={form.reviewerHarness || defaultReviewerHarness} mode={form.reviewerPermissions} />
 							</div>
 						)}
 					</div>
@@ -889,15 +908,31 @@ function ProjectAgentRoleRow({ label, agent, model }: { label: string; agent: Re
 	);
 }
 
+const CODEX_PERMISSION_COPY = {
+	default: { label: "settings.project.permissionCodexDefault", help: "settings.project.permissionCodexDefaultHelp" },
+	auto: { label: "settings.project.permissionCodexAuto", help: "settings.project.permissionCodexAutoHelp" },
+	"accept-edits": { label: "settings.project.permissionCodexAcceptEdits", help: "settings.project.permissionCodexAcceptEditsHelp" },
+	"bypass-permissions": { label: "settings.project.permissionCodexBypass", help: "settings.project.permissionCodexBypassHelp" },
+} as const;
+
+function codexPermissionCopy(mode: string) {
+	return CODEX_PERMISSION_COPY[(mode || "auto") as keyof typeof CODEX_PERMISSION_COPY] ?? CODEX_PERMISSION_COPY.auto;
+}
+
 function PermissionModeSelect({ ariaLabel, value, agentId, onChange }: { ariaLabel: string; value: string; agentId: string; onChange: (value: string) => void }) {
 	const { t } = useTranslation();
+	const isCodex = agentId === "codex";
 	const options: { value: string; label: string }[] = PERMISSION_MODE_VALUES.map((permission) => ({
 		value: permission,
-		label: permission === "accept-edits" ? t("settings.project.permissionAcceptEdits") : permission === "auto" ? t("settings.project.permissionAuto") : t("settings.project.permissionBypass"),
+		label: isCodex
+			? t(CODEX_PERMISSION_COPY[permission].label)
+			: permission === "accept-edits" ? t("settings.project.permissionAcceptEdits") : permission === "auto" ? t("settings.project.permissionAuto") : t("settings.project.permissionBypass"),
 	}));
 	options.unshift({
 		value: "default",
-		label: agentId === "claude-code" ? t("settings.project.permissionUseClaude") : t("settings.project.permissionUseAgent"),
+		label: isCodex
+			? t(CODEX_PERMISSION_COPY.default.label)
+			: agentId === "claude-code" ? t("settings.project.permissionUseClaude") : t("settings.project.permissionUseAgent"),
 	});
 	return (
 		<SettingsOptionMenu
@@ -908,6 +943,63 @@ function PermissionModeSelect({ ariaLabel, value, agentId, onChange }: { ariaLab
 			triggerClassName="w-full justify-between"
 			onChange={onChange}
 		/>
+	);
+}
+
+/**
+ * What the chosen Codex mode does, in words, plus the permission fallback toggle.
+ *
+ * Codex's four modes are genuinely different launches (no override, approve-for-me,
+ * ask, full access), so each one is explained under the picker instead of leaving
+ * the reader to infer them from a generic "Auto". Only roles that can step down
+ * (everything but the read-only reviewer) get the toggle.
+ */
+function CodexPermissionDetails({
+	agentId,
+	mode,
+	fallback,
+	fallbackLabel,
+	onFallbackChange,
+}: {
+	agentId: string;
+	mode: string;
+	fallback?: boolean;
+	fallbackLabel?: string;
+	onFallbackChange?: (enabled: boolean) => void;
+}) {
+	const { t } = useTranslation();
+	if (agentId !== "codex") return null;
+	const copy = codexPermissionCopy(mode);
+	return (
+		<div className="space-y-1.5">
+			<p className="text-xs leading-normal text-settings-muted">{t(copy.help)}</p>
+			{onFallbackChange && fallbackLabel !== undefined && (
+				<div className="flex items-center justify-between gap-2">
+					<div className="flex min-w-0 items-center gap-1.5">
+						<span className="text-xs leading-5 text-settings-label">{t("settings.project.permissionFallbackToggle")}</span>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<button
+									type="button"
+									className="inline-flex size-5 shrink-0 items-center justify-center rounded-md text-settings-muted transition-colors hover:bg-settings-menu-selected hover:text-settings-label focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+									aria-label={t("settings.project.permissionFallbackDescription")}
+								>
+									<Info className="size-icon-sm" aria-hidden="true" />
+								</button>
+							</TooltipTrigger>
+							<TooltipContent className="max-w-72 leading-normal" side="top">
+								{t("settings.project.permissionFallbackDescription")}
+							</TooltipContent>
+						</Tooltip>
+					</div>
+					<Switch
+						aria-label={t("settings.project.permissionFallbackSwitch", { role: fallbackLabel })}
+						checked={fallback ?? true}
+						onCheckedChange={onFallbackChange}
+					/>
+				</div>
+			)}
+		</div>
 	);
 }
 
@@ -956,6 +1048,7 @@ function buildRoleAgentConfig(
 	mode: string,
 	effort: string,
 	permissions: string,
+	permissionFallback?: boolean,
 ): components["schemas"]["AgentConfig"] | undefined {
 	const next = { ...existing };
 	if (model) next.model = model;
@@ -966,5 +1059,8 @@ function buildRoleAgentConfig(
 	else delete next.effort;
 	if (permissions) next.permissions = permissions as components["schemas"]["AgentConfig"]["permissions"];
 	else delete next.permissions;
+	// On is the default and is never written; only an explicit "off" is stored.
+	if (permissionFallback === false) next.permissionFallback = false;
+	else if (permissionFallback === true) delete next.permissionFallback;
 	return Object.keys(next).length > 0 ? next : undefined;
 }
