@@ -53,6 +53,7 @@ func (e *PermissionFallbackExhaustedError) Error() string {
 	return "every permission mode was rejected: " + strings.Join(parts, "; ")
 }
 
+// Is lets errors.Is(err, ErrPermissionRejected) classify the error.
 func (e *PermissionFallbackExhaustedError) Is(target error) bool {
 	return target == ErrPermissionRejected
 }

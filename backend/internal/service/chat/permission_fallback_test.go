@@ -393,7 +393,7 @@ func TestStepDownDoesNotOverwriteAConcurrentChoice(t *testing.T) {
 	if f.startErr != nil {
 		t.Fatalf("Start: %v", f.startErr)
 	}
-	f.conv.fakeConversation.onSend = func(string) {
+	f.conv.onSend = func(string) {
 		if _, err := f.svc.SetTurnSettings(context.Background(), testSession, domain.ConversationSettings{ApprovalMode: acceptEdit}); err != nil {
 			t.Errorf("SetTurnSettings: %v", err)
 		}
