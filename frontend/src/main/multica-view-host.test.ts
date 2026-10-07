@@ -159,6 +159,7 @@ async function setup(initial: MulticaSettings = { url: URL }, overrides: Partial
 			startLogStream: vi.fn(),
 			stopLogStream: vi.fn(),
 			startPolling: vi.fn(),
+			stopPolling: vi.fn(),
 			dispose: daemonDispose,
 		}),
 		onTakeover,
@@ -875,6 +876,7 @@ describe("multica view host: a stale document after a URL change", () => {
 			startLogStream: vi.fn(),
 			stopLogStream: vi.fn(),
 			startPolling: vi.fn(),
+			stopPolling: vi.fn(),
 			dispose: vi.fn(),
 		};
 		const t = await setup({ url: URL }, { createDaemonService: () => daemon });
