@@ -278,6 +278,9 @@ func TestEditConversationRouteRefusalsUseEditCodes(t *testing.T) {
 		{"legacy durable rejection", chatsvc.ErrEditDeliveryRejected, http.StatusConflict, "CHAT_EDIT_REJECTED"},
 		{"provider refused", chatsvc.ErrProviderRefused, http.StatusConflict, "CHAT_PROVIDER_REFUSED"},
 		{"permission rejected", &ports.PermissionRejectedError{Mode: ports.PermissionModeBypassPermissions, Reason: "not allowed"}, http.StatusConflict, "CHAT_PERMISSION_REJECTED"},
+		// The chat service wraps a permission refusal in the generic provider-refused
+		// sentinel as well; the specific code has to win.
+		{"permission rejected folded into a provider refusal", fmt.Errorf("%w: %w", chatsvc.ErrProviderRefused, &ports.PermissionRejectedError{Mode: ports.PermissionModeBypassPermissions, Reason: "not allowed"}), http.StatusConflict, "CHAT_PERMISSION_REJECTED"},
 		{"missing turn", fmt.Errorf("%w: %w", chatsvc.ErrEditTurnInvalid, domain.ErrNoConversationTurn), http.StatusNotFound, "CHAT_EDIT_TURN_INVALID"},
 		{"invalid stored content", chatsvc.ErrEditTurnInvalid, http.StatusBadRequest, "CHAT_EDIT_TURN_INVALID"},
 	}

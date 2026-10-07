@@ -153,6 +153,12 @@ Rules:
   reach any of this. Error codes are not enumerated in the OpenAPI spec, so it is
   unchanged. The chat client treats the code as a definitive non-acceptance of a
   steer or an edit.
+- A permission refusal counts as the provider declining while the conversation stays
+  healthy (`ChatRefusal`, which the chat service reads structurally). So an edit that
+  carries a delivery handle settles as rejected rather than staying "uncertain", the
+  source branch is restored, and replaying the handle never reaches the provider
+  again (the replay reports the stored refusal with the generic
+  `CHAT_PROVIDER_REFUSED` code and the same message); steers settle the same way.
 - A lower mode that the provider cannot admit (it needs an approval channel the
   provider lacks) is treated as refused at launch, not launched.
 - A mode the user picks while a turn is being sent is not overwritten by the

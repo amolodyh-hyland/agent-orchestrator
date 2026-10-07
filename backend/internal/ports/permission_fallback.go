@@ -32,6 +32,13 @@ func (e *PermissionRejectedError) Unwrap() error { return e.Err }
 // Is lets errors.Is(err, ErrPermissionRejected) classify the error.
 func (e *PermissionRejectedError) Is(target error) bool { return target == ErrPermissionRejected }
 
+// ChatRefusal marks the error as the provider declining the request while the
+// conversation stays healthy. The chat service reads that contract structurally to
+// decide that nothing was delivered: an edit or steer refused over the permission
+// mode is then a definitive rejection (the source branch is restored and the delivery
+// handle settles) instead of an uncertain one.
+func (e *PermissionRejectedError) ChatRefusal() bool { return true }
+
 // PermissionRejection records one mode the provider refused, and why.
 type PermissionRejection struct {
 	Mode   PermissionMode
@@ -57,6 +64,10 @@ func (e *PermissionFallbackExhaustedError) Error() string {
 func (e *PermissionFallbackExhaustedError) Is(target error) bool {
 	return target == ErrPermissionRejected
 }
+
+// ChatRefusal marks the exhausted ladder as a provider refusal too; see
+// PermissionRejectedError.ChatRefusal.
+func (e *PermissionFallbackExhaustedError) ChatRefusal() bool { return true }
 
 // permissionLadder orders the permission modes a refused launch steps down
 // through, from most to least permissive.
