@@ -77,15 +77,17 @@ func (r *recordingLifecycle) PersistChatModel(_ context.Context, id domain.Sessi
 // newChatServiceOptions is where the daemon wires the Chat service to the Session
 // Manager. The two hooks that write session records have to be present and reach it,
 // and the Session Manager has to be read when the hook fires, because it is built
-// after the Chat service. A hook that is omitted, or that captured a nil Session
-// Manager, would leave sessions reading back a mode and model they are not using.
+// after the Chat service and handed over through the returned bind function. A hook
+// that is omitted, that never sees the bound manager, or that captured a nil one,
+// would leave sessions reading back a mode and model they are not using.
 func TestChatServiceOptionsWireTheSessionRecordHooksToTheSessionManager(t *testing.T) {
-	var current sessionLifecycle // not built yet, as at daemon startup
-	opts := newChatServiceOptions(context.Background(), chatServiceDeps{
+	opts, bind := newChatServiceOptions(context.Background(), chatServiceDeps{
 		Log:          slog.New(slog.DiscardHandler),
 		AgentService: func() *agentsvc.Service { return nil },
-		Sessions:     func() sessionLifecycle { return current },
 	})
+	if bind == nil {
+		t.Fatal("no bind function returned: the daemon has no way to hand the hooks the Session Manager")
+	}
 	if opts.OnPermissionsChanged == nil || opts.OnModelChanged == nil {
 		t.Fatalf("session record hooks missing: permissions=%t model=%t",
 			opts.OnPermissionsChanged != nil, opts.OnModelChanged != nil)
@@ -96,7 +98,7 @@ func TestChatServiceOptionsWireTheSessionRecordHooksToTheSessionManager(t *testi
 	opts.OnModelChanged("ao-0", "early")
 
 	sessions := &recordingLifecycle{fakeSessionLifecycle: &fakeSessionLifecycle{}}
-	current = sessions // built later; the hooks must see it now
+	bind(sessions) // built later; the hooks must see it now
 
 	opts.OnPermissionsChanged("ao-1", domain.PermissionModeAuto)
 	opts.OnModelChanged("ao-1", "gpt-test")
@@ -106,5 +108,26 @@ func TestChatServiceOptionsWireTheSessionRecordHooksToTheSessionManager(t *testi
 	}
 	if got, want := strings.Join(sessions.models, ","), "ao-1=gpt-test"; got != want {
 		t.Fatalf("models persisted %q, want %q", got, want)
+	}
+}
+
+// Each daemon builds its own options, so a manager bound for one must not leak into
+// another's hooks (a package-level holder would).
+func TestChatServiceOptionsBindTheSessionManagerPerInstance(t *testing.T) {
+	deps := chatServiceDeps{Log: slog.New(slog.DiscardHandler), AgentService: func() *agentsvc.Service { return nil }}
+	first, bindFirst := newChatServiceOptions(context.Background(), deps)
+	second, _ := newChatServiceOptions(context.Background(), deps)
+
+	sessions := &recordingLifecycle{fakeSessionLifecycle: &fakeSessionLifecycle{}}
+	bindFirst(sessions)
+	second.OnPermissionsChanged("ao-2", domain.PermissionModeAcceptEdits)
+	second.OnModelChanged("ao-2", "other")
+	first.OnPermissionsChanged("ao-1", domain.PermissionModeAuto)
+
+	if got, want := strings.Join(sessions.permissions, ","), "ao-1=auto"; got != want {
+		t.Fatalf("permissions persisted %q, want %q: the second instance's hooks reached the first's manager", got, want)
+	}
+	if len(sessions.models) != 0 {
+		t.Fatalf("models persisted %v from an instance that was never bound", sessions.models)
 	}
 }

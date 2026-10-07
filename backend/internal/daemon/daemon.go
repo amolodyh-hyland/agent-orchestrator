@@ -397,16 +397,15 @@ func Run() error {
 	// Chat service. The driver registry is the capability gate: a harness with no
 	// registered driver cannot start in chat mode, so an unsupported request fails
 	// loudly instead of silently becoming a TUI session.
-	var sessMgr sessionLifecycle
-	chatSvc := chatsvc.New(newChatServiceOptions(ctx, chatServiceDeps{
+	chatOptions, bindChatSessions := newChatServiceOptions(ctx, chatServiceDeps{
 		Store:        store,
 		DataDir:      cfg.DataDir,
 		Drivers:      chatDrivers,
 		Activity:     lcStack.LCM,
 		Log:          log,
 		AgentService: func() *agentsvc.Service { return agentSvc },
-		Sessions:     func() sessionLifecycle { return sessMgr },
-	}))
+	})
+	chatSvc := chatsvc.New(chatOptions)
 
 	codexModelDriver := codexappserver.New(codexagent.New(), log)
 	modelDiscoverer := modelcatalog.Discoverer{
@@ -485,7 +484,8 @@ func Run() error {
 		return fmt.Errorf("wire session service: %w", err)
 	}
 	sessionSvc.SetChatProviderPreserver(chatSvc.PreservesProviderOnRestart)
-	sessMgr = wiredSessMgr
+	sessMgr := wiredSessMgr
+	bindChatSessions(sessMgr)
 	if tunable, ok := sessMgr.(interface {
 		SetModelCatalog(interface {
 			Models(context.Context, string, string, bool) (ports.AgentModelCatalog, error)

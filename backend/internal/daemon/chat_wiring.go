@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"log/slog"
+	"sync"
 
 	"github.com/google/uuid"
 
@@ -15,9 +16,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
-// chatServiceDeps is what the daemon wires into the Chat service. The Session
-// Manager and the agent service are built after it, so they are read through getters
-// when a hook fires instead of being captured as nil.
+// chatServiceDeps is what the daemon wires into the Chat service. The agent service
+// is built after it, so it is read through a getter when a hook fires instead of
+// being captured as nil.
 type chatServiceDeps struct {
 	Store        *sqlite.Store
 	DataDir      string
@@ -25,13 +26,32 @@ type chatServiceDeps struct {
 	Activity     *lifecycle.Manager
 	Log          *slog.Logger
 	AgentService func() *agentsvc.Service
-	Sessions     func() sessionLifecycle
 }
 
 // newChatServiceOptions builds the Chat service's options. It is a function, not an
 // inline literal in Run, so a test can prove the hooks that write to session records
 // (the model and permission hooks) are actually wired and reach the Session Manager.
-func newChatServiceOptions(ctx context.Context, deps chatServiceDeps) chatsvc.Options {
+//
+// The Session Manager is built after the Chat service, so the hooks read it through
+// the bind function returned alongside the options. Handing the caller that function,
+// instead of asking it for a getter, means Run cannot leave the hooks pointing at
+// nothing: an unused result does not compile, and the binding lives here, under test.
+// Hooks that fire before bind is called do nothing.
+func newChatServiceOptions(ctx context.Context, deps chatServiceDeps) (chatsvc.Options, func(sessionLifecycle)) {
+	var (
+		sessionsMu sync.RWMutex
+		sessions   sessionLifecycle
+	)
+	bindSessions := func(manager sessionLifecycle) {
+		sessionsMu.Lock()
+		defer sessionsMu.Unlock()
+		sessions = manager
+	}
+	currentSessions := func() sessionLifecycle {
+		sessionsMu.RLock()
+		defer sessionsMu.RUnlock()
+		return sessions
+	}
 	return chatsvc.Options{
 		Store:    deps.Store,
 		Sessions: deps.Store,
@@ -106,7 +126,7 @@ func newChatServiceOptions(ctx context.Context, deps chatServiceDeps) chatsvc.Op
 		// Sync ChatUI's model choice, including clearing its override, before a
 		// later TUI rebuild reads the session metadata.
 		OnModelChanged: func(sessionID domain.SessionID, model string) {
-			sessMgr := deps.Sessions()
+			sessMgr := currentSessions()
 			if sessMgr == nil {
 				return
 			}
@@ -120,10 +140,10 @@ func newChatServiceOptions(ctx context.Context, deps chatServiceDeps) chatsvc.Op
 		// Session Manager is built after the Chat service, so it is read when the
 		// hook fires.
 		OnPermissionsChanged: chatPermissionsRecorder(ctx, func() chatPermissionsPersister {
-			if sessions := deps.Sessions(); sessions != nil {
-				return sessions
+			if manager := currentSessions(); manager != nil {
+				return manager
 			}
 			return nil
 		}, deps.Log),
-	}
+	}, bindSessions
 }
