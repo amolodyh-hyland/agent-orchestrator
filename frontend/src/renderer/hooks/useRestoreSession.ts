@@ -7,6 +7,7 @@ import { createRendererCloudCpClient } from "./useCloudCp";
 import { settingsQueryKey, type Settings } from "./useSettings";
 import { cloudSessionsQueryKey, workspaceQueryKey } from "./useWorkspaceQuery";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
+import { useTopbarTabsStore } from "../stores/topbar-tabs-store";
 
 export type RestoreSessionResult =
 	{ status: "success" } | { status: "not_resumable"; message: string } | { status: "error"; message: string };
@@ -66,6 +67,7 @@ export function useRestoreSession(): (sessionId: string) => Promise<RestoreSessi
 					// until the worker epoch advances past it (the fresh worker's terminal
 					// exists), so the user never types into the old box's dead terminal.
 					useTerminalResetStore.getState().bump(sessionId, baselineEpoch);
+					useTopbarTabsStore.getState().markInteracted(sessionId);
 					return { status: "success" };
 				} catch (err) {
 					return {
@@ -99,6 +101,7 @@ export function useRestoreSession(): (sessionId: string) => Promise<RestoreSessi
 							console.warn("Unable to show restore fallback notification", err);
 						});
 				}
+				useTopbarTabsStore.getState().markInteracted(sessionId);
 				return { status: "success" };
 			} catch (err) {
 				return {

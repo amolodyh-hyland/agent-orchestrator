@@ -69,6 +69,8 @@ export type UseTerminalSessionOptions = {
 	daemonReady: boolean;
 	/** Refuse user bytes without detaching while a controller handoff owns input. */
 	inputDisabled?: boolean;
+	/** Called when accepted human input is sent to the attached terminal. */
+	onHumanInput?: () => void;
 	/** Coalesce and cover the initial replay. Disable for non-retained reviewer panes. */
 	coverInitialReplay?: boolean;
 	/** Keep the initial cover up until the terminal emits its first bytes. */
@@ -759,6 +761,7 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 			// end the gate immediately.
 			if (r.replayBuffering) flushReplay();
 			else revealReplayTail();
+			if (source !== "wheel") optionsRef.current.onHumanInput?.();
 			mux.sendInput(handle, data);
 			return true;
 		});

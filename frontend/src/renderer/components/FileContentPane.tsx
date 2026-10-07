@@ -15,6 +15,7 @@ import {
 } from "../hooks/useSessionWorkspaceFiles";
 import { usePierreFileHighlightReady } from "../hooks/usePierreFileHighlight";
 import { cn } from "../lib/utils";
+import { useTopbarTabsStore } from "../stores/topbar-tabs-store";
 import { statusLabel, statusTone } from "../lib/workspace-file-status";
 import {
 	canSplitCompare,
@@ -122,6 +123,7 @@ export function FileContentPane({
 				sessionId,
 			});
 			queryClient.setQueryData(sessionWorkspaceFileQueryKey(sessionId, path, scope, commitSha), saved);
+			useTopbarTabsStore.getState().markInteracted(sessionId);
 			await queryClient.invalidateQueries({
 				predicate: ({ queryKey }) => [
 					"session-workspace-files",
