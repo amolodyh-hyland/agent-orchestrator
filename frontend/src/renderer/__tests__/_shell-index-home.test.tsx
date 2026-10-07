@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
 import {
@@ -27,6 +28,19 @@ const routeMocks = vi.hoisted(() => ({
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@tanstack/react-router")>()),
 	useNavigate: () => routeMocks.navigate,
+	Outlet: () => <div data-testid="route-outlet" />,
+}));
+
+vi.mock("../components/CenterPanelShell", () => ({
+	CenterPanelShell: ({ children }: { children: ReactNode }) => <div data-testid="center-panel-shell">{children}</div>,
+}));
+
+vi.mock("../components/ShellTopbar", () => ({
+	ShellTopbar: () => <div data-testid="shell-topbar" />,
+}));
+
+vi.mock("../components/topbar-tabs/TopbarTabsRow", () => ({
+	TopbarTabsRow: () => <div data-testid="topbar-tabs-row" />,
 }));
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({
@@ -68,6 +82,7 @@ vi.mock("../components/CreateProjectFlow", () => ({
 }));
 
 import { HomePage } from "../components/HomePage";
+import { ShellCenter } from "../routes/_shell";
 
 const standaloneSession = (overrides: Partial<WorkspaceSession>): WorkspaceSession => ({
 	id: "standalone-1",
@@ -281,5 +296,22 @@ describe("shell index route", () => {
 		expect(screen.getByRole("button", { name: /Project One/ })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /Project Three/ })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: /Project Four/ })).not.toBeInTheDocument();
+	});
+});
+
+describe("shell center route tabs", () => {
+	it("renders the flat tab row above shell chrome on board routes", () => {
+		render(<ShellCenter hideShellTopbar={false} isSessionRoute={false} selfFramedCenterPanel={false} />);
+
+		const row = screen.getByTestId("topbar-tabs-row");
+		const shellTopbar = screen.getByTestId("shell-topbar");
+		expect(row.compareDocumentPosition(shellTopbar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
+	it("omits the shell tab row on session routes", () => {
+		render(<ShellCenter hideShellTopbar={false} isSessionRoute={true} selfFramedCenterPanel={false} />);
+
+		expect(screen.queryByTestId("topbar-tabs-row")).not.toBeInTheDocument();
+		expect(screen.getByTestId("route-outlet")).toBeInTheDocument();
 	});
 });

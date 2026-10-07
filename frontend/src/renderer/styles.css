@@ -1573,6 +1573,146 @@ textarea,
 	height: 0;
 }
 
+/* Topbar tabs */
+.topbar-toolbar {
+	--topbar-row-h: var(--size-inspector-tabs);
+}
+
+.topbar-toolbar[data-density="compact"] {
+	--topbar-row-h: 32px;
+}
+
+/* Keep pinned controls aligned with the compact tab row. */
+.session-split:has(.topbar-toolbar[data-density="compact"]) .session-pinned-actions {
+	height: 32px;
+}
+
+.topbar-toolbar[data-density="compact"] .workspace-topbar-actions [data-priority] [data-compact-label] {
+	inline-size: 0;
+	opacity: 0;
+	transform: translateX(-2px);
+}
+
+.topbar-toolbar[data-density="compact"] .workspace-topbar-actions [data-priority].topbar-control {
+	gap: 0;
+	padding-inline: 0;
+}
+
+.topbar-toolbar[data-density="compact"] [data-testid="session-action-region"] {
+	zoom: 0.9;
+}
+
+.topbar-tabs {
+	--topbar-row-h: var(--size-inspector-tabs);
+	min-width: 0;
+	flex: 1 1 0%;
+}
+
+.topbar-tabs[data-density="compact"] {
+	--topbar-row-h: 32px;
+}
+
+.topbar-tabs[data-overflow="scroll"] {
+	display: flex;
+	height: var(--topbar-row-h);
+	align-items: stretch;
+	overflow-x: auto;
+	overflow-y: hidden;
+}
+
+.topbar-tabs[data-overflow="wrap"] {
+	display: block;
+	max-height: min(50vh, calc(var(--topbar-row-h) * 6));
+	min-height: var(--topbar-row-h);
+	overflow-x: clip;
+	overflow-y: auto;
+}
+
+/* Normal wrapped rows after the first keep their full width. Once the strip
+   scrolls vertically, every row reserves the fixed actions column so its
+   controls remain reachable; long strips may therefore have narrower rows. */
+.topbar-tabs[data-overflow="wrap"][data-wrap-scrolling="true"] {
+	padding-right: var(--topbar-actions-w);
+}
+
+.topbar-tabs[data-overflow="wrap"][data-wrap-scrolling="true"] .topbar-tabs__actions-spacer {
+	display: none;
+}
+
+.topbar-tabs[data-overflow="wrap"] .topbar-tabs__actions-spacer {
+	float: right;
+	width: var(--topbar-actions-w);
+	height: var(--topbar-row-h);
+}
+
+.topbar-tabs[data-overflow="wrap"] [data-testid="topbar-tab"] {
+	display: inline-flex;
+	height: var(--topbar-row-h);
+	vertical-align: top;
+}
+
+.topbar-tabs__viewport {
+	--topbar-row-h: var(--size-inspector-tabs);
+	position: relative;
+	width: 100%;
+	min-width: 0;
+}
+
+.topbar-tabs__viewport[data-density="compact"] {
+	--topbar-row-h: 32px;
+}
+
+.topbar-tabs__scroll-fade,
+.topbar-tabs__scroll-button {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+}
+
+.topbar-tabs__scroll-fade {
+	width: 52px;
+	height: var(--topbar-row-h);
+	pointer-events: none;
+	z-index: 2;
+}
+
+.topbar-tabs__scroll-fade--left {
+	left: 0;
+	background: linear-gradient(to right, var(--color-background) 28px, transparent);
+}
+
+.topbar-tabs__scroll-fade--right {
+	right: var(--topbar-actions-w);
+	background: linear-gradient(to left, var(--color-background) 28px, transparent);
+}
+
+.topbar-tabs__scroll-button {
+	display: flex;
+	width: 28px;
+	height: var(--topbar-row-h);
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	color: var(--color-passive);
+	cursor: pointer;
+	z-index: 3;
+}
+
+.topbar-tabs__scroll-button:hover {
+	color: var(--color-foreground);
+}
+
+.topbar-tabs__scroll-button--left {
+	left: 0;
+}
+
+.topbar-tabs__scroll-button--right {
+	right: var(--topbar-actions-w);
+}
+
 .board-scrollbar::-webkit-scrollbar {
 	width: 4px;
 	height: 4px;

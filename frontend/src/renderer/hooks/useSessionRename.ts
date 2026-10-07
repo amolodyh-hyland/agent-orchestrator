@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { renameSession } from "../lib/rename-session";
+import { useTopbarTabsStore } from "../stores/topbar-tabs-store";
 import type { WorkspaceSession } from "../types/workspace";
 
 export const MAX_SESSION_DISPLAY_NAME_LEN = 100;
@@ -36,6 +37,7 @@ export function useSessionRename(session?: RenameableSession, onRenamed?: () => 
     if (!name || name === session.title) return;
 		try {
 			await renameSession(session.id, name);
+			useTopbarTabsStore.getState().markInteracted(session.id);
 			await onRenamed?.();
 		} catch (error) {
       console.error("Failed to rename session:", error);

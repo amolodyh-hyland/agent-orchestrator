@@ -3,9 +3,11 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import type { CloudCpClient, CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
+import { useTopbarTabsStore } from "../../stores/topbar-tabs-store";
 import type { ApprovalMode, ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn, TurnSettings } from "../../types/conversation";
 import type { WorkspaceSession } from "../../types/workspace";
-import { ChatWorkspace } from "./ChatWorkspace";
+import { ChatWorkspace, type ChatWorkspaceProps } from "./ChatWorkspace";
+import type { SessionTabActions } from "../topbar-tabs/TopbarTab";
 
 type EventPayload = {
 	attempt?: unknown;
@@ -203,10 +205,16 @@ export function CloudSessionChatSurface({
 	controllerTransitioning,
 	newWorkDisabled,
 	onConversationWorkChange,
+	workspaceTabs,
+	workspaceActiveTabKey,
+	onSelectChat,
 }: {
 	session: WorkspaceSession;
 	headerActions?: ReactNode;
-	sessionTabAction?: ReactNode;
+	sessionTabAction?: SessionTabActions;
+	workspaceTabs?: ChatWorkspaceProps["workspaceTabs"];
+	workspaceActiveTabKey?: string;
+	onSelectChat?: ChatWorkspaceProps["onSelectChat"];
 	controllerTransitioning?: boolean;
 	newWorkDisabled?: boolean;
 	onConversationWorkChange?: (state: {
@@ -232,6 +240,7 @@ export function CloudSessionChatSurface({
 	const settingsRef = useRef({ key: settingsKey, settings });
 	if (settingsRef.current.key !== settingsKey) settingsRef.current = { key: settingsKey, settings };
 	const updateSettings = (next: CloudTurnSettings) => {
+		useTopbarTabsStore.getState().markInteracted(session.id);
 		settingsRef.current = { key: settingsKey, settings: next };
 		setSelected({ key: settingsKey, settings: next });
 		try {
@@ -279,6 +288,7 @@ export function CloudSessionChatSurface({
 	const invalidate = () =>
 		queryClient.invalidateQueries({ queryKey: ["cloud-chat-events", cloud?.orgId ?? "", session.id] });
 	const send = useMutation({
+		onMutate: () => useTopbarTabsStore.getState().markInteracted(session.id),
 		mutationFn: async ({ text, clientMessageId }: { text: string; clientMessageId?: string }) => {
 			if (!cloud) throw new Error("Cloud session context is unavailable.");
 			const selectedSettings: CloudTurnSettings = settingsRef.current.key === settingsKey ? settingsRef.current.settings : {};
@@ -307,6 +317,7 @@ export function CloudSessionChatSurface({
 		});
 	}, [activeTurn, onConversationWorkChange, queuedTurnCount, snapshot.controller.state]);
 	const interrupt = useMutation({
+		onMutate: () => useTopbarTabsStore.getState().markInteracted(session.id),
 		mutationFn: async () => {
 			if (!cloud || !activeTurn) return;
 			await client.cancelTurn(cloud.orgId, session.id, activeTurn.id);
@@ -314,6 +325,7 @@ export function CloudSessionChatSurface({
 		onSettled: () => void invalidate(),
 	});
 	const decide = useMutation({
+		onMutate: () => useTopbarTabsStore.getState().markInteracted(session.id),
 		mutationFn: async ({ requestId, decisionId }: { requestId: string; decisionId: string }) => {
 			if (!cloud) throw new Error("Cloud session context is unavailable.");
 			await client.decideChatApproval(cloud.orgId, session.id, requestId, decisionId);
@@ -321,6 +333,7 @@ export function CloudSessionChatSurface({
 		onSettled: () => void invalidate(),
 	});
 	const steer = useMutation({
+		onMutate: () => useTopbarTabsStore.getState().markInteracted(session.id),
 		mutationFn: async ({ text, clientMessageId }: { text: string; clientMessageId?: string }) => {
 			if (!cloud || !activeTurn) return { status: "not-accepted" as const, reason: "There is no active turn." };
 			const key = clientMessageId ?? crypto.randomUUID();
@@ -383,6 +396,9 @@ export function CloudSessionChatSurface({
 			sessionRole={session.kind}
 			sessionTabAction={sessionTabAction}
 			sessionTitle={session.title}
+			workspaceTabs={workspaceTabs}
+			workspaceActiveTabKey={workspaceActiveTabKey}
+			onSelectChat={onSelectChat}
 		/>
 	);
 }

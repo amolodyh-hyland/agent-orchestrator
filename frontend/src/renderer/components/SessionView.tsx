@@ -35,7 +35,6 @@ import { FilesTopbarHostContext } from "./files-topbar-host";
 import { CloudFileContentPane, CloudWorkspaceDiff } from "./CloudWorkspaceDiff";
 import { SessionFileTab } from "./SessionFileTabs";
 import { SessionFileWorkspace } from "./SessionFileWorkspace";
-import { SessionActionsMenu } from "./SessionActionsMenu";
 import { SessionInspector } from "./SessionInspector";
 import {
 	SessionInterfaceSwitchButton,
@@ -49,6 +48,7 @@ import { SwitchAgentDialog } from "./SwitchAgentDialog";
 import { SessionTopbarHost } from "./SessionTopbarPortal";
 import { TerminalSwitchAgentButton } from "./TerminalSwitchAgentButton";
 import { TopbarButton } from "./TopbarButton";
+import type { SessionTabActions } from "./topbar-tabs/TopbarTab";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { MultiStepLoader } from "./ui/multi-step-loader";
 import { useBrowserView } from "../hooks/useBrowserView";
@@ -1956,12 +1956,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 	// local daemon feature. Hide the empty actions menu for harnesses without
 	// Chat, including when local settings identify one before transition status
 	// becomes available.
-	const sessionTabActions = useMemo(() => interfaceSwitchUnsupported ? null : (
-		<SessionActionsMenu inlineStatus={interfaceSwitchInlineStatus}>
-			{interfaceSwitchMenuItem}
-			{handoffMenuItem}
-		</SessionActionsMenu>
-	), [handoffMenuItem, interfaceSwitchInlineStatus, interfaceSwitchMenuItem, interfaceSwitchUnsupported]);
+	const sessionTabActions = useMemo<SessionTabActions>(() => {
+		if (interfaceSwitchUnsupported || (!interfaceSwitchMenuItem && !handoffMenuItem && !interfaceSwitchInlineStatus)) {
+			return null;
+		}
+		return {
+			menuItems: <>{interfaceSwitchMenuItem}{handoffMenuItem}</>,
+			...(interfaceSwitchInlineStatus ? { inlineStatus: interfaceSwitchInlineStatus } : {}),
+		};
+	}, [handoffMenuItem, interfaceSwitchInlineStatus, interfaceSwitchMenuItem, interfaceSwitchUnsupported]);
 	const sessionHeaderActions = (
 		<div
 			className="session-topbar-session-chrome flex shrink-0 items-center"
@@ -1970,10 +1973,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 			<ShellTopbar embedded />
 		</div>
 	);
-	// Spinner replaces the ⋮ at the same size, so the tab title does not need a
-	// wider action slot while switching.
-	const sessionTabActionWide = false;
-
 	useEffect(() => {
 		setHandoffDialogOpen(false);
 	}, [sessionId]);
@@ -2263,7 +2262,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 				>
 					<div className="relative flex h-full min-h-0 flex-col">
 						<SessionTopbarHost
-							className="relative z-chrome flex h-inspector-tabs w-full shrink-0 overflow-hidden"
+							className="relative z-chrome flex min-h-inspector-tabs w-full shrink-0 overflow-hidden"
 							data-testid="session-topbar-host"
 						/>
 						<div className="relative min-h-0 flex-1" ref={bindHandoffDialogContainer}>
@@ -2284,14 +2283,17 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 								inert={fileTabs.activePath ? true : undefined}
 							>
 							{showChatSurface && session?.cloud ? (
-								<CloudSessionChatSurface
-									controllerTransitioning={chatControllerTransitioning}
-									headerActions={sessionHeaderActions}
-									newWorkDisabled={chatNewWorkDisabled}
-									onConversationWorkChange={handleConversationWorkChange}
-									session={session}
-									sessionTabAction={sessionTabActions}
-								/>
+				<CloudSessionChatSurface
+					controllerTransitioning={chatControllerTransitioning}
+					headerActions={sessionHeaderActions}
+					newWorkDisabled={chatNewWorkDisabled}
+					onSelectChat={selectSessionTerminal}
+					onConversationWorkChange={handleConversationWorkChange}
+					session={session}
+					sessionTabAction={sessionTabActions}
+					workspaceTabs={centerFileTabs}
+					workspaceActiveTabKey={activeWorkspaceTabKey}
+				/>
 							) : showChatSurface ? (
 								<>
 								<SessionChatSurface
@@ -2318,7 +2320,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 									theme={theme}
 									headerActions={sessionHeaderActions}
 									sessionTabAction={sessionTabActions}
-									sessionTabActionWide={sessionTabActionWide}
 									tabStripAction={newShellTerminalAction}
 									handoffDialogOpen={handoffDialogOpen}
 									workspaceTabs={centerFileTabs}
@@ -2367,7 +2368,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId }: SessionViewPro
 									theme={theme}
 									topbarActions={sessionHeaderActions}
 									sessionTabAction={sessionTabActions}
-									sessionTabActionWide={sessionTabActionWide}
 									tabStripAction={newShellTerminalAction}
 									handoffDialogOpen={handoffDialogOpen}
 									workspaceTabs={centerFileTabs}
