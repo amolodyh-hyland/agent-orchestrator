@@ -17,11 +17,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/multicahost"
 )
 
+// Errors returned by the supervisor's control methods.
 var (
-	ErrDisabled   = errors.New("Multica hosting is disabled")
-	ErrExternal   = errors.New("Multica daemon is externally managed")
-	ErrNotRunning = errors.New("Multica supervisor is not running")
-	ErrStopped    = errors.New("Multica start was cancelled by stop")
+	ErrDisabled   = errors.New("Multica hosting is disabled")          //nolint:staticcheck // Multica is a proper noun
+	ErrExternal   = errors.New("Multica daemon is externally managed") //nolint:staticcheck // Multica is a proper noun
+	ErrNotRunning = errors.New("Multica supervisor is not running")    //nolint:staticcheck // Multica is a proper noun
+	ErrStopped    = errors.New("Multica start was cancelled by stop")  //nolint:staticcheck // Multica is a proper noun
 )
 
 const (
@@ -32,6 +33,7 @@ const (
 	defaultExitBound = 20 * time.Second
 )
 
+// Supervisor owns the hosted Multica daemon child: it starts, restarts, stops and reports on it.
 type Supervisor struct {
 	cfg      Config
 	logger   *slog.Logger
@@ -125,6 +127,7 @@ type ownerState struct {
 	retryC          <-chan time.Time
 }
 
+// New builds a supervisor from cfg; Run must be called to start it.
 func New(cfg Config, logger *slog.Logger) *Supervisor {
 	if logger == nil {
 		logger = slog.Default()
@@ -180,6 +183,7 @@ func New(cfg Config, logger *slog.Logger) *Supervisor {
 	return s
 }
 
+// Run runs the supervisor until ctx is cancelled.
 func (s *Supervisor) Run(ctx context.Context) {
 	if !s.started.CompareAndSwap(false, true) {
 		return
@@ -195,9 +199,10 @@ func (s *Supervisor) Run(ctx context.Context) {
 		s.snapshot.Store(&starting)
 	}
 	go s.runLogger()
-	go s.runOwner(ctx)
+	go s.runOwner(ctx) //nolint:gosec // the owner goroutine is bound to ctx; the logger only drains a queue
 }
 
+// Status returns a snapshot of the supervised daemon's state.
 func (s *Supervisor) Status() Status {
 	status := cloneStatus(s.snapshot.Load())
 	if status.Enabled && (status.State == StateRunning || status.State == StateExternal || status.State == StateStopped) {
@@ -211,18 +216,22 @@ func (s *Supervisor) Status() Status {
 	return status
 }
 
+// Start asks the supervisor to run the daemon and waits for the outcome.
 func (s *Supervisor) Start(ctx context.Context) error {
 	return s.send(ctx, requestStart)
 }
 
+// Stop asks the supervisor to stop the daemon and keep it stopped.
 func (s *Supervisor) Stop(ctx context.Context) error {
 	return s.send(ctx, requestStop)
 }
 
+// Restart stops the daemon if it is running and starts it again.
 func (s *Supervisor) Restart(ctx context.Context) error {
 	return s.send(ctx, requestRestart)
 }
 
+// Shutdown stops the daemon and the supervisor, bounded by ctx.
 func (s *Supervisor) Shutdown(ctx context.Context) error {
 	if !s.started.Load() {
 		return nil
@@ -287,7 +296,7 @@ func (s *Supervisor) runOwner(ctx context.Context) {
 		select {
 		case <-parentDone:
 			parentDone = nil
-			s.beginShutdown(&state, nil, context.Background())
+			s.beginShutdown(context.Background(), &state, nil)
 		case req := <-s.requests:
 			s.handleRequest(&state, req)
 		case event := <-s.events:
@@ -329,11 +338,11 @@ func (s *Supervisor) handleRequest(state *ownerState, req request) {
 			return
 		}
 		s.cancelPendingStarts(state)
-		s.stop(state, req.resp, req.ctx)
+		s.stop(req.ctx, state, req.resp)
 	case requestRestart:
-		s.restart(state, req.resp, req.ctx)
+		s.restart(req.ctx, state, req.resp)
 	case requestShutdown:
-		s.beginShutdown(state, req.resp, req.ctx)
+		s.beginShutdown(req.ctx, state, req.resp)
 	}
 }
 
@@ -367,7 +376,7 @@ func (s *Supervisor) start(state *ownerState, reply chan error) {
 	s.beginStart(state)
 }
 
-func (s *Supervisor) restart(state *ownerState, reply chan error, ctx context.Context) {
+func (s *Supervisor) restart(ctx context.Context, state *ownerState, reply chan error) {
 	if !s.cfg.Enabled {
 		reply <- ErrDisabled
 		return
@@ -381,7 +390,7 @@ func (s *Supervisor) restart(state *ownerState, reply chan error, ctx context.Co
 		return
 	}
 	if state.restartReply != nil {
-		reply <- errors.New("Multica restart already in progress")
+		reply <- errors.New("Multica restart already in progress") //nolint:staticcheck // Multica is a proper noun
 		return
 	}
 	state.status.Restarts = 0
@@ -391,7 +400,7 @@ func (s *Supervisor) restart(state *ownerState, reply chan error, ctx context.Co
 	if s.stopPending(state) {
 		return
 	}
-	s.stop(state, nil, ctx)
+	s.stop(ctx, state, nil)
 }
 
 func (s *Supervisor) stopPending(state *ownerState) bool {
@@ -408,7 +417,7 @@ func (s *Supervisor) cancelPendingStarts(state *ownerState) {
 	}
 }
 
-func (s *Supervisor) stop(state *ownerState, reply chan error, ctx context.Context) {
+func (s *Supervisor) stop(ctx context.Context, state *ownerState, reply chan error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -506,7 +515,7 @@ func (s *Supervisor) completeStop(state *ownerState) {
 	s.beginStart(state)
 }
 
-func (s *Supervisor) beginShutdown(state *ownerState, reply chan error, ctx context.Context) {
+func (s *Supervisor) beginShutdown(ctx context.Context, state *ownerState, reply chan error) {
 	if reply != nil && state.closing {
 		state.stopReplies = append(state.stopReplies, reply)
 		return
@@ -538,7 +547,7 @@ func (s *Supervisor) beginShutdown(state *ownerState, reply chan error, ctx cont
 	if state.child != nil && state.child.stopping && state.child.stopCancel != nil {
 		state.child.stopCancel()
 	}
-	s.stop(state, nil, ctx)
+	s.stop(ctx, state, nil)
 }
 
 func (s *Supervisor) finishClosing(state *ownerState) {
@@ -627,7 +636,7 @@ func (s *Supervisor) handleEvent(state *ownerState, event any) {
 			s.events <- processExit{child: child, result: child.result}
 		}()
 		if state.status.Desired == DesiredStopped || state.closing {
-			s.stop(state, nil, context.Background())
+			s.stop(context.Background(), state, nil)
 		}
 	case processExit:
 		s.handleExit(state, value)
@@ -704,7 +713,7 @@ func (s *Supervisor) spawn(state *ownerState) {
 func (s *Supervisor) handleStartFailure(state *ownerState, err error) {
 	state.status.PID = 0
 	if err == nil {
-		err = errors.New("Multica host process did not start")
+		err = errors.New("Multica host process did not start") //nolint:staticcheck // Multica is a proper noun
 	}
 	if state.status.Desired != DesiredRunning || state.closing {
 		state.status.State = StateStopped
@@ -855,7 +864,7 @@ func (s *Supervisor) fetchHealth(parent context.Context) (*Health, error) {
 	ctx, cancel := context.WithTimeout(parent, s.cfg.HealthTimeout)
 	defer cancel()
 	requestURL := "http://127.0.0.1:" + strconv.Itoa(s.cfg.HealthPort) + "/health"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, http.NoBody)
 	if err != nil {
 		return nil, err
 	}
@@ -863,7 +872,7 @@ func (s *Supervisor) fetchHealth(parent context.Context) (*Health, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("health endpoint returned %s", response.Status)
 	}
@@ -935,7 +944,7 @@ func (s *Supervisor) waitAfterKill(child *childRun) ProcessExit {
 	case <-child.done:
 		return child.result
 	case <-timer.C():
-		return ProcessExit{Code: -1, Err: errors.New("Multica host did not exit after kill")}
+		return ProcessExit{Code: -1, Err: errors.New("Multica host did not exit after kill")} //nolint:staticcheck // Multica is a proper noun
 	}
 }
 
@@ -1033,24 +1042,24 @@ func cloneStatus(status *Status) Status {
 	if status == nil {
 		return Status{}
 	}
-	copy := *status
-	copy.LogLines = append([]string(nil), status.LogLines...)
+	cp := *status
+	cp.LogLines = append([]string(nil), status.LogLines...)
 	if status.LastExit != nil {
 		exit := *status.LastExit
-		copy.LastExit = &exit
+		cp.LastExit = &exit
 	}
-	copy.Health = cloneHealth(status.Health)
-	return copy
+	cp.Health = cloneHealth(status.Health)
+	return cp
 }
 
 func cloneHealth(health *Health) *Health {
 	if health == nil {
 		return nil
 	}
-	copy := *health
-	copy.Agents = append([]string(nil), health.Agents...)
-	copy.RuntimeIDs = append([]string(nil), health.RuntimeIDs...)
-	return &copy
+	cp := *health
+	cp.Agents = append([]string(nil), health.Agents...)
+	cp.RuntimeIDs = append([]string(nil), health.RuntimeIDs...)
+	return &cp
 }
 
 // answer queues a reply that is sent only after the owner has published the
@@ -1069,6 +1078,7 @@ func (s *Supervisor) flushReplies(state *ownerState) {
 	state.outbox = nil
 }
 
+//nolint:unparam // callers assign the result to clear the answered list
 func (s *Supervisor) resolveReplies(state *ownerState, replies []chan error, err error) []chan error {
 	for _, reply := range replies {
 		s.answer(state, reply, err)

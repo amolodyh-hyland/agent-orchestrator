@@ -37,7 +37,7 @@ func runChildWith(ctx context.Context, stdin io.Reader, watchStdin bool, logger 
 	deps = deps.withDefaults()
 
 	if !Enabled(deps.getenv) {
-		return &ErrConfiguration{Err: errors.New("Multica daemon hosting is disabled (set AO_MULTICA_DAEMON=1)")}
+		return &ErrConfiguration{Err: errors.New("Multica daemon hosting is disabled (set AO_MULTICA_DAEMON=1)")} //nolint:staticcheck // Multica is a proper noun
 	}
 	profile, port, stateDir, profileCfg, err := preflight(deps)
 	if err != nil {
@@ -66,7 +66,7 @@ func runChildWith(ctx context.Context, stdin io.Reader, watchStdin bool, logger 
 	cfg.LaunchedBy = "desktop"
 	cfg.CLIVersion = managedCLIVersion
 
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+	if err := os.MkdirAll(stateDir, 0o755); err != nil { //nolint:gosec // the profile directory is shared with the Multica CLI, which keeps it world-readable
 		return fmt.Errorf("create Multica profile directory: %w", err)
 	}
 	pidPath := filepath.Join(stateDir, "daemon.pid")
@@ -80,11 +80,11 @@ func runChildWith(ctx context.Context, stdin io.Reader, watchStdin bool, logger 
 		}
 	}()
 
-	logFile, err := os.OpenFile(filepath.Join(stateDir, "daemon.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	logFile, err := os.OpenFile(filepath.Join(stateDir, "daemon.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644) //nolint:gosec // matches the log mode Multica's own daemon uses
 	if err != nil {
 		return fmt.Errorf("open Multica daemon log: %w", err)
 	}
-	defer logFile.Close()
+	defer func() { _ = logFile.Close() }()
 	hostLogger := newHostLogger(logFile, logger)
 	host := deps.newDaemon(cfg, hostLogger)
 	if host == nil {
@@ -114,7 +114,7 @@ func runChildWith(ctx context.Context, stdin io.Reader, watchStdin bool, logger 
 		return nil
 	}
 	hostLogger.Error("Multica daemon stopped with an error", "err", runErr)
-	return fmt.Errorf("Multica daemon stopped: %w", runErr)
+	return fmt.Errorf("Multica daemon stopped: %w", runErr) //nolint:staticcheck // Multica is a proper noun
 }
 
 func (d dependencies) withDefaults() dependencies {
@@ -233,7 +233,7 @@ func writePIDAtomically(path string, pid int) error {
 		return err
 	}
 	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
+	defer func() { _ = os.Remove(tmpPath) }()
 	if err := tmp.Chmod(0o644); err != nil {
 		_ = tmp.Close()
 		return err
@@ -258,7 +258,7 @@ func removePIDIfOwned(path string, pid int) error {
 	}
 	currentPID, err := strconv.Atoi(strings.TrimSpace(string(contents)))
 	if err != nil || currentPID != pid {
-		return nil
+		return nil //nolint:nilerr // an unreadable pid file or another daemon's pid is left alone
 	}
 	if err := os.Remove(path); !errors.Is(err, os.ErrNotExist) {
 		return err

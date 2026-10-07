@@ -11,6 +11,7 @@ import (
 
 var runPreparationHelper = daemonhost.RunPreparationHelper
 
+// RunHelperIfRequested runs the hidden execution-environment helper when args select it and reports whether it did.
 func RunHelperIfRequested(args []string, stdin io.Reader, stdout, stderr io.Writer) (handled bool, exitCode int) {
 	return runHelperIfRequested(args, stdin, stdout, stderr, os.Getenv)
 }
@@ -25,7 +26,7 @@ func runHelperIfRequested(args []string, stdin io.Reader, stdout, stderr io.Writ
 
 	logger := slog.New(slog.NewTextHandler(stderr, nil))
 	if err := runPreparationHelper(stdin, stdout, logger); err != nil {
-		fmt.Fprintln(stderr, err)
+		_, _ = fmt.Fprintln(stderr, err)
 		return true, 1
 	}
 	return true, 0

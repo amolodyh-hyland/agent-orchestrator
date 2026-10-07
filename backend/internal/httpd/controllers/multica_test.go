@@ -56,7 +56,7 @@ func newMulticaRouter(svc controllers.MulticaService) http.Handler {
 	return r
 }
 
-func multicaRequest(handler http.Handler, method, path, body string, ctx context.Context) *httptest.ResponseRecorder {
+func multicaRequest(ctx context.Context, handler http.Handler, method, path, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	if ctx != nil {
 		req = req.WithContext(ctx)
@@ -102,7 +102,7 @@ func TestMulticaStatusMapsEveryField(t *testing.T) {
 		},
 	}}
 
-	rec := multicaRequest(newMulticaRouter(svc), http.MethodGet, "/api/v1/multica/status", "", nil)
+	rec := multicaRequest(context.Background(), newMulticaRouter(svc), http.MethodGet, "/api/v1/multica/status", "")
 	want := `{"daemon":{"enabled":true,"state":"running","desired":"running","pid":1234,"profile":"work","healthPort":47832,"startedAt":"2026-10-06T01:02:03Z","restarts":2,"nextRetryAt":"2026-10-06T01:03:04Z","lastExit":{"code":7,"signal":"SIGTERM","at":"2026-10-06T00:59:58Z","graceful":true,"crash":false},"lastError":"last problem","logLines":["ready","listening"],"health":{"status":"ok","pid":1234,"daemonId":"daemon-1","profile":"work","deviceName":"build machine","serverUrl":"http://127.0.0.1:47832","agents":["codex","claude"],"workspaceCount":3,"runtimeIds":["tmux","docker"]}}}`
 	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != want {
 		t.Fatalf("GET multica status = %d %s, want 200 %s", rec.Code, rec.Body.String(), want)
@@ -116,7 +116,7 @@ func TestMulticaDisabledStatusOmitsUnsetValues(t *testing.T) {
 		Profile:  "local",
 		Restarts: 0,
 	}}
-	rec := multicaRequest(newMulticaRouter(svc), http.MethodGet, "/api/v1/multica/status", `{"ignored":true}`, nil)
+	rec := multicaRequest(context.Background(), newMulticaRouter(svc), http.MethodGet, "/api/v1/multica/status", `{"ignored":true}`)
 	want := `{"daemon":{"enabled":false,"state":"disabled","desired":"stopped","profile":"local","healthPort":0,"restarts":0}}`
 	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != want {
 		t.Fatalf("GET disabled multica status = %d %s, want 200 %s", rec.Code, rec.Body.String(), want)
@@ -139,7 +139,7 @@ func TestMulticaActionsReturnPostActionStatus(t *testing.T) {
 				Enabled: true, State: multicasupervisor.StateStopped, Desired: multicasupervisor.DesiredStopped,
 				Profile: "local",
 			}}
-			rec := multicaRequest(newMulticaRouter(svc), http.MethodPost, tc.path, "", nil)
+			rec := multicaRequest(context.Background(), newMulticaRouter(svc), http.MethodPost, tc.path, "")
 			if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"state":"`+string(tc.state)+`"`) || !strings.Contains(rec.Body.String(), `"desired":"`+string(tc.desired)+`"`) {
 				t.Fatalf("POST %s = %d %s", tc.path, rec.Code, rec.Body.String())
 			}
@@ -154,7 +154,7 @@ func TestMulticaActionUsesContextIndependentOfRequestCancellation(t *testing.T) 
 	svc := &fakeMulticaService{}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	rec := multicaRequest(newMulticaRouter(svc), http.MethodPost, "/api/v1/multica/start", "", ctx)
+	rec := multicaRequest(ctx, newMulticaRouter(svc), http.MethodPost, "/api/v1/multica/start", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("POST multica start = %d %s, want 200", rec.Code, rec.Body.String())
 	}
@@ -178,7 +178,7 @@ func TestMulticaActionErrors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := &fakeMulticaService{actionErr: map[string]error{"start": fmt.Errorf("wrapped: %w", tc.err)}}
-			rec := multicaRequest(newMulticaRouter(svc), http.MethodPost, "/api/v1/multica/start", "", nil)
+			rec := multicaRequest(context.Background(), newMulticaRouter(svc), http.MethodPost, "/api/v1/multica/start", "")
 			if rec.Code != tc.statusCode || !strings.Contains(rec.Body.String(), `"code":"`+tc.code+`"`) {
 				t.Fatalf("POST multica start = %d %s, want %d code %s", rec.Code, rec.Body.String(), tc.statusCode, tc.code)
 			}
@@ -206,7 +206,7 @@ func TestMulticaNilServiceAndUnsupportedMethods(t *testing.T) {
 		{method: http.MethodPost, path: "/api/v1/multica/status", status: http.StatusMethodNotAllowed},
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
-			rec := multicaRequest(handler, tc.method, tc.path, tc.body, nil)
+			rec := multicaRequest(context.Background(), handler, tc.method, tc.path, tc.body)
 			if rec.Code != tc.status {
 				t.Fatalf("%s %s = %d %s, want %d", tc.method, tc.path, rec.Code, rec.Body.String(), tc.status)
 			}

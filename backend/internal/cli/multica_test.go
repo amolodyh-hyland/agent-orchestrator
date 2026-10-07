@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -93,7 +94,7 @@ func TestMulticaStatusHumanAndJSONOutput(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			payload := multicaPayload(t, tc.status)
-			out, _, err, stub := runMulticaCLI(t, payload, http.StatusOK, "multica", "status")
+			out, _, stub, err := runMulticaCLI(t, payload, http.StatusOK, "multica", "status")
 			if err != nil {
 				t.Fatalf("human status: %v", err)
 			}
@@ -111,7 +112,7 @@ func TestMulticaStatusHumanAndJSONOutput(t *testing.T) {
 				}
 			}
 
-			jsonOut, _, err, stub := runMulticaCLI(t, payload, http.StatusOK, "multica", "status", "--json")
+			jsonOut, _, stub, err := runMulticaCLI(t, payload, http.StatusOK, "multica", "status", "--json")
 			if err != nil {
 				t.Fatalf("JSON status: %v", err)
 			}
@@ -155,7 +156,7 @@ func TestMulticaActionsUseRoutesAndPrintStatus(t *testing.T) {
 					args = append(args, "--json")
 				}
 				t.Run(name, func(t *testing.T) {
-					out, _, err, stub := runMulticaCLI(t, multicaPayload(t, status), http.StatusOK, args...)
+					out, _, stub, err := runMulticaCLI(t, multicaPayload(t, status), http.StatusOK, args...)
 					if err != nil {
 						t.Fatalf("command: %v", err)
 					}
@@ -192,12 +193,12 @@ func TestMulticaActionAPIErrorMapping(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			body := `{"message":"` + tc.message + `","code":"` + tc.code + `"}`
-			_, _, err, _ := runMulticaCLI(t, body, tc.statusCode, "multica", "start")
+			_, _, _, err := runMulticaCLI(t, body, tc.statusCode, "multica", "start")
 			if err == nil || ExitCode(err) == 0 {
 				t.Fatalf("error = %v, want non-zero exit", err)
 			}
-			apiErr, ok := err.(apiResponseError)
-			if !ok {
+			var apiErr apiResponseError
+			if !errors.As(err, &apiErr) {
 				t.Fatalf("error type = %T, want apiResponseError", err)
 			}
 			if apiErr.StatusCode != tc.statusCode || apiErr.ErrorBody.Code != tc.code || apiErr.ErrorBody.Message != tc.message {
@@ -212,7 +213,7 @@ func TestMulticaActionAPIErrorMapping(t *testing.T) {
 
 func TestMulticaActionsRequireHTTP200(t *testing.T) {
 	status := multicaDaemonStatus{Enabled: true, State: "running", Desired: "running", Profile: "default", HealthPort: 4700}
-	_, _, err, _ := runMulticaCLI(t, multicaPayload(t, status), http.StatusAccepted, "multica", "start")
+	_, _, _, err := runMulticaCLI(t, multicaPayload(t, status), http.StatusAccepted, "multica", "start")
 	if err == nil || ExitCode(err) == 0 || !strings.Contains(err.Error(), "HTTP 202") {
 		t.Fatalf("error = %v, want non-zero HTTP 202 failure", err)
 	}
@@ -247,7 +248,7 @@ func multicaPayload(t *testing.T, status multicaDaemonStatus) string {
 	return string(body)
 }
 
-func runMulticaCLI(t *testing.T, body string, status int, args ...string) (string, string, error, *multicaAPIStub) {
+func runMulticaCLI(t *testing.T, body string, status int, args ...string) (string, string, *multicaAPIStub, error) {
 	t.Helper()
 	cfg := setConfigEnv(t)
 	if err := runfile.Write(cfg.runFile, runfile.Info{PID: os.Getpid(), Port: 3001, StartedAt: time.Unix(100, 0).UTC()}); err != nil {
@@ -258,5 +259,5 @@ func runMulticaCLI(t *testing.T, body string, status int, args ...string) (strin
 		HTTPClient:   &http.Client{Transport: stub},
 		ProcessAlive: func(int) bool { return true },
 	}, args...)
-	return out, errOut, err, stub
+	return out, errOut, stub, err
 }

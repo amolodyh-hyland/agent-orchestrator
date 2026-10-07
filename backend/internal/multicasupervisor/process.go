@@ -70,7 +70,7 @@ func (p *execProcess) Wait() ProcessExit {
 	if errors.As(err, &exitErr) {
 		result := ProcessExit{Code: exitErr.ExitCode(), Err: err}
 		if result.Code < 0 {
-			result.Signal = fmt.Sprint(exitErr.ProcessState.Sys())
+			result.Signal = fmt.Sprint(exitErr.Sys())
 		}
 		return result
 	}
@@ -127,6 +127,7 @@ func (w *lineWriter) flushLine() {
 	w.truncated = false
 }
 
+// BuildEnvironment returns the environment the hosted daemon inherits from environ.
 func BuildEnvironment(environ []string) []string {
 	allowed := make(map[string]string)
 	for _, entry := range environ {
@@ -152,7 +153,7 @@ func allowedEnvironmentKey(key, goos string) bool {
 	if goos == "windows" {
 		key = strings.ToUpper(key)
 	}
-	if key == strings.ToUpper(multicahost.FlagEnv) || key == strings.ToUpper(multicahost.ProfileEnv) || key == strings.ToUpper(multicahost.HealthPortEnv) || key == strings.ToUpper(multicahost.CLIPathEnv) {
+	if key == strings.ToUpper(multicahost.FlagEnv) || key == strings.ToUpper(multicahost.ProfileEnv) || key == strings.ToUpper(multicahost.HealthPortEnv) || key == strings.ToUpper(multicahost.CLIPathEnv) { //nolint:gocritic // the key is only upper-cased on Windows, so this must stay case-sensitive elsewhere
 		return true
 	}
 	switch key {

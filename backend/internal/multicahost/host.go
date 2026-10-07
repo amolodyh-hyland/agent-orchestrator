@@ -49,6 +49,7 @@ type ErrDaemonAlreadyRunning struct {
 	OtherProfileSet bool
 }
 
+// ErrNoToken reports that the selected Multica profile has no token to sign in with.
 type ErrNoToken struct {
 	ConfigPath string
 }
@@ -57,6 +58,7 @@ func (e *ErrNoToken) Error() string {
 	return fmt.Sprintf("Multica profile token is required in %s", e.ConfigPath)
 }
 
+// ErrNonLocalServer reports that the profile points at a server that is not local.
 type ErrNonLocalServer struct {
 	Scheme string
 	Host   string
@@ -156,7 +158,7 @@ func healthPortInUse(port int) bool {
 	return true
 }
 
-func findOtherRunningProfile(home, selected string, processLive func(int) bool, portInUse func(int) bool) (string, bool, error) {
+func findOtherRunningProfile(home, selected string, processLive, portInUse func(int) bool) (string, bool, error) {
 	root := filepath.Join(home, ".multica")
 	profiles := []struct {
 		name string
