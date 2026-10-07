@@ -306,12 +306,8 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
 	conv.readOnly = cfg.ReadOnly
 	conv.launchMode = cfg.Permissions
-	params := map[string]any{
-		"cwd":               cfg.WorkspacePath,
-		"approvalPolicy":    policy,
-		"approvalsReviewer": reviewer,
-		"sandbox":           sandbox,
-	}
+	params := map[string]any{"cwd": cfg.WorkspacePath}
+	setApprovalParams(params, policy, sandbox, reviewer)
 	if cfg.Ephemeral {
 		params["ephemeral"] = true
 	}
@@ -339,6 +335,9 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	defer cancel()
 	if err := conv.conn.request(openCtx, "thread/start", params, &resp); err != nil {
 		_ = conv.Terminate()
+		if sentApprovalOverride(policy, sandbox, reviewer) && !cfg.ReadOnly {
+			err = permissionRejection(cfg.Permissions, err)
+		}
 		return nil, fmt.Errorf("thread/start: %w", err)
 	}
 	if resp.Thread.ID == "" {
@@ -346,6 +345,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 		return nil, errors.New("thread/start returned no thread id")
 	}
 
+	conv.widerThanDefaults = sentApprovalOverride(policy, sandbox, reviewer) && !cfg.ReadOnly
 	conv.start(resp.Thread.ID, resp.Model, resp.ReasoningEffort)
 	return conv, nil
 }
@@ -381,6 +381,12 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		// across the daemon detach without waiting for the active turn to settle.
 		conv.readOnly = cfg.ReadOnly
 		conv.launchMode = cfg.Permissions
+		// The surviving host kept whatever posture its earlier turns left, which this
+		// process never saw (the stored mode may be default while the thread still
+		// carries an override from before the restart). Assume it may be wider than
+		// the defaults, so the first default turn resets it rather than trusting it.
+		conv.widerThanDefaults = !cfg.ReadOnly
+		conv.widerAssumed = conv.widerThanDefaults
 		conv.start(cfg.ProviderConversationID, cfg.Model, cfg.Effort)
 		return conv, nil
 	}
@@ -389,12 +395,10 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	conv.readOnly = cfg.ReadOnly
 	conv.launchMode = cfg.Permissions
 	params := map[string]any{
-		"threadId":          cfg.ProviderConversationID,
-		"cwd":               cfg.WorkspacePath,
-		"approvalPolicy":    policy,
-		"approvalsReviewer": reviewer,
-		"sandbox":           sandbox,
+		"threadId": cfg.ProviderConversationID,
+		"cwd":      cfg.WorkspacePath,
 	}
+	setApprovalParams(params, policy, sandbox, reviewer)
 	if cfg.Model != "" {
 		params["model"] = cfg.Model
 	}
@@ -419,11 +423,27 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	err = conv.conn.request(resumeCtx, "thread/resume", params, &resp)
 	if err != nil {
 		_ = conv.Terminate()
+		if sentApprovalOverride(policy, sandbox, reviewer) && !cfg.ReadOnly {
+			err = permissionRejection(cfg.Permissions, err)
+		}
+		if errors.Is(err, ports.ErrPermissionRejected) {
+			// The conversation is fine; the provider refused the permission mode.
+			// Reporting it as an unresumable conversation would offer the user a
+			// fresh one for what is really a policy refusal.
+			return nil, fmt.Errorf("thread/resume: %w", err)
+		}
 		// Deliberately not falling back to thread/start: silently opening a new
 		// conversation would present unrelated history as continuous.
 		return nil, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, err)
 	}
 
+	// A resumed thread keeps the override its last turn left: Codex restores it even
+	// when the resume itself sends none (verified live: the automatic reviewer a
+	// prior turn set was still in effect after a plain thread/resume). So a resume
+	// with the default mode may still be on a wider posture, and the first default
+	// turn resets it. A resume that sent an override applied that one.
+	conv.widerThanDefaults = !cfg.ReadOnly
+	conv.widerAssumed = conv.widerThanDefaults && !sentApprovalOverride(policy, sandbox, reviewer)
 	conv.start(cfg.ProviderConversationID, resp.Model, resp.ReasoningEffort)
 	return conv, nil
 }
@@ -598,38 +618,51 @@ func initializeConnection(ctx context.Context, connection *conn) error {
 	return nil
 }
 
-// approvalSettings maps AO's existing per-session permission mode onto Codex's
-// approval policy and sandbox.
+// approvalSettings maps AO's per-session permission mode onto Codex's approval
+// policy and sandbox, mirroring the terminal launch flags.
 //
-// The default matches what AO already passes a Codex TUI session
-// (--dangerously-bypass-approvals-and-sandbox): AO sessions run in isolated
-// worktrees and are expected to work without prompting. Chat does not quietly
-// become stricter than the terminal path for the same setting.
+//   - default sends nothing, so Codex's own configuration, and any
+//     enterprise-managed requirements over it, decide the posture. An empty
+//     policy and sandbox mean "do not override".
+//   - accept-edits asks on request inside the workspace sandbox.
+//   - auto is Codex's approve-for-me: on-request approvals with the
+//     workspace-write sandbox, reviewed by approvalReviewer.
+//   - bypass-permissions is the explicit full-access request. AO sends it as
+//     asked and never works around a managed requirement that rejects it: the
+//     provider's error is surfaced to the caller instead.
 func approvalSettings(mode ports.PermissionMode) (policy, sandbox string) {
 	switch ports.NormalizePermissionMode(mode) {
 	case ports.PermissionModeAcceptEdits, ports.PermissionModeAuto:
 		// on-request lets the provider decide when to ask; workspace-write keeps
 		// edits inside the worktree.
 		return "on-request", "workspace-write"
-	default:
+	case ports.PermissionModeBypassPermissions:
 		return "never", "danger-full-access"
+	default:
+		return "", ""
 	}
 }
 
 // approvalReviewer selects whether Codex asks the user directly or first lets
 // its built-in reviewer approve routine safe actions. Explicitly sending "user"
-// also resets a thread that previously used auto review.
+// also resets a thread that previously used auto review. Empty means the mode
+// overrides nothing.
 func approvalReviewer(mode ports.PermissionMode) string {
-	if ports.NormalizePermissionMode(mode) == ports.PermissionModeAuto {
+	switch ports.NormalizePermissionMode(mode) {
+	case ports.PermissionModeAuto:
 		return "auto_review"
+	case ports.PermissionModeDefault:
+		return ""
+	default:
+		return "user"
 	}
-	return "user"
 }
 
 // SandboxAllowsNetwork reports whether this thread's agent can reach the
 // network. Codex's workspace-write sandbox, used for accept-edits and auto, has
-// no network (AO never grants it), while full access and the read-only
-// reviewer sandbox do.
+// no network (AO never grants it), while full access (bypass-permissions) and
+// the read-only reviewer sandbox do. The default mode overrides nothing, so it
+// is treated as the sandbox without network.
 func (c *conversation) SandboxAllowsNetwork(turnMode ports.PermissionMode) bool {
 	if c.readOnly {
 		return true
@@ -647,6 +680,27 @@ func launchApprovalSettings(mode ports.PermissionMode, readOnly bool) (policy, s
 	}
 	policy, sandbox = approvalSettings(mode)
 	return policy, sandbox, approvalReviewer(mode)
+}
+
+// sentApprovalOverride reports whether a launch named any approval field, which
+// is the only case a permission refusal can be about it.
+func sentApprovalOverride(policy, sandbox, reviewer string) bool {
+	return policy != "" || sandbox != "" || reviewer != ""
+}
+
+// setApprovalParams adds the thread-level approval fields a launch chose. Empty
+// values are left out entirely: Codex reads an absent field as "use the
+// configured default", which is how a managed install keeps its own sandbox.
+func setApprovalParams(params map[string]any, policy, sandbox, reviewer string) {
+	if policy != "" {
+		params["approvalPolicy"] = policy
+	}
+	if reviewer != "" {
+		params["approvalsReviewer"] = reviewer
+	}
+	if sandbox != "" {
+		params["sandbox"] = sandbox
+	}
 }
 
 // spawnAppServer is the real launcher.

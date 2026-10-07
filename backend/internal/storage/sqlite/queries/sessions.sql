@@ -80,6 +80,11 @@ UPDATE sessions
 SET artifact_dir = sqlc.arg(artifact_dir), session_output_type = sqlc.arg(session_output_type)
 WHERE id = sqlc.arg(id);
 
+-- name: UpdateSessionPermissions :execrows
+UPDATE sessions
+SET session_permissions = sqlc.arg(permissions)
+WHERE id = sqlc.arg(id);
+
 -- name: UpdateBrowserCapabilityVerifier :execrows
 -- Rotate only the browser credential for the exact controller owner observed by
 -- the launcher. This must not replay a stale SessionRecord over newer lifecycle,

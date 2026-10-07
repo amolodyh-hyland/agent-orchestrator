@@ -239,6 +239,8 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 			in.record = prepared
 			return launchEnv, nil
 		},
+		// Off only when the project or role config turns the step-down off.
+		DisablePermissionFallback: !agentConfig.PermissionFallbackEnabled(),
 		ControllerReady: func(started ChatStarted) (ChatControllerCommit, error) {
 			metadata := domain.SessionMetadata{
 				Permissions:       in.record.Metadata.Permissions,
@@ -506,6 +508,9 @@ func (m *Manager) resumeChatController(
 			rec = prepared
 			return launchEnv, nil
 		},
+		// Off only when the project or role config turns the step-down off.
+		DisablePermissionFallback: !agentConfig.PermissionFallbackEnabled(),
+
 		// The handle that makes this a resume rather than a new conversation.
 		ProviderConversationID:             rec.Metadata.ProviderConversationID,
 		FreshIfProviderConversationMissing: freshIfMissing,

@@ -1439,6 +1439,12 @@ func mapSessionError(err error) error {
 		// unavailable".
 		return apierr.Conflict("CHAT_RECOVERY_INCONCLUSIVE",
 			"AO could not safely reconnect to the session's still-running chat process: "+err.Error(), nil)
+	case errors.Is(err, ports.ErrPermissionRejected):
+		// The provider refused the permission mode and no lower mode was tried or
+		// accepted. Every session endpoint that starts, resumes or sends to a chat
+		// controller reaches this, so they all report the same typed error with the
+		// provider's own reason instead of a generic stage failure.
+		return apierr.Conflict("CHAT_PERMISSION_REJECTED", err.Error(), nil)
 	case errors.Is(err, ports.ErrChatDriverUnavailable):
 		return apierr.Conflict("CHAT_DRIVER_UNAVAILABLE", err.Error(), nil)
 	case errors.Is(err, ports.ErrChatDriverIncompatible):

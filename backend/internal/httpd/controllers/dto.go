@@ -366,6 +366,11 @@ type SessionView struct {
 	// Empty means the agent's default. Pulled from the json:"-" domain
 	// Metadata.
 	Effort string `json:"effort,omitempty"`
+	// Permissions is the permission mode the session is running with. When the
+	// provider refused the requested mode and the permission fallback stepped
+	// down, this is the lower mode that was accepted. Pulled from the json:"-"
+	// domain Metadata.
+	Permissions domain.PermissionMode `json:"permissions,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
 	// LastUserMessageAt is the latest real user-authored task direction time.
 	// Lifecycle and internal automation updates do not advance it.
 	LastUserMessageAt *time.Time `json:"lastUserMessageAt,omitempty"`

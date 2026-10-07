@@ -78,6 +78,8 @@ type agentConfig struct {
 	Model       string `json:"model,omitempty"`
 	Mode        string `json:"mode,omitempty"`
 	Permissions string `json:"permissions,omitempty"`
+	// PermissionFallback is a pointer so unset (on) stays distinct from false.
+	PermissionFallback *bool `json:"permissionFallback,omitempty"`
 }
 
 // roleOverride mirrors domain.RoleOverride.
@@ -156,6 +158,10 @@ type projectSetConfigOptions struct {
 	configJSON        string
 	clear             bool
 	json              bool
+
+	// permissionFallback is set only when --permission-fallback was passed, so
+	// leaving it off the command line keeps the daemon default (on).
+	permissionFallback *bool
 }
 
 type projectListResult struct {
@@ -312,6 +318,13 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id := strings.TrimSpace(args[0])
+			if cmd.Flags().Changed("permission-fallback") {
+				enabled, flagErr := cmd.Flags().GetBool("permission-fallback")
+				if flagErr != nil {
+					return flagErr
+				}
+				opts.permissionFallback = &enabled
+			}
 			config, err := buildProjectConfig(opts)
 			if err != nil {
 				return err
@@ -334,6 +347,7 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 	f.StringVar(&opts.sessionPrefix, "session-prefix", "", "Displayed session-id prefix")
 	f.StringVar(&opts.model, "model", "", "Agent model override (e.g. claude-opus-4-5)")
 	f.StringVar(&opts.permission, "permission", "", "Permission mode: default, accept-edits, auto, bypass-permissions")
+	f.Bool("permission-fallback", true, "Step down to a less permissive permission mode when the provider rejects the configured one (default on; --permission-fallback=false reports the rejection instead)")
 	f.StringVar(&opts.workerAgent, "worker-agent", "", "Harness override for worker sessions")
 	f.StringVar(&opts.orchestratorAgent, "orchestrator-agent", "", "Harness override for orchestrator sessions")
 	f.StringVar(&opts.agentRules, "agent-rules", "", "Project-specific standing instructions for worker sessions")
@@ -382,7 +396,7 @@ func buildProjectConfig(opts projectSetConfigOptions) (projectConfig, error) {
 		AgentRules:        opts.agentRules,
 		AgentRulesFile:    opts.agentRulesFile,
 		OrchestratorRules: opts.orchestratorRules,
-		AgentConfig:       agentConfig{Model: opts.model, Permissions: opts.permission},
+		AgentConfig:       agentConfig{Model: opts.model, Permissions: opts.permission, PermissionFallback: opts.permissionFallback},
 		Worker:            roleOverride{Agent: opts.workerAgent},
 		Orchestrator:      roleOverride{Agent: opts.orchestratorAgent},
 		TrackerIntake: trackerIntakeConfig{

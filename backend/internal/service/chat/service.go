@@ -86,6 +86,10 @@ type Service struct {
 	wakeRuns           map[domain.SessionID]*wakeRun
 	backgroundWakes    map[domain.SessionID]bool
 
+	// onPermissionsChanged records the permission mode a session really runs
+	// with after the permission fallback lowered it.
+	onPermissionsChanged func(domain.SessionID, domain.PermissionMode)
+
 	mu               sync.RWMutex
 	controllers      map[domain.SessionID]*Controller
 	ownerControllers map[domain.ConversationOwner]*Controller
@@ -150,6 +154,10 @@ type Options struct {
 	// OnModelChanged syncs ChatUI's model override to session metadata before
 	// the next prompt routes. Nil leaves session metadata unchanged.
 	OnModelChanged func(domain.SessionID, string)
+	// OnPermissionsChanged records the permission mode a session really runs
+	// with after the permission fallback lowered it from the requested one. Nil
+	// leaves the session record unchanged.
+	OnPermissionsChanged func(domain.SessionID, domain.PermissionMode)
 	// StopProviderHost destroys current ownership on explicit teardown or failed hibernation,
 	// even if its daemon attachment already failed. Never used by StopAll.
 	StopProviderHost func(context.Context, domain.SessionID) error
@@ -188,6 +196,7 @@ func New(opts Options) *Service {
 		onAccountChanged:       opts.OnAccountChanged,
 		onCodexCapacityChanged: opts.OnCodexCapacityChanged,
 		onModelChanged:         opts.OnModelChanged,
+		onPermissionsChanged:   opts.OnPermissionsChanged,
 		stopProviderHost:       opts.StopProviderHost,
 		renders:                opts.Renders,
 		dataDir:                opts.DataDir,
@@ -278,6 +287,25 @@ func notifyControllerReady(
 		return ControllerCommit{}, fmt.Errorf("commit chat controller: %w", err)
 	}
 	return commit, nil
+}
+
+// recordEffectivePermissions is the hook a controller reports a permission step-down
+// through. Besides passing it on, it makes the mode the session settled on the one its
+// stored launch configuration asks for, so a branch launch (an edit, a branch switch, or
+// restoring the source after one fails) does not ask the provider for the mode it already
+// refused.
+func (s *Service) recordEffectivePermissions(owner domain.ConversationOwner) func(domain.SessionID, domain.PermissionMode) {
+	return func(id domain.SessionID, mode domain.PermissionMode) {
+		s.mu.Lock()
+		if cfg, ok := s.startConfigs[owner]; ok {
+			cfg.Permissions = mode
+			s.startConfigs[owner] = cfg
+		}
+		s.mu.Unlock()
+		if s.onPermissionsChanged != nil {
+			s.onPermissionsChanged(id, mode)
+		}
+	}
 }
 
 func cloneStartConfig(cfg StartConfig) StartConfig {
@@ -666,45 +694,84 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 
 	var conv ports.ChatConversation
 	hostID := providerHostID(cfg)
-	if cfg.ProviderConversationID != "" {
-		conv, err = resume(ctx, ports.ChatResumeConfig{
-			SessionID:              hostID,
-			ProviderConversationID: cfg.ProviderConversationID,
-			FreshIfMissing:         cfg.FreshIfProviderConversationMissing,
-			DataDir:                cfg.DataDir,
-			WorkspacePath:          cfg.WorkspacePath,
-			Env:                    cfg.Env,
-			PrepareEnv:             prepareEnv,
-			Model:                  cfg.Model,
-			Effort:                 cfg.Effort,
-			Permissions:            cfg.Permissions,
-			ReadOnly:               cfg.ReadOnly,
-			SystemPrompt:           cfg.SystemPrompt,
-			ProviderScopeID:        providerScopeID,
-			ProviderIDsScoped:      providerBoundaryID != "" || activeBranch.ProviderIDsScoped,
-			AdditionalDirectories:  cfg.AdditionalDirectories,
-			MCPServers:             cfg.MCPServers,
-		})
-	} else {
-		conv, err = driver.Start(ctx, ports.ChatStartConfig{
-			ProviderIDsScoped:     providerBoundaryID != "" || activeBranch.ProviderIDsScoped,
-			SessionID:             hostID,
-			DataDir:               cfg.DataDir,
-			WorkspacePath:         cfg.WorkspacePath,
-			Env:                   cfg.Env,
-			PrepareEnv:            prepareEnv,
-			Model:                 cfg.Model,
-			Effort:                cfg.Effort,
-			Permissions:           cfg.Permissions,
-			ReadOnly:              cfg.ReadOnly,
-			SystemPrompt:          cfg.SystemPrompt,
-			ProviderScopeID:       providerScopeID,
-			AdditionalDirectories: cfg.AdditionalDirectories,
-			MCPServers:            cfg.MCPServers,
-		})
+	requestedPermissions := cfg.Permissions
+	launchFallback := permissionFallback{
+		// A read-only conversation (every review conversation is one) has no
+		// permission mode to lower: its sandbox is forced regardless of the mode,
+		// so a step-down cannot change what the provider refused.
+		enabled: !cfg.DisablePermissionFallback && !cfg.ReadOnly,
+		log:     s.log, session: cfg.SessionID, stage: "launch",
 	}
+	fallbackOutcome, err := launchFallback.run(ctx, requestedPermissions, func(mode ports.PermissionMode) error {
+		if mode != requestedPermissions && caps != nil {
+			// A lower mode can need more than the requested one did: an approval
+			// channel the provider may not have. Treat that as a refusal of the
+			// mode rather than launching something that could stall unattended.
+			if admissionErr := capabilityAdmissionError(cfg.Harness, caps, mode); admissionErr != nil {
+				return &ports.PermissionRejectedError{Mode: mode, Reason: admissionErr.Error(), Err: admissionErr}
+			}
+		}
+		var openErr error
+		if cfg.ProviderConversationID != "" {
+			conv, openErr = resume(ctx, ports.ChatResumeConfig{
+				SessionID:              hostID,
+				ProviderConversationID: cfg.ProviderConversationID,
+				FreshIfMissing:         cfg.FreshIfProviderConversationMissing,
+				DataDir:                cfg.DataDir,
+				WorkspacePath:          cfg.WorkspacePath,
+				Env:                    cfg.Env,
+				PrepareEnv:             prepareEnv,
+				Model:                  cfg.Model,
+				Effort:                 cfg.Effort,
+				Permissions:            mode,
+				ReadOnly:               cfg.ReadOnly,
+				SystemPrompt:           cfg.SystemPrompt,
+				ProviderScopeID:        providerScopeID,
+				ProviderIDsScoped:      providerBoundaryID != "" || activeBranch.ProviderIDsScoped,
+				AdditionalDirectories:  cfg.AdditionalDirectories,
+				MCPServers:             cfg.MCPServers,
+			})
+		} else {
+			conv, openErr = driver.Start(ctx, ports.ChatStartConfig{
+				ProviderIDsScoped:     providerBoundaryID != "" || activeBranch.ProviderIDsScoped,
+				SessionID:             hostID,
+				DataDir:               cfg.DataDir,
+				WorkspacePath:         cfg.WorkspacePath,
+				Env:                   cfg.Env,
+				PrepareEnv:            prepareEnv,
+				Model:                 cfg.Model,
+				Effort:                cfg.Effort,
+				Permissions:           mode,
+				ReadOnly:              cfg.ReadOnly,
+				SystemPrompt:          cfg.SystemPrompt,
+				ProviderScopeID:       providerScopeID,
+				AdditionalDirectories: cfg.AdditionalDirectories,
+				MCPServers:            cfg.MCPServers,
+			})
+		}
+		return openErr
+	})
 	if err != nil {
 		return nil, err
+	}
+	effectivePermissions := fallbackOutcome.Effective
+	if fallbackOutcome.steppedDown(requestedPermissions) {
+		cfg.Permissions = effectivePermissions
+		conversation.Settings.ApprovalMode = effectivePermissions
+		if settingsErr := s.store.SetConversationSettings(ctx, conversation.ID, conversation.Settings, s.now()); settingsErr != nil {
+			s.log.Warn("could not record the permission fallback on the conversation",
+				"sessionID", cfg.SessionID, "effective", effectivePermissions, "error", settingsErr)
+		}
+		if s.onPermissionsChanged != nil {
+			s.onPermissionsChanged(cfg.SessionID, effectivePermissions)
+		}
+		// Last, for the same reason as on a turn: publishing the notice makes clients
+		// refetch, and the settings and session record must already be current.
+		if activityErr := s.store.UpsertActivity(ctx, conversation.ID, "",
+			permissionFallbackActivity(s.newID(), requestedPermissions, fallbackOutcome), s.now()); activityErr != nil {
+			s.log.Warn("could not record the permission fallback in the timeline",
+				"sessionID", cfg.SessionID, "effective", effectivePermissions, "error", activityErr)
+		}
 	}
 	liveReconnect := false
 	if reconnected, ok := conv.(ports.ChatLiveReconnector); ok {
@@ -866,6 +933,8 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	// replaced can be told apart from the current one's.
 	controller := newController(
 		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
+	controller.permissionFallbackOff = cfg.DisablePermissionFallback
+	controller.onPermissionsChanged = s.recordEffectivePermissions(owner)
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {
 		providerTurnID := controller.restoreLiveTurnOwnership(liveRows.Turns)

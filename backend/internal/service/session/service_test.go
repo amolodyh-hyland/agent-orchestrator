@@ -3654,6 +3654,8 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"provider history recovery unavailable", fmt.Errorf("recover interface: %w", sessionmanager.ErrInterfaceProviderHistoryRecoveryUnavailable), apierr.KindConflict, "PROVIDER_HISTORY_RECOVERY_UNAVAILABLE"},
 		{"native conversation missing", fmt.Errorf("switch interface: %w", sessionmanager.ErrNativeConversationMissing), apierr.KindConflict, "NATIVE_SESSION_MISSING"},
 		{"native conversation unverified", fmt.Errorf("switch interface: %w", sessionmanager.ErrNativeConversationUnverified), apierr.KindConflict, "NATIVE_SESSION_UNVERIFIED"},
+		{"permission mode rejected", fmt.Errorf("restore: %w", &ports.PermissionRejectedError{Mode: ports.PermissionModeBypassPermissions, Reason: "not allowed"}), apierr.KindConflict, "CHAT_PERMISSION_REJECTED"},
+		{"every permission mode rejected", fmt.Errorf("resume: %w", &ports.PermissionFallbackExhaustedError{Rejected: []ports.PermissionRejection{{Mode: ports.PermissionModeBypassPermissions, Reason: "not allowed"}}}), apierr.KindConflict, "CHAT_PERMISSION_REJECTED"},
 		{"unsupported effort", fmt.Errorf("spawn: %w", ports.ErrUnsupportedEffort), apierr.KindInvalid, "UNSUPPORTED_EFFORT"},
 		{"model capabilities unavailable", fmt.Errorf("spawn: %w", ports.ErrModelCapabilitiesUnavailable), apierr.KindInvalid, "MODEL_CAPABILITIES_UNAVAILABLE"},
 	}
@@ -3701,6 +3703,19 @@ func TestToSpawnAPIErrorMapsSpawnStageSentinels(t *testing.T) {
 			fmt.Errorf("spawn mer-1: %w: app-server exited", sessionmanager.ErrChatController),
 			apierr.KindConflict,
 			"CHAT_CONTROLLER_FAILED",
+		},
+		{
+			// The refusal is the cause; the stage it surfaced in is not the useful part.
+			"permission refusal wins over the delivery stage",
+			fmt.Errorf("spawn mer-1: %w: %w", sessionmanager.ErrSpawnDeliverPrompt, &ports.PermissionRejectedError{Mode: ports.PermissionModeBypassPermissions, Reason: "not allowed"}),
+			apierr.KindConflict,
+			"CHAT_PERMISSION_REJECTED",
+		},
+		{
+			"permission refusal wins over the chat controller stage",
+			fmt.Errorf("spawn mer-1: %w: %w", sessionmanager.ErrChatController, &ports.PermissionFallbackExhaustedError{Rejected: []ports.PermissionRejection{{Mode: ports.PermissionModeBypassPermissions, Reason: "not allowed"}}}),
+			apierr.KindConflict,
+			"CHAT_PERMISSION_REJECTED",
 		},
 		{
 			"spawn timeout",
@@ -5818,5 +5833,17 @@ func TestSessionReadsExposeOnlyCurrentTerminatedCleanupFacts(t *testing.T) {
 		if err != nil || len(list) != 1 || list[0].WorkspaceCleanup != tc.want {
 			t.Fatalf("list=%+v err=%v", list, err)
 		}
+	}
+}
+
+// The provider's reason is the only thing that tells the user which mode was refused
+// and why, so the mapped error has to carry it.
+func TestPermissionRejectionMapsWithTheProvidersReason(t *testing.T) {
+	err := fmt.Errorf("spawn mer-1: %w: %w", sessionmanager.ErrSpawnDeliverPrompt,
+		&ports.PermissionRejectedError{Mode: ports.PermissionModeBypassPermissions, Reason: "`DangerFullAccess` is not in the allowed set"})
+	mapped := toSpawnAPIError(err)
+	var apiErr *apierr.Error
+	if !errors.As(mapped, &apiErr) || !strings.Contains(apiErr.Message, "`DangerFullAccess` is not in the allowed set") {
+		t.Fatalf("mapped = %v, want the provider's reason in the message", mapped)
 	}
 }

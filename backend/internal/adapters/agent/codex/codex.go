@@ -141,7 +141,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		Prompt:           cfg.Prompt,
 		SystemPrompt:     cfg.SystemPrompt,
 		SystemPromptFile: cfg.SystemPromptFile,
-		Permission:       agentruntime.PermissionPolicy(cfg.Permissions),
+		Permission:       codexPermissionPolicy(cfg.Permissions),
 		ProviderArgs:     providerArgs,
 	})
 }
@@ -182,9 +182,22 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		Prompt:           cfg.Prompt,
 		SystemPrompt:     cfg.SystemPrompt,
 		SystemPromptFile: cfg.SystemPromptFile,
-		Permission:       agentruntime.PermissionPolicy(cfg.Permissions),
+		Permission:       codexPermissionPolicy(cfg.Permissions),
 		ProviderArgs:     providerArgs,
 	})
+}
+
+// codexPermissionPolicy picks the launch policy for an AO permission mode.
+//
+// AO's default mode sends Codex no approval or sandbox flag, so Codex's own
+// configuration, and any enterprise-managed requirements over it, decide.
+// Auto is approve-for-me and bypass-permissions is the explicit full-access
+// launch; both are passed through as chosen.
+func codexPermissionPolicy(mode ports.PermissionMode) agentruntime.PermissionPolicy {
+	if ports.NormalizePermissionMode(mode) == ports.PermissionModeDefault {
+		return agentruntime.PermissionAgentDefault
+	}
+	return agentruntime.PermissionPolicy(mode)
 }
 
 func appendReasoningEffortFlag(args *[]string, effort string) {

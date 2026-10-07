@@ -2617,6 +2617,7 @@ func sessionView(r *http.Request, s domain.Session) SessionView {
 		PreviewRevision:    s.Metadata.PreviewRevision,
 		Model:              s.Metadata.Model,
 		Effort:             s.Metadata.Effort,
+		Permissions:        s.Metadata.Permissions,
 		LastUserMessageAt: func() *time.Time {
 			if s.Metadata.LatestUserPromptAt.IsZero() {
 				return nil

@@ -85,13 +85,16 @@ type fakeConversation struct {
 	events                 chan ports.ChatEvent
 	providerConversationID string
 
-	mu                 sync.Mutex
-	sent               []ports.ChatUserMessage
-	caps               ports.ChatCapabilities
-	resolved           map[string]ports.ChatDecision
-	sendCalls          int
-	turnSeq            int
-	sendErr            error
+	mu        sync.Mutex
+	sent      []ports.ChatUserMessage
+	caps      ports.ChatCapabilities
+	resolved  map[string]ports.ChatDecision
+	sendCalls int
+	turnSeq   int
+	sendErr   error
+	// refuseApproval refuses a turn that asks for one of these permission modes, as a
+	// provider enforcing a managed requirement would, while turns for others run.
+	refuseApproval     map[ports.PermissionMode]error
 	onSend             func(providerTurnID string)
 	onClose            func()
 	closeStarted       chan struct{}
@@ -287,6 +290,10 @@ func (f *fakeConversation) Events() <-chan ports.ChatEvent { return f.events }
 func (f *fakeConversation) SendTurn(_ context.Context, msg ports.ChatUserMessage) (ports.ChatTurnRef, error) {
 	f.mu.Lock()
 	f.sendCalls++
+	if err := f.refuseApproval[msg.Settings.Approval]; err != nil {
+		f.mu.Unlock()
+		return ports.ChatTurnRef{}, err
+	}
 	if f.sendErr != nil {
 		f.mu.Unlock()
 		return ports.ChatTurnRef{}, f.sendErr

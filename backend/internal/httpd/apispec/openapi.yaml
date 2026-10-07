@@ -9760,6 +9760,10 @@ components:
           type: string
         model:
           type: string
+        permissionFallback:
+          type:
+          - "null"
+          - boolean
         permissions:
           type: string
       type: object
@@ -11307,6 +11311,13 @@ components:
           - pr
           - artifact
           - pr_artifact
+          type: string
+        permissions:
+          enum:
+          - default
+          - accept-edits
+          - auto
+          - bypass-permissions
           type: string
         pinnedAt:
           format: date-time

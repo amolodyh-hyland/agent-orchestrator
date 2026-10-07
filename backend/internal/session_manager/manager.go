@@ -386,6 +386,13 @@ type Store interface {
 	DeleteTaskPreparation(ctx context.Context, id domain.SessionID) (bool, error)
 }
 
+// sessionPermissionsStore is the narrow optional write boundary for recording
+// the permission mode a session really runs with after a permission fallback.
+// Stores that do not implement it leave the pinned mode unchanged.
+type sessionPermissionsStore interface {
+	UpdateSessionPermissions(ctx context.Context, id domain.SessionID, permissions domain.PermissionMode) (bool, error)
+}
+
 // conversationSettingsStore is the narrow optional read boundary for deriving
 // a chat orchestrator's current approval mode during a worker spawn. Older
 // embedders without chat persistence retain project-config-only behavior.
@@ -2230,6 +2237,9 @@ func effectiveAgentConfig(harness domain.AgentHarness, kind domain.SessionKind, 
 	if override.Permissions != "" {
 		merged.Permissions = override.Permissions
 	}
+	if override.PermissionFallback != nil {
+		merged.PermissionFallback = override.PermissionFallback
+	}
 	// Copilot is the only terminal harness besides Codex and Claude Code that
 	// applies inherited effort; unsupported levels are dropped for spawn,
 	// restore, and relaunch.
@@ -2260,6 +2270,9 @@ func applySpawnAgentConfig(base, override ports.AgentConfig) ports.AgentConfig {
 	}
 	if override.Permissions != "" {
 		base.Permissions = override.Permissions
+	}
+	if override.PermissionFallback != nil {
+		base.PermissionFallback = override.PermissionFallback
 	}
 	if base.Permissions == "" {
 		base.Permissions = ports.PermissionModeAuto
@@ -3563,6 +3576,25 @@ func (m *Manager) PersistChatModel(ctx context.Context, id domain.SessionID, mod
 	}
 	if !updated {
 		return fmt.Errorf("persist chat model %s: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
+// PersistChatPermissions records the permission mode a chat session really runs
+// with after the provider refused the requested one and the permission fallback
+// stepped down. It replaces the mode pinned at spawn, so a restore resumes with
+// the mode that works and the session reads back what it is running with.
+func (m *Manager) PersistChatPermissions(ctx context.Context, id domain.SessionID, permissions domain.PermissionMode) error {
+	store, ok := m.store.(sessionPermissionsStore)
+	if !ok {
+		return nil
+	}
+	updated, err := store.UpdateSessionPermissions(ctx, id, permissions)
+	if err != nil {
+		return fmt.Errorf("persist chat permissions %s: %w", id, err)
+	}
+	if !updated {
+		return fmt.Errorf("persist chat permissions %s: %w", id, ErrNotFound)
 	}
 	return nil
 }

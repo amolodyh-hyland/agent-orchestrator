@@ -18,8 +18,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/google/uuid"
-
 	claudecodeagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/modelcatalog"
@@ -31,7 +29,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/systemexec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry/policyauthority"
-	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/autoreview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
 	"github.com/aoagents/agent-orchestrator/backend/internal/codexops"
@@ -404,92 +401,15 @@ func Run() error {
 	// Chat service. The driver registry is the capability gate: a harness with no
 	// registered driver cannot start in chat mode, so an unsupported request fails
 	// loudly instead of silently becoming a TUI session.
-	var sessMgr sessionLifecycle
-	chatSvc := chatsvc.New(chatsvc.Options{
-		Store:               store,
-		Sessions:            store,
-		Renders:             attachmentstore.New(cfg.DataDir),
-		DataDir:             cfg.DataDir,
-		ReconcileOutputType: lcStack.LCM.ReconcileSessionOutputType,
-		HibernationEnabled:  settingsSvc.ChatHibernationEnabled,
-		StopProviderHost: func(ctx context.Context, id domain.SessionID) error {
-			return persistenthost.Shutdown(ctx, cfg.DataDir, string(id))
-		},
-		// Adapts the store's own snapshot type, so the chat service never has to
-		// import the storage layer.
-		Reader: chatsvc.SnapshotReaderFunc(func(ctx context.Context, conversationID string) (chatsvc.ConversationRows, error) {
-			rows, err := store.LoadConversationSnapshot(ctx, conversationID)
-			if err != nil {
-				return chatsvc.ConversationRows{}, err
-			}
-			return chatsvc.ConversationRows{
-				Conversation:                     rows.Conversation,
-				ActiveBranch:                     rows.ActiveBranch,
-				EditFloorSequence:                rows.EditFloorSequence,
-				NativeForkAvailableAfterSequence: rows.NativeForkAvailableAfterSequence,
-				Turns:                            rows.Turns,
-				Messages:                         rows.Messages,
-				Activities:                       rows.Activities,
-				BranchPoints:                     rows.BranchPoints,
-				BranchedFromEarlierMessage:       rows.BranchedFromEarlierMessage,
-			}, nil
-		}),
-		PageReader: chatsvc.SnapshotPageReaderFunc(func(ctx context.Context, conversationID string, beforeSequence, limit int64) (chatsvc.ConversationRows, error) {
-			rows, err := store.LoadConversationSnapshotPage(ctx, conversationID, beforeSequence, limit)
-			if err != nil {
-				return chatsvc.ConversationRows{}, err
-			}
-			return chatsvc.ConversationRows{
-				Conversation:                     rows.Conversation,
-				ActiveBranch:                     rows.ActiveBranch,
-				EditFloorSequence:                rows.EditFloorSequence,
-				NativeForkAvailableAfterSequence: rows.NativeForkAvailableAfterSequence,
-				Turns:                            rows.Turns,
-				Messages:                         rows.Messages,
-				Activities:                       rows.Activities,
-				BranchPoints:                     rows.BranchPoints,
-				BranchedFromEarlierMessage:       rows.BranchedFromEarlierMessage,
-				OldestSequence:                   rows.OldestSequence,
-				HasMoreBefore:                    rows.HasMoreBefore,
-			}, nil
-		}),
-		Drivers: chatDrivers,
-		// The LCM satisfies ActivityRecorder directly: a chat turn is a pure
-		// lifecycle reduction, same as a hook signal from a terminal session.
-		Activity: lcStack.LCM,
-		Log:      log,
-		NewID:    uuid.NewString,
-		OnAccountChanged: func(sessionID domain.SessionID, generation string, harness domain.AgentHarness) {
-			if harness != domain.HarnessCodex || agentSvc == nil || agentSvc.CodexAccountSwitchInProgress() {
-				return
-			}
-			rec, ok, readErr := store.GetSession(ctx, sessionID)
-			if readErr == nil && ok && rec.Harness == domain.HarnessCodex && rec.Metadata.ControllerGeneration == generation {
-				agentSvc.InvalidateCodexAccountAuthentication()
-			}
-		},
-		OnCodexCapacityChanged: func(sessionID domain.SessionID, generation string, observation ports.CodexCapacityObservation) {
-			if agentSvc == nil || agentSvc.CodexAccountSwitchInProgress() {
-				return
-			}
-			rec, ok, readErr := store.GetSession(ctx, sessionID)
-			if readErr != nil || !ok || rec.Harness != domain.HarnessCodex || rec.Metadata.ControllerGeneration != generation {
-				return
-			}
-			agentSvc.ObserveActiveCodexAccountCapacity(observation)
-		},
-		// Sync ChatUI's model choice, including clearing its override, before a
-		// later TUI rebuild reads the session metadata.
-		OnModelChanged: func(sessionID domain.SessionID, model string) {
-			if sessMgr == nil {
-				return
-			}
-			if err := sessMgr.PersistChatModel(ctx, sessionID, model); err != nil {
-				log.Warn("persist ChatUI model on session failed; a TUI rebuild may resume with a different model",
-					"sessionID", sessionID, "model", model, "error", err)
-			}
-		},
+	chatOptions, chatBindings := newChatServiceOptions(ctx, chatServiceDeps{
+		Store:              store,
+		DataDir:            cfg.DataDir,
+		HibernationEnabled: settingsSvc.ChatHibernationEnabled,
+		Drivers:            chatDrivers,
+		Activity:           lcStack.LCM,
+		Log:                log,
 	})
+	chatSvc := chatsvc.New(chatOptions)
 	chatSvc.SetRenderCheck(renderViaDesktop(browserBroker, "__render-check"))
 	chatSvc.SetRenderMeasure(renderViaDesktop(browserBroker, "__render-measure"))
 
@@ -565,11 +485,12 @@ func Run() error {
 		CodexOperationGate: codexOperationGate,
 	}
 	agentSvc = agentsvc.NewWithDeps(agentDeps)
+	chatBindings.Agents(agentSvc)
 	agentSvc.WarmModelCatalogs(ctx)
 
 	persistentHostsReconciled := make(chan struct{})
 	reviewerChatsRecovered := make(chan struct{})
-	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, policyCoordinator, tracker, codexOperationGate, log)
+	sessionSvc, reviewSvc, sessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, policyCoordinator, tracker, codexOperationGate, log)
 	if err != nil {
 		stop()
 		lcStack.Stop()
@@ -601,7 +522,7 @@ func Run() error {
 			return roots
 		},
 	})
-	sessMgr = wiredSessMgr
+	chatBindings.Sessions(sessMgr)
 	if fenced, ok := sessMgr.(interface{ SetPersistentHostReconcileDone(<-chan struct{}) }); ok {
 		fenced.SetPersistentHostReconcileDone(persistentHostsReconciled)
 	}
