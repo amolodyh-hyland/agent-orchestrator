@@ -95,3 +95,53 @@ func TestPermissionFallbackNeverStepsDownToDefault(t *testing.T) {
 		}
 	}
 }
+
+// The wording is what a user reads when a mode is refused, so it must carry the mode
+// and the provider's reason, and the types must match only the sentinel they stand for.
+func TestPermissionRejectedErrorMessageNamesTheModeAndTheReason(t *testing.T) {
+	err := &PermissionRejectedError{Mode: PermissionModeBypassPermissions, Reason: "not allowed by policy"}
+	if got, want := err.Error(), `permission mode "bypass-permissions" rejected: not allowed by policy`; got != want {
+		t.Fatalf("Error() = %q, want %q", got, want)
+	}
+}
+
+func TestPermissionFallbackExhaustedErrorMessageIsOrderedAndSeparated(t *testing.T) {
+	err := &PermissionFallbackExhaustedError{Rejected: []PermissionRejection{
+		{Mode: PermissionModeBypassPermissions, Reason: "no full access"},
+		{Mode: PermissionModeAuto, Reason: "no reviewer"},
+		{Mode: PermissionModeAcceptEdits, Reason: "no sandbox"},
+	}}
+	want := "every permission mode was rejected: bypass-permissions (no full access); auto (no reviewer); accept-edits (no sandbox)"
+	if got := err.Error(); got != want {
+		t.Fatalf("Error() = %q, want %q", got, want)
+	}
+}
+
+func TestPermissionErrorsMatchOnlyTheirOwnSentinel(t *testing.T) {
+	other := errors.New("some other failure")
+	for name, err := range map[string]error{
+		"rejected":  &PermissionRejectedError{Mode: PermissionModeAuto, Reason: "no"},
+		"exhausted": &PermissionFallbackExhaustedError{Rejected: []PermissionRejection{{Mode: PermissionModeAuto, Reason: "no"}}},
+	} {
+		if !errors.Is(err, ErrPermissionRejected) {
+			t.Errorf("%s does not match ErrPermissionRejected", name)
+		}
+		if errors.Is(err, other) {
+			t.Errorf("%s matches an unrelated error", name)
+		}
+	}
+}
+
+// The chat service reads this contract structurally, without importing the type, to
+// settle an edit or steer refused over the permission mode as a definitive rejection.
+func TestPermissionErrorsAreChatRefusals(t *testing.T) {
+	for name, err := range map[string]error{
+		"rejected":  &PermissionRejectedError{Mode: PermissionModeAuto},
+		"exhausted": &PermissionFallbackExhaustedError{},
+	} {
+		refusal, ok := err.(interface{ ChatRefusal() bool })
+		if !ok || !refusal.ChatRefusal() {
+			t.Errorf("%s does not report itself as a chat refusal", name)
+		}
+	}
+}

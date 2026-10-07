@@ -2,7 +2,9 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"reflect"
 	"testing"
@@ -165,5 +167,76 @@ func TestRefusalWithNoLowerModeIsReportedAsIs(t *testing.T) {
 				t.Fatalf("attempts = %v, want %v", attempts, want)
 			}
 		})
+	}
+}
+
+// The timeline notice is the user's only durable record of a step-down, and its
+// provider item id is what makes republishing it idempotent, so each field is pinned.
+func TestPermissionFallbackActivityRecordsTheStepDown(t *testing.T) {
+	outcome := permissionFallbackOutcome{
+		Effective: ports.PermissionModeAcceptEdits,
+		Rejected: []ports.PermissionRejection{
+			{Mode: ports.PermissionModeBypassPermissions, Reason: "no full access"},
+			{Mode: ports.PermissionModeAuto, Reason: "no reviewer"},
+		},
+	}
+
+	got := permissionFallbackActivity("id-7", ports.PermissionModeBypassPermissions, outcome)
+
+	if got.ID != "id-7" || got.Kind != domain.ActivityKindSystem || got.Status != domain.ActivityStatusCompleted {
+		t.Fatalf("activity identity = %q/%q/%q, want id-7 as a completed system activity", got.ID, got.Kind, got.Status)
+	}
+	if want := "Permission mode lowered from bypass-permissions to accept-edits"; got.Summary != want {
+		t.Fatalf("summary = %q, want %q", got.Summary, want)
+	}
+	if want := "ao-permission-fallback-id-7"; got.ProviderItemID != want {
+		t.Fatalf("provider item id = %q, want %q", got.ProviderItemID, want)
+	}
+	var detail struct {
+		Event     string `json:"event"`
+		Requested string `json:"requested"`
+		Effective string `json:"effective"`
+		Rejected  []struct {
+			Mode   string `json:"mode"`
+			Reason string `json:"reason"`
+		} `json:"rejected"`
+	}
+	if err := json.Unmarshal(got.Detail, &detail); err != nil {
+		t.Fatalf("detail is not JSON: %v", err)
+	}
+	if detail.Event != "permission.fallback" || detail.Requested != "bypass-permissions" || detail.Effective != "accept-edits" {
+		t.Fatalf("detail = %+v", detail)
+	}
+	if len(detail.Rejected) != 2 ||
+		detail.Rejected[0].Mode != "bypass-permissions" || detail.Rejected[0].Reason != "no full access" ||
+		detail.Rejected[1].Mode != "auto" || detail.Rejected[1].Reason != "no reviewer" {
+		t.Fatalf("rejected = %+v, want both refusals in the order they happened", detail.Rejected)
+	}
+}
+
+// The reason shown to the user is the provider's own words, not the typed error's
+// framing of them, and a failure that is not a typed refusal reads as itself.
+func TestRejectionReasonIsTheProvidersOwnWords(t *testing.T) {
+	typed := &ports.PermissionRejectedError{Mode: ports.PermissionModeAuto, Reason: "not in the allowed set"}
+	for name, err := range map[string]error{
+		"typed":   typed,
+		"wrapped": fmt.Errorf("turn/start: %w", typed),
+	} {
+		if got := rejectionReason(err); got != "not in the allowed set" {
+			t.Errorf("%s: reason = %q, want the provider's verbatim reason", name, got)
+		}
+	}
+	if got := rejectionReason(errors.New("plain failure")); got != "plain failure" {
+		t.Errorf("a plain error's reason = %q, want its own text", got)
+	}
+}
+
+func TestRejectedModesKeepsTheOrderTheyWereRefusedIn(t *testing.T) {
+	got := rejectedModes([]ports.PermissionRejection{
+		{Mode: ports.PermissionModeBypassPermissions}, {Mode: ports.PermissionModeAuto},
+	})
+	want := []ports.PermissionMode{ports.PermissionModeBypassPermissions, ports.PermissionModeAuto}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("rejectedModes = %v, want %v", got, want)
 	}
 }

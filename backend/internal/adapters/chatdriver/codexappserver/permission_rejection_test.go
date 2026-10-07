@@ -16,6 +16,23 @@ import (
 // enterprise-managed requirement that allows only ReadOnly and WorkspaceWrite.
 const managedSandboxRejection = "invalid thread settings override: invalid value for `sandbox_mode`: `DangerFullAccess` is not in the allowed set [ReadOnly, WorkspaceWrite] (set by enterprise-managed requirements Default requirements (6e1e489a-e29e-4073-8f8c-01fd3ae783df))"
 
+// assertLabelledRejection checks a marked refusal still says which request failed,
+// carries the provider's wording verbatim, and keeps the provider's own error
+// reachable: the classification adds to the failure, it does not replace it.
+func assertLabelledRejection(t *testing.T, err error, label string) {
+	t.Helper()
+	if !strings.HasPrefix(err.Error(), label) {
+		t.Errorf("error %q does not start with the request label %q", err.Error(), label)
+	}
+	if !strings.Contains(err.Error(), managedSandboxRejection) {
+		t.Errorf("error %q lost the provider's wording", err.Error())
+	}
+	var cause *rpcError
+	if !errors.As(err, &cause) || cause.Message != managedSandboxRejection {
+		t.Errorf("the provider's error is not reachable from %v", err)
+	}
+}
+
 func TestPermissionConstraintMessages(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -66,6 +83,18 @@ func TestPermissionRejectionOnlyMarksProviderConstraintErrors(t *testing.T) {
 	if typed.Mode != ports.PermissionModeBypassPermissions || typed.Reason != managedSandboxRejection {
 		t.Fatalf("rejection = %+v, want the mode and the provider's verbatim reason", typed)
 	}
+	// The provider's own error stays reachable underneath, so a caller can still read
+	// its code and so the original failure is not lost behind the classification.
+	var cause *rpcError
+	if !errors.As(rejected, &cause) || cause.Code != -32600 || cause.Message != managedSandboxRejection {
+		t.Fatalf("the provider's error is not reachable through the rejection: %v", rejected)
+	}
+	// A stored mode AO does not recognise means the provider's default, never a mode
+	// the ladder would step down from.
+	odd := permissionRejection("not-a-mode", &rpcError{Code: -32600, Message: managedSandboxRejection})
+	if !errors.As(odd, &typed) || typed.Mode != ports.PermissionModeDefault {
+		t.Fatalf("an unrecognised mode was recorded as %+v, want default", typed)
+	}
 
 	for name, err := range map[string]error{
 		"provider error": &rpcError{Code: -32000, Message: "Usage limit reached"},
@@ -100,6 +129,7 @@ func TestTurnRejectionIsMarkedForEveryExplicitMode(t *testing.T) {
 			if !errors.Is(err, ports.ErrPermissionRejected) || !errors.As(err, &typed) || typed.Mode != mode {
 				t.Fatalf("SendTurn error = %v, want a permission rejection for %q", err, mode)
 			}
+			assertLabelledRejection(t, err, "turn/start: ")
 		})
 	}
 }
@@ -163,6 +193,8 @@ func TestThreadStartRejectionIsMarkedOnlyWhenAnOverrideWasSent(t *testing.T) {
 			if got := errors.Is(err, ports.ErrPermissionRejected); got != tc.want {
 				t.Fatalf("Start(%q) marked as a permission rejection = %t, want %t: %v", tc.mode, got, tc.want, err)
 			}
+			// Marked or not, the failure still names the request and keeps the provider's error.
+			assertLabelledRejection(t, err, "thread/start: ")
 		})
 	}
 }
@@ -184,6 +216,7 @@ func TestThreadResumePermissionRejectionIsNotAResumeFailure(t *testing.T) {
 	if errors.Is(err, ports.ErrChatResumeFailed) {
 		t.Fatalf("Resume error = %v; a policy refusal must not be reported as an unresumable conversation", err)
 	}
+	assertLabelledRejection(t, err, "thread/resume: ")
 }
 
 // Anything else that goes wrong resuming still means the conversation could not be
