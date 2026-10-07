@@ -49,6 +49,7 @@ function fakeDaemon() {
 		startLogStream: vi.fn(),
 		stopLogStream: vi.fn(),
 		startPolling: vi.fn(),
+		stopPolling: vi.fn(),
 		dispose: vi.fn(),
 	};
 }

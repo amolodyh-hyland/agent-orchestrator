@@ -169,7 +169,14 @@ import {
 import { buildLinuxAppMenuTemplate, buildMacAppMenuTemplate, buildWindowsAppMenuTemplate } from "./main/menu";
 import { readMulticaSettings, writeMulticaUrl } from "./main/multica-settings";
 import { createMulticaDaemonService, findMulticaBinary } from "./main/multica-daemon-cli";
-import { createHostedMulticaDaemonControl, createModeAwareMulticaDaemonService, hostedMulticaCliEnv, isMulticaHostingEnabled } from "./main/multica-daemon-hosted";
+import {
+	createHostedFetchJson,
+	createHostedMulticaDaemonControl,
+	createModeAwareMulticaDaemonService,
+	hostedMulticaCliEnv,
+	hostedMulticaLogPath,
+	isMulticaHostingEnabled,
+} from "./main/multica-daemon-hosted";
 import { createMulticaDaemonOwnerStore, listRunningMulticaDaemons } from "./main/multica-daemon-guard";
 import { probeMulticaHealth } from "./main/multica-health-probe";
 import { multicaBridgeChannels } from "./main/multica-desktop-bridge";
@@ -872,6 +879,8 @@ async function createWindowInternal(): Promise<void> {
 		// overrides where it is found).
 		createDaemonService: (emit) => {
 			const homeDirectory = os.homedir();
+			const defaultLogPath = path.join(homeDirectory, ".multica", "daemon.log");
+			let modeAware: ReturnType<typeof createModeAwareMulticaDaemonService> | undefined;
 			const ownerStore = createMulticaDaemonOwnerStore(app.getPath("userData"));
 			const isPidAlive = (pid: number): boolean => {
 				try {
@@ -899,7 +908,8 @@ async function createWindowInternal(): Promise<void> {
 				emit,
 				findBinary: () => findMulticaBinary(multicaBinaryOptions()),
 				cliNotFoundMessage: app.isPackaged ? "The Multica CLI isn't bundled with this build and was not found on PATH" : undefined,
-				logPath: path.join(homeDirectory, ".multica", "daemon.log"),
+				logPath: () =>
+					modeAware?.getMode() === "hosted" ? hostedMulticaLogPath(homeDirectory, process.env.AO_MULTICA_PROFILE) : defaultLogPath,
 				isOwnedDaemon: ownerStore.isOwnedDaemon,
 				listRunningDaemons: () => listRunningMulticaDaemons(guardOptions),
 				writeOwnerMarker: ownerStore.write,
@@ -908,21 +918,21 @@ async function createWindowInternal(): Promise<void> {
 				isBundledBinary: (binaryPath: string) =>
 					!process.env.AO_MULTICA_CLI?.trim() && bundledMulticaBinary !== undefined && path.resolve(binaryPath) === bundledMulticaBinary,
 			});
-			if (!isMulticaHostingEnabled(process.env)) return cli;
+			const multicaBaseUrl = () =>
+				daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null;
 			const hosted = createHostedMulticaDaemonControl({
-				baseUrl: () => (daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null),
-				timeoutMs: 75_000,
-				fetchJson: async (url, init, timeoutMs) => {
-					const controller = new AbortController();
-					const timer = setTimeout(() => controller.abort(), timeoutMs);
-					try {
-						return await net.fetch(url, { ...init, signal: controller.signal });
-					} finally {
-						clearTimeout(timer);
-					}
-				},
+				baseUrl: multicaBaseUrl,
+				timeoutMs: 65_000,
+				fetchJson: createHostedFetchJson((url, init) => net.fetch(String(url), init)),
 			});
-			return createModeAwareMulticaDaemonService({ cli, hosted, hostingEnabled: () => isMulticaHostingEnabled(process.env), emit });
+			modeAware = createModeAwareMulticaDaemonService({
+				cli,
+				hosted,
+				baseUrl: multicaBaseUrl,
+				hostingEnabled: () => isMulticaHostingEnabled(process.env),
+				emit,
+			});
+			return modeAware;
 		},
 		onPageTitleChange: (title) => multicaIssueLinkService?.handlePageTitle(title),
 		onAoSessionLink: (url) => multicaIssueLinkService?.handleAoSessionLink(url) ?? false,

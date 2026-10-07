@@ -49,6 +49,7 @@ export type MulticaDaemonService = {
 	stopLogStream: () => void;
 	/** Polls the CLI and pushes `daemon:status` when the daemon's state changes. */
 	startPolling: () => void;
+	stopPolling: () => void;
 	dispose: () => void;
 };
 
@@ -100,7 +101,7 @@ export type MulticaDaemonServiceOptions = {
 	emit: (channel: string, payload: unknown) => void;
 	findBinary: () => string | null;
 	cliNotFoundMessage?: string;
-	logPath: string;
+	logPath: string | (() => string);
 	isOwnedDaemon?: (status: DaemonStatus) => boolean | Promise<boolean>;
 	listRunningDaemons?: () => Promise<MulticaDaemonScanResult>;
 	writeOwnerMarker?: (status: DaemonStatus) => Promise<void>;
@@ -117,6 +118,7 @@ export function createMulticaDaemonService(options: MulticaDaemonServiceOptions)
 	let disposed = false;
 	let pollTimer: NodeJS.Timeout | undefined;
 	let polling = false;
+	let pollGeneration = 0;
 	let lastKey = "";
 
 	const locate = (): string | null => {
@@ -290,15 +292,22 @@ export function createMulticaDaemonService(options: MulticaDaemonServiceOptions)
 		}
 	};
 
-	const poll = async (): Promise<void> => {
-		if (disposed || lifecycleBusy || polling) return;
+	const poll = async (generation: number): Promise<void> => {
+		if (disposed || generation !== pollGeneration || lifecycleBusy || polling) return;
 		polling = true;
 		try {
 			const status = await readStatus();
-			if (!disposed && !lifecycleBusy && daemonStatusKey(status) !== lastKey) push(status);
+			if (!disposed && generation === pollGeneration && !lifecycleBusy && daemonStatusKey(status) !== lastKey) push(status);
 		} finally {
-			polling = false;
+			if (generation === pollGeneration) polling = false;
 		}
+	};
+
+	const stopPolling = (): void => {
+		pollGeneration += 1;
+		if (pollTimer) clearInterval(pollTimer);
+		pollTimer = undefined;
+		polling = false;
 	};
 
 	// Log tail: reads the end of the file once, then forwards appended bytes.
@@ -307,6 +316,7 @@ export function createMulticaDaemonService(options: MulticaDaemonServiceOptions)
 	let logPartial = "";
 	let logBusy = false;
 	let logGeneration = 0;
+	let activeLogPath = typeof options.logPath === "string" ? options.logPath : "";
 
 	const sendLines = (text: string): void => {
 		const lines = (logPartial + text).split("\n");
@@ -316,7 +326,7 @@ export function createMulticaDaemonService(options: MulticaDaemonServiceOptions)
 	};
 
 	const readRange = async (from: number, length: number): Promise<string> => {
-		const handle = await open(options.logPath, "r");
+		const handle = await open(activeLogPath, "r");
 		try {
 			const buffer = Buffer.alloc(length);
 			const { bytesRead } = await handle.read(buffer, 0, length, from);
@@ -331,7 +341,7 @@ export function createMulticaDaemonService(options: MulticaDaemonServiceOptions)
 		logBusy = true;
 		const generation = logGeneration;
 		try {
-			const { size } = await stat(options.logPath);
+			const { size } = await stat(activeLogPath);
 			if (logPosition === null) {
 				const length = Math.min(size, LOG_INITIAL_BYTES);
 				const text = length > 0 ? await readRange(size - length, length) : "";
@@ -380,6 +390,7 @@ export function createMulticaDaemonService(options: MulticaDaemonServiceOptions)
 		probeRuntimes: async () => probeFromStatus(await readStatus()),
 		startLogStream: () => {
 			stopLogStream();
+			activeLogPath = typeof options.logPath === "string" ? options.logPath : options.logPath();
 			void logTick();
 			logTimer = setInterval(() => void logTick(), LOG_POLL_MS);
 			logTimer.unref?.();
@@ -387,14 +398,15 @@ export function createMulticaDaemonService(options: MulticaDaemonServiceOptions)
 		stopLogStream,
 		startPolling: () => {
 			if (pollTimer || disposed) return;
-			void poll();
-			pollTimer = setInterval(() => void poll(), options.pollMs ?? DEFAULT_POLL_MS);
+			const generation = pollGeneration;
+			void poll(generation);
+			pollTimer = setInterval(() => void poll(generation), options.pollMs ?? DEFAULT_POLL_MS);
 			pollTimer.unref?.();
 		},
+		stopPolling,
 		dispose: () => {
 			disposed = true;
-			if (pollTimer) clearInterval(pollTimer);
-			pollTimer = undefined;
+			stopPolling();
 			stopLogStream();
 		},
 	};

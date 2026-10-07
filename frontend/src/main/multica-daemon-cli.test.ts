@@ -275,6 +275,47 @@ describe("multica daemon service", () => {
 		expect(calls.length).toBe(before);
 	});
 
+	it("can stop and restart polling without disposing the service", async () => {
+		vi.useFakeTimers();
+		let status = JSON.stringify({ status: "stopped" });
+		const calls: string[] = [];
+		const exec: ExecFileLike = (_file, args, _options, callback) => {
+			calls.push(args.join(" "));
+			queueMicrotask(() => callback(null, status, ""));
+		};
+		const emit = vi.fn();
+		const service = createMulticaDaemonService({
+			emit,
+			findBinary: () => "/usr/local/bin/multica",
+			execFile: exec,
+			logPath: "/nonexistent/daemon.log",
+			pollMs: 1000,
+		});
+
+		service.startPolling();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(emit).toHaveBeenLastCalledWith("daemon:status", { state: "stopped" });
+
+		service.stopPolling();
+		status = RUNNING;
+		const stoppedCallCount = calls.length;
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(calls).toHaveLength(stoppedCallCount);
+		expect(emit).toHaveBeenCalledTimes(1);
+
+		service.startPolling();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(emit).toHaveBeenLastCalledWith("daemon:status", expect.objectContaining({ state: "running" }));
+		expect(calls).toHaveLength(stoppedCallCount + 1);
+
+		service.dispose();
+		const disposedCallCount = calls.length;
+		const disposedPushCount = emit.mock.calls.length;
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(calls).toHaveLength(disposedCallCount);
+		expect(emit).toHaveBeenCalledTimes(disposedPushCount);
+	});
+
 	it("looks for the CLI again after refreshBinary", async () => {
 		let binary: string | null = "/usr/local/bin/multica";
 		const { exec } = fakeExec();
@@ -622,6 +663,51 @@ describe("multica daemon log stream", () => {
 		expect(lines()).toHaveLength(4);
 	});
 
+	it("keeps reading logs after polling stops", async () => {
+		dir = mkdtempSync(path.join(os.tmpdir(), "daemon-log-polling-"));
+		const logPath = path.join(dir, "daemon.log");
+		writeFileSync(logPath, "one\n");
+		const emit = vi.fn();
+		const service = createMulticaDaemonService({ emit, findBinary: () => null, logPath, pollMs: 1000 });
+
+		service.startPolling();
+		service.startLogStream();
+		await vi.waitFor(() => expect(emit).toHaveBeenCalledWith("daemon:log-line", "one"), { timeout: 3000 });
+		service.stopPolling();
+
+		appendFileSync(logPath, "two\n");
+		await vi.waitFor(() => expect(emit).toHaveBeenCalledWith("daemon:log-line", "two"), { timeout: 3000 });
+		service.dispose();
+	});
+
+	it("dispose stops both status polling and the log stream", async () => {
+		dir = mkdtempSync(path.join(os.tmpdir(), "daemon-log-dispose-"));
+		const logPath = path.join(dir, "daemon.log");
+		writeFileSync(logPath, "one\n");
+		const emit = vi.fn();
+		const { exec, calls } = fakeExec({ "daemon status --output json": { stdout: RUNNING } });
+		const service = createMulticaDaemonService({
+			emit,
+			findBinary: () => "/usr/local/bin/multica",
+			execFile: exec,
+			logPath,
+			pollMs: 100,
+		});
+
+		service.startPolling();
+		service.startLogStream();
+		await vi.waitFor(() => expect(emit).toHaveBeenCalledWith("daemon:log-line", "one"), { timeout: 3000 });
+		await vi.waitFor(() => expect(calls.length).toBeGreaterThan(0), { timeout: 3000 });
+		service.dispose();
+		const callCount = calls.length;
+		const logCount = emit.mock.calls.filter(([channel]) => channel === "daemon:log-line").length;
+		appendFileSync(logPath, "two\n");
+		await new Promise((resolve) => setTimeout(resolve, 700));
+
+		expect(calls).toHaveLength(callCount);
+		expect(emit.mock.calls.filter(([channel]) => channel === "daemon:log-line")).toHaveLength(logCount);
+	});
+
 	it("never holds more than one line's worth of an unterminated line", async () => {
 		dir = mkdtempSync(path.join(os.tmpdir(), "daemon-log-"));
 		const logPath = path.join(dir, "daemon.log");
@@ -650,5 +736,28 @@ describe("multica daemon log stream", () => {
 		service.dispose();
 
 		expect(emit).not.toHaveBeenCalled();
+	});
+
+	it("resolves a function log path each time a stream starts", async () => {
+		dir = mkdtempSync(path.join(os.tmpdir(), "daemon-log-path-"));
+		const firstPath = path.join(dir, "first.log");
+		const secondPath = path.join(dir, "second.log");
+		writeFileSync(firstPath, "first\n");
+		writeFileSync(secondPath, "second\n");
+		let currentPath = firstPath;
+		const logPath = vi.fn(() => currentPath);
+		const emit = vi.fn();
+		const service = createMulticaDaemonService({ emit, findBinary: () => null, logPath });
+
+		service.startLogStream();
+		await vi.waitFor(() => expect(emit).toHaveBeenLastCalledWith("daemon:log-line", "first"), { timeout: 3000 });
+		service.stopLogStream();
+		currentPath = secondPath;
+		service.startLogStream();
+		await vi.waitFor(() => expect(emit).toHaveBeenLastCalledWith("daemon:log-line", "second"), { timeout: 3000 });
+
+		expect(logPath).toHaveBeenCalledTimes(2);
+		expect(emit).toHaveBeenLastCalledWith("daemon:log-line", "second");
+		service.dispose();
 	});
 });
