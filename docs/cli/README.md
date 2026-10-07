@@ -161,6 +161,18 @@ daemon validation.
 Standalone spawns require `--agent` because there is no project configuration
 from which to resolve a default harness.
 
+`--model <id>` and `--effort <level>` override project/role settings for one
+session without changing the config. The resolved values appear in
+`ao session get` (`model:` and `effort:` in the table; `model` and `effort` in
+JSON). When a session has no resolved model or effort, the `model:` and
+`effort:` table rows and the `model` and `effort` JSON properties are omitted;
+their absence means the agent's default. For explicit effort that a harness
+cannot apply, spawn returns `UNSUPPORTED_EFFORT` (HTTP 400 / CLI exit 1), and
+the error names the harness and lists supported harnesses. An unsupported
+level also returns `UNSUPPORTED_EFFORT`; the error names the model, or the
+harness for Copilot, and lists supported levels. An empty `--effort ""` is a
+usage error (exit 2).
+
 `ao preview` resolves its session from the `AO_SESSION_ID` environment variable
 (it is meant to run inside a session), not a flag. With no argument it
 autodetects an `index.html` in the session workspace. Relative file targets are
