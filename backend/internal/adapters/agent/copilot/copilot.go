@@ -38,6 +38,10 @@ import (
 
 const adapterID = "copilot"
 
+// EffortLevels are the levels the installed Copilot CLI documents for
+// --reasoning-effort. AO has no per-model catalog for Copilot.
+var EffortLevels = []string{"low", "medium", "high", "xhigh", "max"}
+
 var copilotUnixPaths = []string{
 	"/usr/local/bin/copilot",
 	"/opt/homebrew/bin/copilot",
@@ -107,6 +111,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	cmd = append(cmd, binary)
 	appendApprovalFlags(&cmd, cfg.Permissions)
 	appendModelFlag(&cmd, cfg.Config)
+	appendReasoningEffortFlag(&cmd, cfg.Config)
 	if agentName := copilotAgentName(cfg.SessionID, cfg.SystemPrompt, cfg.SystemPromptFile); agentName != "" {
 		cmd = append(cmd, "--agent="+agentName)
 	}
@@ -151,9 +156,9 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 
 	cmd = append(cmd, binary)
 	appendApprovalFlags(&cmd, cfg.Permissions)
-	// Deliberately does not forward cfg.Config.Model: --model + --resume
-	// composition is unverified against a real copilot install (see #2895
-	// and appendModelFlag). Pinned by
+	// Deliberately does not forward cfg.Config.Model or cfg.Config.Effort.
+	// --model + --resume composition is unverified against a real copilot
+	// install (see #2895 and appendModelFlag). Pinned by
 	// TestGetRestoreCommandDoesNotForwardModelOverride.
 	if agentName := copilotAgentName(cfg.Session.ID, cfg.SystemPrompt, cfg.SystemPromptFile); agentName != "" {
 		cmd = append(cmd, "--agent="+agentName)
@@ -357,9 +362,23 @@ func appendApprovalFlags(cmd *[]string, permissions ports.PermissionMode) {
 // regardless of --model, on both launch and resume. That makes the plan
 // itself a confound, not evidence either way about whether --resume
 // honors --model. Left as a fast-follow pending verification from an
-// account with paid-plan model access (see #2895).
+// account with paid-plan model access (see #2895). Effort follows the same
+// restore rule as the model.
 func appendModelFlag(cmd *[]string, cfg ports.AgentConfig) {
 	if trimmed := strings.TrimSpace(cfg.Model); trimmed != "" {
 		*cmd = append(*cmd, "--model", trimmed)
+	}
+}
+
+// Explicit levels outside EffortLevels are rejected at spawn before they reach
+// the adapter. Inherited project/role or reviewer levels outside the list are
+// dropped, as they were before the flag existed, so they cannot break a launch.
+func appendReasoningEffortFlag(cmd *[]string, cfg ports.AgentConfig) {
+	trimmed := strings.TrimSpace(cfg.Effort)
+	for _, level := range EffortLevels {
+		if trimmed == level {
+			*cmd = append(*cmd, "--reasoning-effort", trimmed)
+			return
+		}
 	}
 }
