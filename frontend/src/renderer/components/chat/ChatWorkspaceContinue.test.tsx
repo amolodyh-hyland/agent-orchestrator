@@ -7,6 +7,7 @@
  * that: only for the latest turn that still counts, only once it was stopped.
  */
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render as rtlRender, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
@@ -16,8 +17,26 @@ import { chatFixture } from "../../lib/chat-fixture";
 import type { ConversationSnapshot, ConversationTurn } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
 
+const routeMocks = vi.hoisted(() => ({ navigate: vi.fn(), params: { projectId: undefined, sessionId: undefined } }));
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@tanstack/react-router")>();
+	return { ...actual, useNavigate: () => routeMocks.navigate, useParams: () => routeMocks.params };
+});
+vi.mock("../../hooks/useWorkspaceQuery", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../hooks/useWorkspaceQuery")>();
+	return { ...actual, useWorkspaceQuery: () => ({ data: [] }) };
+});
+vi.mock("../topbar-tabs/useTopbarTabsView", () => ({
+	useTopbarTabsView: () => ({ groups: [], activeSessionId: routeMocks.params.sessionId }),
+}));
+
 function render(ui: ReactElement) {
-	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	return rtlRender(
+		<QueryClientProvider client={queryClient}>
+			<TooltipProvider>{ui}</TooltipProvider>
+		</QueryClientProvider>,
+	);
 }
 
 /** turn-1 completed and turn-2 stopped by the user, with nothing in flight. */

@@ -41,6 +41,7 @@ import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useShellTerminals } from "../hooks/useShellTerminals";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { terminalResetNonce, useTerminalResetStore } from "../stores/terminal-reset-store";
+import { useTopbarTabsStore } from "../stores/topbar-tabs-store";
 import { createCloudTerminalMux } from "../lib/cloud-terminal-mux";
 import { LazyChunkBoundary } from "./LazyChunkBoundary";
 
@@ -1096,6 +1097,11 @@ function AttachedTerminal({
 		inputDisabled,
 		isVisible,
 		shellTerminalHandleId,
+		onHumanInput: session && terminalTarget?.kind !== "reviewer"
+			? () => {
+				if (session) useTopbarTabsStore.getState().markInteracted(session.id);
+			}
+			: undefined,
 	});
 	useEffect(() => {
 		onTerminalStateChange?.(state);

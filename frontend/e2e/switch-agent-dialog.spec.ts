@@ -56,14 +56,21 @@ async function setupSwitchAgentDialogTest(page: Page): Promise<{
 	});
 
 	await page.goto(`/#/projects/${projectId}/sessions/switch-worker`);
-	const primaryTerminalTab = page.locator('[data-terminal-role="primary"]');
-	const primaryTabBox = await primaryTerminalTab.boundingBox();
-	const terminalRegionBox = await page.getByTestId("session-terminal-region").boundingBox();
-	expect(primaryTabBox).not.toBeNull();
-	expect(terminalRegionBox).not.toBeNull();
-	expect(primaryTabBox!.x + primaryTabBox!.width).toBeLessThanOrEqual(
-		terminalRegionBox!.x + terminalRegionBox!.width,
+	const routeTab = page.getByTestId("topbar-tabs").getByRole("tab", { name: /Switch worker/ });
+	const routeTabFrame = routeTab.locator("xpath=ancestor::*[@data-testid='topbar-tab']");
+	const routeTabBox = await routeTabFrame.boundingBox();
+	const actionRegionBox = await page.getByTestId("session-action-region").boundingBox();
+	const viewport = page.viewportSize();
+	expect(routeTabBox).not.toBeNull();
+	expect(actionRegionBox).not.toBeNull();
+	expect(viewport).not.toBeNull();
+	expect(routeTabBox!.x).toBeGreaterThanOrEqual(0);
+	expect(routeTabBox!.y).toBeGreaterThanOrEqual(0);
+	expect(routeTabBox!.x + routeTabBox!.width).toBeLessThanOrEqual(
+		actionRegionBox!.x,
 	);
+	expect(routeTabBox!.x + routeTabBox!.width).toBeLessThanOrEqual(viewport!.width);
+	expect(routeTabBox!.y + routeTabBox!.height).toBeLessThanOrEqual(viewport!.height);
 	const dialog = await openSwitchAgentDialog(page);
 	return {
 		dialog,

@@ -19,6 +19,9 @@ import { SettingsPane, SettingsProvider } from "../components/SettingsDialog";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
 import { KeyboardShortcutsSettingsDialog } from "../components/settings/KeyboardShortcutsSettingsDialog";
 import { MulticaPane } from "../components/MulticaPane";
+import { TopbarTabsLifecycle } from "../components/topbar-tabs/TopbarTabsLifecycle";
+import { TopbarTabsRouteSync } from "../components/topbar-tabs/TopbarTabsRouteSync";
+import { TopbarTabsRow } from "../components/topbar-tabs/TopbarTabsRow";
 import { ShellTopbar } from "../components/ShellTopbar";
 import { SessionTopbarProvider } from "../components/SessionTopbarPortal";
 import { OrchestratorReplacementDialog } from "../components/OrchestratorReplacementDialog";
@@ -226,7 +229,7 @@ const shellTopbarHiddenByPlatform = hidesShellTopbar();
  * the center frame behind a primitive-only memo boundary; SessionView and the
  * board own their more granular workspace subscriptions.
  */
-const ShellCenter = memo(function ShellCenter({
+export const ShellCenter = memo(function ShellCenter({
 	hideShellTopbar,
 	isSessionRoute,
 	selfFramedCenterPanel,
@@ -256,8 +259,14 @@ const ShellCenter = memo(function ShellCenter({
 		{startingChat ? <CenterPanelShell>{startingChat}</CenterPanelShell> : null}
 	</>;
 	if (hideShellTopbar) {
-		return selfFramedCenterPanel ? selfFramedOutlet : (
+		return selfFramedCenterPanel ? (
+			<>
+				{isSessionRoute || startingOrchestrator || settingsOpen ? null : <TopbarTabsRow />}
+				{selfFramedOutlet}
+			</>
+		) : (
 			<CenterPanelShell className={panelClassName} draggableSessionFrame={draggableSessionFrame}>
+				{isSessionRoute || startingOrchestrator || settingsOpen ? null : <TopbarTabsRow />}
 				<ShellOutlet startingChat={startingChat} />
 			</CenterPanelShell>
 		);
@@ -265,6 +274,7 @@ const ShellCenter = memo(function ShellCenter({
 	if (framedAppTopbar) {
 		return (
 			<CenterPanelShell className={panelClassName} draggableSessionFrame={draggableSessionFrame}>
+				{isSessionRoute || startingOrchestrator || settingsOpen ? null : <TopbarTabsRow />}
 				{isSessionRoute || startingOrchestrator || settingsOpen ? null : <ShellTopbar />}
 				<ShellOutlet startingChat={startingChat} />
 			</CenterPanelShell>
@@ -272,6 +282,7 @@ const ShellCenter = memo(function ShellCenter({
 	}
 	return (
 		<CenterPanelShell className={panelClassName} draggableSessionFrame={draggableSessionFrame}>
+			{isSessionRoute || startingOrchestrator || settingsOpen ? null : <TopbarTabsRow />}
 			<ShellOutlet startingChat={startingChat} />
 		</CenterPanelShell>
 	);
@@ -1448,6 +1459,8 @@ function ShellLayout() {
 							/>
 						</div>
 						<MulticaPane />
+						<TopbarTabsRouteSync />
+						<TopbarTabsLifecycle />
 						</main>
 					</div>
 					<DaemonFailureBanner status={daemonStatus} />
