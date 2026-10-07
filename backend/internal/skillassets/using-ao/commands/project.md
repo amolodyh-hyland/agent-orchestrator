@@ -148,6 +148,7 @@ ao project set-config <id> [flags]
 | `--orchestrator-agent string` | Harness override for orchestrator sessions | - |
 | `--orchestrator-rules string` | Project-specific standing instructions appended to orchestrator session prompts | - |
 | `--permission string` | Permission mode: `default`, `accept-edits`, `auto`, `bypass-permissions` | - |
+| `--permission-fallback` | Step down to a less permissive permission mode when the provider rejects the configured one (`--permission-fallback=false` reports the rejection instead) | `true` |
 | `--post-create stringArray` | Command to run after workspace creation (repeatable) | - |
 | `--session-prefix string` | Displayed session-id prefix | - |
 | `--symlink stringArray` | Repo-relative path to symlink into workspaces (repeatable) | - |

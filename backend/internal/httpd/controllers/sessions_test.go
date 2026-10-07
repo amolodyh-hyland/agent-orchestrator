@@ -3716,3 +3716,40 @@ func TestSessionsAPI_ClaimPRErrors(t *testing.T) {
 		})
 	}
 }
+
+// A permission fallback lowers the mode a session runs with after spawn, so the
+// read model must report the effective mode rather than leave it unknowable.
+func TestSessionsAPI_GetReportsTheEffectivePermissionMode(t *testing.T) {
+	svc := newFakeSessionService()
+	s := svc.sessions["ao-1"]
+	s.Metadata.Permissions = domain.PermissionModeAuto
+	svc.sessions["ao-1"] = s
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions/ao-1", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET session = %d, want 200; body=%s", status, body)
+	}
+	var got struct {
+		Session struct {
+			Permissions string `json:"permissions"`
+		} `json:"session"`
+	}
+	mustJSON(t, body, &got)
+	if got.Session.Permissions != "auto" {
+		t.Fatalf("permissions = %q, want auto; body=%s", got.Session.Permissions, body)
+	}
+}
+
+func TestSessionsAPI_GetOmitsPermissionsForASessionThatHasNone(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions/ao-1", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET session = %d, want 200; body=%s", status, body)
+	}
+	if strings.Contains(string(body), `"permissions"`) {
+		t.Fatalf("a session with no pinned mode reports permissions: %s", body)
+	}
+}

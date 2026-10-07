@@ -549,6 +549,10 @@ func (m *Manager) runInterfaceTransition(
 	if err != nil {
 		code := "TARGET_RESUME_FAILED"
 		switch {
+		case errors.Is(err, ports.ErrPermissionRejected):
+			// The target controller itself was refused over the permission mode;
+			// the conversation is fine, so this is not a failed resume.
+			code = "TARGET_PERMISSION_REJECTED"
 		case errors.Is(err, ports.ErrChatHistoryLoadFailed):
 			code = "TARGET_HISTORY_LOAD_FAILED"
 		case errors.Is(err, ports.ErrChatHistoryUnavailable):
@@ -1717,6 +1721,8 @@ func interfaceTransitionErrorCode(err error) string {
 		return "TARGET_INCOMPATIBLE"
 	case errors.Is(err, ports.ErrChatAuthRequired), errors.Is(err, ports.ErrAgentAuthRequired):
 		return "TARGET_AUTH_REQUIRED"
+	case errors.Is(err, ports.ErrPermissionRejected):
+		return "TARGET_PERMISSION_REJECTED"
 	case errors.Is(err, ErrInterfaceProviderHistoryRecoveryUnavailable):
 		return "PROVIDER_HISTORY_RECOVERY_UNAVAILABLE"
 	case errors.Is(err, ErrNativeConversationMissing):

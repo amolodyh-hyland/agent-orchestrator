@@ -215,6 +215,10 @@ type sessionLifecycle interface {
 	// session's durable metadata before the next prompt routes. A later TUI
 	// rebuild reads it back so ChatUI model changes survive the handoff.
 	PersistChatModel(ctx context.Context, id domain.SessionID, model string) error
+	// PersistChatPermissions records the permission mode a chat session really
+	// runs with after the provider refused the requested one and the permission
+	// fallback stepped down, so the session record and a later restore agree.
+	PersistChatPermissions(ctx context.Context, id domain.SessionID, permissions domain.PermissionMode) error
 }
 
 // sessionLifecycleMessenger adapts sessionLifecycle to ports.AgentMessenger so
@@ -697,4 +701,32 @@ func (c chatLauncher) AbortChatHandoff(id domain.SessionID) {
 
 func (c chatLauncher) StopChat(ctx context.Context, id domain.SessionID) error {
 	return c.svc.StopChat(ctx, id)
+}
+
+// chatPermissionsPersister is the part of the Session Manager that records the
+// permission mode a chat session really runs with.
+type chatPermissionsPersister interface {
+	PersistChatPermissions(ctx context.Context, id domain.SessionID, permissions domain.PermissionMode) error
+}
+
+// chatPermissionsRecorder is the Chat service's OnPermissionsChanged hook: it
+// writes the mode a session runs with, after the permission fallback lowered it,
+// onto the session record. Without it the session would read back, and a restore
+// would re-ask for, the mode the provider refused. A failed write is logged, not
+// returned: the turn it follows already ran.
+func chatPermissionsRecorder(
+	ctx context.Context,
+	sessions func() chatPermissionsPersister,
+	log *slog.Logger,
+) func(domain.SessionID, domain.PermissionMode) {
+	return func(sessionID domain.SessionID, permissions domain.PermissionMode) {
+		persister := sessions()
+		if persister == nil {
+			return
+		}
+		if err := persister.PersistChatPermissions(ctx, sessionID, permissions); err != nil {
+			log.Warn("persist the permission fallback on the session failed; the session may read back a mode it is not running with",
+				"sessionID", sessionID, "permissions", permissions, "error", err)
+		}
+	}
 }

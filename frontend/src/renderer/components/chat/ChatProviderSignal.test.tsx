@@ -265,6 +265,34 @@ describe("system events", () => {
 		expect(screen.getByText("at capacity")).toBeInTheDocument();
 	});
 
+	it("explains a lowered permission mode: what was asked, what runs, and why", () => {
+		render(
+			<ActivityRow
+				activity={activity({
+					activityKind: "system",
+					summary: "Permission mode lowered from bypass-permissions to auto",
+					detail: {
+						event: "permission.fallback",
+						requested: "bypass-permissions",
+						effective: "auto",
+						rejected: [
+							{
+								mode: "bypass-permissions",
+								reason: "DangerFullAccess is not in the allowed set [ReadOnly, WorkspaceWrite]",
+							},
+						],
+					},
+				})}
+			/>,
+		);
+		expect(screen.getByText(/Permission mode lowered to/)).toBeInTheDocument();
+		expect(screen.getByText("auto")).toBeInTheDocument();
+		expect(screen.getAllByText("bypass-permissions").length).toBeGreaterThan(0);
+		expect(screen.getByText(/DangerFullAccess is not in the allowed set/)).toBeInTheDocument();
+		// A generic row would show only the summary; the reasons prove the dedicated row.
+		expect(screen.queryByText("Permission mode lowered from bypass-permissions to auto")).not.toBeInTheDocument();
+	});
+
 	it("records where the provider demanded credentials", () => {
 		render(
 			<ActivityRow

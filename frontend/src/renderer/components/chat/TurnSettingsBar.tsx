@@ -57,14 +57,21 @@ const APPROVAL_ORDER: ApprovalMode[] = [
 	"bypass-permissions",
 ];
 
-// Codex has three distinct permission profiles. Its default is already full
-// access in AO's isolated worktree posture, so expose it as that rather than a
-// fourth, ambiguous "default" option.
+// Codex has four distinct permission profiles. Its default sends no approval or
+// sandbox override, so Codex's own configuration (and any managed requirements)
+// decide; full access is only ever the explicit bypass choice.
 const CODEX_APPROVAL_COPY: Record<ApprovalMode, { label: string }> = {
-	default: { label: "Full access" },
+	default: { label: "Codex defaults" },
 	"accept-edits": { label: "Ask for approval" },
 	auto: { label: "Approve for me" },
 	"bypass-permissions": { label: "Bypass permissions" },
+};
+
+// Cloud launches Codex's default mode with full access (the worker's own VM is the
+// sandbox), unlike the local no-override default.
+const CLOUD_CODEX_APPROVAL_COPY: Record<ApprovalMode, { label: string }> = {
+	...CODEX_APPROVAL_COPY,
+	default: { label: "Full access" },
 };
 
 const CODEX_APPROVAL_ORDER: ApprovalMode[] = [
@@ -84,6 +91,7 @@ export function TurnSettingsBar({
 	harness,
 	showApprovalMode = true,
 	approvalModes,
+	cloudSession = false,
 	reroute,
 	onChange,
 	onRememberPermissions,
@@ -104,6 +112,11 @@ export function TurnSettingsBar({
 	/** Cloud permissions are fixed for the session, not a per-turn setting. */
 	showApprovalMode?: boolean;
 	approvalModes?: ApprovalMode[];
+	/**
+	 * A Cloud session. Cloud still launches Codex's default mode with full access,
+	 * so the local "Codex defaults" wording would be wrong there.
+	 */
+	cloudSession?: boolean;
 	/**
 	 * The provider answered with a different model than the one chosen. Separate from
 	 * `settings` all the way down: settings are what the user asked for, this is what
@@ -162,7 +175,9 @@ export function TurnSettingsBar({
 	const efforts = (selected ?? fallback)?.efforts ?? [];
 	const effortLabel =
 		settings.reasoningEffort ?? (selected ?? fallback)?.defaultEffort ?? undefined;
-	const approvalCopy = harness === "codex" ? CODEX_APPROVAL_COPY : APPROVAL_COPY;
+	const approvalCopy = harness === "codex"
+		? cloudSession ? CLOUD_CODEX_APPROVAL_COPY : CODEX_APPROVAL_COPY
+		: APPROVAL_COPY;
 	const approvalOrder = harness === "codex" ? CODEX_APPROVAL_ORDER : APPROVAL_ORDER;
 	const approvalLabel = approvalCopy[settings.approvalMode ?? "default"].label;
 	const modelGroupLabel = effortLabel

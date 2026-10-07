@@ -304,7 +304,7 @@ describe("ProjectSettingsForm", () => {
 			),
 		);
 		expect(ensureAgentReadinessMock).toHaveBeenCalledWith();
-		expect(screen.getByRole("button", { name: "Worker approval" })).toHaveTextContent("Auto");
+		expect(screen.getByRole("button", { name: "Worker approval" })).toHaveTextContent("Approve for me");
 		expect(screen.queryByRole("button", { name: "Refresh agents" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Refresh worker model list" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Refresh orchestrator model list" })).not.toBeInTheDocument();
@@ -545,11 +545,13 @@ describe("ProjectSettingsForm", () => {
 		renderSettings("proj-1", undefined, "agents");
 		const worker = await screen.findByRole("button", { name: "Worker approval" });
 		const orchestrator = screen.getByRole("button", { name: "Orchestrator approval" });
-		expect(worker).toHaveTextContent("Bypass permissions");
+		// Codex's default no longer means full access, so a saved default must not
+		// read as Bypass permissions.
+		expect(worker).toHaveTextContent("Codex defaults (no override)");
 		expect(orchestrator).toHaveTextContent("Use Claude permissions");
 		await userEvent.click(worker);
 		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
-			"Auto", "Accept edits", "Bypass permissions",
+			"Codex defaults (no override)", "Approve for me", "Ask for approval", "Full access (bypass)",
 		]);
 		await userEvent.keyboard("{Escape}");
 		await userEvent.click(orchestrator);
@@ -562,6 +564,161 @@ describe("ProjectSettingsForm", () => {
 		const config = putMock.mock.calls[0][1].body.config;
 		expect(config.worker.agentConfig.permissions).toBe("default");
 		expect(config.orchestrator.agentConfig.permissions).toBe("default");
+	});
+
+	it("explains each Codex permission mode so legacy, approve-for-me and full access are distinct", async () => {
+		mockProject({
+			id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+			repo: "", defaultBranch: "main", config: {
+				worker: { agent: "codex", agentConfig: { permissions: "default" } },
+				orchestrator: { agent: "claude-code", agentConfig: { permissions: "auto" } },
+			},
+		});
+		renderSettings("proj-1", undefined, "agents");
+		const worker = await screen.findByRole("button", { name: "Worker approval" });
+		expect(screen.getByText(/AO sends no sandbox or approval setting.*legacy launch/)).toBeInTheDocument();
+
+		// The reviewer defaults to Codex too, so its approve-for-me explanation can
+		// share the screen; assert on counts instead of a single node.
+		const legacyHelp = () => screen.queryAllByText(/legacy launch/).length;
+		const fullAccessHelp = () => screen.queryAllByText(/No sandbox and no approvals\. A managed policy can reject this/).length;
+		expect(legacyHelp()).toBe(1);
+		expect(fullAccessHelp()).toBe(0);
+
+		await chooseOption(worker, "Approve for me");
+		expect(legacyHelp()).toBe(0);
+
+		await chooseOption(worker, "Full access (bypass)");
+		expect(fullAccessHelp()).toBe(1);
+
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock.mock.calls[0][1].body.config.worker.agentConfig.permissions).toBe("bypass-permissions");
+	});
+
+	it("shows the permission fallback toggle only for Codex roles, on by default", async () => {
+		mockProject({
+			id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+			repo: "", defaultBranch: "main", config: {
+				worker: { agent: "codex", agentConfig: { permissions: "bypass-permissions" } },
+				orchestrator: { agent: "claude-code", agentConfig: { permissions: "auto" } },
+			},
+		});
+		renderSettings("proj-1", undefined, "agents");
+		const toggle = await screen.findByRole("switch", { name: "Step down if rejected (Worker approval)" });
+		expect(toggle).toBeChecked();
+		// Claude has no permission ladder to step down, and the read-only reviewer never steps down.
+		expect(screen.queryByRole("switch", { name: "Step down if rejected (Orchestrator approval)" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("switch", { name: /Reviewer approval/ })).not.toBeInTheDocument();
+		// The helper text states the safety rules.
+		expect(screen.getByRole("button", { name: /only steps down, never up.*never bypasses managed policy/ })).toBeInTheDocument();
+
+		// Saving without touching it never writes the default.
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock.mock.calls[0][1].body.config.worker.agentConfig).not.toHaveProperty("permissionFallback");
+	});
+
+	it("hides the permission fallback toggle for modes that have nothing less permissive to step down to", async () => {
+		mockProject({
+			id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+			repo: "", defaultBranch: "main", config: {
+				worker: { agent: "codex", agentConfig: { permissions: "default" } },
+				orchestrator: { agent: "codex", agentConfig: { permissions: "accept-edits" } },
+			},
+		});
+		renderSettings("proj-1", undefined, "agents");
+		const worker = await screen.findByRole("button", { name: "Worker approval" });
+		expect(screen.queryByRole("switch", { name: /Step down if rejected/ })).not.toBeInTheDocument();
+
+		// Choosing a mode that can step down brings the toggle back, and an unset
+		// mode (shown as approve-for-me) has one too.
+		await chooseOption(worker, "Approve for me");
+		expect(screen.getByRole("switch", { name: "Step down if rejected (Worker approval)" })).toBeInTheDocument();
+		await chooseOption(worker, "Ask for approval");
+		expect(screen.queryByRole("switch", { name: "Step down if rejected (Worker approval)" })).not.toBeInTheDocument();
+	});
+
+	it("shows the permission fallback toggle for an unset mode, which a new session treats as approve-for-me", async () => {
+		mockProject({
+			id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+			repo: "", defaultBranch: "main", config: {
+				worker: { agent: "codex", agentConfig: {} },
+				orchestrator: { agent: "claude-code", agentConfig: {} },
+			},
+		});
+		renderSettings("proj-1", undefined, "agents");
+		expect(await screen.findByRole("button", { name: "Worker approval" })).toHaveTextContent("Approve for me");
+		expect(screen.getByRole("switch", { name: "Step down if rejected (Worker approval)" })).toBeChecked();
+	});
+
+	it("saves an explicit off for the permission fallback and removes it when turned back on", async () => {
+		let savedConfig: Record<string, unknown> = {
+			worker: { agent: "codex", agentConfig: { permissions: "bypass-permissions" } },
+			orchestrator: { agent: "codex", agentConfig: { permissions: "auto" } },
+		};
+		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents/readiness") return agentCatalogResponse;
+			if (path === "/api/v1/agents/{agent}/models") {
+				return {
+					data: { agentId: "test-agent", selectionMode: "text", models: [], allowCustom: true, source: "manual", fetchedAt: "2026-07-31T00:00:00Z", stale: false },
+					error: undefined,
+				};
+			}
+			return {
+				data: { status: "ok", project: {
+					id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+					repo: "", defaultBranch: "main", config: savedConfig,
+				} },
+				error: undefined,
+			};
+		});
+		putMock.mockImplementation(async (_path: string, request: { body: { config: Record<string, unknown> } }) => {
+			savedConfig = request.body.config;
+			return { data: { project: {} }, error: undefined };
+		});
+		const first = render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<TestProjectSettings projectId="proj-1" section="agents" />
+			</QueryClientProvider>,
+		);
+		const worker = await screen.findByRole("switch", { name: "Step down if rejected (Worker approval)" });
+		await userEvent.click(worker);
+		expect(worker).not.toBeChecked();
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		const saved = savedConfig as { worker: { agentConfig: Record<string, unknown> }; orchestrator: { agentConfig: Record<string, unknown> } };
+		expect(saved.worker.agentConfig).toMatchObject({ permissions: "bypass-permissions", permissionFallback: false });
+		expect(saved.orchestrator.agentConfig).not.toHaveProperty("permissionFallback");
+
+		first.unmount();
+		renderSettings("proj-1", undefined, "agents");
+		const reloaded = await screen.findByRole("switch", { name: "Step down if rejected (Worker approval)" });
+		expect(reloaded).not.toBeChecked();
+		await userEvent.click(reloaded);
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(2));
+		expect((savedConfig as typeof saved).worker.agentConfig).not.toHaveProperty("permissionFallback");
+	});
+
+	it("moves a project-level permission fallback off into the role overrides instead of dropping it", async () => {
+		mockProject({
+			id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+			repo: "", defaultBranch: "main", config: {
+				agentConfig: { permissionFallback: false },
+				worker: { agent: "codex", agentConfig: { permissions: "bypass-permissions" } },
+				orchestrator: { agent: "codex", agentConfig: { permissions: "auto" } },
+			},
+		});
+		renderSettings("proj-1", undefined, "agents");
+		expect(await screen.findByRole("switch", { name: "Step down if rejected (Worker approval)" })).not.toBeChecked();
+		expect(screen.getByRole("switch", { name: "Step down if rejected (Orchestrator approval)" })).not.toBeChecked();
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		const config = putMock.mock.calls[0][1].body.config;
+		expect(config.worker.agentConfig.permissionFallback).toBe(false);
+		expect(config.orchestrator.agentConfig.permissionFallback).toBe(false);
+		expect(config.agentConfig?.permissionFallback).toBeUndefined();
 	});
 
 	it("can switch back to Claude's own permission setting", async () => {
@@ -662,7 +819,7 @@ describe("ProjectSettingsForm", () => {
 		// exactly which one is on screen depends on unrelated query timing.
 		expect(workerAgent).toHaveTextContent(/^codex$/i);
 		expect(orchestratorAgent).toHaveTextContent(/^claude[- ]code$/i);
-		expect(permissionMode).toHaveTextContent("Auto");
+		expect(permissionMode).toHaveTextContent("Approve for me");
 
 		await chooseOption(workerAgent, "OpenCode");
 		await chooseOption(orchestratorAgent, "Goose");
@@ -1590,15 +1747,15 @@ describe("ProjectSettingsForm", () => {
 			</QueryClientProvider>,
 		);
 		const approval = await screen.findByRole("button", { name: "Reviewer approval" });
-		expect(approval).toHaveTextContent("Auto");
-		await chooseOption(approval, "Accept edits");
+		expect(approval).toHaveTextContent("Approve for me");
+		await chooseOption(approval, "Ask for approval");
 		submitSettings();
 		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
 		expect(savedConfig.reviewers).toEqual([{ harness: "codex", agentConfig: { permissions: "accept-edits" } }]);
 
 		first.unmount();
 		renderSettings("proj-1", undefined, "agents");
-		expect(await screen.findByRole("button", { name: "Reviewer approval" })).toHaveTextContent("Accept edits");
+		expect(await screen.findByRole("button", { name: "Reviewer approval" })).toHaveTextContent("Ask for approval");
 	});
 
 	it("hides the Copilot reviewer when its binary is missing", async () => {

@@ -407,6 +407,9 @@ func (m *Manager) executeChatAgentSwitch(
 			m.augmentAgentRuntimeEnv(targetAgent, launchEnv)
 			return launchEnv, nil
 		},
+		// Off only when the project or role config turns the step-down off.
+		DisablePermissionFallback: !agentConfig.PermissionFallbackEnabled(),
+
 		ProviderConversationID: providerConversationID,
 		ProviderScopeID:        chatSwitchProviderBoundaryID(result.ID),
 		ControllerGeneration:   string(targetGeneration),

@@ -978,6 +978,18 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
 			"CHAT_TITLE_REQUIRED", "title is required", nil)
 
+	case errors.Is(err, ports.ErrPermissionRejected):
+		// Listed before ErrProviderRefused: the chat service folds a permission refusal
+		// into that sentinel too (so edits and steers settle definitively), and the
+		// specific code is the one a client can act on.
+		// The provider refused the permission mode and no lower mode was tried or
+		// accepted (the fallback is off, exhausted, or has nothing below the mode).
+		// The turn did not start and the conversation is fine. The message says which
+		// mode was refused and why in the provider's own words, so it is carried
+		// through instead of becoming an anonymous server error.
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
+			"CHAT_PERMISSION_REJECTED", err.Error(), nil)
+
 	case errors.Is(err, chatsvc.ErrProviderRefused):
 		// The provider declined and the conversation is fine. Its own explanation is
 		// carried through: it says something the user can act on, which a generic
