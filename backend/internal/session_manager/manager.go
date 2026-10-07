@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 
+	copilotagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/copilot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/modelcatalog"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
@@ -981,6 +982,14 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	if err := validateSpawnModel(cfg.Harness, agentConfig.Model); err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: %s", ErrUnsupportedModel, err.Error())
 	}
+	if err := validateSpawnEffort(cfg.Harness, cfg.AgentConfig.Effort); err != nil {
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
+	}
+	if cfg.EffortOverride {
+		agentConfig.Effort = cfg.AgentConfig.Effort
+	}
+	// Explicit effort is rejected above when unsupported; inherited effort is dropped when the harness cannot apply it.
+	agentConfig.Effort = appliedSpawnEffort(cfg.Harness, agentConfig.Effort)
 	// Resolve the controller mode here, before anything durable is created, for
 	// the same reason an unknown harness is rejected above: an explicit Chat
 	// request AO cannot honor should cost nothing, not leave a terminated row and
@@ -1018,7 +1027,8 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			cfg.AgentConfigResolved = true
 		}
 	}
-	if mode == domain.SessionModeTUI && cfg.Harness == domain.HarnessClaudeCode {
+	if mode == domain.SessionModeTUI && (cfg.Harness == domain.HarnessClaudeCode ||
+		(cfg.Harness == domain.HarnessCodex && strings.TrimSpace(cfg.AgentConfig.Effort) != "")) {
 		resolved, err := m.resolveAgentConfig(ctx, cfg, project.Config)
 		if err != nil {
 			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
@@ -1497,7 +1507,7 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		resolved.Effort = requested.Effort
 	}
 	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode {
-		resolved.Effort = ""
+		resolved.Effort = appliedSpawnEffort(cfg.Harness, resolved.Effort)
 		return resolved, nil
 	}
 	modelID := strings.TrimSpace(resolved.Model)
@@ -1561,7 +1571,11 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		return ports.AgentConfig{}, fmt.Errorf("%w for model %q", ports.ErrModelCapabilitiesUnavailable, modelID)
 	}
 	if resolved.Effort != "" && !containsString(selected.Efforts, resolved.Effort) {
-		return ports.AgentConfig{}, fmt.Errorf("%w %q for model %q", ports.ErrUnsupportedEffort, resolved.Effort, modelID)
+		supported := strings.Join(selected.Efforts, ", ")
+		if supported == "" {
+			supported = "none"
+		}
+		return ports.AgentConfig{}, fmt.Errorf("%w %q for model %q (supported: %s)", ports.ErrUnsupportedEffort, resolved.Effort, modelID, supported)
 	}
 	return resolved, nil
 }
@@ -2111,6 +2125,12 @@ func effectiveAgentConfig(harness domain.AgentHarness, kind domain.SessionKind, 
 	if override.Permissions != "" {
 		merged.Permissions = override.Permissions
 	}
+	// Copilot is the only terminal harness besides Codex and Claude Code that
+	// applies inherited effort; unsupported levels are dropped for spawn,
+	// restore, and relaunch.
+	if harness == domain.HarnessCopilot {
+		merged.Effort = appliedSpawnEffort(harness, merged.Effort)
+	}
 	return merged
 }
 
@@ -2196,6 +2216,35 @@ func validateSpawnModel(harness domain.AgentHarness, model string) error {
 		}
 	}
 	return fmt.Errorf("model %q is not supported by harness %q", model, harness)
+}
+
+func validateSpawnEffort(harness domain.AgentHarness, effort string) error {
+	if strings.TrimSpace(effort) == "" {
+		return nil
+	}
+	switch harness {
+	case domain.HarnessCodex, domain.HarnessClaudeCode:
+		return nil
+	case domain.HarnessCopilot:
+		if containsString(copilotagent.EffortLevels, effort) {
+			return nil
+		}
+		return fmt.Errorf("%w %q for harness %q (supported: %s)", ports.ErrUnsupportedEffort, effort, harness, strings.Join(copilotagent.EffortLevels, ", "))
+	default:
+		return fmt.Errorf("%w: harness %q cannot apply an effort override (supported harnesses: claude-code, codex, copilot)", ports.ErrUnsupportedEffort, harness)
+	}
+}
+
+func appliedSpawnEffort(harness domain.AgentHarness, effort string) string {
+	switch harness {
+	case domain.HarnessCodex, domain.HarnessClaudeCode:
+		return effort
+	case domain.HarnessCopilot:
+		if containsString(copilotagent.EffortLevels, effort) {
+			return effort
+		}
+	}
+	return ""
 }
 
 func roleOverride(kind domain.SessionKind, cfg domain.ProjectConfig) domain.RoleOverride {
