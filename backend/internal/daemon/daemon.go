@@ -296,6 +296,12 @@ func Run() error {
 	// graceful shutdown inside Server.Run and stops the background goroutines.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	multicaService, multicaStop, err := wireMulticaSupervisor(ctx, log)
+	if err != nil {
+		stop()
+		return fmt.Errorf("wire Multica supervisor: %w", err)
+	}
+	defer multicaStop()
 	policyCoordinator.StartWatcher(ctx)
 	defer func() { _ = policyCoordinator.CloseAndDrain(context.Background()) }()
 	// Constructing the synchronous sender performs no I/O. The hard production
@@ -850,6 +856,7 @@ func Run() error {
 		GitHub:             githubpat.New(cfg.DataDir),
 		Conversations:      chatSvc,
 		Settings:           settingsSvc,
+		Multica:            multicaService,
 		CDC:                store,
 		Events:             cdcPipe.Broadcaster,
 		Activity:           lcStack.LCM,

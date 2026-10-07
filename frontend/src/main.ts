@@ -174,6 +174,16 @@ import {
 import { buildLinuxAppMenuTemplate, buildMacAppMenuTemplate, buildWindowsAppMenuTemplate } from "./main/menu";
 import { readMulticaSettings, writeMulticaUrl } from "./main/multica-settings";
 import { createMulticaDaemonService, findMulticaBinary } from "./main/multica-daemon-cli";
+import {
+	createHostedFetchJson,
+	createHostedMulticaDaemonControl,
+	createModeAwareMulticaDaemonService,
+	hostedMulticaCliEnv,
+	hostedMulticaLogPath,
+	isMulticaHostingEnabled,
+} from "./main/multica-daemon-hosted";
+import { createMulticaDaemonOwnerStore, listRunningMulticaDaemons } from "./main/multica-daemon-guard";
+import { probeMulticaHealth } from "./main/multica-health-probe";
 import { multicaBridgeChannels } from "./main/multica-desktop-bridge";
 import { resolveMulticaDesktopBundle } from "./main/multica-desktop-bundle";
 import { createMulticaIssueLinkService, type MulticaIssueLinkService } from "./main/multica-issue-link-service";
@@ -871,18 +881,63 @@ async function createWindowInternal(): Promise<void> {
 		hostName: () => os.hostname(),
 		// The daemon is driven through the installed multica CLI (AO_MULTICA_CLI
 		// overrides where it is found).
-		createDaemonService: (emit) =>
-			createMulticaDaemonService({
+		createDaemonService: (emit) => {
+			const homeDirectory = os.homedir();
+			const defaultLogPath = path.join(homeDirectory, ".multica", "daemon.log");
+			let modeAware: ReturnType<typeof createModeAwareMulticaDaemonService> | undefined;
+			const ownerStore = createMulticaDaemonOwnerStore(app.getPath("userData"));
+			const isPidAlive = (pid: number): boolean => {
+				try {
+					process.kill(pid, 0);
+					return true;
+				} catch (error) {
+					return (error as NodeJS.ErrnoException).code === "EPERM";
+				}
+			};
+			const bundledMulticaBinary = multicaBinaryOptions().bundledPath;
+			const guardOptions = {
+				homeDirectory,
+				probeHealth: probeMulticaHealth,
+				readFile: async (file: string): Promise<string | null> => {
+					try {
+						return await readFile(file, "utf8");
+					} catch (error) {
+						if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+						throw error;
+					}
+				},
+				isPidAlive,
+			};
+			const cli = createMulticaDaemonService({
 				emit,
-				findBinary: () =>
-					findMulticaBinary({
-						override: process.env.AO_MULTICA_CLI?.trim() || undefined,
-						pathEnv: process.env.PATH,
-						home: os.homedir(),
-						platform: process.platform,
-					}),
-				logPath: path.join(os.homedir(), ".multica", "daemon.log"),
-			}),
+				findBinary: () => findMulticaBinary(multicaBinaryOptions()),
+				cliNotFoundMessage: app.isPackaged ? "The Multica CLI isn't bundled with this build and was not found on PATH" : undefined,
+				logPath: () =>
+					modeAware?.getMode() === "hosted" ? hostedMulticaLogPath(homeDirectory, process.env.AO_MULTICA_PROFILE) : defaultLogPath,
+				isOwnedDaemon: ownerStore.isOwnedDaemon,
+				listRunningDaemons: () => listRunningMulticaDaemons(guardOptions),
+				writeOwnerMarker: ownerStore.write,
+				removeOwnerMarker: ownerStore.remove,
+				isPidAlive,
+				isBundledBinary: (binaryPath: string) =>
+					!process.env.AO_MULTICA_CLI?.trim() && bundledMulticaBinary !== undefined && path.resolve(binaryPath) === bundledMulticaBinary,
+			});
+			const multicaBaseUrl = () =>
+				daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null;
+			const hosted = createHostedMulticaDaemonControl({
+				baseUrl: multicaBaseUrl,
+				timeoutMs: 65_000,
+				fetchJson: createHostedFetchJson((url, init) => net.fetch(String(url), init)),
+			});
+			modeAware = createModeAwareMulticaDaemonService({
+				cli,
+				hosted,
+				baseUrl: multicaBaseUrl,
+				hostingEnabled: () => isMulticaHostingEnabled(process.env),
+				emit,
+			});
+			return modeAware;
+		},
 		onPageTitleChange: (title) => multicaIssueLinkService?.handlePageTitle(title),
 		onAoSessionLink: (url) => multicaIssueLinkService?.handleAoSessionLink(url) ?? false,
 		notifications: createMulticaNotifications({
@@ -1254,6 +1309,18 @@ async function ensureBundledTmuxStaged(): Promise<void> {
 	stagedBundledTmuxBinary = destination;
 }
 
+function multicaBinaryOptions() {
+	return {
+		override: process.env.AO_MULTICA_CLI?.trim() || undefined,
+		bundledPath: app.isPackaged
+			? path.resolve(process.resourcesPath, "multica-cli", process.platform === "win32" ? "multica.exe" : "multica")
+			: undefined,
+		pathEnv: process.env.PATH,
+		home: os.homedir(),
+		platform: process.platform,
+	};
+}
+
 function daemonEnv(forceKeep = keepDaemonAlive(process.env)): NodeJS.ProcessEnv {
 	// AO_OWNER is the daemon's durable spawn-mode record: the daemon writes it
 	// into running.json and the attach path reads it to decide the supervisor
@@ -1289,6 +1356,7 @@ function daemonEnv(forceKeep = keepDaemonAlive(process.env)): NodeJS.ProcessEnv 
 				? path.join(process.resourcesPath, "acp-runtime")
 				: path.join(app.getAppPath(), "resources", "acp-runtime")),
 		...(bundledTmuxBinary ? { AO_TMUX_BINARY: bundledTmuxBinary, AO_TMUX_SOCKET_NAME: "ao" } : {}),
+		...hostedMulticaCliEnv(process.env, () => findMulticaBinary(multicaBinaryOptions())),
 	};
 	// In dev mode, inject isolation defaults so the dev daemon never collides with
 	// the installed app. User-set env vars take priority (checked first).
