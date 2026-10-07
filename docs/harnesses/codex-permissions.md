@@ -34,7 +34,7 @@ AO keeps its four modes; no new mode or API enum was added.
 | AO mode | TUI launch | Chat thread start / resume | Chat per-turn |
 | --- | --- | --- | --- |
 | `default` | no approval or sandbox flag | no `approvalPolicy`, `approvalsReviewer`, `sandbox` | nothing sent |
-| `accept-edits` | `--ask-for-approval on-request` | `on-request`, `workspace-write`, reviewer `user` | same, `workspaceWrite` |
+| `accept-edits` | `--ask-for-approval on-request --sandbox workspace-write` | `on-request`, `workspace-write`, reviewer `user` | same, `workspaceWrite` |
 | `auto` (approve-for-me) | `--ask-for-approval on-request --sandbox workspace-write -c approvals_reviewer="auto_review"` | `on-request`, `workspace-write`, reviewer `auto_review` | same, `workspaceWrite` |
 | `bypass-permissions` | `--dangerously-bypass-approvals-and-sandbox` | `never`, `danger-full-access` | same, `dangerFullAccess` |
 
@@ -56,9 +56,20 @@ AO keeps its four modes; no new mode or API enum was added.
   `bypass-permissions`. The Codex pickers and the project-permission memory were
   updated to match (they previously labeled and stored Codex `default` as full
   access / bypass).
-- Per-turn `default` cannot withdraw an earlier explicit per-turn choice: Codex has
-  no "reset to configured default" on `turn/start`, so selecting it mid-thread
-  leaves the thread on its last explicit posture.
+- Returning to `default` mid-thread: Codex applies a turn's override to later turns
+  and has no way to withdraw it, so sending nothing would leave, for example, full
+  access running under a "Codex defaults" label. When a thread has carried an
+  explicit posture (from its launch or an earlier turn), the first `default` turn
+  sends the Ask for approval posture explicitly (`on-request`, workspace-write,
+  reviewer `user`), after which `default` sends nothing again. For the common setup
+  that equals Codex's own default; for a user whose configuration is wider it is
+  deliberately safer. A thread that never overrode anything is never touched.
+- **Existing data:** conversations whose stored approval mode is `default` (the old
+  picker showed it as "Full access"), sessions with no pinned permissions, and
+  projects that stored `default` now launch or resume with no override instead of
+  full access. They are less permissive than before, so unattended workers that
+  relied on full access can stall on approvals until the mode is set to
+  `bypass-permissions`. There is no data migration.
 - `PermissionDefault` in `pkg/agentruntime` keeps its full-access launch for Cloud
   workers (the `cloud/` module is unchanged); the desktop adapter uses the new
   `PermissionAgentDefault` policy.
@@ -70,27 +81,38 @@ retries with the next less permissive mode instead of failing the spawn.
 
 Order, most to least permissive (`ports.PermissionFallbackModes`):
 
-`bypass-permissions` → `auto` → `accept-edits` → `default`
+`bypass-permissions` → `auto` → `accept-edits`
 
 Relative permissiveness was checked against the Codex mapping: `auto` and
-`accept-edits` share `on-request` + `workspace-write`, but `auto` lets the automatic
-reviewer approve escalations that `accept-edits` leaves to the user. `default` is
-last on purpose: it asks Codex for nothing, so it is the one posture that cannot
-contradict a managed requirement. On an unmanaged machine whose own configuration is
-`danger-full-access`, `default` could in theory be *more* permissive than `auto`;
-that only happens after the stricter modes were refused, and the effective mode is
-logged and recorded either way.
+`accept-edits` share `on-request` + `workspace-write` (the sandbox is pinned in both
+the TUI and chat), but `auto` lets the automatic reviewer approve escalations that
+`accept-edits` leaves to the user.
+
+`default` is **not** a rung. It asks Codex for nothing, so its posture is whatever
+Codex's own configuration says, and that can be wider than the mode that was just
+refused: with a managed requirement that only constrains approvals and a user-level
+`sandbox_mode = "danger-full-access"`, stepping `auto` → `default` would run
+unsandboxed although workspace-write was requested. A fallback that can widen the
+posture is not a fallback, so the ladder ends at `accept-edits` and, if that is
+refused too, the spawn or turn fails. A user who wants Codex's own configuration
+chooses `default` explicitly.
 
 Rules:
 
 - Step down **only** on `ports.ErrPermissionRejected`, which a driver wraps solely
   for a provider refusal of the permission/sandbox/approval posture. The Codex driver
-  matches a JSON-RPC error that names a sandbox or approval field together with
-  "is not in the allowed set", "disallowed by requirements" or "managed
-  requirements". Transport errors, usage limits and every other failure surface
-  untouched, on the first attempt and after a step-down.
+  matches a JSON-RPC error that names the `sandbox_mode`, `approval_policy` or
+  `approvals_reviewer` setting (in backticks, before any "(set by …)" label) together
+  with "is not in the allowed set" or "disallowed by requirements". Transport errors,
+  usage limits and every other failure surface untouched, on the first attempt and
+  after a step-down. If a Codex build rewords these errors the step-down goes inert
+  and the error simply surfaces.
+- Read-only and review conversations never step down and their refusals are never
+  classified as permission rejections: their sandbox is forced whatever mode they
+  carry, so a lower mode cannot change what was refused.
 - Strictly downward: the ladder never contains the requested mode or a more
-  permissive one. A requested `default` has no fallback.
+  permissive one, and never `default`. A requested `accept-edits` or `default` has
+  no fallback.
 - Never bypasses a managed requirement. Each step asks for a weaker mode; AO does not
   edit Codex configuration or retry a refused mode.
 - Not silent: every refused mode is logged (`permission mode rejected by the
@@ -98,14 +120,19 @@ Rules:
   (`permission fallback applied`, with `requested`, `effective`, `rejected`). The
   effective mode is stored as the conversation's approval mode (so the picker shows
   it and later turns start from it), stored as the session's pinned permissions
-  (`ao session get` shows `permissions:`, the API reports `permissions`), recorded as a
-  timeline notice, and used by restore.
+  (`ao session get` shows `permissions:`, the API reports `permissions`; written by
+  the daemon's permissions hook with a targeted query, because the general session
+  update does not write the pinned permissions), recorded as a timeline notice, and
+  used by restore.
 - If every mode is refused the spawn or turn fails with a
   `PermissionFallbackExhaustedError` that lists each mode and its reason.
 - A lower mode that the provider cannot admit (it needs an approval channel the
   provider lacks) is treated as refused at launch, not launched.
 - A mode the user picks while a turn is being sent is not overwritten by the
   fallback.
+- A fallback refusal on resume is reported as the policy refusal it is, not as an
+  unresumable conversation (`CHAT_RESUME_FAILED`), so the client does not offer a
+  fresh conversation for it.
 
 Where it runs (`service/chat`): `Service.Start` for `thread/start` and
 `thread/resume`, and `Controller.sendTurn` for every `turn/start`, including the
@@ -162,7 +189,11 @@ provider refuses a mode. Only Codex does today.
 
 - TUI sessions: Codex coerces a managed-policy violation with a startup warning
   instead of failing, so there is no error to step down on.
-- The `cloud/` Codex worker mapping.
+- The `cloud/` Codex worker mapping, and the Cloud session picker, which keeps the
+  "Full access" wording for Codex's default because Cloud still launches it that way.
+- Read-only (reviewer) Codex turns still send `approvalPolicy: never`; under an
+  approval allow-list that excludes `never` they would be refused. This predates the
+  change and is not a permission mode AO can lower.
 - A Codex build that rejects `thread/start` is handled (same classification), but
   only `turn/start` rejection was observed live.
 

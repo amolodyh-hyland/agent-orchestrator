@@ -145,8 +145,8 @@ surface (`npm run sqlc`, `npm run api`).
   mode sends no approval or sandbox override, `auto` is approve-for-me with the
   workspace-write sandbox pinned, and `bypass-permissions` is the only mode that
   requests full access. When a provider refuses the requested mode for a
-  permission reason, chat spawns step down through `auto`, `accept-edits` and
-  `default` (on by default; `agentConfig.permissionFallback=false` turns it off),
+  permission reason, chat spawns step down through `auto` and `accept-edits`, never
+  to the provider's own defaults (on by default; `agentConfig.permissionFallback=false` turns it off),
   log every refused mode, and report the effective mode on the session. See
   [harnesses/codex-permissions.md](harnesses/codex-permissions.md).
 - OpenAPI spec generated from Go DTOs; frontend TS types generated from it and

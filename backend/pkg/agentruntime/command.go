@@ -202,13 +202,15 @@ func ClaudePermissionArgs(policy PermissionPolicy) []string {
 
 // CodexPermissionArgs maps AO policy onto Codex approval flags.
 //
-// Auto is Codex's approve-for-me posture (on-request approvals, auto review,
-// workspace-write sandbox). The sandbox is pinned so a user-level
-// sandbox_mode = "danger-full-access" cannot widen it.
+// Accept-edits and auto both run inside the workspace-write sandbox; auto is
+// Codex's approve-for-me posture (on-request approvals reviewed automatically).
+// The sandbox is pinned in both so a user-level sandbox_mode = "danger-full-access"
+// cannot widen them, which keeps accept-edits below auto as the fallback ladder
+// assumes.
 func CodexPermissionArgs(policy PermissionPolicy) []string {
 	switch NormalizePermissionPolicy(policy) {
 	case PermissionAcceptEdits:
-		return []string{"--ask-for-approval", "on-request"}
+		return []string{"--ask-for-approval", "on-request", "--sandbox", "workspace-write"}
 	case PermissionAuto:
 		return []string{"--ask-for-approval", "on-request", "--sandbox", "workspace-write", "-c", `approvals_reviewer="auto_review"`}
 	case PermissionAgentDefault:

@@ -70,9 +70,6 @@ type recordingLauncher struct {
 	afterReady       func()
 	providerBoundary *domain.ConversationBranch
 	liveReconnect    bool
-	// effectivePermissions simulates the permission fallback having launched a
-	// lower mode than the one requested.
-	effectivePermissions ports.PermissionMode
 
 	preflighted          []domain.AgentHarness
 	preflightPermissions []ports.PermissionMode
@@ -185,7 +182,6 @@ func (l *recordingLauncher) StartChat(ctx context.Context, cfg ChatStart) (ChatS
 		ProviderConversationID: "thread-1",
 		ControllerGeneration:   "gen-1",
 		ProviderBoundary:       l.providerBoundary,
-		EffectivePermissions:   l.effectivePermissions,
 	}
 	if cfg.ControllerGeneration != "" {
 		started.ControllerGeneration = cfg.ControllerGeneration
@@ -1629,4 +1625,43 @@ func (l *deadlineConsumingChatLauncher) QueueChatPrompt(_ context.Context, _ dom
 
 func (l *deadlineConsumingChatLauncher) DrainChatQueue(_ context.Context, _ domain.SessionID) error {
 	return nil
+}
+
+// Restoring a Chat session starts a new controller, so it has to carry the
+// project's permission fallback setting too, not only the spawn path.
+func TestReconcileLiveChatCarriesThePermissionFallbackSetting(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		fallback    *bool
+		wantDisable bool
+	}{
+		{"unset defaults to on", nil, false},
+		{"explicitly off", boolPtr(false), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			launcher := &recordingLauncher{}
+			m, st, _ := newChatManager(launcher)
+			project := st.projects[string(chatTestProject)]
+			project.Config.AgentConfig = domain.AgentConfig{PermissionFallback: tc.fallback}
+			st.projects[string(chatTestProject)] = project
+			rec := domain.SessionRecord{
+				ID: "mer-1", ProjectID: chatTestProject, Kind: domain.KindWorker,
+				Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
+				Metadata: domain.SessionMetadata{
+					Branch: "ao/mer-1/root", WorkspacePath: "/ws/mer-1", ProviderConversationID: "thread-existing",
+				},
+			}
+			st.sessions[rec.ID] = rec
+
+			if err := m.reconcileLive(context.Background(), rec); err != nil {
+				t.Fatalf("reconcileLive: %v", err)
+			}
+			if len(launcher.started) != 1 {
+				t.Fatalf("chat starts = %d, want 1", len(launcher.started))
+			}
+			if got := launcher.started[0].DisablePermissionFallback; got != tc.wantDisable {
+				t.Fatalf("DisablePermissionFallback = %t, want %t", got, tc.wantDisable)
+			}
+		})
+	}
 }

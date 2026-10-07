@@ -203,10 +203,6 @@ type Controller struct {
 	// controller. The zero value leaves it on, so callers that never mention it
 	// get the default behavior.
 	permissionFallbackOff bool
-	// launchPermissions is the mode the permission fallback started this
-	// controller with when the provider refused the requested one; empty when
-	// the launch used the requested mode.
-	launchPermissions ports.PermissionMode
 	// onPermissionsChanged reports the mode a turn actually ran with after the
 	// fallback lowered it, so the session record can show it.
 	onPermissionsChanged func(domain.SessionID, domain.PermissionMode)
@@ -1733,7 +1729,7 @@ func (c *Controller) adoptEffectivePermission(ctx context.Context, requested por
 		c.log.Warn("could not record the permission fallback on the conversation",
 			"sessionID", c.sessionID, "effective", effective, "error", err)
 	}
-	if c.onPermissionsChanged != nil && c.reviewID == "" {
+	if c.onPermissionsChanged != nil {
 		c.onPermissionsChanged(c.sessionID, effective)
 	}
 }

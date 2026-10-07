@@ -1208,7 +1208,7 @@
 	"settings.project.permissionCodexBypass": "Acesso total (ignorar)",
 	"settings.project.permissionCodexBypassHelp": "Sem sandbox e sem aprovações. Uma política gerenciada pode rejeitar isso; o recurso abaixo pode reduzir o nível.",
 	"settings.project.permissionFallbackToggle": "Reduzir se for rejeitado",
-	"settings.project.permissionFallbackDescription": "Se o Codex rejeitar o modo escolhido (por exemplo, uma política gerenciada proíbe acesso total), tenta novamente com o próximo modo menos permissivo: acesso total, aprovar por mim, pedir aprovação e, por fim, os padrões do Codex. Só reduz, nunca aumenta, e nunca contorna a política gerenciada. O modo realmente usado aparece no chat.",
+	"settings.project.permissionFallbackDescription": "Se o Codex rejeitar o modo escolhido (por exemplo, uma política gerenciada proíbe acesso total), tenta novamente com o próximo modo menos permissivo: acesso total, depois aprovar por mim, depois pedir aprovação. Só reduz, nunca aumenta, nunca recorre aos padrões do Codex e nunca contorna a política gerenciada. O modo realmente usado aparece no chat.",
 	"settings.project.permissionFallbackSwitch": "Reduzir se for rejeitado ({{role}})",
 	"settings.project.permissionMode": "Modo de permissão",
 	"settings.project.refresh": "Atualizar",

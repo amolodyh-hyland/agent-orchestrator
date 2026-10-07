@@ -12,9 +12,9 @@ func TestPermissionFallbackModesStepsStrictlyDown(t *testing.T) {
 		requested PermissionMode
 		want      []PermissionMode
 	}{
-		{PermissionModeBypassPermissions, []PermissionMode{PermissionModeAuto, PermissionModeAcceptEdits, PermissionModeDefault}},
-		{PermissionModeAuto, []PermissionMode{PermissionModeAcceptEdits, PermissionModeDefault}},
-		{PermissionModeAcceptEdits, []PermissionMode{PermissionModeDefault}},
+		{PermissionModeBypassPermissions, []PermissionMode{PermissionModeAuto, PermissionModeAcceptEdits}},
+		{PermissionModeAuto, []PermissionMode{PermissionModeAcceptEdits}},
+		{PermissionModeAcceptEdits, nil},
 		{PermissionModeDefault, nil},
 		{"", nil},
 		{"nonsense", nil},
@@ -77,6 +77,21 @@ func TestPermissionFallbackExhaustedErrorListsEveryMode(t *testing.T) {
 	for _, want := range []string{"bypass-permissions (no full access)", "auto (no reviewer)"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("%q does not mention %q", err.Error(), want)
+		}
+	}
+}
+
+// default asks the provider for nothing, so its posture is the provider's own
+// configuration and can be more permissive than a mode that was just refused. It
+// is therefore never a rung a refusal steps down to.
+func TestPermissionFallbackNeverStepsDownToDefault(t *testing.T) {
+	for _, requested := range []PermissionMode{
+		PermissionModeBypassPermissions, PermissionModeAuto, PermissionModeAcceptEdits, PermissionModeDefault, "",
+	} {
+		for _, mode := range PermissionFallbackModes(requested) {
+			if mode == PermissionModeDefault {
+				t.Errorf("fallback from %q offers default", requested)
+			}
 		}
 	}
 }

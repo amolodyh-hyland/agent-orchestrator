@@ -69,8 +69,6 @@ type fallbackOptions struct {
 	// conversation double to return once it accepts the mode.
 	start func(ports.ChatStartConfig, ports.ChatConversation) (ports.ChatConversation, error)
 	caps  ports.ChatCapabilities
-	// onReady, when set, receives what the controller reports to ControllerReady.
-	onReady func(ports.ChatControllerStarted)
 	// readOnly starts a read-only conversation, as a reviewer does.
 	readOnly bool
 }
@@ -123,12 +121,6 @@ func newFallbackFixture(t *testing.T, opts fallbackOptions) *fallbackFixture {
 		WorkspacePath: t.TempDir(), Permissions: opts.permissions,
 		DisablePermissionFallback: opts.disableFallback,
 		ReadOnly:                  opts.readOnly,
-	}
-	if opts.onReady != nil {
-		startCfg.ControllerReady = func(started ports.ChatControllerStarted) (ports.ChatControllerCommit, error) {
-			opts.onReady(started)
-			return ports.ChatControllerCommit{}, nil
-		}
 	}
 	f.ctrl, f.startErr = f.svc.Start(context.Background(), startCfg)
 	if f.startErr == nil {
@@ -221,7 +213,6 @@ func TestTurnStepsDownOneModeAtATimeUntilAccepted(t *testing.T) {
 	}{
 		{"bypass to auto", []ports.PermissionMode{bypass}, autoMode, []ports.PermissionMode{bypass, autoMode}},
 		{"auto to accept-edits", []ports.PermissionMode{bypass, autoMode}, acceptEdit, []ports.PermissionMode{bypass, autoMode, acceptEdit}},
-		{"accept-edits to default", []ports.PermissionMode{bypass, autoMode, acceptEdit}, defaultMod, []ports.PermissionMode{bypass, autoMode, acceptEdit, defaultMod}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFallbackFixture(t, fallbackOptions{permissions: bypass, reject: reject(tc.refuse...)})
@@ -363,8 +354,8 @@ func TestStepDownNeverEscalates(t *testing.T) {
 		requested ports.PermissionMode
 		want      []ports.PermissionMode
 	}{
-		{acceptEdit, []ports.PermissionMode{acceptEdit, defaultMod}},
-		{autoMode, []ports.PermissionMode{autoMode, acceptEdit, defaultMod}},
+		{acceptEdit, []ports.PermissionMode{acceptEdit}},
+		{autoMode, []ports.PermissionMode{autoMode, acceptEdit}},
 		{defaultMod, []ports.PermissionMode{defaultMod}},
 	} {
 		t.Run(string(tc.requested), func(t *testing.T) {
@@ -383,14 +374,14 @@ func TestStepDownNeverEscalates(t *testing.T) {
 
 func TestEveryModeRejectedFailsClearlyListingThem(t *testing.T) {
 	f := newFallbackFixture(t, fallbackOptions{
-		permissions: bypass, reject: reject(bypass, autoMode, acceptEdit, defaultMod),
+		permissions: bypass, reject: reject(bypass, autoMode, acceptEdit),
 	})
 	turn, err := f.send("first")
 	var exhausted *ports.PermissionFallbackExhaustedError
 	if !errors.As(err, &exhausted) || !errors.Is(err, ports.ErrPermissionRejected) {
 		t.Fatalf("Send error = %v, want a permission fallback exhausted error", err)
 	}
-	want := []ports.PermissionMode{bypass, autoMode, acceptEdit, defaultMod}
+	want := []ports.PermissionMode{bypass, autoMode, acceptEdit}
 	if got := f.conv.attemptedModes(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("modes tried = %v, want %v", got, want)
 	}
@@ -417,7 +408,7 @@ func TestNoTimelineNoticeWithoutAStepDown(t *testing.T) {
 	}{
 		{"requested mode accepted", nil, false},
 		{"unrelated failure", map[ports.PermissionMode]error{bypass: errProviderBusy}, true},
-		{"every mode rejected", reject(bypass, autoMode, acceptEdit, defaultMod), true},
+		{"every mode rejected", reject(bypass, autoMode, acceptEdit), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFallbackFixture(t, fallbackOptions{permissions: bypass, reject: tc.reject})
@@ -448,15 +439,6 @@ func TestFallbackDisabledSurfacesTheProviderRejection(t *testing.T) {
 	}
 	if f.ctrl.Settings().ApprovalMode != bypass || len(f.changedModes()) != 0 {
 		t.Fatalf("a disabled fallback changed the mode: %q, reported %v", f.ctrl.Settings().ApprovalMode, f.changedModes())
-	}
-}
-
-// The fallback is on unless it was turned off, so a caller that never mentions it
-// gets it.
-func TestFallbackIsOnByDefault(t *testing.T) {
-	var cfg chatsvc.StartConfig
-	if cfg.DisablePermissionFallback {
-		t.Fatal("the zero StartConfig disables the permission fallback")
 	}
 }
 
@@ -552,16 +534,28 @@ func TestLaunchNoStepDownOnUnrelatedErrors(t *testing.T) {
 }
 
 func TestLaunchAllModesRejectedFailsListingThem(t *testing.T) {
-	f, recorder := newLaunchFixture(t, bypass, false, reject(bypass, autoMode, acceptEdit, defaultMod))
+	f, recorder := newLaunchFixture(t, bypass, false, reject(bypass, autoMode, acceptEdit))
 	var exhausted *ports.PermissionFallbackExhaustedError
 	if !errors.As(f.startErr, &exhausted) {
 		t.Fatalf("Start error = %v, want a permission fallback exhausted error", f.startErr)
 	}
-	if got, want := recorder.modes(), []ports.PermissionMode{bypass, autoMode, acceptEdit, defaultMod}; !reflect.DeepEqual(got, want) {
+	if got, want := recorder.modes(), []ports.PermissionMode{bypass, autoMode, acceptEdit}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("launch modes tried = %v, want %v", got, want)
 	}
-	if got := len(exhausted.Rejected); got != 4 {
-		t.Fatalf("exhausted error lists %d modes, want 4", got)
+	if got := len(exhausted.Rejected); got != 3 {
+		t.Fatalf("exhausted error lists %d modes, want 3", got)
+	}
+}
+
+// The provider's own defaults are never a fallback: a launch that every explicit
+// mode refused fails, it does not quietly run with whatever the provider's
+// configuration says, which could be wider than anything that was refused.
+func TestLaunchNeverFallsBackToTheProvidersOwnDefaults(t *testing.T) {
+	_, recorder := newLaunchFixture(t, bypass, false, reject(bypass, autoMode, acceptEdit))
+	for _, mode := range recorder.modes() {
+		if mode == defaultMod {
+			t.Fatalf("launch tried default after the explicit modes were refused: %v", recorder.modes())
+		}
 	}
 }
 
@@ -576,9 +570,12 @@ func TestLaunchFallbackDisabled(t *testing.T) {
 }
 
 func TestLaunchNeverEscalates(t *testing.T) {
-	_, recorder := newLaunchFixture(t, acceptEdit, false, reject(acceptEdit, defaultMod))
-	if got, want := recorder.modes(), []ports.PermissionMode{acceptEdit, defaultMod}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("launch modes tried = %v, want %v and nothing more permissive", got, want)
+	f, recorder := newLaunchFixture(t, acceptEdit, false, reject(acceptEdit))
+	if got, want := recorder.modes(), []ports.PermissionMode{acceptEdit}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("launch modes tried = %v, want only %v and nothing more permissive", got, want)
+	}
+	if !errors.Is(f.startErr, ports.ErrPermissionRejected) {
+		t.Fatalf("Start error = %v, want the rejection reported as is", f.startErr)
 	}
 }
 
@@ -601,35 +598,6 @@ func TestLaunchSkipsModesTheProviderCannotAdmit(t *testing.T) {
 	}
 }
 
-// The launch commit needs to know a lower mode was launched, so it can pin that
-// instead of the requested one. A launch that used the requested mode reports none.
-func TestLaunchReportsTheEffectiveModeToControllerReady(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		refuse map[ports.PermissionMode]error
-		want   ports.PermissionMode
-	}{
-		{"stepped down", reject(bypass), autoMode},
-		{"stepped down twice", reject(bypass, autoMode), acceptEdit},
-		{"requested mode launched", nil, ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			recorder := &launchRecorder{reject: tc.refuse}
-			var got []ports.PermissionMode
-			f := newFallbackFixture(t, fallbackOptions{
-				permissions: bypass, start: recorder.start,
-				onReady: func(started ports.ChatControllerStarted) { got = append(got, started.EffectivePermissions) },
-			})
-			if f.startErr != nil {
-				t.Fatalf("Start: %v", f.startErr)
-			}
-			if len(got) != 1 || got[0] != tc.want {
-				t.Fatalf("ControllerReady effective permissions = %v, want [%q]", got, tc.want)
-			}
-		})
-	}
-}
-
 // A read-only conversation (a reviewer) never steps down: its sandbox does not
 // depend on the permission mode, so a lower mode could not change the outcome.
 func TestReadOnlyLaunchNeverStepsDown(t *testing.T) {
@@ -640,5 +608,69 @@ func TestReadOnlyLaunchNeverStepsDown(t *testing.T) {
 	}
 	if got, want := recorder.modes(), []ports.PermissionMode{bypass}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("launch modes tried = %v, want only %v for a read-only conversation", got, want)
+	}
+}
+
+// The whole persistence chain on a real database: a step-down reports the mode, the
+// hook writes it with the targeted session query, and reading the session back
+// shows it. Fakes cannot prove this, because the general session update does not
+// write the pinned permissions at all; only the targeted write does.
+func TestStepDownIsPersistedOnTheSessionRow(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		launch bool
+	}{
+		{"turn step-down", false},
+		{"launch step-down", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := openStore(t)
+			ctx := context.Background()
+			if updated, err := st.UpdateSessionPermissions(ctx, testSession, bypass); err != nil || !updated {
+				t.Fatalf("seed pinned permissions: updated=%v err=%v", updated, err)
+			}
+			conv := &modeRejectingConversation{fakeConversation: newFakeConversation(), reject: reject(bypass)}
+			recorder := &launchRecorder{reject: reject(bypass)}
+			start := func(cfg ports.ChatStartConfig) (ports.ChatConversation, error) { return recorder.start(cfg, conv) }
+			if !tc.launch {
+				start = nil
+			}
+			svc := chatsvc.New(chatsvc.Options{
+				Store: st, Sessions: st,
+				Drivers: fakeRegistry{driver: fakeDriver{conv: conv, start: start}},
+				Log:     slog.New(slog.DiscardHandler),
+				NewID:   func() string { return "id-" + tc.name },
+				OnPermissionsChanged: func(id domain.SessionID, mode domain.PermissionMode) {
+					if _, err := st.UpdateSessionPermissions(ctx, id, mode); err != nil {
+						t.Errorf("persist: %v", err)
+					}
+				},
+			})
+			if _, err := svc.Start(ctx, chatsvc.StartConfig{
+				SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex,
+				WorkspacePath: t.TempDir(), Permissions: bypass,
+			}); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			t.Cleanup(func() { _ = svc.Stop(context.Background(), testSession) })
+			if !tc.launch {
+				if _, err := svc.Send(ctx, testSession, ports.ChatUserMessage{
+					Text: "go", ClientMessageID: "client-go", Origin: domain.MessageOriginHuman,
+				}); err != nil {
+					t.Fatalf("Send: %v", err)
+				}
+			}
+
+			got, ok, err := st.GetSession(ctx, testSession)
+			if err != nil || !ok {
+				t.Fatalf("read session: ok=%v err=%v", ok, err)
+			}
+			if got.Metadata.Permissions != autoMode {
+				t.Fatalf("session permissions = %q, want the lower mode that was accepted", got.Metadata.Permissions)
+			}
+			if got.Metadata.Permissions == bypass {
+				t.Fatal("the session still pins the refused bypass-permissions")
+			}
+		})
 	}
 }

@@ -150,36 +150,3 @@ func TestPersistChatPermissionsIsANoOpWithoutStoreSupport(t *testing.T) {
 		t.Fatalf("permissions = %q, want the pinned mode untouched", got)
 	}
 }
-
-// The launch commit rewrites the session's metadata. If the fallback launched a
-// lower mode, that commit must pin it rather than the mode that was requested, or
-// the session would read back (and restore with) a mode the provider refused.
-func TestChatSpawnPinsTheModeTheFallbackLaunched(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		effective ports.PermissionMode
-		want      ports.PermissionMode
-	}{
-		{"fallback lowered it", ports.PermissionModeAuto, ports.PermissionModeAuto},
-		{"requested mode ran", "", ports.PermissionModeBypassPermissions},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			launcher := &recordingLauncher{effectivePermissions: tc.effective}
-			mgr, store, _ := newChatManager(launcher)
-			project := store.projects[string(chatTestProject)]
-			project.Config.AgentConfig = domain.AgentConfig{Permissions: ports.PermissionModeBypassPermissions}
-			store.projects[string(chatTestProject)] = project
-
-			rec, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{
-				ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessCodex,
-				RequestedMode: domain.SessionModeChat,
-			})
-			if err != nil {
-				t.Fatalf("Spawn: %v", err)
-			}
-			if got := store.sessions[rec.ID].Metadata.Permissions; got != tc.want {
-				t.Fatalf("pinned permissions = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}

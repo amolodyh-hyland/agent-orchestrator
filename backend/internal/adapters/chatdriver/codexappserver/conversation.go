@@ -52,7 +52,13 @@ type conversation struct {
 	historyParentID string
 	providerScopeID string
 	readOnly        bool
-	events          chan ports.ChatEvent
+	// widerThanDefaults reports whether this thread may be running with a more
+	// permissive posture than Codex's own defaults, because a launch or an earlier
+	// turn sent an explicit approval override. Codex applies a turn's override to
+	// later turns too and cannot withdraw it, so returning to the default mode has
+	// to send a posture rather than nothing. Guarded by sendMu.
+	widerThanDefaults bool
+	events            chan ports.ChatEvent
 	// Effective defaults returned when Codex opened or resumed this thread.
 	threadModel, threadEffort string
 
@@ -311,7 +317,18 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 		// must not produce a second turn.
 		params["clientUserMessageId"] = msg.ClientMessageID
 	}
-	applyTurnSettings(params, msg.Settings, c.readOnly)
+	settings := msg.Settings
+	// Codex cannot withdraw an override it already applied, so a drop to the
+	// default mode after an explicit one sends the Ask for approval posture
+	// instead of nothing. Anything else would leave the thread, for example, still
+	// running with full access under a "Codex defaults" label.
+	resetToDefaults := !c.readOnly && settings.Approval != "" &&
+		ports.NormalizePermissionMode(settings.Approval) == ports.PermissionModeDefault && c.widerThanDefaults
+	if resetToDefaults {
+		settings.Approval = ports.PermissionModeAcceptEdits
+	}
+	applyTurnSettings(params, settings, c.readOnly)
+	_, sentOverride := params["sandboxPolicy"]
 
 	var resp struct {
 		Turn struct {
@@ -323,6 +340,12 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 			err = permissionRejection(msg.Settings.Approval, err)
 		}
 		return ports.ChatTurnRef{}, fmt.Errorf("turn/start: %w", err)
+	}
+
+	if !c.readOnly && sentOverride {
+		// The reset itself leaves the thread at Codex's defaults; any other
+		// override may be wider than them.
+		c.widerThanDefaults = !resetToDefaults
 	}
 
 	c.mu.Lock()
@@ -352,9 +375,8 @@ func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings, r
 		// turn is rejected as a missing `type`, so the two are mapped separately
 		// rather than assumed to be interchangeable.
 		//
-		// The default mode overrides nothing. Codex has no way to withdraw an
-		// earlier per-turn override, so a thread keeps the posture of its last
-		// explicit choice until another one is made.
+		// The default mode overrides nothing here. SendTurn handles a drop to it
+		// after an explicit mode, because Codex cannot withdraw an override.
 		if policy, sandbox := approvalSettings(settings.Approval); policy != "" {
 			params["approvalPolicy"] = policy
 			params["approvalsReviewer"] = approvalReviewer(settings.Approval)

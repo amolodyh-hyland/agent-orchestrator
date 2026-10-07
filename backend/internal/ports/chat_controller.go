@@ -84,11 +84,6 @@ type ChatControllerStarted struct {
 	ProviderConversationID string
 	ControllerGeneration   string
 	Conversation           domain.ConversationRecord
-	// EffectivePermissions is set only when the provider refused the requested
-	// permission mode at launch and the permission fallback started the
-	// controller with a less permissive one. ControllerReady must pin it on the
-	// session instead of the mode that was requested.
-	EffectivePermissions PermissionMode
 	// ProviderBoundary is non-nil when this launch owns a provider namespace
 	// that is not active yet. ControllerReady must commit it atomically with the
 	// session's provider handle and controller generation.

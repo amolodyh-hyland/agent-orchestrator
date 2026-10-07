@@ -218,7 +218,6 @@ func controllerStartResult(
 		Conversation:           controller.conversation,
 		ProviderBoundary:       providerBoundary,
 		CommitProviderHistory:  commitProviderHistory,
-		EffectivePermissions:   controller.launchPermissions,
 	}
 }
 
@@ -619,9 +618,11 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	hostID := providerHostID(cfg)
 	requestedPermissions := cfg.Permissions
 	launchFallback := permissionFallback{
-		// A read-only conversation has no permission mode to lower: its sandbox is
-		// forced regardless of the mode, so there is nothing for a step-down to do.
-		enabled: !cfg.DisablePermissionFallback && !cfg.ReadOnly, log: s.log, session: cfg.SessionID, stage: "launch",
+		// A read-only or review conversation has no permission mode to lower: its
+		// sandbox is forced regardless of the mode, so a step-down cannot change
+		// what the provider refused.
+		enabled: !cfg.DisablePermissionFallback && !cfg.ReadOnly && owner.Kind != domain.ConversationOwnerReview,
+		log:     s.log, session: cfg.SessionID, stage: "launch",
 	}
 	fallbackOutcome, err := launchFallback.run(ctx, requestedPermissions, func(mode ports.PermissionMode) error {
 		if mode != requestedPermissions && caps != nil {
@@ -687,7 +688,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			s.log.Warn("could not record the permission fallback on the conversation",
 				"sessionID", cfg.SessionID, "effective", effectivePermissions, "error", settingsErr)
 		}
-		if s.onPermissionsChanged != nil && owner.Kind != domain.ConversationOwnerReview {
+		if s.onPermissionsChanged != nil {
 			s.onPermissionsChanged(cfg.SessionID, effectivePermissions)
 		}
 	}
@@ -808,9 +809,6 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
 	controller.permissionFallbackOff = cfg.DisablePermissionFallback
 	controller.onPermissionsChanged = s.onPermissionsChanged
-	if fallbackOutcome.steppedDown(requestedPermissions) {
-		controller.launchPermissions = effectivePermissions
-	}
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {
 		providerTurnID := controller.restoreLiveTurnOwnership(liveRows.Turns)

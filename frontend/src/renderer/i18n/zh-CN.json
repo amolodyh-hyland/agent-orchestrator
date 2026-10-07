@@ -1170,7 +1170,7 @@
 	"settings.project.permissionCodexBypass": "完全访问（绕过）",
 	"settings.project.permissionCodexBypassHelp": "无沙盒、无审批。受管策略可能拒绝此模式；下方的回退可逐级降低。",
 	"settings.project.permissionFallbackToggle": "被拒绝时逐级降低",
-	"settings.project.permissionFallbackDescription": "如果 Codex 拒绝所选模式（例如受管策略禁止完全访问），将用下一个限制更严格的模式重试：完全访问、代我审批、请求审批，最后是 Codex 默认。它只会降低、不会升高，也绝不会绕过受管策略。实际使用的模式会显示在聊天中。",
+	"settings.project.permissionFallbackDescription": "如果 Codex 拒绝所选模式（例如受管策略禁止完全访问），将用下一个限制更严格的模式重试：完全访问，然后代我审批，再然后请求审批。它只会降低、不会升高，不会回退到 Codex 默认，也绝不会绕过受管策略。实际使用的模式会显示在聊天中。",
 	"settings.project.permissionFallbackSwitch": "被拒绝时逐级降低（{{role}}）",
 	"settings.project.permissionMode": "权限模式",
 	"settings.project.refresh": "刷新",

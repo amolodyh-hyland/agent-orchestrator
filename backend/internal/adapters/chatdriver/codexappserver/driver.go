@@ -344,6 +344,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 		return nil, errors.New("thread/start returned no thread id")
 	}
 
+	conv.widerThanDefaults = sentApprovalOverride(policy, sandbox, reviewer) && !cfg.ReadOnly
 	conv.start(resp.Thread.ID, resp.Model, resp.ReasoningEffort)
 	return conv, nil
 }
@@ -372,6 +373,10 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		// loaded thread. Host replay bridges output and unresolved server requests
 		// across the daemon detach without waiting for the active turn to settle.
 		conv.readOnly = cfg.ReadOnly
+		// The surviving host's posture is unknown; assume the resume's own mode
+		// applied, so a later drop to default resets it rather than trusting it.
+		policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
+		conv.widerThanDefaults = sentApprovalOverride(policy, sandbox, reviewer) && !cfg.ReadOnly
 		conv.start(cfg.ProviderConversationID, cfg.Model, cfg.Effort)
 		return conv, nil
 	}
@@ -410,11 +415,18 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		if sentApprovalOverride(policy, sandbox, reviewer) && !cfg.ReadOnly {
 			err = permissionRejection(cfg.Permissions, err)
 		}
+		if errors.Is(err, ports.ErrPermissionRejected) {
+			// The conversation is fine; the provider refused the permission mode.
+			// Reporting it as an unresumable conversation would offer the user a
+			// fresh one for what is really a policy refusal.
+			return nil, fmt.Errorf("thread/resume: %w", err)
+		}
 		// Deliberately not falling back to thread/start: silently opening a new
 		// conversation would present unrelated history as continuous.
 		return nil, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, err)
 	}
 
+	conv.widerThanDefaults = sentApprovalOverride(policy, sandbox, reviewer) && !cfg.ReadOnly
 	conv.start(cfg.ProviderConversationID, resp.Model, resp.ReasoningEffort)
 	return conv, nil
 }

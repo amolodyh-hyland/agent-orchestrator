@@ -785,6 +785,15 @@ describe("ACP session config options", () => {
 		);
 	});
 
+	it("labels Codex's default as full access in a Cloud session, where it still means that", async () => {
+		const user = userEvent.setup();
+		render(<TurnSettingsBar harness="codex" models={[]} settings={{}} cloudSession onChange={vi.fn()} />);
+		expect(screen.getByRole("button", { name: "Approval policy for the next turn" })).toHaveTextContent("Full access");
+		await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+		expect(screen.getByRole("menuitemradio", { name: "Full access" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitemradio", { name: "Codex defaults" })).not.toBeInTheDocument();
+	});
+
 	it("labels bypass permission policy plainly", () => {
 		render(
 			<TurnSettingsBar

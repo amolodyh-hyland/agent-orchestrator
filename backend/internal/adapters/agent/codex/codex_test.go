@@ -547,7 +547,7 @@ func TestGetLaunchCommandMapsApprovalModes(t *testing.T) {
 		{
 			name:        "accept-edits",
 			permission:  ports.PermissionModeAcceptEdits,
-			want:        []string{"--ask-for-approval", "on-request"},
+			want:        []string{"--ask-for-approval", "on-request", "--sandbox", "workspace-write"},
 			notExpected: "--dangerously-bypass-approvals-and-sandbox",
 		},
 		{

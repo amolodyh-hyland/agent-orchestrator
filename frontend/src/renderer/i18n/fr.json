@@ -1208,7 +1208,7 @@
 	"settings.project.permissionCodexBypass": "Accès complet (contournement)",
 	"settings.project.permissionCodexBypassHelp": "Aucun bac à sable ni approbation. Une politique gérée peut le refuser ; le repli ci-dessous peut rétrograder.",
 	"settings.project.permissionFallbackToggle": "Rétrograder en cas de refus",
-	"settings.project.permissionFallbackDescription": "Si Codex refuse le mode choisi (par exemple parce qu’une politique gérée interdit l’accès complet), nouvelle tentative avec le mode suivant, moins permissif : accès complet, approuver pour moi, demander l’approbation, puis valeurs par défaut de Codex. Cela ne fait que rétrograder, jamais élever, et ne contourne jamais la politique gérée. Le mode réellement utilisé s’affiche dans le chat.",
+	"settings.project.permissionFallbackDescription": "Si Codex refuse le mode choisi (par exemple parce qu’une politique gérée interdit l’accès complet), nouvelle tentative avec le mode suivant, moins permissif : accès complet, puis approuver pour moi, puis demander l’approbation. Cela ne fait que rétrograder, jamais élever, ne retombe jamais sur les valeurs par défaut de Codex et ne contourne jamais la politique gérée. Le mode réellement utilisé s’affiche dans le chat.",
 	"settings.project.permissionFallbackSwitch": "Rétrograder en cas de refus ({{role}})",
 	"settings.project.permissionMode": "Mode de permission",
 	"settings.project.refresh": "Actualiser",

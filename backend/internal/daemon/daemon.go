@@ -482,16 +482,15 @@ func Run() error {
 			}
 		},
 		// Record the mode a session really runs with after the permission
-		// fallback lowered it, so session reads and a later restore agree.
-		OnPermissionsChanged: func(sessionID domain.SessionID, permissions domain.PermissionMode) {
+		// fallback lowered it, so session reads and a later restore agree. The
+		// Session Manager is built after the Chat service, so it is read when the
+		// hook fires.
+		OnPermissionsChanged: chatPermissionsRecorder(ctx, func() chatPermissionsPersister {
 			if sessMgr == nil {
-				return
+				return nil
 			}
-			if err := sessMgr.PersistChatPermissions(ctx, sessionID, permissions); err != nil {
-				log.Warn("persist the permission fallback on the session failed; the session may read back a mode it is not running with",
-					"sessionID", sessionID, "permissions", permissions, "error", err)
-			}
-		},
+			return sessMgr
+		}, log),
 	})
 
 	codexModelDriver := codexappserver.New(codexagent.New(), log)

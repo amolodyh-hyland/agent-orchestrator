@@ -1321,7 +1321,7 @@
 	"settings.project.permissionCodexBypass": "Full access (bypass)",
 	"settings.project.permissionCodexBypassHelp": "No sandbox and no approvals. A managed policy can reject this; the fallback below can step down.",
 	"settings.project.permissionFallbackToggle": "Step down if rejected",
-	"settings.project.permissionFallbackDescription": "If Codex rejects the chosen mode (for example, a managed policy forbids full access), retry with the next less permissive mode: full access, approve for me, ask for approval, then Codex defaults. It only steps down, never up, and never bypasses managed policy. The mode actually used is shown in the chat.",
+	"settings.project.permissionFallbackDescription": "If Codex rejects the chosen mode (for example, a managed policy forbids full access), retry with the next less permissive mode: full access, then approve for me, then ask for approval. It only steps down, never up, never falls back to Codex defaults, and never bypasses managed policy. The mode actually used is shown in the chat.",
 	"settings.project.permissionFallbackSwitch": "Step down if rejected ({{role}})",
 	"settings.project.permissionMode": "Permission mode",
 	"settings.project.refresh": "Refresh",

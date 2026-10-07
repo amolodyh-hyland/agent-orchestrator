@@ -1188,7 +1188,7 @@
 	"settings.project.permissionCodexBypass": "Vollzugriff (umgehen)",
 	"settings.project.permissionCodexBypassHelp": "Keine Sandbox und keine Genehmigungen. Eine verwaltete Richtlinie kann das ablehnen; der Rückfall unten kann herabstufen.",
 	"settings.project.permissionFallbackToggle": "Bei Ablehnung herabstufen",
-	"settings.project.permissionFallbackDescription": "Lehnt Codex den gewählten Modus ab (z. B. weil eine verwaltete Richtlinie Vollzugriff verbietet), wird mit dem nächst weniger freizügigen Modus erneut versucht: Vollzugriff, für mich genehmigen, um Genehmigung bitten, dann Codex-Standard. Es wird nur herab-, nie heraufgestuft, und verwaltete Richtlinien werden nie umgangen. Der tatsächlich verwendete Modus wird im Chat angezeigt.",
+	"settings.project.permissionFallbackDescription": "Lehnt Codex den gewählten Modus ab (z. B. weil eine verwaltete Richtlinie Vollzugriff verbietet), wird mit dem nächst weniger freizügigen Modus erneut versucht: Vollzugriff, dann für mich genehmigen, dann um Genehmigung bitten. Es wird nur herab-, nie heraufgestuft, nie auf die Codex-Standardwerte zurückgefallen, und verwaltete Richtlinien werden nie umgangen. Der tatsächlich verwendete Modus wird im Chat angezeigt.",
 	"settings.project.permissionFallbackSwitch": "Bei Ablehnung herabstufen ({{role}})",
 	"settings.project.permissionMode": "Berechtigungsmodus",
 	"settings.project.refresh": "Aktualisieren",

@@ -58,26 +58,30 @@ func (e *PermissionFallbackExhaustedError) Is(target error) bool {
 	return target == ErrPermissionRejected
 }
 
-// permissionLadder orders AO's permission modes from most to least permissive.
+// permissionLadder orders the permission modes a refused launch steps down
+// through, from most to least permissive.
 //
 // bypass-permissions asks for no approvals and no sandbox. auto approves routine
-// actions through an automatic reviewer, accept-edits leaves approvals with the
-// user, and default asks the provider for nothing, deferring to its own
-// configuration and any managed requirements over it. A provider's own
-// configuration can in theory be more permissive than auto on a given machine,
-// but it is the one posture that never contradicts a managed requirement, so it
-// is the last rung rather than a candidate for escalation.
+// actions through an automatic reviewer, and accept-edits leaves those approvals
+// with the user inside the same sandbox.
+//
+// default is deliberately not a rung. It asks the provider for nothing, so its
+// posture is whatever the provider's own configuration says, and on a given
+// machine that can be more permissive than the mode that was just refused (a
+// user-level sandbox_mode of danger-full-access, with a managed requirement that
+// only constrains approvals). A fallback that could widen the posture would
+// contradict "strictly downward", so the ladder ends at accept-edits and a user
+// who wants the provider's defaults chooses default explicitly.
 var permissionLadder = []PermissionMode{
 	PermissionModeBypassPermissions,
 	PermissionModeAuto,
 	PermissionModeAcceptEdits,
-	PermissionModeDefault,
 }
 
 // PermissionFallbackModes returns the modes strictly less permissive than
 // requested, in the order a refused launch steps down through them. It never
 // returns the requested mode or a more permissive one, so a fallback cannot
-// escalate. An unknown or default mode has nothing below it.
+// escalate. Accept-edits, default and unknown modes have nothing below them.
 func PermissionFallbackModes(requested PermissionMode) []PermissionMode {
 	for i, mode := range permissionLadder {
 		if mode == requested {

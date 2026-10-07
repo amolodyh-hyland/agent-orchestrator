@@ -184,7 +184,7 @@ func TestBuildRestoreCommands(t *testing.T) {
 				"-c", "check_for_update_on_startup=false",
 				"-c", "notice.hide_rate_limit_model_nudge=true",
 				"--dangerously-bypass-hook-trust",
-				"--ask-for-approval", "on-request",
+				"--ask-for-approval", "on-request", "--sandbox", "workspace-write",
 				"thread-1",
 			},
 		},
@@ -318,7 +318,7 @@ func TestCodexPermissionArgs(t *testing.T) {
 		want   []string
 	}{
 		{PermissionAgentDefault, nil},
-		{PermissionAcceptEdits, []string{"--ask-for-approval", "on-request"}},
+		{PermissionAcceptEdits, []string{"--ask-for-approval", "on-request", "--sandbox", "workspace-write"}},
 		{PermissionAuto, []string{"--ask-for-approval", "on-request", "--sandbox", "workspace-write", "-c", `approvals_reviewer="auto_review"`}},
 		{PermissionBypassPermissions, []string{"--dangerously-bypass-approvals-and-sandbox"}},
 		{PermissionDefault, []string{"--dangerously-bypass-approvals-and-sandbox"}},

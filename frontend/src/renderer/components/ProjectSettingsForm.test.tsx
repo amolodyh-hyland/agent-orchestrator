@@ -611,7 +611,7 @@ describe("ProjectSettingsForm", () => {
 		expect(screen.queryByRole("switch", { name: "Step down if rejected (Orchestrator approval)" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("switch", { name: /Reviewer approval/ })).not.toBeInTheDocument();
 		// The helper text states the safety rules.
-		expect(screen.getByRole("button", { name: /only steps down, never up, and never bypasses managed policy/ })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /only steps down, never up.*never bypasses managed policy/ })).toBeInTheDocument();
 
 		// Saving without touching it never writes the default.
 		submitSettings();

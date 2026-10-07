@@ -1188,7 +1188,7 @@
 	"settings.project.permissionCodexBypass": "전체 액세스(우회)",
 	"settings.project.permissionCodexBypassHelp": "샌드박스도 승인도 없습니다. 관리형 정책이 거부할 수 있으며, 아래 폴백으로 한 단계씩 낮출 수 있습니다.",
 	"settings.project.permissionFallbackToggle": "거부되면 단계적으로 낮추기",
-	"settings.project.permissionFallbackDescription": "선택한 모드를 Codex가 거부하면(예: 관리형 정책이 전체 액세스를 금지) 다음으로 덜 허용적인 모드(전체 액세스, 대신 승인, 승인 요청, Codex 기본값 순)로 다시 시도합니다. 낮추기만 하고 올리지 않으며 관리형 정책을 우회하지 않습니다. 실제로 사용된 모드는 채팅에 표시됩니다.",
+	"settings.project.permissionFallbackDescription": "선택한 모드를 Codex가 거부하면(예: 관리형 정책이 전체 액세스를 금지) 다음으로 덜 허용적인 모드로 다시 시도합니다(전체 액세스, 그다음 대신 승인, 그다음 승인 요청). 낮추기만 하고 올리지 않으며, Codex 기본값으로 되돌아가지 않고 관리형 정책도 우회하지 않습니다. 실제로 사용된 모드는 채팅에 표시됩니다.",
 	"settings.project.permissionFallbackSwitch": "거부되면 단계적으로 낮추기({{role}})",
 	"settings.project.permissionMode": "권한 모드",
 	"settings.project.refresh": "새로고침",

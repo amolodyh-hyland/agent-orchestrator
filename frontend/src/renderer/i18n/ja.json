@@ -1188,7 +1188,7 @@
 	"settings.project.permissionCodexBypass": "フルアクセス（バイパス）",
 	"settings.project.permissionCodexBypassHelp": "サンドボックスも承認もありません。管理ポリシーが拒否することがあり、その場合は下のフォールバックで段階的に下げられます。",
 	"settings.project.permissionFallbackToggle": "拒否されたら段階的に下げる",
-	"settings.project.permissionFallbackDescription": "選択したモードを Codex が拒否した場合（例: 管理ポリシーがフルアクセスを禁止）、次に制限の厳しいモード（フルアクセス、自動で承認、承認を求める、Codex の既定の順）で再試行します。下げるだけで上げることはなく、管理ポリシーを回避することもありません。実際に使われたモードはチャットに表示されます。",
+	"settings.project.permissionFallbackDescription": "選択したモードを Codex が拒否した場合（例: 管理ポリシーがフルアクセスを禁止）、次に制限の厳しいモードで再試行します（フルアクセス、次に自動で承認、次に承認を求める）。下げるだけで上げることはなく、Codex の既定にフォールバックすることも、管理ポリシーを回避することもありません。実際に使われたモードはチャットに表示されます。",
 	"settings.project.permissionFallbackSwitch": "拒否されたら段階的に下げる（{{role}}）",
 	"settings.project.permissionMode": "権限モード",
 	"settings.project.refresh": "更新",
