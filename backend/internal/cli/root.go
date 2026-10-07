@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon"
+	"github.com/aoagents/agent-orchestrator/backend/internal/multicahost"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
@@ -44,11 +45,15 @@ type usageError struct{ err error }
 func (e usageError) Error() string { return e.err.Error() }
 func (e usageError) Unwrap() error { return e.err }
 
-// ExitCode maps a CLI error to a process exit code: 2 for usage errors, 1 for
-// any other failure, 0 for success.
+// ExitCode maps CLI errors to process exit codes: 2 for usage errors, 78 for
+// Multica configuration refusals, 1 for other failures, and 0 for success.
 func ExitCode(err error) int {
 	if err == nil {
 		return 0
+	}
+	var configErr *multicahost.ErrConfiguration
+	if errors.As(err, &configErr) {
+		return multicahost.ExitConfig
 	}
 	var ue usageError
 	if errors.As(err, &ue) {
@@ -214,6 +219,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newHooksCommand(ctx))
 	root.AddCommand(newAgentProcessCommand(ctx))
 	root.AddCommand(newChatHostCommand())
+	root.AddCommand(newMulticaHostCommand())
 	root.AddCommand(newUnrealProviderCommand())
 	root.AddCommand(newLaunchCommand(ctx))
 	root.AddCommand(newPtyHostCommand())
@@ -222,6 +228,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newImportCommand(ctx))
 	root.AddCommand(newDevCommand(ctx))
 	root.AddCommand(newProjectCommand(ctx))
+	root.AddCommand(newMulticaCommand(ctx))
 	root.AddCommand(newSessionCommand(ctx))
 	root.AddCommand(newOrchestratorCommand(ctx))
 	root.AddCommand(newPRCommand(ctx))
