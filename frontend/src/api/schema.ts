@@ -3781,6 +3781,7 @@ export interface components {
             displayName?: string;
             /** @enum {string} */
             displayStatus: "Working" | "Blocked" | "Exited" | "No signal" | "Awaiting PR" | "Fixing CI failures" | "Addressing comments" | "Needs review" | "Review scheduled" | "Reviewing" | "Review failed" | "Review pending" | "Draft" | "CI failing" | "Commented" | "Changes requested" | "Needs human review" | "Mergeable" | "Approved" | "Merged" | "Closed without merge" | "Terminated";
+            effort?: string;
             harness?: string;
             /** Format: date-time */
             hibernatedAt?: null | string;

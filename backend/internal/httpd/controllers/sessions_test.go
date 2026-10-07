@@ -2102,6 +2102,69 @@ func TestSessionsAPI_SpawnPassesEffortToService(t *testing.T) {
 	}
 }
 
+func TestSessionsAPI_SessionViewIncludesResolvedEffort(t *testing.T) {
+	svc := newFakeSessionService()
+	withEffort := svc.sessions["ao-1"]
+	withEffort.Metadata.Model = "gpt-6-luna"
+	withEffort.Metadata.Effort = "xhigh"
+	svc.sessions["ao-1"] = withEffort
+	withoutEffort := withEffort
+	withoutEffort.ID = "ao-2"
+	withoutEffort.Metadata.Effort = ""
+	svc.sessions["ao-2"] = withoutEffort
+	srv := newSessionTestServer(t, svc)
+
+	assertSessionEffort := func(session map[string]any, wantEffort bool) {
+		t.Helper()
+		if got, ok := session["model"].(string); !ok || got != "gpt-6-luna" {
+			t.Fatalf("session model = %v, want gpt-6-luna", session["model"])
+		}
+		got, ok := session["effort"].(string)
+		if wantEffort && (!ok || got != "xhigh") {
+			t.Fatalf("session effort = %v, want xhigh", session["effort"])
+		}
+		if !wantEffort {
+			if _, present := session["effort"]; present {
+				t.Fatalf("session effort = %v, want omitted", session["effort"])
+			}
+		}
+	}
+
+	for _, tc := range []struct {
+		id         string
+		wantEffort bool
+	}{
+		{id: "ao-1", wantEffort: true},
+		{id: "ao-2"},
+	} {
+		body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/"+tc.id, "")
+		if status != http.StatusOK {
+			t.Fatalf("GET session %s = %d, want 200; body=%s", tc.id, status, body)
+		}
+		var response struct {
+			Session map[string]any `json:"session"`
+		}
+		mustJSON(t, body, &response)
+		assertSessionEffort(response.Session, tc.wantEffort)
+	}
+
+	body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions?project=ao", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET sessions = %d, want 200; body=%s", status, body)
+	}
+	var response struct {
+		Sessions []map[string]any `json:"sessions"`
+	}
+	mustJSON(t, body, &response)
+	if len(response.Sessions) != 2 {
+		t.Fatalf("listed sessions = %d, want 2", len(response.Sessions))
+	}
+	for _, session := range response.Sessions {
+		id, _ := session["id"].(string)
+		assertSessionEffort(session, id == "ao-1")
+	}
+}
+
 func TestSessionsAPI_SpawnPassesParentSessionToService(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)

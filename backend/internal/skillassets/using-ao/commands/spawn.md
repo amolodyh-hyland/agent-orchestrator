@@ -15,6 +15,7 @@ ao spawn [flags]
 |---|---|---|
 | `--branch string` | Branch for the session worktree | `ao/<session-id>/root` |
 | `--claim-pr string` | Immediately claim an existing PR for the spawned session | - |
+| `--effort string` | Per-session reasoning effort override; supported values depend on harness and model | - |
 | `--kind string` | Session role: `worker` or `orchestrator` | `worker` |
 | `--harness string` | Agent harness to use (see list below) | Project `worker.agent`; required if the project has none |
 | `--issue string` | Issue id to associate with the session | - |
@@ -30,7 +31,31 @@ ao spawn [flags]
 
 `--agent` is an alias for `--harness`.
 
-Available harnesses: `claude-code`, `codex`, `aider`, `opencode`, `opencode-v2`, `grok`, `droid`, `amp`, `agy`, `crush`, `cursor`, `qwen`, `gemini`, `copilot`, `goose`, `auggie`, `continue`, `devin`, `cline`, `kimi`, `muse`, `kiro`, `kilocode`, `vibe`, `pi`, `kimchi`, `prime-agent`, `autohand`, `omp`, `fx`, `unreal-agent`, `mimo-code`, `deepseek-harness`, `openhands`. Check `ao agent ls --refresh` for readiness on the installed build. `unreal-agent` is Chat-only; Gemini, MiMo Code, and OpenHands are Terminal UI-only.
+`--model` and `--effort` override project/role config for this session only and do not change it.
+Claude Code and Codex use the model's supported effort list (for example, Codex
+`gpt-6-luna` lists `low`, `medium`, `high`, `xhigh`, and `max`; Sol models also
+list `ultra`); Copilot supports `low`, `medium`, `high`, `xhigh`, and `max`;
+Command Code has no per-model effort catalog, so AO forwards the level as given
+and `cmd --effort` rejects an unknown value at launch.
+Effort is passed at launch as Claude Code `--effort <level>`, Codex
+`-c model_reasoning_effort=<level>`, Command Code `--effort <level>`, or Copilot
+`--reasoning-effort <level>`.
+When a Claude Code spawn has an explicit `--model` or `--effort`, or a Codex
+spawn has an explicit `--effort`, validation uses the provider model catalog;
+if it cannot be refreshed, spawn fails with `MODEL_CAPABILITIES_UNAVAILABLE`.
+Explicit effort for a harness that cannot apply it fails with HTTP 400 / CLI
+exit 1 (`UNSUPPORTED_EFFORT`); the error names the harness and lists supported
+harnesses (`claude-code`, `codex`, `command-code`, `copilot`). An unsupported level also fails
+with `UNSUPPORTED_EFFORT`; the error names the model, or the harness for
+Copilot, and lists supported levels. Inherited effort is dropped for any
+harness that cannot apply it. Empty `--effort ""` is a
+usage error (exit 2).
+`ao session get` shows resolved `model` and `effort` values in its table and
+JSON output. When a session has no resolved model or effort, the `model:` and
+`effort:` table rows and the `model` and `effort` JSON properties are omitted;
+their absence means the agent's default.
+
+Available harnesses: `claude-code`, `codex`, `aider`, `opencode`, `opencode-v2`, `grok`, `droid`, `amp`, `agy`, `crush`, `cursor`, `qwen`, `gemini`, `copilot`, `goose`, `auggie`, `continue`, `devin`, `cline`, `kimi`, `muse`, `kiro`, `kilocode`, `vibe`, `pi`, `kimchi`, `prime-agent`, `autohand`, `omp`, `fx`, `unreal-agent`, `mimo-code`, `deepseek-harness`, `openhands`, `command-code`. Check `ao agent ls --refresh` for readiness on the installed build. `unreal-agent` is Chat-only; Gemini, MiMo Code, and OpenHands are Terminal UI-only.
 
 `fx` is experimental and Terminal UI only: spawn it with `--agent fx --mode tui`.
 
@@ -56,4 +81,8 @@ ao spawn --project agent-orchestrator --kind orchestrator --name "coordinate-fix
 # Associate a GitLab issue with a worker
 ao spawn --project my-gitlab-app --issue 42 --tracker-provider gitlab \
   --name "fix-issue-42" --prompt "Fix GitLab issue 42."
+```
+
+```bash
+ao spawn --name "fix flaky test" --harness codex --model gpt-6-luna --effort xhigh --prompt "..."
 ```

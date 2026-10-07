@@ -121,6 +121,8 @@ Important flags include:
 | `--agent`, `--harness <name>` | Override the project's agent. The two names are aliases. |
 | `--kind worker\|orchestrator` | Select the session role. |
 | `--mode chat\|tui` | Select structured Chat or the agent's native terminal UI. |
+| `--model <id>` | Override the model for this session without changing project/role config. |
+| `--effort <level>` | Override reasoning effort for this session; supported levels depend on the harness and model. |
 | `--branch <name>` | Branch for Git projects. Scratch projects do not support it. |
 | `--prompt <text>` | Initial prompt. |
 | `--standalone` | Projectless worker; requires an explicit agent and excludes project, branch, issue, PR, and orchestrator options. |

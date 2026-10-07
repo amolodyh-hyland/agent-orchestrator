@@ -1060,3 +1060,113 @@ func TestSpawnModelFlagWiring(t *testing.T) {
 		t.Fatalf("spawn request model = %q, want gpt-5.6-sol", req.Model)
 	}
 }
+
+func TestSpawnEffortFlagWiring(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var req spawnRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
+			_, _ = io.WriteString(w, authorizedAgentsJSON("codex"))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatal(err)
+			}
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-21","status":"idle"}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "codex", "--name", "worker", "--model", "gpt-6-luna", "--effort", " xhigh ")
+	if err != nil {
+		t.Fatalf("spawn failed: %v stderr=%s", err, errOut)
+	}
+	if req.Model != "gpt-6-luna" || req.Effort != "xhigh" {
+		t.Fatalf("spawn request model=%q effort=%q, want model gpt-6-luna and effort xhigh", req.Model, req.Effort)
+	}
+}
+
+func TestSpawnEffortFlagOmittedLeavesRequestEffortEmpty(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var req spawnRequest
+	var rawRequest map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
+			_, _ = io.WriteString(w, authorizedAgentsJSON("codex"))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(body, &req); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(body, &rawRequest); err != nil {
+				t.Fatal(err)
+			}
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-22","status":"idle"}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "codex", "--name", "worker")
+	if err != nil {
+		t.Fatalf("spawn failed: %v stderr=%s", err, errOut)
+	}
+	if req.Effort != "" {
+		t.Fatalf("spawn request effort = %q, want empty", req.Effort)
+	}
+	if _, ok := rawRequest["effort"]; ok {
+		t.Fatalf("spawn request unexpectedly includes effort: %#v", rawRequest)
+	}
+}
+
+func TestSpawnCommand_RejectsEmptyEffort(t *testing.T) {
+	_, _, err := executeCLI(t, Deps{}, "spawn", "--project", "demo", "--agent", "codex", "--name", "worker", "--effort", "  ")
+	if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), "--effort must not be empty") {
+		t.Fatalf("err=%v exit=%d, want --effort must not be empty", err, ExitCode(err))
+	}
+}
+
+func TestSpawnEffortDaemonRejectionPreservesErrorEnvelope(t *testing.T) {
+	cfg := setConfigEnv(t)
+	const message = `harness "gemini" cannot apply an effort override (supported harnesses: claude-code, codex, command-code, copilot)`
+	var requests []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		appendPrimaryRequest(&requests, r)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":"bad_request","message":"harness \"gemini\" cannot apply an effort override (supported harnesses: claude-code, codex, command-code, copilot)","code":"UNSUPPORTED_EFFORT","requestId":"req-effort"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "gemini", "--skip-agent-check", "--name", "worker", "--effort", "high")
+	if err == nil || ExitCode(err) != 1 || !strings.Contains(err.Error(), message) || !strings.Contains(err.Error(), "UNSUPPORTED_EFFORT") {
+		t.Fatalf("err=%v exit=%d, want preserved UNSUPPORTED_EFFORT error", err, ExitCode(err))
+	}
+	want := []string{"GET /api/v1/projects/demo", "POST /api/v1/sessions"}
+	if !reflect.DeepEqual(requests, want) {
+		t.Fatalf("requests=%#v want %#v", requests, want)
+	}
+}
