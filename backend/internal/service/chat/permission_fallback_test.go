@@ -674,3 +674,59 @@ func TestStepDownIsPersistedOnTheSessionRow(t *testing.T) {
 		})
 	}
 }
+
+// Every review conversation is launched read-only, so a refusal of its launch is
+// never retried down the ladder and never reported as a session's mode change.
+func TestReviewConversationLaunchNeverStepsDown(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if err := st.UpsertReview(ctx, domain.Review{
+		ID: "review-1", SessionID: testSession, ProjectID: testProject,
+		Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpsertReview: %v", err)
+	}
+	recorder := &launchRecorder{reject: reject(bypass, autoMode, acceptEdit)}
+	conv := newFakeConversation()
+	var reported []domain.PermissionMode
+	svc := chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st,
+		Drivers: fakeRegistry{driver: fakeDriver{conv: conv, start: func(cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+			return recorder.start(cfg, conv)
+		}}},
+		Log:                  slog.New(slog.DiscardHandler),
+		NewID:                func() string { return "review-conversation" },
+		OnPermissionsChanged: func(_ domain.SessionID, mode domain.PermissionMode) { reported = append(reported, mode) },
+	})
+
+	_, err := svc.Start(ctx, chatsvc.StartConfig{
+		Owner: domain.ReviewConversationOwner("review-1"), SessionID: testSession, ProjectID: testProject,
+		Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(), Permissions: bypass,
+	})
+	if !errors.Is(err, ports.ErrPermissionRejected) {
+		t.Fatalf("Start error = %v, want the rejection reported as is", err)
+	}
+	if got, want := recorder.modes(), []ports.PermissionMode{bypass}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("launch modes tried = %v, want only %v for a review conversation", got, want)
+	}
+	if len(reported) != 0 {
+		t.Fatalf("a review conversation reported session permissions %v", reported)
+	}
+}
+
+// Nothing configures the fallback in a plain StartConfig, and it still works: the
+// default is on. (The zero value of the disable switch is what makes that so, so the
+// behavior is the test, not the field.)
+func TestFallbackRunsWhenNothingConfiguresIt(t *testing.T) {
+	f := newFallbackFixture(t, fallbackOptions{permissions: bypass, reject: reject(bypass)})
+	if f.startErr != nil {
+		t.Fatalf("Start: %v", f.startErr)
+	}
+	if _, err := f.send("first"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if got, want := f.conv.attemptedModes(), []ports.PermissionMode{bypass, autoMode}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("modes tried = %v, want a step-down with the fallback left at its default", got)
+	}
+}

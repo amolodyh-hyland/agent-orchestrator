@@ -113,3 +113,28 @@ func (noopSettingsStore) UpsertActivity(context.Context, string, string, domain.
 func (noopSettingsStore) SetConversationSettings(context.Context, string, domain.ConversationSettings, time.Time) error {
 	return nil
 }
+
+// A review controller never steps a turn down, even if its provider answered with a
+// permission rejection: its sandbox is forced, so a lower mode changes nothing.
+func TestReviewControllerTurnNeverStepsDown(t *testing.T) {
+	provider := &fakeSender{refuse: map[ports.PermissionMode]bool{ports.PermissionModeBypassPermissions: true}}
+	var reported []ports.PermissionMode
+	controller := newController("s", domain.ReviewConversationOwner("review-1"), domain.ConversationRecord{}, "gen-1",
+		domain.HarnessCodex, provider, nil, nil, slog.New(slog.DiscardHandler),
+		func() string { return "id" }, func() time.Time { return time.Unix(0, 0) }, nil, nil)
+	controller.onPermissionsChanged = func(_ domain.SessionID, mode domain.PermissionMode) { reported = append(reported, mode) }
+
+	_, err := controller.sendTurn(context.Background(), ports.ChatUserMessage{
+		Text: "go", Settings: ports.ChatTurnSettings{Approval: ports.PermissionModeBypassPermissions},
+	})
+
+	if !errors.Is(err, ports.ErrPermissionRejected) {
+		t.Fatalf("sendTurn error = %v, want the rejection reported as is", err)
+	}
+	if want := []ports.PermissionMode{ports.PermissionModeBypassPermissions}; !reflect.DeepEqual(provider.modes, want) {
+		t.Fatalf("modes tried = %v, want only %v for a review controller", provider.modes, want)
+	}
+	if len(reported) != 0 {
+		t.Fatalf("a review controller reported session permissions %v", reported)
+	}
+}
