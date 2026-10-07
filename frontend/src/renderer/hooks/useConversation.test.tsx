@@ -903,6 +903,31 @@ describe("conversation branching commands", () => {
 		});
 	});
 
+	it("returns a typed non-acceptance when the provider refused the permission mode for an edit", async () => {
+		apiErrorCodeMock.mockReturnValue("CHAT_PERMISSION_REJECTED");
+		apiErrorMessageMock.mockReturnValue('permission mode "bypass-permissions" rejected: not in the allowed set');
+		postMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_PERMISSION_REJECTED" } });
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+
+		await expect(
+			result.current.editMessage("turn-2", "keep this edit", "edit-permission-1"),
+		).resolves.toEqual({
+			status: "not-accepted",
+			reason: 'permission mode "bypass-permissions" rejected: not in the allowed set',
+		});
+	});
+
+	it("returns a typed non-acceptance when the provider refused the permission mode for a steer", async () => {
+		apiErrorCodeMock.mockReturnValue("CHAT_PERMISSION_REJECTED");
+		apiErrorMessageMock.mockReturnValue("permission mode rejected");
+		postMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_PERMISSION_REJECTED" } });
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+
+		await expect(
+			result.current.steer("guidance", undefined, "steer-permission-1"),
+		).resolves.toMatchObject({ status: "not-accepted" });
+	});
+
 	it("keeps an uncertain inline edit rejected for same-id recovery", async () => {
 		apiErrorCodeMock.mockReturnValue("CHAT_EDIT_UNCERTAIN");
 		const failure = { code: "CHAT_EDIT_UNCERTAIN" };

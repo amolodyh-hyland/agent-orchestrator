@@ -59,6 +59,7 @@ type sessionDTO struct {
 	Status       string          `json:"status"`
 	Branch       string          `json:"branch,omitempty"`
 	BranchState  *branchStateDTO `json:"branchState,omitempty"`
+	Permissions  string          `json:"permissions,omitempty"`
 	PRs          []sessionPRDTO  `json:"prs"`
 }
 
@@ -1012,6 +1013,7 @@ func writeSessionDetails(cmd *cobra.Command, sess sessionDTO) error {
 		{"harness", sess.Harness},
 		{"model", sess.Model},
 		{"effort", sess.Effort},
+		{"permissions", sess.Permissions},
 		{"issue", sess.IssueID},
 		{"branch", formatBranchState(sess)},
 		{"terminated", fmt.Sprintf("%t", sess.IsTerminated)},

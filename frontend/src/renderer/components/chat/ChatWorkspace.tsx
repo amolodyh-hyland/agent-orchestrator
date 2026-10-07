@@ -1256,6 +1256,7 @@ function ChatWorkspaceContent({
 					harness={snapshot.harness}
 					showApprovalMode={showApprovalMode ?? !session?.cloud}
 					approvalModes={approvalModes}
+					cloudSession={Boolean(session?.cloud)}
 					reroute={stableModelReroute}
 					onChange={newWorkDisabled ? undefined : onChooseSettings}
 					configOptions={configOptions ?? []}

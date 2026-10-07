@@ -582,6 +582,7 @@ func newEditHarnessWithOptions(
 	wrapStore func(*store.Store) chatsvc.Store,
 	wrapReader func(chatsvc.SnapshotReader) chatsvc.SnapshotReader,
 	prepare func(context.Context, domain.SessionControllerOwner) (map[string]string, error),
+	startTweaks ...func(*chatsvc.StartConfig),
 ) (*harness, *historyRecorder, *editDriverState) {
 	t.Helper()
 	st := openStore(t)
@@ -693,12 +694,16 @@ func newEditHarnessWithOptions(
 		Now: func() time.Time { return clock },
 	})
 	workspace := t.TempDir()
-	ctrl, err := svc.Start(context.Background(), chatsvc.StartConfig{
+	startCfg := chatsvc.StartConfig{
 		SessionID: testSession, ProjectID: testProject, Kind: domain.KindWorker,
 		Harness: domain.HarnessCodex, WorkspacePath: workspace,
 		Env:          map[string]string{"AO_EDIT_TEST": "yes", "AO_BROWSER_CAPABILITY": "stale"},
 		SystemPrompt: "preserved prompt", PrepareControllerEnv: prepare,
-	})
+	}
+	for _, tweak := range startTweaks {
+		tweak(&startCfg)
+	}
+	ctrl, err := svc.Start(context.Background(), startCfg)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}

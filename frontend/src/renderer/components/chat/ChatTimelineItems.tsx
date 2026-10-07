@@ -1012,6 +1012,7 @@ export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 	else if (activity.activityKind === "error") content = <ErrorActivityRow activity={activity} />;
 	else if (activity.detail?.event === "model.rerouted") content = <RerouteRow activity={activity} />;
 	else if (activity.detail?.event === "auth.reauth_required") content = <ReauthRow activity={activity} />;
+	else if (activity.detail?.event === "permission.fallback") content = <PermissionFallbackRow activity={activity} />;
 	else content = <GenericActivityRow activity={activity} />;
 
 	if (!toolActivity) return content;
@@ -2114,6 +2115,39 @@ function RerouteRow({ activity }: { activity: ConversationActivity }) {
 				{detail?.reason ? (
 					<span className="text-xs leading-snug text-muted-foreground">{detail.reason}</span>
 				) : null}
+			</div>
+		</div>
+	);
+}
+
+/**
+ * The provider refused the requested permission mode, so the session runs with a
+ * less permissive one. Never silent: it says what was asked for, what is in
+ * effect, and the provider's reason for each refusal. The fallback only steps
+ * down, so this row is the one place a lowered mode is explained.
+ */
+function PermissionFallbackRow({ activity }: { activity: ConversationActivity }) {
+	const detail = activity.detail;
+	const rejected = detail?.rejected ?? [];
+	return (
+		<div className="flex items-start gap-2.5 rounded-md border border-border bg-surface/60 px-3 py-2">
+			<ShieldX aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+			<div className="flex min-w-0 flex-col gap-0.5">
+				<span className="text-[11px] text-foreground">
+					Permission mode lowered to{" "}
+					<strong className="font-medium">{detail?.effective ?? "a less permissive mode"}</strong>
+					{detail?.requested ? (
+						<>
+							{" "}
+							from <span className="text-muted-foreground">{detail.requested}</span>
+						</>
+					) : null}
+				</span>
+				{rejected.map((rejection) => (
+					<span className="text-[10.5px] leading-snug text-muted-foreground break-words" key={rejection.mode}>
+						<span className="font-medium">{rejection.mode}</span>: {rejection.reason}
+					</span>
+				))}
 			</div>
 		</div>
 	);

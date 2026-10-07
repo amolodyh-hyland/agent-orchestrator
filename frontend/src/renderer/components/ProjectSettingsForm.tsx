@@ -155,6 +155,8 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 		orchestratorModel: config.orchestrator?.agentConfig?.model ?? config.agentConfig?.model ?? "",
 		orchestratorEffort: config.orchestrator?.agentConfig?.effort ?? config.agentConfig?.effort ?? "",
 		orchestratorPermissions: config.orchestrator?.agentConfig?.permissions ?? config.agentConfig?.permissions ?? "",
+		workerPermissionFallback: config.worker?.agentConfig?.permissionFallback ?? config.agentConfig?.permissionFallback ?? true,
+		orchestratorPermissionFallback: config.orchestrator?.agentConfig?.permissionFallback ?? config.agentConfig?.permissionFallback ?? true,
 		workerMode: config.worker?.agentConfig?.mode ?? config.agentConfig?.mode ?? "",
 		orchestratorMode: config.orchestrator?.agentConfig?.mode ?? config.agentConfig?.mode ?? "",
 		reviewerHarness: config.reviewers?.[0]?.harness ?? "",
@@ -179,7 +181,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 			project_id: projectId,
 		});
 		const displayName = values.displayName.trim();
-		const { model: _legacyModel, mode: _legacyMode, effort: _legacyEffort, permissions: _legacyPermissions, ...sharedAgentConfig } = config.agentConfig ?? {};
+		const { model: _legacyModel, mode: _legacyMode, effort: _legacyEffort, permissions: _legacyPermissions, permissionFallback: _legacyPermissionFallback, ...sharedAgentConfig } = config.agentConfig ?? {};
 		const existingReviewer = config.reviewers?.[0];
 		const existingReviewerAgentConfig = existingReviewer?.harness === values.reviewerHarness ? existingReviewer.agentConfig : undefined;
 		const next: ProjectConfig = isScratchProject
@@ -188,7 +190,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 					worker: {
 						...config.worker,
 						agent: values.workerAgent,
-						agentConfig: buildRoleAgentConfig(config.worker?.agentConfig, values.workerModel, values.workerMode, values.workerEffort, values.workerPermissions),
+						agentConfig: buildRoleAgentConfig(config.worker?.agentConfig, values.workerModel, values.workerMode, values.workerEffort, values.workerPermissions, values.workerPermissionFallback),
 					},
 					orchestrator: {
 						...config.orchestrator,
@@ -199,6 +201,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 							values.orchestratorMode,
 							values.orchestratorEffort,
 							values.orchestratorPermissions,
+							values.orchestratorPermissionFallback,
 						),
 					},
 					agentConfig: blankToUndefined({
@@ -213,7 +216,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 					worker: {
 						...config.worker,
 						agent: values.workerAgent,
-						agentConfig: buildRoleAgentConfig(config.worker?.agentConfig, values.workerModel, values.workerMode, values.workerEffort, values.workerPermissions),
+						agentConfig: buildRoleAgentConfig(config.worker?.agentConfig, values.workerModel, values.workerMode, values.workerEffort, values.workerPermissions, values.workerPermissionFallback),
 					},
 					orchestrator: {
 						...config.orchestrator,
@@ -224,6 +227,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 							values.orchestratorMode,
 							values.orchestratorEffort,
 							values.orchestratorPermissions,
+							values.orchestratorPermissionFallback,
 						),
 					},
 					agentConfig: blankToUndefined({
@@ -382,6 +386,7 @@ function buildRoleAgentConfig(
 	mode: string,
 	effort: string,
 	permissions: string,
+	permissionFallback?: boolean,
 ): components["schemas"]["AgentConfig"] | undefined {
 	const next = { ...existing };
 	if (model) next.model = model;
@@ -392,5 +397,8 @@ function buildRoleAgentConfig(
 	else delete next.effort;
 	if (permissions) next.permissions = permissions as components["schemas"]["AgentConfig"]["permissions"];
 	else delete next.permissions;
+	// On is the default and is never written; only an explicit "off" is stored.
+	if (permissionFallback === false) next.permissionFallback = false;
+	else if (permissionFallback === true) delete next.permissionFallback;
 	return Object.keys(next).length > 0 ? next : undefined;
 }

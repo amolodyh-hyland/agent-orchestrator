@@ -408,10 +408,19 @@ export interface SystemEventDetail {
 		| "steer"
 		| "plan"
 		| "context.reset"
-		| "context.boundary";
+		| "context.boundary"
+		| "permission.fallback";
 	/** model.rerouted */
 	fromModel?: string;
 	toModel?: string;
+	/**
+	 * permission.fallback: the provider refused the requested permission mode, so
+	 * the session runs with a less permissive one. `rejected` lists each refused
+	 * mode with the provider's own reason, most permissive first.
+	 */
+	requested?: string;
+	effective?: string;
+	rejected?: Array<{ mode: string; reason: string }>;
 	/** provider.failure */
 	category?: string;
 	severity?: "warning" | "error" | (string & {});

@@ -35,6 +35,17 @@ type AgentConfig struct {
 	// project/role preference; new sessions fall back to Auto when none is saved.
 	// Other adapter callers retain their existing baseline for an empty value.
 	Permissions PermissionMode `json:"permissions,omitempty"`
+	// PermissionFallback controls the step-down to a less permissive mode when
+	// the provider refuses the starting Permissions (for example a managed
+	// requirement that forbids full access). Unset means enabled; false turns it
+	// off so the provider's refusal is reported as is.
+	PermissionFallback *bool `json:"permissionFallback,omitempty"`
+}
+
+// PermissionFallbackEnabled reports whether a refused permission mode may step
+// down to a less permissive one. It is on unless explicitly set to false.
+func (c AgentConfig) PermissionFallbackEnabled() bool {
+	return c.PermissionFallback == nil || *c.PermissionFallback
 }
 
 // IsZero reports whether the config carries no settings, so storage can persist

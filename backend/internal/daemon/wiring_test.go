@@ -1010,6 +1010,10 @@ func (f *fakeSessionLifecycle) PersistChatModel(_ context.Context, _ domain.Sess
 	return nil
 }
 
+func (f *fakeSessionLifecycle) PersistChatPermissions(_ context.Context, _ domain.SessionID, _ domain.PermissionMode) error {
+	return nil
+}
+
 // TestWiring_SessionLifecycleInterfaceInvokedByDaemon asserts the
 // sessionLifecycle interface is satisfied by *sessionmanager.Manager (compile
 // check) and that Reconcile and RestoreAll dispatch correctly through the
