@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
 )
 
 type recordingPermissionsPersister struct {
@@ -81,11 +80,8 @@ func (r *recordingLifecycle) PersistChatModel(_ context.Context, id domain.Sessi
 // that is omitted, that never sees the bound manager, or that captured a nil one,
 // would leave sessions reading back a mode and model they are not using.
 func TestChatServiceOptionsWireTheSessionRecordHooksToTheSessionManager(t *testing.T) {
-	opts, bind := newChatServiceOptions(context.Background(), chatServiceDeps{
-		Log:          slog.New(slog.DiscardHandler),
-		AgentService: func() *agentsvc.Service { return nil },
-	})
-	if bind == nil {
+	opts, bindings := newChatServiceOptions(context.Background(), chatServiceDeps{Log: slog.New(slog.DiscardHandler)})
+	if bindings.Sessions == nil {
 		t.Fatal("no bind function returned: the daemon has no way to hand the hooks the Session Manager")
 	}
 	if opts.OnPermissionsChanged == nil || opts.OnModelChanged == nil {
@@ -98,7 +94,7 @@ func TestChatServiceOptionsWireTheSessionRecordHooksToTheSessionManager(t *testi
 	opts.OnModelChanged("ao-0", "early")
 
 	sessions := &recordingLifecycle{fakeSessionLifecycle: &fakeSessionLifecycle{}}
-	bind(sessions) // built later; the hooks must see it now
+	bindings.Sessions(sessions) // built later; the hooks must see it now
 
 	opts.OnPermissionsChanged("ao-1", domain.PermissionModeAuto)
 	opts.OnModelChanged("ao-1", "gpt-test")
@@ -114,12 +110,12 @@ func TestChatServiceOptionsWireTheSessionRecordHooksToTheSessionManager(t *testi
 // Each daemon builds its own options, so a manager bound for one must not leak into
 // another's hooks (a package-level holder would).
 func TestChatServiceOptionsBindTheSessionManagerPerInstance(t *testing.T) {
-	deps := chatServiceDeps{Log: slog.New(slog.DiscardHandler), AgentService: func() *agentsvc.Service { return nil }}
+	deps := chatServiceDeps{Log: slog.New(slog.DiscardHandler)}
 	first, bindFirst := newChatServiceOptions(context.Background(), deps)
 	second, _ := newChatServiceOptions(context.Background(), deps)
 
 	sessions := &recordingLifecycle{fakeSessionLifecycle: &fakeSessionLifecycle{}}
-	bindFirst(sessions)
+	bindFirst.Sessions(sessions)
 	second.OnPermissionsChanged("ao-2", domain.PermissionModeAcceptEdits)
 	second.OnModelChanged("ao-2", "other")
 	first.OnPermissionsChanged("ao-1", domain.PermissionModeAuto)

@@ -397,13 +397,12 @@ func Run() error {
 	// Chat service. The driver registry is the capability gate: a harness with no
 	// registered driver cannot start in chat mode, so an unsupported request fails
 	// loudly instead of silently becoming a TUI session.
-	chatOptions, bindChatSessions := newChatServiceOptions(ctx, chatServiceDeps{
-		Store:        store,
-		DataDir:      cfg.DataDir,
-		Drivers:      chatDrivers,
-		Activity:     lcStack.LCM,
-		Log:          log,
-		AgentService: func() *agentsvc.Service { return agentSvc },
+	chatOptions, chatBindings := newChatServiceOptions(ctx, chatServiceDeps{
+		Store:    store,
+		DataDir:  cfg.DataDir,
+		Drivers:  chatDrivers,
+		Activity: lcStack.LCM,
+		Log:      log,
 	})
 	chatSvc := chatsvc.New(chatOptions)
 
@@ -472,6 +471,7 @@ func Run() error {
 		CodexOperationGate: codexOperationGate,
 	}
 	agentSvc = agentsvc.NewWithDeps(agentDeps)
+	chatBindings.Agents(agentSvc)
 	agentSvc.WarmModelCatalogs(ctx)
 
 	sessionSvc, reviewSvc, sessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc}, settingsSvc, policyCoordinator, tracker, codexOperationGate, log)
@@ -484,7 +484,7 @@ func Run() error {
 		return fmt.Errorf("wire session service: %w", err)
 	}
 	sessionSvc.SetChatProviderPreserver(chatSvc.PreservesProviderOnRestart)
-	bindChatSessions(sessMgr)
+	chatBindings.Sessions(sessMgr)
 	if tunable, ok := sessMgr.(interface {
 		SetModelCatalog(interface {
 			Models(context.Context, string, string, bool) (ports.AgentModelCatalog, error)

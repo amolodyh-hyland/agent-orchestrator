@@ -8,13 +8,14 @@ import (
 )
 
 // Run starts the whole daemon and blocks, so a unit test cannot execute it. The
-// Session Manager is built after the Chat service, and the hooks that write the
-// effective permission mode and the chosen model onto its session records only
-// reach it if Run hands it to the bind function newChatServiceOptions returns. A Run
-// that forgets to, discards the function, or binds something other than the manager
-// startSession returned leaves those hooks quietly doing nothing while every other
-// test passes, so the call is checked in Run's source.
-func TestRunBindsTheSessionManagerStartSessionReturnsToTheChatHooks(t *testing.T) {
+// Session Manager and the agent service are built after the Chat service, and the
+// hooks that write the effective permission mode and the chosen model onto session
+// records, and that report Codex account events, reach them only if Run hands each
+// one to the matching bind function newChatServiceOptions returns. A Run that forgets
+// to, discards the bindings, binds nil, or tucks the call into a closure or branch
+// leaves those hooks quietly doing nothing while every other test passes, so the calls
+// are checked in Run's source.
+func TestRunBindsTheLateServicesToTheChatHooks(t *testing.T) {
 	file, err := parser.ParseFile(token.NewFileSet(), "daemon.go", nil, 0)
 	if err != nil {
 		t.Fatalf("parse daemon.go: %v", err)
@@ -29,59 +30,88 @@ func TestRunBindsTheSessionManagerStartSessionReturnsToTheChatHooks(t *testing.T
 		t.Fatal("daemon.go has no Run function")
 	}
 
-	// The name Run gives the bind function, and the name it gives the manager.
-	var bindName, managerName string
-	ast.Inspect(run.Body, func(n ast.Node) bool {
-		assign, ok := n.(*ast.AssignStmt)
+	// The names Run gives the bindings, the Session Manager and the agent service.
+	var bindings, manager, agents string
+	defined := map[string]int{} // statement index at which Run defines each of those
+	for i, stmt := range run.Body.List {
+		assign, ok := stmt.(*ast.AssignStmt)
 		if !ok || len(assign.Rhs) != 1 {
-			return true
+			continue
 		}
 		call, ok := assign.Rhs[0].(*ast.CallExpr)
 		if !ok {
-			return true
+			continue
 		}
 		switch calledName(call) {
 		case "newChatServiceOptions":
-			bindName = identName(assign.Lhs, 1)
+			bindings = identName(assign.Lhs, 1)
+			defined[bindings] = i
 		case "startSession":
-			managerName = identName(assign.Lhs, 2)
+			manager = identName(assign.Lhs, 2)
+			defined[manager] = i
+		case "agentsvc.NewWithDeps":
+			agents = identName(assign.Lhs, 0)
+			defined[agents] = i
 		}
-		return true
-	})
-	if bindName == "" || bindName == "_" {
-		t.Fatalf("Run does not keep the bind function newChatServiceOptions returns (got %q)", bindName)
 	}
-	if managerName == "" || managerName == "_" {
-		t.Fatalf("Run does not keep the Session Manager startSession returns (got %q)", managerName)
+	for what, name := range map[string]string{
+		"the bindings newChatServiceOptions returns": bindings,
+		"the Session Manager startSession returns":   manager,
+		"the agent service agentsvc.NewWithDeps":     agents,
+	} {
+		if name == "" || name == "_" {
+			t.Fatalf("Run does not keep %s as a top-level variable (got %q)", what, name)
+		}
 	}
 
 	// Only a statement of Run's own body runs on every boot; a call tucked inside a
 	// closure or a branch might never.
-	calls := 0
-	for _, stmt := range run.Body.List {
+	want := map[string]string{
+		bindings + ".Sessions": manager,
+		bindings + ".Agents":   agents,
+	}
+	calls := map[string]int{}
+	for i, stmt := range run.Body.List {
 		exprStmt, ok := stmt.(*ast.ExprStmt)
 		if !ok {
 			continue
 		}
 		call, ok := exprStmt.X.(*ast.CallExpr)
-		if !ok || calledName(call) != bindName {
+		if !ok {
 			continue
 		}
-		calls++
+		name := calledName(call)
+		wantArg, bound := want[name]
+		if !bound {
+			continue
+		}
+		calls[name]++
+		// Binding before the value exists would hand the hooks nothing.
+		if i <= defined[wantArg] {
+			t.Errorf("Run calls %s before it has built %q", name, wantArg)
+		}
 		if len(call.Args) != 1 {
-			t.Errorf("Run calls %s with %d arguments, want the Session Manager", bindName, len(call.Args))
-		} else if arg, ok := call.Args[0].(*ast.Ident); !ok || arg.Name != managerName {
-			t.Errorf("Run binds %v to the chat hooks, want the Session Manager %q that startSession returned", call.Args[0], managerName)
+			t.Errorf("Run calls %s with %d arguments, want exactly %q", name, len(call.Args), wantArg)
+		} else if arg, ok := call.Args[0].(*ast.Ident); !ok || arg.Name != wantArg {
+			t.Errorf("Run calls %s with %v, want %q", name, call.Args[0], wantArg)
 		}
 	}
-	if calls != 1 {
-		t.Fatalf("Run calls the bind function %d times, want exactly once", calls)
+	for name := range want {
+		if calls[name] != 1 {
+			t.Errorf("Run calls %s %d times, want exactly once", name, calls[name])
+		}
 	}
 }
 
+// calledName names a call's target: a plain function as "f", a selector as "x.f".
 func calledName(call *ast.CallExpr) string {
-	if ident, ok := call.Fun.(*ast.Ident); ok {
-		return ident.Name
+	switch fun := call.Fun.(type) {
+	case *ast.Ident:
+		return fun.Name
+	case *ast.SelectorExpr:
+		if x, ok := fun.X.(*ast.Ident); ok {
+			return x.Name + "." + fun.Sel.Name
+		}
 	}
 	return ""
 }

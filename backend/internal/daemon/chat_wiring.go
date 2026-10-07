@@ -16,41 +16,70 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
-// chatServiceDeps is what the daemon wires into the Chat service. The agent service
-// is built after it, so it is read through a getter when a hook fires instead of
-// being captured as nil.
+// chatServiceDeps is what the daemon wires into the Chat service directly. The Session
+// Manager and the agent service are built after it, so they reach the hooks through
+// chatLateBindings instead.
 type chatServiceDeps struct {
-	Store        *sqlite.Store
-	DataDir      string
-	Drivers      ports.ChatDriverRegistry
-	Activity     *lifecycle.Manager
-	Log          *slog.Logger
-	AgentService func() *agentsvc.Service
+	Store    *sqlite.Store
+	DataDir  string
+	Drivers  ports.ChatDriverRegistry
+	Activity *lifecycle.Manager
+	Log      *slog.Logger
+}
+
+// chatAgentService is what the Codex account hooks need from the agent service.
+type chatAgentService interface {
+	CodexAccountSwitchInProgress() bool
+	InvalidateCodexAccountAuthentication()
+	ObserveActiveCodexAccountCapacity(ports.CodexCapacityObservation)
+}
+
+var _ chatAgentService = (*agentsvc.Service)(nil)
+
+// chatLateBindings hands the Chat service's hooks the services that are built after
+// it. Each is nil until Run calls it, and a hook that fires before then does nothing.
+type chatLateBindings struct {
+	Sessions func(sessionLifecycle)
+	Agents   func(chatAgentService)
 }
 
 // newChatServiceOptions builds the Chat service's options. It is a function, not an
 // inline literal in Run, so a test can prove the hooks that write to session records
-// (the model and permission hooks) are actually wired and reach the Session Manager.
+// (the model and permission hooks) and the Codex account hooks are actually wired and
+// reach the services they act on.
 //
-// The Session Manager is built after the Chat service, so the hooks read it through
-// the bind function returned alongside the options. Handing the caller that function,
-// instead of asking it for a getter, means Run cannot leave the hooks pointing at
-// nothing: an unused result does not compile, and the binding lives here, under test.
-// Hooks that fire before bind is called do nothing.
-func newChatServiceOptions(ctx context.Context, deps chatServiceDeps) (chatsvc.Options, func(sessionLifecycle)) {
+// Those services are built after the Chat service, so the hooks read them through the
+// bindings returned alongside the options. Handing the caller the bind functions,
+// instead of asking it for getters, means Run cannot leave a hook pointing at nothing
+// by omitting a field: the binding lives here, under test, and Run's calls to it are
+// checked from its source (see run_wiring_test.go).
+func newChatServiceOptions(ctx context.Context, deps chatServiceDeps) (chatsvc.Options, chatLateBindings) {
 	var (
-		sessionsMu sync.RWMutex
-		sessions   sessionLifecycle
+		mu       sync.RWMutex
+		sessions sessionLifecycle
+		agents   chatAgentService
 	)
-	bindSessions := func(manager sessionLifecycle) {
-		sessionsMu.Lock()
-		defer sessionsMu.Unlock()
-		sessions = manager
+	bindings := chatLateBindings{
+		Sessions: func(manager sessionLifecycle) {
+			mu.Lock()
+			defer mu.Unlock()
+			sessions = manager
+		},
+		Agents: func(service chatAgentService) {
+			mu.Lock()
+			defer mu.Unlock()
+			agents = service
+		},
 	}
 	currentSessions := func() sessionLifecycle {
-		sessionsMu.RLock()
-		defer sessionsMu.RUnlock()
+		mu.RLock()
+		defer mu.RUnlock()
 		return sessions
+	}
+	currentAgents := func() chatAgentService {
+		mu.RLock()
+		defer mu.RUnlock()
+		return agents
 	}
 	return chatsvc.Options{
 		Store:    deps.Store,
@@ -103,7 +132,7 @@ func newChatServiceOptions(ctx context.Context, deps chatServiceDeps) (chatsvc.O
 		Log:      deps.Log,
 		NewID:    uuid.NewString,
 		OnAccountChanged: func(sessionID domain.SessionID, generation string, harness domain.AgentHarness) {
-			agentSvc := deps.AgentService()
+			agentSvc := currentAgents()
 			if harness != domain.HarnessCodex || agentSvc == nil || agentSvc.CodexAccountSwitchInProgress() {
 				return
 			}
@@ -113,7 +142,7 @@ func newChatServiceOptions(ctx context.Context, deps chatServiceDeps) (chatsvc.O
 			}
 		},
 		OnCodexCapacityChanged: func(sessionID domain.SessionID, generation string, observation ports.CodexCapacityObservation) {
-			agentSvc := deps.AgentService()
+			agentSvc := currentAgents()
 			if agentSvc == nil || agentSvc.CodexAccountSwitchInProgress() {
 				return
 			}
@@ -145,5 +174,5 @@ func newChatServiceOptions(ctx context.Context, deps chatServiceDeps) (chatsvc.O
 			}
 			return nil
 		}, deps.Log),
-	}, bindSessions
+	}, bindings
 }
