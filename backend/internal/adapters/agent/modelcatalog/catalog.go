@@ -326,6 +326,44 @@ func claudeCodeModels() []ports.AgentModelInfo {
 	}
 }
 
+// claudeEffortLevels is the vocabulary `claude --effort` accepts, lowest to
+// highest. The CLI warns about any other value and silently launches with its
+// default effort, so AO must validate the level itself.
+var claudeEffortLevels = []string{"low", "medium", "high", "xhigh", "max"}
+
+// claudeFallbackEfforts records, for each static alias in claudeCodeModels, the
+// effort levels it accepts. It is the capability data AO falls back to when the
+// provider cannot be asked. Haiku takes no effort setting; the rest of the
+// static aliases are the Claude 5 family, which accepts every level.
+var claudeFallbackEfforts = map[string][]string{
+	"sonnet":   claudeEffortLevels,
+	"fable":    claudeEffortLevels,
+	"opus":     claudeEffortLevels,
+	"haiku":    nil,
+	"opus[1m]": claudeEffortLevels,
+}
+
+// ClaudeFallbackEfforts returns the effort levels AO assumes a Claude Code model
+// accepts when provider discovery is unavailable. The boolean is false for a
+// model the built-in table does not list, including the empty ID: provider
+// model IDs are credential-scoped (Bedrock, Vertex, gateways), so only the
+// provider can vouch for them.
+func ClaudeFallbackEfforts(modelID string) ([]string, bool) {
+	efforts, ok := claudeFallbackEfforts[modelID]
+	return append([]string(nil), efforts...), ok
+}
+
+// ClaudeFallbackModelIDs lists the models ClaudeFallbackEfforts knows, in the
+// order of the static Claude Code catalog.
+func ClaudeFallbackModelIDs() []string {
+	static := claudeCodeModels()
+	ids := make([]string, 0, len(static))
+	for _, item := range static {
+		ids = append(ids, item.ID)
+	}
+	return ids
+}
+
 // discoverClaudeCatalog builds the Claude Code catalog, preferring the model
 // list the provider itself reports and falling back to the static aliases.
 //

@@ -1552,6 +1552,9 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		}
 		return resolved, nil
 	}
+	if catalog.Stale && cfg.Harness == domain.HarnessClaudeCode {
+		return m.resolveClaudeFallbackConfig(resolved, base, catalog, modelChangedWithoutExplicitEffort)
+	}
 	if modelID == "" {
 		for _, item := range catalog.Models {
 			if item.IsDefault {
@@ -1559,9 +1562,6 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 				break
 			}
 		}
-	}
-	if catalog.Stale && validateClaudeModel {
-		return ports.AgentConfig{}, fmt.Errorf("%w for model %q: catalog is stale", ports.ErrModelCapabilitiesUnavailable, modelID)
 	}
 	var selected *ports.AgentModelInfo
 	for i := range catalog.Models {
@@ -1669,6 +1669,63 @@ func compareVersions(a, b []int) int {
 		}
 	}
 	return 0
+}
+
+// resolveClaudeFallbackConfig validates Claude Code tuning against the built-in
+// capability table when the model catalog is stale, which is what discovery
+// returns when it finds no credential. The table only describes Claude's static
+// aliases, so it is used only while the stale catalog lists nothing else: a
+// configured custom model or gateway means the provider, not AO, knows what
+// each model accepts. The effective model is the resolved one or, when none is
+// set, the default the catalog took from the local Claude settings; with
+// neither, capabilities cannot be established and the spawn fails closed, as it
+// does against a live catalog. The table assumes the aliases resolve to
+// first-party defaults. Alias pins and non-first-party providers that add no
+// model IDs to the catalog are invisible here, and the CLI drops an effort the
+// resolved model does not support.
+func (m *Manager) resolveClaudeFallbackConfig(resolved, base ports.AgentConfig, catalog ports.AgentModelCatalog, modelChangedWithoutExplicitEffort bool) (ports.AgentConfig, error) {
+	aliases := modelcatalog.ClaudeFallbackModelIDs()
+	modelID := strings.TrimSpace(resolved.Model)
+	unavailable := func(reason string) (ports.AgentConfig, error) {
+		target := ""
+		if modelID != "" {
+			target = fmt.Sprintf(" for model %q", modelID)
+		}
+		return ports.AgentConfig{}, fmt.Errorf("%w%s: catalog is stale (%s; without provider discovery only these models can be validated: %s)",
+			ports.ErrModelCapabilitiesUnavailable, target, reason, strings.Join(aliases, ", "))
+	}
+	for _, item := range catalog.Models {
+		if !containsString(aliases, item.ID) {
+			return unavailable(fmt.Sprintf("it lists %q, which is not a built-in alias", item.ID))
+		}
+		if modelID == "" && item.IsDefault {
+			modelID = item.ID
+		}
+	}
+	efforts, known := modelcatalog.ClaudeFallbackEfforts(modelID)
+	if !known {
+		if modelID == "" {
+			return unavailable("no model is selected and no default is configured")
+		}
+		return unavailable("the model is not one of the built-in aliases")
+	}
+	if modelChangedWithoutExplicitEffort && !containsString(efforts, base.Effort) {
+		resolved.Effort = ""
+	}
+	if resolved.Effort != "" && !containsString(efforts, resolved.Effort) {
+		supported := strings.Join(efforts, ", ")
+		if supported == "" {
+			supported = "none"
+		}
+		return ports.AgentConfig{}, fmt.Errorf("%w %q for model %q (supported: %s)", ports.ErrUnsupportedEffort, resolved.Effort, modelID, supported)
+	}
+	logger := m.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Warn("claude-code model discovery unavailable; validated against the built-in capability table",
+		"model", modelID, "effort", resolved.Effort)
+	return resolved, nil
 }
 
 func containsString(values []string, value string) bool {
