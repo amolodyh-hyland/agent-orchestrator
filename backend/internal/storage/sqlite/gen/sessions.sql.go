@@ -1857,3 +1857,22 @@ func (q *Queries) UpdateSessionModel(ctx context.Context, arg UpdateSessionModel
 	}
 	return result.RowsAffected()
 }
+
+const updateSessionPermissions = `-- name: UpdateSessionPermissions :execrows
+UPDATE sessions
+SET session_permissions = ?1
+WHERE id = ?2
+`
+
+type UpdateSessionPermissionsParams struct {
+	Permissions string
+	ID          domain.SessionID
+}
+
+func (q *Queries) UpdateSessionPermissions(ctx context.Context, arg UpdateSessionPermissionsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateSessionPermissions, arg.Permissions, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}

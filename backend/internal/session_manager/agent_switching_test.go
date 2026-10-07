@@ -5520,3 +5520,49 @@ func (l *switchAgentChatLauncher) QueueChatPrompt(_ context.Context, _ domain.Se
 func (l *switchAgentChatLauncher) DrainChatQueue(_ context.Context, _ domain.SessionID) error {
 	return nil
 }
+
+// The fallback is configured per project, and a switched-to Chat controller is a
+// new launch: it must carry the setting rather than quietly defaulting to on.
+func TestSwitchAgentChatCarriesThePermissionFallbackSetting(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		fallback    *bool
+		wantDisable bool
+	}{
+		{"unset defaults to on", nil, false},
+		{"explicitly off", boolPtr(false), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manager, store, _ := newSwitchTestManager(t, &fakeRestartRuntime{fakeRuntime: &fakeRuntime{}})
+			rec := store.sessions["proj-1"]
+			rec.Mode = domain.SessionModeChat
+			rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now().UTC()}
+			rec.Metadata.RuntimeHandleID = ""
+			rec.Metadata.RuntimeLaunchID = ""
+			rec.Metadata.AgentSessionID = ""
+			rec.Metadata.ProviderConversationID = "source-chat-native"
+			rec.Metadata.ControllerGeneration = "source-chat-generation"
+			store.sessions[rec.ID] = rec
+			project := store.projects[string(rec.ProjectID)]
+			project.Config.Worker = domain.RoleOverride{
+				Harness:     domain.HarnessCodex,
+				AgentConfig: domain.AgentConfig{PermissionFallback: tc.fallback},
+			}
+			store.projects[string(rec.ProjectID)] = project
+			launcher := &switchAgentChatLauncher{recordingLauncher: &recordingLauncher{}, store: store, live: true}
+			manager.chat = launcher
+
+			if _, err := switchAgentSynchronously(context.Background(), manager, rec.ID, SwitchAgentConfig{
+				TargetHarness: domain.HarnessCodex, IdempotencyKey: "chat-codex-fallback-" + tc.name,
+			}); err != nil {
+				t.Fatalf("SwitchAgent: %v", err)
+			}
+			if len(launcher.started) != 1 {
+				t.Fatalf("Chat starts = %d, want 1", len(launcher.started))
+			}
+			if got := launcher.started[0].DisablePermissionFallback; got != tc.wantDisable {
+				t.Fatalf("DisablePermissionFallback = %t, want %t", got, tc.wantDisable)
+			}
+		})
+	}
+}

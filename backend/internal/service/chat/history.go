@@ -430,7 +430,7 @@ func (s *Service) EditMessage(
 	}
 	conversation := source.conversation
 	conversation.ActiveBranchID = branchID
-	replacement := newController(id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
+	replacement := s.newReplacementController(id, source, conversation, generation, provider)
 	if err := s.store.CreateAndActivateConversationBranch(
 		operationCtx, id, branch, generation, s.now(),
 	); err != nil {
@@ -926,7 +926,7 @@ func (s *Service) activateBranchLocked(ctx context.Context, id domain.SessionID,
 	generation := s.newID()
 	conversation := source.conversation
 	conversation.ActiveBranchID = branch.ID
-	replacement := newController(id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
+	replacement := s.newReplacementController(id, source, conversation, generation, provider)
 	if err := s.store.ActivateConversationBranch(operationCtx, id, conversation.ID, branch.ID,
 		branch.ProviderConversationID, generation, s.now()); err != nil {
 		_ = cleanupUnpublishedConversation(provider, true)
@@ -1024,8 +1024,7 @@ func (s *Service) restoreClosedSourceController(
 	generation := s.newID()
 	conversation := source.conversation
 	conversation.ActiveBranchID = branch.ID
-	replacement := newController(
-		id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
+	replacement := s.newReplacementController(id, source, conversation, generation, provider)
 	if err := s.store.ActivateConversationBranch(recoveryCtx, id, conversation.ID, branch.ID,
 		providerConversationID, generation, s.now()); err != nil {
 		_ = provider.Close()
@@ -1198,4 +1197,23 @@ type deliveryRequestSettings struct {
 	Model    string               `json:"model,omitempty"`
 	Effort   string               `json:"effort,omitempty"`
 	Approval ports.PermissionMode `json:"approval,omitempty"`
+}
+
+// newReplacementController builds the controller that takes over a session from
+// source (a branch switch, an edit, or restoring the source after a failed edit).
+// The replacement keeps the source's permission fallback settings, so a project
+// that turned the fallback off does not get it back, and the effective mode keeps
+// reaching the session record.
+func (s *Service) newReplacementController(
+	id domain.SessionID,
+	source *Controller,
+	conversation domain.ConversationRecord,
+	generation string,
+	provider ports.ChatConversation,
+) *Controller {
+	replacement := newController(
+		id, source.owner(), conversation, generation, source.harness, provider,
+		s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
+	replacement.inheritPermissionFallback(source)
+	return replacement
 }

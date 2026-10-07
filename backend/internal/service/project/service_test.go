@@ -2273,6 +2273,8 @@ func TestManager_SetPermissionsPreservesConfig(t *testing.T) {
 	}
 }
 
+// Codex's default no longer means full access, so remembering it must not turn
+// it into bypass-permissions for the project's other sessions.
 func TestManager_RememberPortablePermissions(t *testing.T) {
 	m := newManager(t)
 	ctx := context.Background()
@@ -2282,7 +2284,7 @@ func TestManager_RememberPortablePermissions(t *testing.T) {
 	for _, tc := range []struct {
 		source domain.AgentHarness
 		want   domain.PermissionMode
-	}{{domain.HarnessCodex, domain.PermissionModeBypassPermissions}, {domain.HarnessClaudeCode, domain.PermissionModeDefault}, {"", domain.PermissionModeDefault}} {
+	}{{domain.HarnessCodex, domain.PermissionModeDefault}, {domain.HarnessClaudeCode, domain.PermissionModeDefault}, {"", domain.PermissionModeDefault}} {
 		got, err := m.SetPermissions(ctx, "portable", project.SetPermissionsInput{SourceHarness: tc.source, Permissions: domain.PermissionModeDefault})
 		if err != nil {
 			t.Fatal(err)

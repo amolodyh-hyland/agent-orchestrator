@@ -52,7 +52,17 @@ type conversation struct {
 	historyParentID string
 	providerScopeID string
 	readOnly        bool
-	events          chan ports.ChatEvent
+	// widerThanDefaults reports whether this thread may be running with a more
+	// permissive posture than Codex's own defaults, because a launch or an earlier
+	// turn sent an explicit approval override. Codex applies a turn's override to
+	// later turns too and cannot withdraw it, so returning to the default mode has
+	// to send a posture rather than nothing. Guarded by sendMu.
+	widerThanDefaults bool
+	// widerAssumed marks widerThanDefaults as a guess about a posture this process
+	// never saw (a resume that sent no override, or a host that outlived the daemon)
+	// rather than something it sent itself. Guarded by sendMu.
+	widerAssumed bool
+	events       chan ports.ChatEvent
 	// Effective defaults returned when Codex opened or resumed this thread.
 	threadModel, threadEffort string
 
@@ -319,7 +329,18 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 		// must not produce a second turn.
 		params["clientUserMessageId"] = msg.ClientMessageID
 	}
-	applyTurnSettings(params, msg.Settings, c.readOnly)
+	settings := msg.Settings
+	// Codex cannot withdraw an override it already applied, so a drop to the
+	// default mode after an explicit one sends the Ask for approval posture
+	// instead of nothing. Anything else would leave the thread, for example, still
+	// running with full access under a "Codex defaults" label.
+	resetToDefaults := !c.readOnly && settings.Approval != "" &&
+		ports.NormalizePermissionMode(settings.Approval) == ports.PermissionModeDefault && c.widerThanDefaults
+	if resetToDefaults {
+		settings.Approval = ports.PermissionModeAcceptEdits
+	}
+	applyTurnSettings(params, settings, c.readOnly)
+	_, sentOverride := params["sandboxPolicy"]
 
 	var resp struct {
 		Turn struct {
@@ -327,7 +348,33 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 		} `json:"turn"`
 	}
 	if err := c.conn.request(ctx, "turn/start", params, &resp); err != nil {
+		if _, overridden := params["sandboxPolicy"]; overridden && !c.readOnly {
+			// Name the posture that was really sent: for a return to the default mode
+			// that is the reset posture, not the mode the user picked.
+			err = permissionRejection(settings.Approval, err)
+			if resetToDefaults && errors.Is(err, ports.ErrPermissionRejected) {
+				err = fmt.Errorf("returning to Codex defaults sent the ask-for-approval posture, which was refused: %w", err)
+				if c.widerAssumed {
+					// Nothing this process sent is known to need withdrawing, and the provider
+					// does not allow the posture that would withdraw it, so asking again would
+					// refuse every default turn with no way out. Stop assuming: the next default
+					// turn sends nothing, and this error is the one warning that the thread may
+					// still carry an earlier override. A posture this process did send stays
+					// assumed wider, since the user can return to that mode.
+					c.widerThanDefaults, c.widerAssumed = false, false
+					err = fmt.Errorf("%w; the thread may still carry the permission override it had before it was reopened, and the next message in this mode is sent without one", err)
+				}
+			}
+		}
 		return ports.ChatTurnRef{}, fmt.Errorf("turn/start: %w", err)
+	}
+
+	if !c.readOnly && sentOverride {
+		// The reset itself leaves the thread at Codex's defaults; any other
+		// override may be wider than them.
+		c.widerThanDefaults = !resetToDefaults
+		// Whatever was sent is now the thread's known posture, not a guess.
+		c.widerAssumed = false
 	}
 
 	c.mu.Lock()
@@ -356,10 +403,14 @@ func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings, r
 		// `sandboxPolicy: {type: "workspaceWrite"}`. Sending a thread's shape to a
 		// turn is rejected as a missing `type`, so the two are mapped separately
 		// rather than assumed to be interchangeable.
-		policy, sandbox := approvalSettings(settings.Approval)
-		params["approvalPolicy"] = policy
-		params["approvalsReviewer"] = approvalReviewer(settings.Approval)
-		params["sandboxPolicy"] = turnSandboxPolicy(sandbox)
+		//
+		// The default mode overrides nothing here. SendTurn handles a drop to it
+		// after an explicit mode, because Codex cannot withdraw an override.
+		if policy, sandbox := approvalSettings(settings.Approval); policy != "" {
+			params["approvalPolicy"] = policy
+			params["approvalsReviewer"] = approvalReviewer(settings.Approval)
+			params["sandboxPolicy"] = turnSandboxPolicy(sandbox)
+		}
 	}
 	if readOnly {
 		// A reviewer must not write the workspace, but it does need the network:

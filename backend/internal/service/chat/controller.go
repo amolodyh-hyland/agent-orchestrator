@@ -207,6 +207,13 @@ type Controller struct {
 	now                    Clock
 	onAccountChanged       func(domain.SessionID, string, domain.AgentHarness)
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
+	// permissionFallbackOff turns the permission step-down off for this
+	// controller. The zero value leaves it on, so callers that never mention it
+	// get the default behavior.
+	permissionFallbackOff bool
+	// onPermissionsChanged reports the mode a turn actually ran with after the
+	// fallback lowered it, so the session record can show it.
+	onPermissionsChanged func(domain.SessionID, domain.PermissionMode)
 
 	// sendMu serializes command dispatch so only one operation mutates the
 	// provider conversation at a time.
@@ -1690,6 +1697,80 @@ func (c *Controller) busy() bool {
 	return c.pendingTurnID != "" || c.compactionPending
 }
 
+// inheritPermissionFallback carries the permission fallback settings of the
+// controller this one replaces, so a branch or provider replacement keeps the
+// behavior the session was launched with.
+func (c *Controller) inheritPermissionFallback(source *Controller) {
+	c.permissionFallbackOff = source.permissionFallbackOff
+	c.onPermissionsChanged = source.onPermissionsChanged
+}
+
+// sendTurn delivers msg to the provider. When the provider refuses the turn's
+// permission mode it retries with the next less permissive one (see
+// permissionFallback) and records the mode that was finally accepted.
+//
+// A turn the provider refused over its permission mode did not start, so
+// asking again cannot run the work twice.
+func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (ports.ChatTurnRef, error) {
+	requested := msg.Settings.Approval
+	var ref ports.ChatTurnRef
+	// A review conversation is read-only whatever its mode, so it never steps down.
+	fallback := permissionFallback{enabled: !c.permissionFallbackOff && c.reviewID == "", log: c.log, session: c.sessionID, stage: "turn"}
+	outcome, err := fallback.run(ctx, requested, func(mode ports.PermissionMode) error {
+		attempt := msg
+		attempt.Settings.Approval = mode
+		var sendErr error
+		ref, sendErr = c.conv.SendTurn(ctx, attempt)
+		return sendErr
+	})
+	if err != nil {
+		return ports.ChatTurnRef{}, err
+	}
+	if outcome.steppedDown(requested) {
+		c.adoptEffectivePermission(ctx, requested, outcome)
+	}
+	return ref, nil
+}
+
+// adoptEffectivePermission makes the mode a turn really ran with the one the
+// conversation shows and later turns start from, so the step-down is visible
+// and is not repeated, and reports it for the session record. A choice the user
+// made while the turn was being sent is left alone.
+func (c *Controller) adoptEffectivePermission(ctx context.Context, requested ports.PermissionMode, outcome permissionFallbackOutcome) {
+	c.adoptEffectiveMode(ctx, requested, outcome.Effective)
+	// The notice goes last, and whatever the user chose meanwhile: the turn did run
+	// with the lower mode. Writing it publishes an event that makes clients refetch
+	// the conversation, so the settings (the picker's mode) and the session record
+	// must already say the new mode by then; nothing is published after them.
+	if err := c.store.UpsertActivity(ctx, c.conversation.ID, "",
+		permissionFallbackActivity(c.newID(), requested, outcome), c.now()); err != nil {
+		c.log.Warn("could not record the permission fallback in the timeline",
+			"sessionID", c.sessionID, "effective", outcome.Effective, "error", err)
+	}
+}
+
+// adoptEffectiveMode stores the mode a turn really ran with as the conversation's
+// approval mode and reports it for the session record, unless the user changed the
+// mode while the turn was being sent.
+func (c *Controller) adoptEffectiveMode(ctx context.Context, requested, effective ports.PermissionMode) {
+	c.configMu.Lock()
+	defer c.configMu.Unlock()
+	current := c.Settings()
+	if current.ApprovalMode != requested {
+		c.log.Warn("permission fallback applied to a turn but the conversation's mode changed meanwhile; leaving it",
+			"sessionID", c.sessionID, "requested", requested, "effective", effective, "current", current.ApprovalMode)
+		return
+	}
+	current.ApprovalMode = effective
+	if err := c.SetSettings(ctx, current); err != nil {
+		c.log.Warn("could not record the permission fallback on the conversation",
+			"sessionID", c.sessionID, "effective", effective, "error", err)
+	}
+	if c.onPermissionsChanged != nil {
+		c.onPermissionsChanged(c.sessionID, effective)
+	}
+}
+
 // dispatch hands a recorded turn to the provider. Callers must hold sendMu.
 func (c *Controller) dispatch(
 	ctx context.Context,
@@ -1716,7 +1797,7 @@ func (c *Controller) dispatch(
 	c.mu.Lock()
 	c.dispatchingTurnID = turnID
 	c.mu.Unlock()
-	ref, err := c.conv.SendTurn(ctx, msg)
+	ref, err := c.sendTurn(ctx, msg)
 	if err != nil {
 		c.mu.Lock()
 		if c.dispatchingTurnID == turnID {

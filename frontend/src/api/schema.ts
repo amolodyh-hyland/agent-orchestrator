@@ -3106,6 +3106,7 @@ export interface components {
             effort?: string;
             mode?: string;
             model?: string;
+            permissionFallback?: null | boolean;
             permissions?: string;
         };
         AgentInfo: {
@@ -3657,6 +3658,8 @@ export interface components {
             model?: string;
             /** @enum {string} */
             outputType: "none" | "pr" | "artifact" | "pr_artifact";
+            /** @enum {string} */
+            permissions?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             /** Format: date-time */
             pinnedAt?: null | string;
             /** Format: int64 */
