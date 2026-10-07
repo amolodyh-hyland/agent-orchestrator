@@ -31,6 +31,8 @@ import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { sessionInterfaceTransitionStatus } from "../test/interface-transition-fixtures";
 import { useUiStore } from "../stores/ui-store";
+import { useTopbarTabsStore } from "../stores/topbar-tabs-store";
+import { projectColorCss } from "../lib/project-colors";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
 
@@ -472,6 +474,7 @@ function fireDrag(
 
 beforeEach(() => {
 	window.localStorage.clear();
+	useTopbarTabsStore.setState({ colorCoding: false, projectColors: {} });
 	dragEnds.clear();
 	dragOvers.clear();
 	dragStarts.clear();
@@ -604,6 +607,45 @@ describe("Sidebar", () => {
 			to: "/host/$hostId/project/$projectId/session/$sessionId",
 			params: { hostId: "box-a", projectId: "proj-1", sessionId: "proj-1-1" },
 		});
+	});
+
+	it("leaves project and task rows untouched when project colour coding is off", () => {
+		const taskRows = [
+			session,
+			{ ...session, id: "proj-1-2", title: "fix logout", updatedAt: "2026-06-29T00:00:00Z" },
+		];
+		renderSidebar({ workspaces: [{ ...workspace, sessions: taskRows }] });
+
+		const projectRow = screen.getByText("Project One").closest("[data-sidebar='menu-button']");
+		const taskList = screen.getByTestId("session-list-proj-1");
+		expect(projectRow).not.toHaveAttribute("style");
+		expect(projectRow?.querySelector("[data-project-accent-bar]")).not.toBeInTheDocument();
+		expect(taskList.querySelectorAll("[data-session-row]")).toHaveLength(2);
+		for (const row of taskList.querySelectorAll("[data-session-row]")) {
+			expect(row).not.toHaveAttribute("style");
+			expect(row.querySelector("[data-project-accent-bar]")).not.toBeInTheDocument();
+		}
+	});
+
+	it("uses one project accent on its project row and each task row when enabled", () => {
+		const accent = projectColorCss(3, "light");
+		const taskRows = [
+			session,
+			{ ...session, id: "proj-1-2", title: "fix logout", updatedAt: "2026-06-29T00:00:00Z" },
+		];
+		useUiStore.setState({ resolvedTheme: "light" });
+		useTopbarTabsStore.setState({ colorCoding: true, projectColors: { "proj-1": 3 } });
+		renderSidebar({ workspaces: [{ ...workspace, sessions: taskRows }] });
+
+		const projectRow = screen.getByText("Project One").closest<HTMLElement>("[data-sidebar='menu-button']");
+		const taskRowsInSidebar = Array.from(screen.getByTestId("session-list-proj-1").querySelectorAll<HTMLElement>("[data-session-row]"));
+		expect(projectRow?.style.getPropertyValue("--project-accent")).toBe(accent);
+		expect(projectRow?.querySelectorAll("[data-project-accent-bar]")).toHaveLength(1);
+		expect(taskRowsInSidebar).toHaveLength(2);
+		for (const row of taskRowsInSidebar) {
+			expect(row.style.getPropertyValue("--project-accent")).toBe(accent);
+			expect(row.querySelectorAll("[data-project-accent-bar]")).toHaveLength(1);
+		}
 	});
 
 	it("shows the cloud sign-in entry point while signed out", () => {

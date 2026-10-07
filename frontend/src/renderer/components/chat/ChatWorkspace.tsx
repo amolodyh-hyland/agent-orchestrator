@@ -46,6 +46,7 @@ import {
 } from "@tanstack/react-virtual";
 import { cn } from "../../lib/utils";
 import { annotationBody, annotationTextMatches, annotationTextRange, highlightChatAnnotation } from "../../lib/chat-annotation-navigation";
+import { agentLabel } from "../../lib/agent-options";
 import {
 	acknowledgeChatInlineEditMutation,
 	beginChatInlineEditMutation,
@@ -86,7 +87,6 @@ import { clampTerminalFontSize, initialTerminalFontSize, terminalFontSizeStorage
 import { createTerminalMux, muxUrlFromApiBase } from "../../lib/terminal-mux";
 import { isLinuxPlatform, isMacPlatform } from "../../lib/platform";
 import { handleTerminalTabListKeyDown } from "../../lib/terminal-tabs";
-import { agentLabel } from "../../lib/agent-options";
 import type { ApprovalMode } from "../../types/conversation";
 import type { ConversationLocalEcho } from "../../hooks/useConversation";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
@@ -100,12 +100,14 @@ import {
 } from "../../types/workspace";
 import { AgentAvatar } from "../AgentAvatar";
 import { SessionPaneTab } from "../CenterPane";
+import { RemoteSessionTabAction } from "../topbar-tabs/RemoteSessionTabAction";
 import { Button } from "../ui/button";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "../ui/accordion";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { SessionTopbarPortal } from "../SessionTopbarPortal";
 import { ShellTerminalTab } from "../ShellTerminalTab";
 import { TerminalPane } from "../TerminalPane";
+import { TopbarToolbar } from "../topbar-tabs/TopbarToolbar";
 import {
 	ActivityRow,
 	ApprovalCard,
@@ -125,6 +127,7 @@ import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
 import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
 import { ContextMeter } from "./ContextMeter";
+import type { SessionTabActions } from "../topbar-tabs/TopbarTab";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
 import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
@@ -328,9 +331,8 @@ export interface ChatWorkspaceProps {
 	remoteHostId?: string;
 	/** Session-level actions owned above the conversation surface. */
 	headerActions?: ReactNode;
-	/** Agent-session actions on the primary chat tab (interface switch, handoff). */
-	sessionTabAction?: ReactNode;
-	/** Widen the primary tab action slot only while an interface switch spinner is showing. */
+	/** Agent-session actions in the active grouped tab. */
+	sessionTabAction?: SessionTabActions;
 	sessionTabActionWide?: boolean;
 	/** Pinned beside the tab strip, before the workspace topbar actions. */
 	tabStripAction?: ReactNode;
@@ -592,13 +594,11 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 
 function ChatWorkspaceContent({
 	snapshot,
-	sessionTitle,
 	sessionRole = "worker",
 	assetBaseUrl,
 	remoteHostId,
 	headerActions,
 	sessionTabAction,
-	sessionTabActionWide = false,
 	tabStripAction,
 	workspaceTabs,
 	workspaceTabActions,
@@ -1545,9 +1545,6 @@ function ChatWorkspaceContent({
 			}
 		>
 			{hideHeader ? null : <ChatHeader
-				snapshot={snapshot}
-				sessionTitle={sessionTitle}
-				sessionRole={sessionRole}
 				onOpenReviewerTerminal={onOpenReviewerTerminal}
 				onOpenReviewerChat={onOpenReviewerChat}
 				reviewerActive={reviewerActive}
@@ -1559,9 +1556,9 @@ function ChatWorkspaceContent({
 				onTabsKeyDown={handleChatTabsKeyDown}
 				headerActions={headerActions}
 				session={session}
+				remoteHostId={remoteHostId}
 				onSessionRenamed={onSessionRenamed}
 				sessionTabAction={sessionTabAction}
-				sessionTabActionWide={sessionTabActionWide}
 				tabStripAction={tabStripAction}
 				workspaceTabActions={workspaceTabActions}
 				workspaceActiveTabKey={workspaceActiveTabKey}
@@ -1971,9 +1968,6 @@ function readableItems(snapshot: ConversationSnapshot): ConversationItem[] {
 /* -------------------------------------------------------------------------- */
 
 function ChatHeader({
-	snapshot,
-	sessionTitle,
-	sessionRole,
 	onOpenReviewerTerminal,
 	onOpenReviewerChat,
 	reviewerActive,
@@ -1985,7 +1979,6 @@ function ChatHeader({
 	onTabsKeyDown,
 	headerActions,
 	sessionTabAction,
-	sessionTabActionWide = false,
 	tabStripAction,
 	workspaceTabActions,
 	workspaceActiveTabKey,
@@ -1993,11 +1986,9 @@ function ChatHeader({
 	onReorderAuxiliaryTabs,
 	inline,
 	session,
+	remoteHostId,
 	onSessionRenamed,
 }: {
-	snapshot: ConversationSnapshot;
-	sessionTitle?: string;
-	sessionRole: SessionKind;
 	onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
 	onOpenReviewerChat?: (target: { reviewId: string; harness: string }) => void;
 	/** The reviewer tab is selected; the chat tab is the clickable alternative. */
@@ -2011,26 +2002,19 @@ function ChatHeader({
 	onRenameShellTerminal?: (handleId: string, title: string) => void;
 	onTabsKeyDown?: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
 	headerActions?: ReactNode;
-	sessionTabAction?: ReactNode;
-	sessionTabActionWide?: boolean;
+	sessionTabAction?: SessionTabActions;
 	tabStripAction?: ReactNode;
 	workspaceTabActions?: ReactNode;
 	workspaceActiveTabKey?: string;
 	orderedAuxiliaryTabs: ChatAuxiliaryTab[];
 	onReorderAuxiliaryTabs: (keys: string[]) => void;
 	session?: WorkspaceSession;
+	/** Set when the session lives on a remote host, even before it has loaded. */
+	remoteHostId?: string;
 	onSessionRenamed?: () => void | Promise<void>;
 	/** Fullscreen content cannot see the normal topbar portal outside its subtree. */
 	inline?: boolean;
 }) {
-	const { t } = useTranslation();
-	const providerLabel = agentLabel(snapshot.harness);
-	const sessionIsOrchestrator = session
-		? isOrchestratorSession(session)
-		: sessionRole === "orchestrator";
-	const label = sessionIsOrchestrator
-		? t("shell.orchestrator")
-		: (sessionTitle || session?.title || snapshot.title || snapshot.sessionId);
 	const tabScrollWatch = `${session?.id ?? ""}|${orderedAuxiliaryTabs.map((tab) => tab.key).join("|")}`;
 	const {
 		scrollRef: tabsOverflowRef,
@@ -2043,135 +2027,111 @@ function ChatHeader({
 		if (orderedAuxiliaryTabs.length > previousTabCountRef.current) scrollTabsToEnd();
 		previousTabCountRef.current = orderedAuxiliaryTabs.length;
 	}, [orderedAuxiliaryTabs.length, scrollTabsToEnd]);
+	const { t } = useTranslation();
 	const selectShellTerminal = useStableCallback(onSelectShellTerminal);
 	const closeShellTerminal = useStableCallback(onCloseShellTerminal);
 	const renameShellTerminal = useStableCallback(onRenameShellTerminal);
-	// The chat tab is "selected" only when neither terminal pane is the body.
-	const timelineActive = !workspaceActiveTabKey && !reviewerActive && !shellActiveHandleId;
-	// Match CenterPane: when the sidebar is off-canvas, the fixed TitlebarNav
-	// cluster sits over the session tab strip. Terminal already reserves that
-	// space; chat must too or the back/forward buttons land on the tab label.
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(isMac);
-	const header = (
-		<header className="flex h-inspector-tabs w-full shrink-0 items-stretch bg-sidebar">
-			<div
-				className="session-topbar-surface flex min-w-0 flex-1"
-				data-testid="session-workspace-topbar"
-			>
-				<div
-					className={cn(
-						"flex min-w-0 shrink items-stretch",
-						isMac && "session-topbar-titlebar-clearance-mac",
-						!isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
-					)}
-					data-testid="session-terminal-region"
-					ref={clearanceRef}
-					style={{ width: "100%" }}
-				>
-					<div
-						aria-label="Chat tabs"
-						className="flex h-full min-w-0 flex-1 items-stretch"
-						onKeyDown={onTabsKeyDown ?? handleTerminalTabListKeyDown}
-						role="tablist"
-					>
-						{session ? (
-							<SessionPaneTab
-								isActive={timelineActive}
-								label={label}
-								onSelect={timelineActive ? undefined : onSelectChat}
-								onRenamed={onSessionRenamed}
-								session={session}
-								tabAction={sessionTabAction}
-								tabActionWide={sessionTabActionWide}
-							/>
-						) : (
-							<button
-								aria-current={timelineActive ? true : undefined}
-								aria-label={`${label} · ${providerLabel}`}
-								aria-selected={timelineActive}
-								data-terminal-role="primary"
-								className={cn(
-									"group relative inline-flex min-w-shell-tab-min max-w-shell-tab-max shrink-0 self-stretch cursor-pointer items-center gap-1.5 border-r border-border px-3 text-control font-medium leading-none transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/50",
-									timelineActive
-										? "bg-overlay text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-foreground/80"
-										: "text-muted-foreground hover:bg-raised hover:text-foreground",
-								)}
-								onClick={timelineActive ? undefined : onSelectChat}
-								role="tab"
-								tabIndex={timelineActive || orderedAuxiliaryTabs.length === 0 ? 0 : -1}
-								title={label}
-								type="button"
-							>
-								<AgentAvatar className="size-icon-base" decorative provider={snapshot.harness} />
-								<span className="truncate">{label}</span>
-							</button>
-						)}
-						<div className="relative min-w-0 flex-1 self-stretch overflow-hidden">
-							<div ref={tabsOverflowRef} className="scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto">
-								<div className="flex w-max items-stretch">
-								<Reorder.Group
-									as="div"
-									axis="x"
-									className="flex items-stretch self-stretch"
-									onReorder={onReorderAuxiliaryTabs}
-									values={orderedAuxiliaryTabs.map((tab) => tab.key)}
-								>
-									{orderedAuxiliaryTabs.map((tab) => tab.kind === "shell" ? (
-										<ShellTerminalTabEntry
-											isActive={tab.terminal.handleId === shellActiveHandleId && !workspaceActiveTabKey}
-											key={tab.key}
-											onClose={closeShellTerminal}
-											onRename={onRenameShellTerminal ? renameShellTerminal : undefined}
-											onSelect={selectShellTerminal}
-											shell={tab.terminal}
-											tabKey={tab.key}
-										/>
-									) : (
-										<DraggableChatTab key={tab.key} value={tab.key}>
-											{tab.kind === "reviewer" || tab.kind === "reviewer-chat" ? (
-												<button
-													aria-current={reviewerActive && !workspaceActiveTabKey ? true : undefined}
-													aria-label="Reviewer"
-													aria-selected={Boolean(reviewerActive && !workspaceActiveTabKey)}
-													className={cn(
-														"group relative inline-flex min-w-shell-tab-min max-w-shell-tab-max self-stretch cursor-pointer items-center gap-1.5 border-r border-border px-3 text-control font-medium leading-none transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/50",
-														reviewerActive && !workspaceActiveTabKey
-															? "bg-overlay text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-foreground/80"
-															: "text-muted-foreground hover:bg-raised hover:text-foreground",
-													)}
-													onClick={() => tab.kind === "reviewer" ? onOpenReviewerTerminal?.(tab.terminal) : onOpenReviewerChat?.(tab.terminal)}
-													role="tab"
-													tabIndex={reviewerActive && !workspaceActiveTabKey ? 0 : -1}
-													title={tab.terminal.harness}
-													type="button"
-												>
-													<AgentAvatar className="size-icon-base" decorative provider={tab.terminal.harness} />
-													<span className="truncate">Reviewer</span>
-												</button>
-											) : (
-												tab.tab.content
+	// The chat tab is "selected" only when no other pane is the body.
+	const timelineActive = !workspaceActiveTabKey && !reviewerActive && !shellActiveHandleId;
+	const remoteSessionTab = !(remoteHostId ?? session?.hostId) ? undefined : session ? (
+		<SessionPaneTab
+			isActive={timelineActive}
+			label={isOrchestratorSession(session) ? t("shell.orchestrator") : session.title}
+			onSelect={timelineActive ? undefined : onSelectChat}
+			onRenamed={onSessionRenamed}
+			session={session}
+			tabAction={sessionTabAction ? <RemoteSessionTabAction actions={sessionTabAction} /> : undefined}
+		/>
+	) : null;
+	const sessionSubTabs = orderedAuxiliaryTabs.length > 0 || workspaceTabActions ? (
+		<div
+			aria-label="Chat tabs"
+			className="flex h-full min-w-0 flex-1 items-stretch"
+			onKeyDown={onTabsKeyDown ?? handleTerminalTabListKeyDown}
+			role="tablist"
+		>
+			<div className="relative min-w-0 flex-1 self-stretch overflow-hidden">
+				<div ref={tabsOverflowRef} className="scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto">
+					<div className="flex w-max items-stretch">
+						<Reorder.Group
+							as="div"
+							axis="x"
+							className="flex items-stretch self-stretch"
+							onReorder={onReorderAuxiliaryTabs}
+							values={orderedAuxiliaryTabs.map((tab) => tab.key)}
+						>
+							{orderedAuxiliaryTabs.map((tab) => tab.kind === "shell" ? (
+								<ShellTerminalTabEntry
+									isActive={tab.terminal.handleId === shellActiveHandleId && !workspaceActiveTabKey}
+									key={tab.key}
+									onClose={closeShellTerminal}
+									onRename={onRenameShellTerminal ? renameShellTerminal : undefined}
+									onSelect={selectShellTerminal}
+									shell={tab.terminal}
+									tabKey={tab.key}
+								/>
+							) : (
+								<DraggableChatTab key={tab.key} value={tab.key}>
+									{tab.kind === "reviewer" || tab.kind === "reviewer-chat" ? (
+										<button
+											aria-current={reviewerActive && !workspaceActiveTabKey ? true : undefined}
+											aria-label="Reviewer"
+											aria-selected={Boolean(reviewerActive && !workspaceActiveTabKey)}
+											className={cn(
+												"group relative inline-flex min-w-shell-tab-min max-w-shell-tab-max self-stretch cursor-pointer items-center gap-1.5 border-r border-border px-3 text-control font-medium leading-none transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/50",
+												reviewerActive && !workspaceActiveTabKey
+													? "bg-overlay text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-foreground/80"
+													: "text-muted-foreground hover:bg-raised hover:text-foreground",
 											)}
-										</DraggableChatTab>
-									))}
-								</Reorder.Group>
-								{workspaceTabActions}
-								</div>
-							</div>
-							{showLeftFade ? <div aria-hidden="true" className="session-tab-scroll-fade session-tab-scroll-fade--left" /> : null}
-							{showRightFade ? <div aria-hidden="true" className="session-tab-scroll-fade" /> : null}
-						</div>
+											onClick={() =>
+												tab.kind === "reviewer"
+													? onOpenReviewerTerminal?.(tab.terminal)
+													: onOpenReviewerChat?.(tab.terminal)
+											}
+											role="tab"
+											tabIndex={reviewerActive && !workspaceActiveTabKey ? 0 : -1}
+											title={tab.terminal.harness}
+											type="button"
+										>
+											<AgentAvatar className="size-icon-base" decorative provider={tab.terminal.harness} />
+											<span className="truncate">Reviewer</span>
+										</button>
+									) : (
+										tab.tab.content
+									)}
+								</DraggableChatTab>
+							))}
+						</Reorder.Group>
+						{workspaceTabActions}
 					</div>
 				</div>
-				<div
-					className="ml-auto flex shrink-0 items-center gap-1 pl-2 pr-3"
-					data-testid="session-action-region"
-				>
+				{showLeftFade ? <div aria-hidden="true" className="session-tab-scroll-fade session-tab-scroll-fade--left" /> : null}
+				{showRightFade ? <div aria-hidden="true" className="session-tab-scroll-fade" /> : null}
+			</div>
+		</div>
+	) : undefined;
+	const header = (
+		<TopbarToolbar
+			actions={
+				<>
 					{tabStripAction ? <div data-testid="session-tab-strip-action">{tabStripAction}</div> : null}
 					{headerActions}
-				</div>
-			</div>
-		</header>
+				</>
+			}
+			clearanceClassName={cn(
+				isMac && "session-topbar-titlebar-clearance-mac",
+				!isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
+			)}
+			clearanceRef={clearanceRef}
+				onRenamed={onSessionRenamed}
+				onSelectActiveSession={onSelectChat}
+				onTabsKeyDown={onTabsKeyDown}
+				remoteSessionTab={remoteSessionTab}
+				subTabs={sessionSubTabs}
+			tabAction={sessionTabAction}
+		/>
 	);
 	return inline ? header : <SessionTopbarPortal>{header}</SessionTopbarPortal>;
 }

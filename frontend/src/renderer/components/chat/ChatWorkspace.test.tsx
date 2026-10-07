@@ -1,6 +1,7 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Activity, Profiler, type ReactElement } from "react";
+import { Activity, Profiler, type ComponentProps, type ReactElement } from "react";
 import { typeInLexicalEditor } from "../../test/lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace, promptSpacerHeight, promptTopInset } from "./ChatWorkspace";
@@ -18,7 +19,8 @@ import { appI18n } from "../../i18n";
 import type { ConversationMessage, ConversationSnapshot } from "../../types/conversation";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { useUiStore } from "../../stores/ui-store";
-import type { WorkspaceSession } from "../../types/workspace";
+import { isOrchestratorSession, type WorkspaceSession, type WorkspaceSummary } from "../../types/workspace";
+import { useTopbarTabsStore } from "../../stores/topbar-tabs-store";
 import {
 	getChatComposerMutation,
 	getChatInlineEditMutation,
@@ -32,6 +34,7 @@ import {
 	getChatDraftBoundary,
 } from "../../lib/chat-draft-boundary";
 import { TooltipProvider } from "../ui/tooltip";
+import { DropdownMenuItem } from "../ui/dropdown-menu";
 
 const renameSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 let restoreTimelineGeometry: (() => void) | undefined;
@@ -74,13 +77,93 @@ function stubVirtualTimelineGeometry(rowHeight: (index: number) => number = () =
 	restoreTimelineGeometry = () => spies.forEach((spy) => spy.mockRestore());
 }
 
+const routeMocks = vi.hoisted(() => ({
+	navigate: vi.fn(),
+	params: { projectId: undefined as string | undefined, sessionId: undefined as string | undefined },
+}));
+const workspaceQueryMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@tanstack/react-router")>();
+	return {
+		...actual,
+		useNavigate: () => routeMocks.navigate,
+		useParams: () => routeMocks.params,
+	};
+});
+
+vi.mock("../../hooks/useWorkspaceQuery", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../hooks/useWorkspaceQuery")>();
+	return { ...actual, useWorkspaceQuery: workspaceQueryMock };
+});
+
 vi.mock("../../lib/rename-session", () => ({ renameSession: renameSessionMock }));
 
+function seedChatToolbar(ui: ReactElement): void {
+	if (ui.type !== ChatWorkspace) return;
+	const props = ui.props as ComponentProps<typeof ChatWorkspace>;
+	const sessionId = props.snapshot.sessionId;
+	const sourceSession = props.session;
+	const workspaceId = sourceSession?.workspaceId ?? "project-1";
+	const session: WorkspaceSession = sourceSession
+		? { ...sourceSession, id: sessionId }
+		: {
+			id: sessionId,
+			workspaceId,
+			workspaceName: props.sessionTitle ?? "Project One",
+			title: props.sessionTitle ?? props.snapshot.title ?? sessionId,
+			provider: props.snapshot.harness as WorkspaceSession["provider"],
+			kind: props.sessionRole ?? "worker",
+			branch: "ao/chat-session",
+			status: "working",
+			activity: { state: "active", lastActivityAt: "2026-10-01T00:00:00Z" },
+			updatedAt: "2026-10-01T00:00:00Z",
+			prs: [],
+		};
+	const isOrchestrator = isOrchestratorSession(session);
+	const workspace: WorkspaceSummary = {
+		id: workspaceId,
+		name: session.workspaceName,
+		path: "/tmp/workspace",
+		orchestratorAgent: session.provider,
+		kind: "single_repo",
+		sessions: [session],
+	};
+	routeMocks.params.projectId = workspaceId;
+	routeMocks.params.sessionId = sessionId;
+	workspaceQueryMock.mockReturnValue({ data: [workspace] });
+	useTopbarTabsStore.setState({
+		tabs: {
+			version: 1,
+			groups: [{
+				id: workspaceId,
+				collapsed: false,
+				head: {
+					sessionId: isOrchestrator ? sessionId : null,
+					mode: "persistent",
+					lastActiveAt: 0,
+				},
+				tabs: isOrchestrator ? [] : [{ sessionId, mode: "persistent", lastActiveAt: 0 }],
+			}],
+		},
+	});
+}
+
 function render(ui: ReactElement) {
-	const result = rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
+	seedChatToolbar(ui);
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const wrap = (content: ReactElement) => (
+		<QueryClientProvider client={queryClient}>
+			<TooltipProvider>{content}</TooltipProvider>
+		</QueryClientProvider>
+	);
+	const result = rtlRender(wrap(ui));
 	return {
 		...result,
-		rerender: (nextUi: ReactElement) => result.rerender(<TooltipProvider>{nextUi}</TooltipProvider>),
+		rerender: (nextUi: ReactElement) => {
+			act(() => seedChatToolbar(nextUi));
+			result.rerender(wrap(nextUi));
+		},
 	};
 }
 
@@ -196,6 +279,11 @@ function stubGeometry(
 }
 
 beforeEach(() => {
+	routeMocks.navigate.mockReset();
+	routeMocks.params.projectId = undefined;
+	routeMocks.params.sessionId = undefined;
+	workspaceQueryMock.mockReset().mockReturnValue({ data: [] });
+	useTopbarTabsStore.setState({ tabs: { version: 1, groups: [] }, density: "comfortable", overflow: "scroll" });
 	writeText.mockClear();
 	menuAction.mockClear();
 	previousTabListeners.clear();
@@ -787,22 +875,27 @@ describe("ChatWorkspace timeline", () => {
 		expect(onDecide).toHaveBeenCalledWith("drain-approval", "allow_once");
 	});
 
-	it("labels worker and orchestrator primary tabs with accessible provider context", () => {
+	it("renders grouped worker and orchestrator route tabs with provider context", () => {
 		const view = render(<ChatWorkspace snapshot={chatFixture} session={chatSession} sessionRole="worker" />);
 
 		expect(screen.getByLabelText("Chat")).toHaveAttribute("data-session-role", "worker");
 		expect(screen.getByLabelText("Chat")).toHaveClass("min-w-0", "w-full", "overflow-hidden");
 		expect(screen.getByTestId("session-workspace-topbar")).toBeInTheDocument();
-		expect(screen.getByTestId("session-terminal-region")).toHaveStyle({ width: "100%" });
+		expect(screen.getByTestId("session-terminal-region")).toBeInTheDocument();
+		expect(screen.getByTestId("topbar-tabs")).toBeInTheDocument();
+		expect(document.querySelector('[data-terminal-role="primary"]')).not.toBeInTheDocument();
+		expect(screen.queryByTestId("session-sub-tabs")).not.toBeInTheDocument();
 		const workerTab = screen.getByRole("tab", { name: "Reviewer chat · Codex · Working" });
+		expect(workerTab.closest('[data-testid="topbar-tab"]')).toHaveAttribute("data-role", "task");
 		expect(workerTab).toHaveTextContent(chatSession.title);
 		expect(workerTab).not.toHaveTextContent("Codex");
 		expect(workerTab.querySelector('img[aria-hidden="true"]')).toBeInTheDocument();
 
+		const orchestrator = { ...chatSession, id: "ao-demo-orchestrator", kind: "orchestrator" as const };
 		view.rerender(
 			<ChatWorkspace
-				snapshot={chatFixture}
-				session={{ ...chatSession, id: "ao-demo-orchestrator", kind: "orchestrator" }}
+				snapshot={{ ...chatFixture, sessionId: orchestrator.id }}
+				session={orchestrator}
 				sessionRole="orchestrator"
 			/>,
 		);
@@ -812,15 +905,32 @@ describe("ChatWorkspace timeline", () => {
 		const actionRegion = screen.getByTestId("session-action-region");
 		expect(actionRegion).toHaveClass("pl-2", "pr-3");
 		expect(actionRegion).not.toHaveClass("px-3");
-		expect(screen.getByRole("tab", { name: "Orchestrator · Codex · Working" })).toBeInTheDocument();
+		const headTab = screen.getByRole("tab", { name: "agent-orchestrator" });
+		expect(headTab.closest('[data-testid="topbar-tab"]')).toHaveAttribute("data-role", "head");
+		expect(headTab).toHaveAttribute("aria-current", "true");
 
+		const legacyOrchestrator = { ...chatSession, id: "legacy-orchestrator", kind: undefined };
 		view.rerender(
 			<ChatWorkspace
-				snapshot={chatFixture}
-				session={{ ...chatSession, id: "legacy-orchestrator", kind: undefined }}
+				snapshot={{ ...chatFixture, sessionId: legacyOrchestrator.id }}
+				session={legacyOrchestrator}
 			/>,
 		);
-		expect(screen.getByRole("tab", { name: "Orchestrator · Codex · Working" })).toBeInTheDocument();
+		const legacyHead = screen.getByRole("tab", { name: "agent-orchestrator" });
+		expect(legacyHead.closest('[data-testid="topbar-tab"]')).toHaveAttribute("data-role", "head");
+		expect(legacyHead).toHaveAttribute("aria-current", "true");
+	});
+
+	it("renders route tabs without a session object", () => {
+		render(<ChatWorkspace snapshot={chatFixture} />);
+
+		expect(screen.getByTestId("session-topbar-toolbar")).toBeInTheDocument();
+		const projectTabs = screen.getByRole("tablist", { name: "Project tabs" });
+		const routedTaskTab = within(projectTabs)
+			.getAllByRole("tab")
+			.find((tab) => tab.closest('[data-testid="topbar-tab"]')?.getAttribute("data-role") === "task");
+		expect(routedTaskTab).toHaveAttribute("aria-current", "true");
+		expect(document.querySelector('[data-terminal-role="primary"]')).not.toBeInTheDocument();
 	});
 
 	it("shows live provider context usage beside the composer settings", () => {
@@ -847,7 +957,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(within(composer).getByRole("progressbar", { name: "Context window used" })).toHaveAttribute("aria-valuetext", "129,200 / 258,400 tokens (50%)");
 	});
 
-	it("refreshes the owning workspace after renaming the primary chat tab", async () => {
+	it("refreshes the owning workspace after renaming the grouped chat tab", async () => {
 		const user = userEvent.setup();
 		const onSessionRenamed = vi.fn().mockResolvedValue(undefined);
 		render(
@@ -859,7 +969,8 @@ describe("ChatWorkspace timeline", () => {
 			/>,
 		);
 
-		await user.dblClick(screen.getByRole("tab", { name: "Reviewer chat · Codex · Working" }));
+		screen.getByRole("tab", { name: "Reviewer chat · Codex · Working" }).focus();
+		await user.keyboard("{F2}");
 		const input = screen.getByRole("textbox", { name: "Rename Reviewer chat" });
 		await user.clear(input);
 		await user.type(input, "Focused review{Enter}");
@@ -880,7 +991,8 @@ describe("ChatWorkspace timeline", () => {
 			/>,
 		);
 
-		const tab = screen.getByRole("tab", { name: "Orchestrator · Codex · Working" });
+		// The grouped tabs show the project orchestrator as the project (head) tab.
+		const tab = screen.getByRole("tab", { name: "agent-orchestrator" });
 		await user.dblClick(tab);
 		fireEvent.contextMenu(tab);
 
@@ -906,32 +1018,46 @@ describe("ChatWorkspace timeline", () => {
 		);
 	});
 
-	it("keeps session tab actions on the primary chat tab, like the terminal session", () => {
+	it("keeps session actions in the active tab menu and workspace actions on its row", async () => {
 		render(
 			<ChatWorkspace
 				snapshot={idleSnapshot()}
 				session={chatSession}
-				sessionTabAction={<button type="button">Session tab action</button>}
+				reviewerTerminal={{ handleId: "review-1", harness: "codex" }}
+				sessionTabAction={{ menuItems: <DropdownMenuItem>Switch to chat UI</DropdownMenuItem> }}
 				headerActions={<button type="button">Workspace action</button>}
 			/>,
 		);
 
 		const terminalRegion = screen.getByTestId("session-terminal-region");
-		expect(terminalRegion).toContainElement(screen.getByRole("tab", { name: /^Reviewer chat/ }));
-		expect(terminalRegion).toContainElement(screen.getByRole("button", { name: "Session tab action" }));
-		expect(screen.getByTestId("session-tab-action")).toContainElement(
-			screen.getByRole("button", { name: "Session tab action" }),
-		);
+		const chatTab = screen.getByRole("tab", { name: /^Reviewer chat/ });
+		const subTabs = screen.getByTestId("session-sub-tabs");
+		expect(subTabs).toContainElement(screen.getByRole("tab", { name: "Reviewer" }));
+		expect(terminalRegion).toContainElement(chatTab);
+		const tabList = screen.getByRole("tablist", { name: "Project tabs" });
+		const wrappers = within(tabList).getAllByTestId("topbar-tab");
+		const tabOptionsButtons = within(tabList).getAllByRole("button", { name: "Tab options" });
+		expect(tabOptionsButtons).toHaveLength(wrappers.length);
+		expect(document.querySelectorAll("[data-session-actions-trigger]")).toHaveLength(0);
 		const actionRegion = screen.getByTestId("session-action-region");
 		expect(actionRegion).toContainElement(screen.getByRole("button", { name: "Workspace action" }));
-		expect(actionRegion).not.toContainElement(screen.getByRole("button", { name: "Session tab action" }));
+		for (const tabOptionsButton of tabOptionsButtons) {
+			expect(actionRegion).not.toContainElement(tabOptionsButton);
+		}
+		expect(screen.getAllByRole("button", { name: "Workspace action" })).toHaveLength(1);
+		const activeWrapper = chatTab.closest<HTMLElement>('[data-testid="topbar-tab"]')!;
+		await userEvent.click(within(activeWrapper).getByRole("button", { name: "Tab options" }));
+		const menu = await screen.findByRole("menu");
+		expect(within(menu).getAllByRole("menuitem")[0]).toHaveTextContent("Switch to chat UI");
+		expect(screen.queryByTestId("session-tab-action")).not.toBeInTheDocument();
 	});
 
 	it("leaves new-terminal and display controls out of the chat strip, like the terminal session", () => {
 		render(<ChatWorkspace snapshot={chatFixture} onOpenShell={vi.fn()} />);
 
 		const terminalRegion = screen.getByTestId("session-terminal-region");
-		expect(terminalRegion).toContainElement(screen.getByRole("tablist", { name: "Chat tabs" }));
+		expect(terminalRegion).toContainElement(screen.getByRole("tablist", { name: "Project tabs" }));
+		expect(screen.queryByRole("tablist", { name: "Chat tabs" })).not.toBeInTheDocument();
 		expect(terminalRegion).not.toContainElement(
 			screen.queryByRole("button", { name: "New terminal" }),
 		);
@@ -4423,8 +4549,9 @@ describe("ChatWorkspace reviewer tabs", () => {
 
 		const chatTab = screen.getByRole("tab", { name: /^Reviewer chat/ });
 		const reviewerTab = screen.getByRole("tab", { name: "Reviewer" });
-		expect(chatTab).toHaveClass("px-2", "cursor-pointer");
-		expect(chatTab.closest("[data-terminal-tab-frame]")).toHaveClass("self-stretch");
+		expect(chatTab).toHaveClass("px-3", "text-control", "cursor-pointer");
+		expect(chatTab.closest('[data-testid="topbar-tab"]')).toHaveAttribute("data-role", "task");
+		expect(chatTab.closest("[data-terminal-tab-frame]")).toBeNull();
 		expect(reviewerTab).toHaveClass(
 			"self-stretch",
 			"px-3",
@@ -4585,32 +4712,42 @@ describe("ChatWorkspace reviewer tabs", () => {
 		expect(requestFullscreen).toHaveBeenCalledOnce();
 	});
 
-	it("supports arrow, Home/End, and desktop previous/next tab shortcuts", () => {
+	it("supports row-local keyboard navigation and desktop previous/next shortcuts", () => {
 		const onOpenReviewerTerminal = vi.fn();
+		const onSelectShellTerminal = vi.fn();
 		const onSelectChat = vi.fn();
+		const shellTerminal = {
+			handleId: "shell-1",
+			sessionId: chatFixture.sessionId,
+			title: "review shell",
+			workingDir: "/p",
+			createdAt: "2026-08-04T00:00:00Z",
+		};
 		const common = {
 			snapshot: idleSnapshot(),
 			session: chatSession,
 			reviewerTerminal,
+			shellTerminals: [shellTerminal],
 			onOpenReviewerTerminal,
+			onSelectShellTerminal,
 			onSelectChat,
 		};
 		const view = render(<ChatWorkspace {...common} />);
-		const chatTab = screen.getByRole("tab", {
-			name: /^Reviewer chat/,
-		});
 		const reviewerTab = screen.getByRole("tab", { name: "Reviewer" });
-		expect(chatTab).toHaveAttribute("tabindex", "0");
+		const shellTab = screen.getByRole("tab", { name: "review shell" });
+		const chatTab = screen.getByRole("tab", { name: /^Reviewer chat/ });
+		expect(chatTab.closest('[data-testid="topbar-tab"]')).toHaveAttribute("data-role", "task");
+		expect(screen.getByTestId("session-sub-tabs")).toContainElement(reviewerTab);
+		expect(screen.getByTestId("session-sub-tabs")).toContainElement(shellTab);
 		expect(reviewerTab).toHaveAttribute("tabindex", "-1");
 
-		chatTab.focus();
-		fireEvent.keyDown(chatTab, { key: "End" });
-		expect(reviewerTab).toHaveFocus();
-		expect(onOpenReviewerTerminal).toHaveBeenCalledWith(reviewerTerminal);
+		reviewerTab.focus();
+		fireEvent.keyDown(reviewerTab, { key: "ArrowRight" });
+		expect(shellTab).toHaveFocus();
+		expect(onSelectShellTerminal).toHaveBeenCalledWith("shell-1");
 
-		onOpenReviewerTerminal.mockClear();
-		chatTab.focus();
-		fireEvent.keyDown(chatTab, { key: "ArrowRight" });
+		onSelectShellTerminal.mockClear();
+		fireEvent.keyDown(shellTab, { key: "Home" });
 		expect(reviewerTab).toHaveFocus();
 		expect(onOpenReviewerTerminal).toHaveBeenCalledWith(reviewerTerminal);
 
@@ -4619,25 +4756,24 @@ describe("ChatWorkspace reviewer tabs", () => {
 		act(() => [...nextTabListeners][0]?.());
 		expect(onOpenReviewerTerminal).toHaveBeenCalledWith(reviewerTerminal);
 
-		view.rerender(<ChatWorkspace {...common} reviewerTarget={reviewerTarget} />);
-		const activeReviewerTab = screen.getByRole("tab", { name: "Reviewer" });
-		expect(screen.getByRole("tab", { name: /^Reviewer chat/ })).toHaveAttribute(
-			"tabindex",
-			"-1",
+		view.rerender(
+			<ChatWorkspace
+				{...common}
+				reviewerTarget={reviewerTarget}
+			/>,
 		);
+		const activeReviewerTab = screen.getByRole("tab", { name: "Reviewer" });
+		const routeChatTab = screen.getByRole("tab", { name: /^Reviewer chat/ });
+		expect(routeChatTab).toHaveAttribute("tabindex", "0");
+		expect(routeChatTab).toHaveAttribute("aria-current", "true");
 		expect(activeReviewerTab).toHaveAttribute("tabindex", "0");
 
 		activeReviewerTab.focus();
 		fireEvent.keyDown(activeReviewerTab, { key: "Home" });
-		expect(onSelectChat).toHaveBeenCalledOnce();
-		expect(screen.getByRole("tab", { name: /^Reviewer chat/ })).toHaveFocus();
+		expect(activeReviewerTab).toHaveFocus();
+		expect(onOpenReviewerTerminal).toHaveBeenCalledWith(reviewerTerminal);
 
-		onSelectChat.mockClear();
-		activeReviewerTab.focus();
-		fireEvent.keyDown(activeReviewerTab, { key: "ArrowLeft" });
-		expect(onSelectChat).toHaveBeenCalledOnce();
-
-		onSelectChat.mockClear();
+		onOpenReviewerTerminal.mockClear();
 		expect(previousTabListeners.size).toBe(1);
 		act(() => [...previousTabListeners][0]?.());
 		expect(onSelectChat).toHaveBeenCalledOnce();
@@ -4788,7 +4924,33 @@ describe("ChatWorkspace shell tabs", () => {
 		expect(onSelectChat).toHaveBeenCalledOnce();
 	});
 
-	it("cycles from the focused worker tab on Ctrl+Tab", () => {
+	it("cycles from an active secondary tab on Ctrl+Tab", () => {
+		const onSelectShellTerminal = vi.fn();
+		render(
+			<ChatWorkspace
+				snapshot={idleSnapshot()}
+				session={chatSession}
+				reviewerTerminal={{ handleId: "review-1", harness: "codex" }}
+				reviewerTarget={{
+					kind: "reviewer",
+					handleId: "review-1",
+					harness: "codex",
+					sessionId: chatFixture.sessionId,
+				}}
+				shellTerminals={shells}
+				onSelectShellTerminal={onSelectShellTerminal}
+				onSelectChat={vi.fn()}
+			/>,
+		);
+
+		const reviewerTab = screen.getByRole("tab", { name: "Reviewer" });
+		reviewerTab.focus();
+		fireEvent.keyDown(reviewerTab, { key: "Tab", ctrlKey: true });
+
+		expect(onSelectShellTerminal).toHaveBeenCalledWith("shell-1");
+	});
+
+	it("cycles from the focused primary tab on Ctrl+Tab", () => {
 		const onSelectShellTerminal = vi.fn();
 		render(
 			<ChatWorkspace
@@ -4796,11 +4958,11 @@ describe("ChatWorkspace shell tabs", () => {
 				session={chatSession}
 				shellTerminals={shells}
 				onSelectShellTerminal={onSelectShellTerminal}
-				onSelectChat={vi.fn()}
 			/>,
 		);
 
-		const workerTab = screen.getByRole("tab", { name: /^Reviewer chat/ });
+		const workerTab = screen.getByTestId("topbar-tabs").querySelector<HTMLElement>('[data-role="task"] [role="tab"]');
+		if (!workerTab) throw new Error("Expected the worker task tab");
 		workerTab.focus();
 		fireEvent.keyDown(workerTab, { key: "Tab", ctrlKey: true });
 

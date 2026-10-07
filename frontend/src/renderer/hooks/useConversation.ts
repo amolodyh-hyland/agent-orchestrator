@@ -25,6 +25,7 @@ import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
+import { useTopbarTabsStore } from "../stores/topbar-tabs-store";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 import type { ChatDraftExcerptReference } from "../lib/chat-drafts";
@@ -979,6 +980,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	return {
 		send: (input: string | ConversationSendInput) => {
 			if (!sessionId) return Promise.reject(new Error("No conversation session is selected."));
+			useTopbarTabsStore.getState().markInteracted(sessionId);
 			const clientMessageId = (typeof input === "string" ? undefined : input.clientMessageId) ?? crypto.randomUUID();
 			const normalizedInput: ConversationSendInput = typeof input === "string"
 				? { text: input }
@@ -1006,19 +1008,37 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		acknowledgeAcceptedTurn,
 		localEchos: stateSessionId ? localEchosBySession[stateSessionId] ?? [] : [],
 		acknowledgeLocalEcho,
-		resolve: (requestId: string, decisionId: string) => resolve.mutate({ requestId, decisionId }),
+		resolve: (requestId: string, decisionId: string) => {
+			if (sessionId) useTopbarTabsStore.getState().markInteracted(sessionId);
+			return resolve.mutate({ requestId, decisionId });
+		},
 		resolveInput: (
 			requestId: string,
 			action: "accept" | "decline" | "cancel",
 			content?: Record<string, unknown>,
-		) => resolveInput.mutateAsync({ requestId, action, content }),
-		interrupt: () => interrupt.mutate({ targetSessionId: sessionId as string }),
-		resumeAgent: () => resume.mutateAsync(),
+		) => {
+			if (sessionId) useTopbarTabsStore.getState().markInteracted(sessionId);
+			return resolveInput.mutateAsync({ requestId, action, content });
+		},
+		interrupt: () => {
+			if (sessionId) useTopbarTabsStore.getState().markInteracted(sessionId);
+			return interrupt.mutate({ targetSessionId: sessionId as string });
+		},
+		resumeAgent: () => {
+			if (sessionId) useTopbarTabsStore.getState().markInteracted(sessionId);
+			return resume.mutateAsync();
+		},
 		resumingAgent,
 		resumeError: resume.error ? apiErrorMessage(resume.error) : undefined,
-		compact: () => compact.mutateAsync(),
+		compact: () => {
+			if (sessionId) useTopbarTabsStore.getState().markInteracted(sessionId);
+			return compact.mutateAsync();
+		},
 		choosingSettings: chooseSettings.isPending && chooseSettings.variables?.targetSessionId === sessionId,
-		chooseSettings: (settings: TurnSettings) => chooseSettings.mutate({ targetSessionId: sessionId as string, settings }),
+		chooseSettings: (settings: TurnSettings) => {
+			if (sessionId) useTopbarTabsStore.getState().markInteracted(sessionId);
+			return chooseSettings.mutate({ targetSessionId: sessionId as string, settings });
+		},
 		/** A compaction is in flight provider-side and takes seconds, so it reads as
 		 *  its own state rather than folding into the generic busy flag, which also
 		 *  gates the composer. */
@@ -1034,12 +1054,16 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				: apiErrorCode(compact.error) === "CHAT_COMPACTION_BUSY"
 					? "Stop the current turn before compacting"
 					: undefined,
-		rollback: (turnId: string) => rollback.mutateAsync(turnId),
+		rollback: (turnId: string) => {
+			if (sessionId) useTopbarTabsStore.getState().markInteracted(sessionId);
+			return rollback.mutateAsync(turnId);
+		},
 		rollbackPending: rollback.isPending,
 		rollbackError: rollback.error ? apiErrorMessage(rollback.error) : undefined,
 		retryControl: {
 			retry: (turnId: string) => {
 				if (!sessionId) return Promise.reject(new Error("No conversation session is selected."));
+				useTopbarTabsStore.getState().markInteracted(sessionId);
 				const requestId = crypto.randomUUID();
 				if (!claimConversationDispatch(queryClient, stateSessionId as string, requestId, "retry", turnId)) {
 					return Promise.reject(new Error("Conversation work is already being sent for this session."));
@@ -1066,6 +1090,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		},
 		editMessage: async (turnId: string, text: string, clientMessageId?: string): Promise<ChatEditOutcome> => {
 			if (!sessionId) return Promise.reject(new Error("No conversation session is selected."));
+			useTopbarTabsStore.getState().markInteracted(sessionId);
 			const requestId = clientMessageId ?? crypto.randomUUID();
 			if (!claimConversationDispatch(queryClient, stateSessionId as string, requestId, "edit", turnId)) {
 				return Promise.reject(new Error("Conversation work is already being sent for this session."));
@@ -1091,10 +1116,14 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			editTargetsCurrentSession && editMessage.error
 				? apiErrorMessage(editMessage.error)
 				: undefined,
-		activateBranch: (branchId: string) => activateBranch.mutateAsync(branchId),
+		activateBranch: (branchId: string) => {
+			if (sessionId) useTopbarTabsStore.getState().markInteracted(sessionId);
+			return activateBranch.mutateAsync(branchId);
+		},
 		activateBranchPending: activateBranch.isPending,
 		activateBranchError: activateBranch.error ? apiErrorMessage(activateBranch.error) : undefined,
 		steer: async (text: string, attachments?: WireImageContent[], clientMessageId?: string, recoverOnly?: boolean): Promise<ChatSteerOutcome> => {
+			if (sessionId) useTopbarTabsStore.getState().markInteracted(sessionId);
 			try {
 				if (sessionId) recordDirectWorkerInteraction(sessionId, "chat", "worker", hostId);
 				await steer.mutateAsync({ text, attachments, clientMessageId, recoverOnly });
@@ -1105,14 +1134,22 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				throw error;
 			}
 		},
-		promoteQueuedTurn: (turnId: string) => promoteQueuedTurn.mutateAsync(turnId),
-		cancelQueuedTurn: (turnId: string) => cancelQueuedTurn.mutateAsync(turnId),
+		promoteQueuedTurn: (turnId: string) => {
+			if (sessionId) useTopbarTabsStore.getState().markInteracted(sessionId);
+			return promoteQueuedTurn.mutateAsync(turnId);
+		},
+		cancelQueuedTurn: (turnId: string) => {
+			if (sessionId) useTopbarTabsStore.getState().markInteracted(sessionId);
+			return cancelQueuedTurn.mutateAsync(turnId);
+		},
 		editQueuedTurn: (turnId: string, text: string, options?: QueuedMessageEditOptions) => {
 			if (!sessionId) return Promise.reject(new Error("No conversation session is selected."));
+			useTopbarTabsStore.getState().markInteracted(sessionId);
 			return editQueuedTurn.mutateAsync({ turnId, text, ...options });
 		},
 		reorderQueuedTurns: (turnIds: string[]) => {
 			if (!sessionId) return Promise.reject(new Error("No conversation session is selected."));
+			useTopbarTabsStore.getState().markInteracted(sessionId);
 			return reorderQueuedTurns.mutateAsync(turnIds);
 		},
 		promoteQueuedTurnPendingTurnId: promoteQueuedTurn.isPending
@@ -1340,8 +1377,10 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 	return {
 		options: query.data ?? [],
 		loaded: query.isSuccess,
-		setOption: async (optionId: string, value: ChatConfigOptionValue) =>
-			(await mutation.mutateAsync({ optionId, value })).options,
+		setOption: async (optionId: string, value: ChatConfigOptionValue) => {
+			if (sessionId) useTopbarTabsStore.getState().markInteracted(sessionId);
+			return (await mutation.mutateAsync({ optionId, value })).options;
+		},
 		pending: mutation.isPending,
 		error: mutation.error || query.error ? apiErrorMessage(mutation.error ?? query.error) : undefined,
 	};

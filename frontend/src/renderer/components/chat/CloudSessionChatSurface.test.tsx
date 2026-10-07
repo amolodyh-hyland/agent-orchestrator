@@ -3,6 +3,8 @@ import { act, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
+import { EMPTY_TOPBAR_TABS, findSession } from "../../lib/topbar-tabs";
+import { useTopbarTabsStore } from "../../stores/topbar-tabs-store";
 import type { WorkspaceSession } from "../../types/workspace";
 import { appendCloudEvents, CloudSessionChatSurface, loadCloudChatEvents, toSnapshot } from "./CloudSessionChatSurface";
 
@@ -40,7 +42,97 @@ const session = {
 } satisfies WorkspaceSession;
 
 describe("CloudSessionChatSurface", () => {
-	beforeEach(() => localStorage.clear());
+	beforeEach(() => {
+		localStorage.clear();
+		useTopbarTabsStore.setState({
+			tabs: EMPTY_TOPBAR_TABS,
+			overflow: "scroll",
+			density: "comfortable",
+			colorCoding: false,
+			projectColors: {},
+			lastEviction: null,
+		});
+	});
+	it("forwards workspace file tabs and the callback that returns to chat", async () => {
+		cloudMocks.chatProps.mockClear();
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		const onSelectChat = vi.fn();
+		const onSelectFile = vi.fn();
+		const workspaceTabs = [{
+			key: "file:src/cloud.ts",
+			content: <button aria-selected="true" role="tab" type="button">cloud.ts</button>,
+			onSelect: onSelectFile,
+			onClose: vi.fn(),
+		}];
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface
+					onSelectChat={onSelectChat}
+					session={{ ...session, cloud: { orgId: "org-1" } }}
+					workspaceActiveTabKey="file:src/cloud.ts"
+					workspaceTabs={workspaceTabs}
+				/>
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].workspaceTabs).toBe(workspaceTabs));
+
+		const props = cloudMocks.chatProps.mock.lastCall?.[0] as Record<string, unknown>;
+		expect(props.workspaceActiveTabKey).toBe("file:src/cloud.ts");
+		expect(props.onSelectChat).toBe(onSelectChat);
+		(workspaceTabs[0]?.onSelect)();
+		(props.onSelectChat as () => void)();
+		expect(onSelectFile).toHaveBeenCalledOnce();
+		expect(onSelectChat).toHaveBeenCalledOnce();
+	});
+	it("marks the tab for Cloud send, interrupt, approval, and steer actions", async () => {
+		cloudMocks.chatProps.mockClear();
+		const events: CloudCpClientEvent[] = [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Run", turnId: "turn-1" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 2, type: "chat.turn_started", payload: { turnId: "turn-1" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 3, type: "chat.turn_capabilities", payload: { turnId: "turn-1", steering: true }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 4, type: "chat.approval_requested", payload: {
+				turnId: "turn-1", requestId: "approval-1", summary: "Apply changes", decisions: [{ id: "allow", label: "Allow" }],
+			}, createdAt: session.updatedAt },
+		];
+		const steeredEvent: CloudCpClientEvent = {
+			sessionId: session.id,
+			sequence: 5,
+			type: "chat.turn_steered",
+			payload: { turnId: "turn-1", text: "Continue", clientMessageId: "steer-1" },
+			createdAt: session.updatedAt,
+		};
+		cloudMocks.listChatEvents.mockImplementation((_orgId, _sessionId, options) => Promise.resolve(
+			options.after === 0
+				? { events, hasMore: false, nextAfter: 4 }
+				: { events: [steeredEvent], hasMore: false, nextAfter: 5 },
+		));
+		cloudMocks.sendSessionMessage.mockResolvedValue({ event: {} });
+		cloudMocks.cancelTurn.mockResolvedValue({});
+		cloudMocks.decideChatApproval.mockResolvedValue({});
+		cloudMocks.steerTurn.mockResolvedValue({ event: { sequence: 4 } });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}>
+			<CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} />
+		</QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.controller.state).toBe("busy"));
+		const props = cloudMocks.chatProps.mock.lastCall?.[0] as Record<string, unknown>;
+		const onSend = props.onSend as (text: string, attachments: unknown[], clientMessageId: string) => Promise<unknown>;
+		const onInterrupt = props.onInterrupt as () => void;
+		const onDecide = props.onDecide as (requestId: string, decisionId: string) => void;
+		const onSteer = props.onSteer as (text: string, attachments: unknown[], clientMessageId: string) => Promise<unknown>;
+		const assertInteracted = async (action: () => void | Promise<unknown>) => {
+			useTopbarTabsStore.setState({ tabs: EMPTY_TOPBAR_TABS });
+			useTopbarTabsStore.getState().activateSession({ sessionId: session.id, groupId: "p", kind: "task" });
+			await act(async () => action());
+			expect(findSession(useTopbarTabsStore.getState().tabs, session.id)?.mode).toBe("persistent");
+		};
+
+		await assertInteracted(() => onSend("hello", [], "send-1"));
+		await assertInteracted(() => onInterrupt());
+		await assertInteracted(() => onDecide("approval-1", "allow"));
+		await assertInteracted(() => onSteer("Continue", [], "steer-1"));
+	});
 	it("attributes delivered worker reports as automation without changing the agent prompt", () => {
 		const events: CloudCpClientEvent[] = [{
 			sessionId: session.id, sequence: 1, type: "chat.user_message",
@@ -188,6 +280,23 @@ describe("CloudSessionChatSurface", () => {
 		expect(cloudMocks.sendSessionMessage).toHaveBeenCalledWith("org-1", session.id, {
 			text: "hello", model: "codex-test", reasoningEffort: "high",
 		}, { idempotencyKey: "message-2" });
+	});
+
+	it("marks Cloud settings changes as an interaction", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].onChooseSettings).toBeTypeOf("function"));
+		useTopbarTabsStore.getState().activateSession({ sessionId: session.id, groupId: "project-1", kind: "task" });
+		const chooseSettings = cloudMocks.chatProps.mock.lastCall?.[0].onChooseSettings as (next: { model: string }) => void;
+
+		act(() => chooseSettings({ model: "codex-next" }));
+
+		expect(findSession(useTopbarTabsStore.getState().tabs, session.id)?.mode).toBe("persistent");
 	});
 
 	it("uses the Codex model and effort last selected in the TUI", async () => {

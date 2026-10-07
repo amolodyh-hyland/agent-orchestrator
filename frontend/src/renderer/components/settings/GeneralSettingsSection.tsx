@@ -6,6 +6,7 @@ import { useLocaleStore } from "../../stores/locale-store";
 import { useSoundNotificationsStore } from "../../stores/sound-notifications-store";
 import { useUiStore } from "../../stores/ui-store";
 import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
+import { useTopbarTabsStore, type TabDensity, type TabOverflowMode } from "../../stores/topbar-tabs-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
@@ -148,6 +149,12 @@ export function GeneralSettingsSection({
 	const setLocale = useLocaleStore((state) => state.setLocale);
 	const localeSaving = useLocaleStore((state) => state.saving);
 	const localeSaveError = useLocaleStore((state) => state.saveError);
+	const tabOverflow = useTopbarTabsStore((state) => state.overflow);
+	const setTabOverflow = useTopbarTabsStore((state) => state.setOverflow);
+	const tabDensity = useTopbarTabsStore((state) => state.density);
+	const setTabDensity = useTopbarTabsStore((state) => state.setDensity);
+	const colorCoding = useTopbarTabsStore((state) => state.colorCoding);
+	const setColorCoding = useTopbarTabsStore((state) => state.setColorCoding);
 	const soundNotificationsEnabled = useSoundNotificationsStore((state) => state.enabled);
 	const setSoundNotificationsEnabled = useSoundNotificationsStore((state) => state.setEnabled);
 	const soundNotificationsSaving = useSoundNotificationsStore((state) => state.saving);
@@ -173,6 +180,16 @@ export function GeneralSettingsSection({
 		{ value: "de", label: t("settings.language.de") },
 		{ value: "pt-BR", label: t("settings.language.ptBR") },
 	] satisfies SettingsOption<AppLocale>[];
+
+	const tabOverflowOptions = [
+		{ value: "scroll", label: t("settings.tabs.overflow.scroll") },
+		{ value: "wrap", label: t("settings.tabs.overflow.wrap") },
+	] satisfies SettingsOption<TabOverflowMode>[];
+
+	const tabDensityOptions = [
+		{ value: "comfortable", label: t("settings.tabs.density.comfortable") },
+		{ value: "compact", label: t("settings.tabs.density.compact") },
+	] satisfies SettingsOption<TabDensity>[];
 
 	return (
 		<>
@@ -203,6 +220,32 @@ export function GeneralSettingsSection({
 						onChange={(next) => {
 							void setLocale(next);
 						}}
+					/>
+				</SettingsRow>
+				<SettingsRow label={t("settings.tabs.overflow")}>
+					<SettingsOptionMenu
+						aria-label={t("settings.tabs.overflow")}
+						value={tabOverflow}
+						options={tabOverflowOptions}
+						onChange={setTabOverflow}
+					/>
+				</SettingsRow>
+				<SettingsRow label={t("settings.tabs.density")}>
+					<SettingsOptionMenu
+						aria-label={t("settings.tabs.density")}
+						value={tabDensity}
+						options={tabDensityOptions}
+						onChange={setTabDensity}
+					/>
+				</SettingsRow>
+				<SettingsRow
+					label={t("settings.tabs.colorCoding")}
+					description={t("settings.tabs.colorCoding.help")}
+				>
+					<Switch
+						aria-label={t("settings.tabs.colorCoding")}
+						checked={colorCoding}
+						onCheckedChange={setColorCoding}
 					/>
 				</SettingsRow>
 				{localeSaveError ? (

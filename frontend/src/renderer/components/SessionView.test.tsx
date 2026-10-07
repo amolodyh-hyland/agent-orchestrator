@@ -12,6 +12,7 @@ import type { SessionInterfaceTransitionStatus } from "../hooks/useSessionInterf
 import { inspectorIsOpen, rememberedFileDisplayMode, useUiStore, type InspectorView } from "../stores/ui-store";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
+import type { SessionTabActions } from "./topbar-tabs/TopbarTab";
 import { setChatDraftBoundary } from "../lib/chat-draft-boundary";
 import { chatDraftScopeKey } from "../lib/chat-drafts";
 import { useFileAttachments, type FileAttachment } from "../hooks/useFileAttachments";
@@ -81,10 +82,11 @@ const resumeAgentPostMock = vi.hoisted(() => vi.fn());
 
 async function chooseSessionAction(name: string) {
 	const user = userEvent.setup();
-	await user.click(screen.getByRole("button", { name: "Session actions" }));
+	await user.click(screen.getByRole("button", { name: "Tab options" }));
 	await user.click(await screen.findByRole("menuitem", { name }));
 }
 const routeBlockerState = vi.hoisted(() => ({
+	params: { projectId: "project-1" as string | undefined, sessionId: "session-1" as string | undefined },
 	options: undefined as
 		| {
 				disabled: boolean;
@@ -96,6 +98,7 @@ const routeBlockerState = vi.hoisted(() => ({
 
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
+	useParams: () => routeBlockerState.params,
 	useBlocker: (options: NonNullable<typeof routeBlockerState.options>) => {
 		routeBlockerState.options = options;
 	},
@@ -288,6 +291,17 @@ vi.mock("./TerminalSwitchAgentButton", () => ({
 }));
 vi.mock("./chat/SessionChatSurface", async () => {
 	const { memo } = await vi.importActual<typeof import("react")>("react");
+	const { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } = await vi.importActual<typeof import("./ui/dropdown-menu")>("./ui/dropdown-menu");
+	const SessionTabMenu = ({ actions }: { actions?: SessionTabActions }) => actions?.inlineStatus ? (
+		<span>{actions.inlineStatus}</span>
+	) : (
+		<DropdownMenu>
+			<DropdownMenuTrigger asChild>
+				<button aria-label="Tab options" type="button" />
+			</DropdownMenuTrigger>
+			<DropdownMenuContent>{actions?.menuItems}</DropdownMenuContent>
+		</DropdownMenu>
+	);
 	return { SessionChatSurface: memo(({
 		session,
 		onOpenShell,
@@ -316,7 +330,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 		onOpenShell?: () => void;
 		onOpenFile?: (path: string, line?: number) => void;
 		headerActions?: ReactNode;
-		sessionTabAction?: ReactNode;
+		sessionTabAction?: SessionTabActions;
 		tabStripAction?: ReactNode;
 		reviewerTerminal?: { handleId: string; harness: string };
 		onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
@@ -368,7 +382,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 				reorder visible tabs
 			</button>
 			{headerActions}
-			{sessionTabAction}
+			<SessionTabMenu actions={sessionTabAction} />
 			<div role="tablist">
 				{workspaceTabs?.map((tab) => <div key={tab.key}>{tab.content}</div>)}
 				{workspaceTabActions}
@@ -422,25 +436,74 @@ vi.mock("./chat/SessionChatSurface", async () => {
 	};
 });
 
-vi.mock("./chat/CloudSessionChatSurface", async (importOriginal) => ({
-	...await importOriginal<typeof import("./chat/CloudSessionChatSurface")>(),
-	CloudSessionChatSurface: ({ sessionTabAction, controllerTransitioning, newWorkDisabled, onConversationWorkChange, reviewerTerminal, reviewerTarget, onOpenReviewerTerminal, onSelectChat }: { sessionTabAction?: ReactNode; controllerTransitioning?: boolean; newWorkDisabled?: boolean; onConversationWorkChange?: (state: typeof chatSurfaceWorkState) => void; reviewerTerminal?: { handleId: string; harness: string }; reviewerTarget?: { handleId: string; harness: string }; onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void; onSelectChat?: () => void }) => (
+vi.mock("./chat/CloudSessionChatSurface", async (importOriginal) => {
+	const { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } = await vi.importActual<typeof import("./ui/dropdown-menu")>("./ui/dropdown-menu");
+	const SessionTabMenu = ({ actions }: { actions?: SessionTabActions }) => actions?.inlineStatus ? (
+		<span>{actions.inlineStatus}</span>
+	) : (
+		<DropdownMenu>
+			<DropdownMenuTrigger asChild>
+				<button aria-label="Tab options" type="button" />
+			</DropdownMenuTrigger>
+			<DropdownMenuContent>{actions?.menuItems}</DropdownMenuContent>
+		</DropdownMenu>
+	);
+	return { ...await importOriginal<typeof import("./chat/CloudSessionChatSurface")>(), CloudSessionChatSurface: ({
+		sessionTabAction,
+		controllerTransitioning,
+		newWorkDisabled,
+		onConversationWorkChange,
+		workspaceTabs,
+		workspaceActiveTabKey,
+		onSelectChat,
+		reviewerTerminal,
+		reviewerTarget,
+		onOpenReviewerTerminal,
+	}: {
+		sessionTabAction?: SessionTabActions;
+		controllerTransitioning?: boolean;
+		newWorkDisabled?: boolean;
+		onConversationWorkChange?: (state: typeof chatSurfaceWorkState) => void;
+		workspaceTabs?: Array<{ key: string; content: ReactNode; onSelect: () => void }>;
+		workspaceActiveTabKey?: string;
+		onSelectChat?: () => void;
+		reviewerTerminal?: { handleId: string; harness: string };
+		reviewerTarget?: { handleId: string; harness: string };
+		onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
+	}) => (
 		<div data-testid="cloud-chat-surface" data-transitioning={controllerTransitioning ? "true" : "false"} data-new-work-disabled={newWorkDisabled ? "true" : "false"}>
-			{sessionTabAction}
+			<SessionTabMenu actions={sessionTabAction} />
+			<div data-active-workspace-tab={workspaceActiveTabKey ?? ""} role="tablist">
+				{workspaceTabs?.map((tab) => <div key={tab.key}>{tab.content}</div>)}
+			</div>
+			{workspaceTabs?.length ? <button data-testid="cloud-chat-tab" onClick={onSelectChat} type="button">select cloud chat tab</button> : null}
 			<button type="button" onClick={() => onConversationWorkChange?.({ ...chatSurfaceWorkState })}>report cloud chat work</button>
 			<button type="button" onClick={() => onSelectChat?.()}>cloud chat tab</button>
 			{reviewerTerminal ? <button type="button" onClick={() => onOpenReviewerTerminal?.(reviewerTerminal)}>cloud reviewer tab</button> : null}
 			<span data-testid="cloud-chat-target">{reviewerTarget ? `reviewer:${reviewerTarget.handleId}:${reviewerTarget.harness}` : "chat"}</span>
 		</div>
 	),
-}));
+	};
+});
 vi.mock("./chat/ReviewerChatSurface", () => ({
 	ReviewerChatSurface: ({ reviewId }: { reviewId: string }) => (
 		<div data-testid="reviewer-chat-surface">{reviewId}</div>
 	),
 }));
-vi.mock("./CenterPane", () => ({
-	CenterPane: ({
+
+vi.mock("./CenterPane", async () => {
+	const { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } = await vi.importActual<typeof import("./ui/dropdown-menu")>("./ui/dropdown-menu");
+	const SessionTabMenu = ({ actions }: { actions?: SessionTabActions }) => actions?.inlineStatus ? (
+		<span>{actions.inlineStatus}</span>
+	) : (
+		<DropdownMenu>
+			<DropdownMenuTrigger asChild>
+				<button aria-label="Tab options" type="button" />
+			</DropdownMenuTrigger>
+			<DropdownMenuContent>{actions?.menuItems}</DropdownMenuContent>
+		</DropdownMenu>
+	);
+	return { CenterPane: ({
 		agentInputDisabled,
 		session,
 		terminalGeneration,
@@ -470,7 +533,7 @@ vi.mock("./CenterPane", () => ({
 		onSessionTerminalAttached?: (attached: boolean) => void;
 		onSelectReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
 		topbarActions?: ReactNode;
-		sessionTabAction?: ReactNode;
+		sessionTabAction?: SessionTabActions;
 		tabStripAction?: ReactNode;
 		workspaceTabs?: Array<{ key: string; content: ReactNode; onSelect: () => void }>;
 		workspaceTabActions?: ReactNode;
@@ -492,7 +555,7 @@ vi.mock("./CenterPane", () => ({
 				{auxiliaryTabOrder?.join("|") ?? ""}
 			</div>
 			{topbarActions}
-			{sessionTabAction}
+			<SessionTabMenu actions={sessionTabAction} />
 			<div role="tablist">
 				{workspaceTabs?.map((tab) => <div key={tab.key}>{tab.content}</div>)}
 				{workspaceTabActions}
@@ -526,7 +589,8 @@ vi.mock("./CenterPane", () => ({
 		</div>
 		);
 	},
-}));
+	};
+});
 vi.mock("./BrowserPanel", () => ({
 	BrowserPanelView: ({
 		poppedOut,
@@ -2347,7 +2411,7 @@ describe("SessionView", () => {
 	it.each([
 		["tui", "chat", "Switch to chat UI"],
 		["chat", "tui", "Switch to terminal UI"],
-	] as const)("keeps the Cloud %s to %s switch only in the existing session actions menu", async (mode, targetMode, action) => {
+	] as const)("keeps the Cloud %s to %s switch in the active tab menu", async (mode, targetMode, action) => {
 		interfaceTransitionState.status = { supported: true, targetMode };
 		const session = workerSession("sess-1");
 		session.cloud = { orgId: "org-1" };
@@ -2358,7 +2422,7 @@ describe("SessionView", () => {
 		render(<SessionView sessionId="sess-1" />);
 
 		expect(screen.queryByRole("button", { name: action })).not.toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "Session actions" }));
+		await userEvent.click(screen.getByRole("button", { name: "Tab options" }));
 		expect(screen.getByRole("menuitem", { name: action })).toBeInTheDocument();
 	});
 
@@ -3929,7 +3993,7 @@ describe("SessionView", () => {
 	it.each([
 		["worker", "sess-1"],
 		["orchestrator", "sess-orch"],
-	] as const)("removes the session actions menu for %s sessions when Chat UI is unsupported", (_label, sessionId) => {
+	] as const)("hides unsupported Chat UI actions for %s sessions", async (_label, sessionId) => {
 		interfaceTransitionState.status = { supported: false, targetMode: "chat", reasonCode: "CHAT_UNSUPPORTED" };
 		const session = workerSession(sessionId);
 		session.mode = "tui";
@@ -3938,14 +4002,14 @@ describe("SessionView", () => {
 
 		render(<SessionView sessionId={sessionId} />);
 
-		// Nothing in the menu applies, so it must not render as an empty dropdown.
-		expect(screen.queryByRole("button", { name: "Session actions" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Tab options" }));
+		expect(screen.queryByRole("menuitem", { name: /Switch to chat UI/ })).not.toBeInTheDocument();
 	});
 
 	it.each([
 		["before its status loads", undefined, false],
 		["once terminated", { supported: false, targetMode: "chat", reasonCode: "SESSION_TERMINATED" }, true],
-	] as const)("removes the session actions menu for a harness outside the Chat list %s", (_label, status, terminated) => {
+	] as const)("hides unsupported Chat UI actions for a harness outside the Chat list %s", async (_label, status, terminated) => {
 		settingsState.chatHarnesses = ["claude-code", "codex"];
 		interfaceTransitionState.status = status;
 		const session = workerSession("sess-1");
@@ -3955,10 +4019,11 @@ describe("SessionView", () => {
 
 		render(<SessionView sessionId="sess-1" />);
 
-		expect(screen.queryByRole("button", { name: "Session actions" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Tab options" }));
+		expect(screen.queryByRole("menuitem", { name: /Switch to chat UI/ })).not.toBeInTheDocument();
 	});
 
-	it("keeps the session actions menu for a harness in the Chat list", async () => {
+	it("keeps the interface switch and agent handoff in the tab menu for a harness in the Chat list", async () => {
 		settingsState.chatHarnesses = ["claude-code", "codex", "opencode"];
 		interfaceTransitionState.status = { supported: true, targetMode: "chat" };
 		const session = workerSession("sess-1");
@@ -3967,7 +4032,7 @@ describe("SessionView", () => {
 
 		render(<SessionView sessionId="sess-1" />);
 
-		await userEvent.click(screen.getByRole("button", { name: "Session actions" }));
+		await userEvent.click(screen.getByRole("button", { name: "Tab options" }));
 		expect(screen.getByRole("menuitem", { name: "Switch to chat UI" })).toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: "Switch agent" })).toBeInTheDocument();
 	});
@@ -3980,7 +4045,7 @@ describe("SessionView", () => {
 		session.runtimeConnected = true;
 		render(<SessionView sessionId="sess-2" />);
 
-		await userEvent.click(screen.getByRole("button", { name: "Session actions" }));
+		await userEvent.click(screen.getByRole("button", { name: "Tab options" }));
 		expect(screen.getByRole("menuitem", { name: "Switch to chat UI" })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Switch agent" })).not.toBeInTheDocument();
 	});
@@ -3994,7 +4059,7 @@ describe("SessionView", () => {
 
 		render(<SessionView sessionId="sess-1" />);
 
-		await userEvent.click(screen.getByRole("button", { name: "Session actions" }));
+		await userEvent.click(screen.getByRole("button", { name: "Tab options" }));
 		expect(screen.getByRole("menuitem", { name: "Switch to chat UI" })).toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: "Switch to chat UI" })).toHaveAttribute(
 			"title",
@@ -4954,6 +5019,23 @@ describe("SessionView", () => {
 
 		expect(screen.getByRole("tab", { name: "cloud.ts" })).toHaveAttribute("aria-selected", "true");
 		expect(screen.getByTestId("cloud-file-workspace")).toHaveTextContent("src/cloud.ts");
+	});
+
+	it("returns a Cloud chat to its grouped tab after opening a file sub-tab", () => {
+		const session = workerSession("sess-1");
+		session.cloud = { orgId: "cloud-org", sandboxProvider: "docker" };
+		session.mode = "chat";
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
+		render(<SessionView sessionId="sess-1" />);
+
+		fireEvent.click(screen.getByRole("button", { name: "open files" }));
+		fireEvent.click(screen.getByRole("button", { name: "open cloud file" }));
+
+		expect(screen.getByRole("tab", { name: "cloud.ts", hidden: true })).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByTestId("cloud-file-workspace")).toHaveTextContent("src/cloud.ts");
+		fireEvent.click(screen.getByTestId("cloud-chat-tab"));
+		expect(screen.queryByTestId("cloud-file-workspace")).not.toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "cloud.ts", hidden: true })).toHaveAttribute("aria-selected", "false");
 	});
 
 	it("opens a selected tree file in a center tab while retaining the right-side tree", () => {
