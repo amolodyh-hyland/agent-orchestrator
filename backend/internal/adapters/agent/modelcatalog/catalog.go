@@ -346,6 +346,44 @@ func withOpenCodeCredentialPresence(env map[string]string, credentialType string
 	return next
 }
 
+// claudeEffortLevels is the vocabulary `claude --effort` accepts, lowest to
+// highest. The CLI warns about any other value and silently launches with its
+// default effort, so AO must validate the level itself.
+var claudeEffortLevels = []string{"low", "medium", "high", "xhigh", "max"}
+
+// claudeFallbackAliases are the Claude Code aliases the built-in table knows,
+// in picker order. Provider discovery no longer lists them (it reports only what
+// the provider returns), but the aliases still name the first-party models.
+var claudeFallbackAliases = []string{"sonnet", "fable", "opus", "haiku", "opus[1m]"}
+
+// claudeFallbackEfforts records, for each alias Claude Code accepts, the
+// effort levels it accepts. It is the capability data AO falls back to when the
+// provider cannot be asked. Haiku takes no effort setting; the rest of the
+// static aliases are the Claude 5 family, which accepts every level.
+var claudeFallbackEfforts = map[string][]string{
+	"sonnet":   claudeEffortLevels,
+	"fable":    claudeEffortLevels,
+	"opus":     claudeEffortLevels,
+	"haiku":    nil,
+	"opus[1m]": claudeEffortLevels,
+}
+
+// ClaudeFallbackEfforts returns the effort levels AO assumes a Claude Code model
+// accepts when provider discovery is unavailable. The boolean is false for a
+// model the built-in table does not list, including the empty ID: provider
+// model IDs are credential-scoped (Bedrock, Vertex, gateways), so only the
+// provider can vouch for them.
+func ClaudeFallbackEfforts(modelID string) ([]string, bool) {
+	efforts, ok := claudeFallbackEfforts[modelID]
+	return append([]string(nil), efforts...), ok
+}
+
+// ClaudeFallbackModelIDs lists the models ClaudeFallbackEfforts knows, in the
+// order of the built-in table.
+func ClaudeFallbackModelIDs() []string {
+	return append([]string(nil), claudeFallbackAliases...)
+}
+
 // discoverClaudeCatalog reports only provider-discovered models. Errors leave
 // the shared service to retain the matching cached catalog or allow manual
 // entry when no successful catalog has been saved yet.
