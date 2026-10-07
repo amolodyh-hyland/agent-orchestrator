@@ -63,7 +63,12 @@ AO keeps its four modes; no new mode or API enum was added.
   sends the Ask for approval posture explicitly (`on-request`, workspace-write,
   reviewer `user`), after which `default` sends nothing again. For the common setup
   that equals Codex's own default; for a user whose configuration is wider it is
-  deliberately safer. A thread that never overrode anything is never touched.
+  deliberately safer. A thread that never overrode anything is never touched. After
+  a daemon restart a host that survived keeps whatever posture it had, which this
+  process never saw, so its first `default` turn resets too (unless read-only). If
+  a managed requirement refuses the reset posture, the error says so ("returning to
+  Codex defaults sent the ask-for-approval posture, which was refused") and names
+  `accept-edits`, the posture actually sent, rather than `default`.
 - **Existing data:** conversations whose stored approval mode is `default` (the old
   picker showed it as "Full access"), sessions with no pinned permissions, and
   projects that stored `default` now launch or resume with no override instead of
@@ -125,7 +130,12 @@ Rules:
   update does not write the pinned permissions), recorded as a timeline notice, and
   used by restore.
 - If every mode is refused the spawn or turn fails with a
-  `PermissionFallbackExhaustedError` that lists each mode and its reason.
+  `PermissionFallbackExhaustedError` that lists each mode and its reason. A refusal
+  with nothing below the requested mode (`accept-edits`, `default`) is reported as
+  the provider's refusal itself, not as an exhausted ladder.
+- The conversation API answers a refused turn with `409 CHAT_PERMISSION_REJECTED`
+  carrying that message (the chat client treats it as a definitive non-acceptance of
+  a steer or an edit), never an anonymous `500`.
 - A lower mode that the provider cannot admit (it needs an approval channel the
   provider lacks) is treated as refused at launch, not launched.
 - A mode the user picks while a turn is being sent is not overwritten by the

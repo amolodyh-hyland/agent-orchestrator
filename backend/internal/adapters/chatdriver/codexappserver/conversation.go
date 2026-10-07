@@ -337,7 +337,12 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 	}
 	if err := c.conn.request(ctx, "turn/start", params, &resp); err != nil {
 		if _, overridden := params["sandboxPolicy"]; overridden && !c.readOnly {
-			err = permissionRejection(msg.Settings.Approval, err)
+			// Name the posture that was really sent: for a return to the default mode
+			// that is the reset posture, not the mode the user picked.
+			err = permissionRejection(settings.Approval, err)
+			if resetToDefaults && errors.Is(err, ports.ErrPermissionRejected) {
+				err = fmt.Errorf("returning to Codex defaults sent the ask-for-approval posture, which was refused: %w", err)
+			}
 		}
 		return ports.ChatTurnRef{}, fmt.Errorf("turn/start: %w", err)
 	}

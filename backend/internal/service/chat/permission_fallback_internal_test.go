@@ -138,3 +138,32 @@ func TestReviewControllerTurnNeverStepsDown(t *testing.T) {
 		t.Fatalf("a review controller reported session permissions %v", reported)
 	}
 }
+
+// With nothing less permissive than the requested mode there is no ladder to walk, so
+// the refusal is reported as it is. An "every permission mode was rejected" list with
+// one entry would claim a fallback was tried when none was.
+func TestRefusalWithNoLowerModeIsReportedAsIs(t *testing.T) {
+	for _, requested := range []ports.PermissionMode{ports.PermissionModeAcceptEdits, ports.PermissionModeDefault} {
+		t.Run(string(requested), func(t *testing.T) {
+			var attempts []ports.PermissionMode
+			fallback := permissionFallback{enabled: true, log: slog.New(slog.DiscardHandler), session: "s", stage: "turn"}
+
+			_, err := fallback.run(context.Background(), requested, func(mode ports.PermissionMode) error {
+				attempts = append(attempts, mode)
+				return rejection(mode)
+			})
+
+			var exhausted *ports.PermissionFallbackExhaustedError
+			if errors.As(err, &exhausted) {
+				t.Fatalf("run reported %v as an exhausted ladder", err)
+			}
+			var refused *ports.PermissionRejectedError
+			if !errors.As(err, &refused) || refused.Mode != requested {
+				t.Fatalf("run error = %v, want the provider's refusal of %q", err, requested)
+			}
+			if want := []ports.PermissionMode{requested}; !reflect.DeepEqual(attempts, want) {
+				t.Fatalf("attempts = %v, want %v", attempts, want)
+			}
+		})
+	}
+}

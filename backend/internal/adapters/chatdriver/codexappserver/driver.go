@@ -373,10 +373,11 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		// loaded thread. Host replay bridges output and unresolved server requests
 		// across the daemon detach without waiting for the active turn to settle.
 		conv.readOnly = cfg.ReadOnly
-		// The surviving host's posture is unknown; assume the resume's own mode
-		// applied, so a later drop to default resets it rather than trusting it.
-		policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
-		conv.widerThanDefaults = sentApprovalOverride(policy, sandbox, reviewer) && !cfg.ReadOnly
+		// The surviving host kept whatever posture its earlier turns left, which this
+		// process never saw (the stored mode may be default while the thread still
+		// carries an override from before the restart). Assume it may be wider than
+		// the defaults, so the first default turn resets it rather than trusting it.
+		conv.widerThanDefaults = !cfg.ReadOnly
 		conv.start(cfg.ProviderConversationID, cfg.Model, cfg.Effort)
 		return conv, nil
 	}

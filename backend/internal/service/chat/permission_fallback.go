@@ -67,6 +67,15 @@ func (f permissionFallback) run(
 		return permissionFallbackOutcome{Effective: requested}, err
 	}
 
+	if len(ports.PermissionFallbackModes(requested)) == 0 {
+		// Nothing is less permissive than what was asked for, so there is no step to
+		// take. Report the refusal itself: a list of "every mode" with one entry
+		// would claim a ladder was walked when none was.
+		f.log.Warn("permission mode rejected by the provider; no less permissive mode to try",
+			"sessionID", f.session, "stage", f.stage, "mode", requested, "reason", rejectionReason(err))
+		return permissionFallbackOutcome{Effective: requested}, err
+	}
+
 	rejected := []ports.PermissionRejection{{Mode: requested, Reason: rejectionReason(err)}}
 	f.log.Warn("permission mode rejected by the provider; stepping down",
 		"sessionID", f.session, "stage", f.stage, "mode", requested, "reason", rejectionReason(err))

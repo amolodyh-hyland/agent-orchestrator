@@ -985,6 +985,15 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_PROVIDER_REFUSED", err.Error(), nil)
 
+	case errors.Is(err, ports.ErrPermissionRejected):
+		// The provider refused the permission mode and no lower mode was tried or
+		// accepted (the fallback is off, exhausted, or has nothing below the mode).
+		// The turn did not start and the conversation is fine. The message says which
+		// mode was refused and why in the provider's own words, so it is carried
+		// through instead of becoming an anonymous server error.
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
+			"CHAT_PERMISSION_REJECTED", err.Error(), nil)
+
 	case errors.Is(err, ports.ErrChatRequestNotPending):
 		// Two clients can watch the same approval, so arriving second is ordinary.
 		// The card is stale; the client should refresh rather than retry.

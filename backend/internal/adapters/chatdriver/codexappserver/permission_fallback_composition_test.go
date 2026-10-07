@@ -45,6 +45,9 @@ type composedServer struct {
 	mu     sync.Mutex
 	turns  []json.RawMessage
 	failTo string // when set, every turn/start is refused with this message instead
+	// refuseOnRequest refuses a turn asking for on-request approvals, as a managed
+	// requirement that allows only approval policy Never would.
+	refuseOnRequest bool
 }
 
 func (s *composedServer) spawn(context.Context, string, string, []string) (*process, error) {
@@ -85,10 +88,13 @@ func (s *composedServer) serve(reader *bufio.Reader, out io.Writer) {
 			s.mu.Lock()
 			s.turns = append(s.turns, append(json.RawMessage(nil), f.Params...))
 			failTo := s.failTo
+			refuseOnRequest := s.refuseOnRequest
 			s.mu.Unlock()
 			switch {
 			case failTo != "":
 				refuse(f, failTo)
+			case refuseOnRequest && strings.Contains(string(f.Params), `"approvalPolicy":"on-request"`):
+				refuse(f, "invalid value for `approval_policy`: `OnRequest` is not in the allowed set [Never] (set by enterprise-managed requirements Default requirements (6e1e489a))")
 			case strings.Contains(string(f.Params), `"dangerFullAccess"`):
 				refuse(f, composedRefusal)
 			default:
@@ -282,5 +288,43 @@ func TestUnrelatedProviderFailureDoesNotStepDown(t *testing.T) {
 	defer c.mu.Unlock()
 	if len(c.reported) != 0 {
 		t.Fatalf("session permissions reported %v after an unrelated failure", c.reported)
+	}
+}
+
+// A thread launched with full access whose picker is then set to Codex defaults gets
+// the reset posture. If a managed requirement refuses that posture, the user is told
+// exactly that: one attempt, no claim that every mode was tried, and no mislabelled
+// "default" rejection.
+func TestRefusedResetIsReportedAsItselfThroughTheRealStack(t *testing.T) {
+	c, err := newComposition(t, ports.PermissionModeBypassPermissions, false)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	c.server.mu.Lock()
+	c.server.refuseOnRequest = true
+	c.server.mu.Unlock()
+	if _, err := c.svc.SetTurnSettings(context.Background(), composedSession, domain.ConversationSettings{
+		ApprovalMode: ports.PermissionModeDefault,
+	}); err != nil {
+		t.Fatalf("SetTurnSettings: %v", err)
+	}
+
+	_, err = c.send()
+
+	if !errors.Is(err, ports.ErrPermissionRejected) {
+		t.Fatalf("Send error = %v, want a permission rejection", err)
+	}
+	if strings.Contains(err.Error(), "every permission mode was rejected") {
+		t.Fatalf("Send error = %v; no ladder was walked, so it must not claim one was", err)
+	}
+	if !strings.Contains(err.Error(), "returning to Codex defaults sent the ask-for-approval posture") ||
+		!strings.Contains(err.Error(), "accept-edits") {
+		t.Fatalf("Send error = %v, want the posture that was sent named", err)
+	}
+	if got := len(c.server.turnPostures()); got != 1 {
+		t.Fatalf("provider saw %d turn/start requests, want exactly 1", got)
+	}
+	if got := c.sessionPermissions(t); got != ports.PermissionModeBypassPermissions {
+		t.Fatalf("session permissions = %q; a refused turn must leave them alone", got)
 	}
 }

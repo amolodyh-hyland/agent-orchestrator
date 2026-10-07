@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -33,6 +35,17 @@ func TestPermissionConstraintMessages(t *testing.T) {
 			false,
 		},
 		{"the setting named without backticks", "sandbox_mode DangerFullAccess is not in the allowed set", false},
+		// Codex's own wording for conflicts that are not constraint refusals: the field
+		// is backticked, but nothing says a value was outside an allowed set.
+		{"two permission overrides that cannot be combined", "`sandbox_mode` and `permission_profile` overrides cannot both be set", false},
+		{"a backticked setting in a message that is not a constraint", "invalid value for `sandbox_mode`: expected a string", false},
+		// The label after "(set by …)" is free text an administrator chose; a
+		// backticked setting name inside it is not what was refused.
+		{
+			"a requirement label that contains a backticked setting",
+			"invalid value for `model`: `gpt-x` is not in the allowed set [gpt-y] (set by enterprise-managed requirements `sandbox_mode` policy)",
+			false,
+		},
 		{"empty", "", false},
 	}
 	for _, test := range tests {
@@ -379,5 +392,125 @@ func TestReadOnlyConversationNeverResets(t *testing.T) {
 	postures := turnPostures(t, srv)
 	if len(postures) != 1 || postures[0].SandboxPolicy == nil || postures[0].SandboxPolicy.Type != "readOnly" {
 		t.Fatalf("postures = %+v, want the fixed read-only posture", postures)
+	}
+}
+
+// Resuming a thread through a fresh thread/resume carries whatever mode the resume
+// sent, so a later drop to the default mode resets only when that mode was explicit.
+func TestResumeMarksThePostureItSent(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		mode      ports.PermissionMode
+		wantReset bool
+	}{
+		{"resumed with an explicit mode", ports.PermissionModeBypassPermissions, true},
+		{"resumed with approve-for-me", ports.PermissionModeAuto, true},
+		{"resumed with the default mode", ports.PermissionModeDefault, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, srv := newTestDriver(t)
+			conv, err := d.Resume(context.Background(), ports.ChatResumeConfig{
+				SessionID: "ao-1", ProviderConversationID: "thread-1", WorkspacePath: "/tmp/ws", Permissions: tc.mode,
+			})
+			if err != nil {
+				t.Fatalf("Resume: %v", err)
+			}
+			defer func() { _ = conv.Close() }()
+			if err := sendWithMode(t, conv, ports.PermissionModeDefault); err != nil {
+				t.Fatalf("default turn: %v", err)
+			}
+			posture := turnPostures(t, srv)[0]
+			if tc.wantReset && !posture.isAskForApproval() {
+				t.Errorf("first default turn sent %+v, want the reset posture", posture)
+			}
+			if !tc.wantReset && !posture.isEmpty() {
+				t.Errorf("first default turn sent %+v on a thread resumed with defaults", posture)
+			}
+		})
+	}
+}
+
+// A host that survived a daemon restart may still carry an override from before it,
+// whatever mode is stored now: the stored mode can be default while the thread is
+// still on full access. Its first default turn must reset, not trust the label.
+func TestReconnectedHostIsResetOnTheFirstDefaultTurn(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		readOnly  bool
+		wantReset bool
+	}{
+		{"writable conversation", false, true},
+		{"read-only conversation", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, srv := newTestDriver(t)
+			proc, err := d.spawn(context.Background(), "codex", "/tmp/ws", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.persistent = true
+			d.connectHost = func(context.Context, persistenthost.Config) (*persistenthost.Transport, error) {
+				return &persistenthost.Transport{Stdin: proc.stdin, Stdout: proc.stdout, Reconnected: true, NextRequestID: 41}, nil
+			}
+			conv, err := d.Resume(context.Background(), ports.ChatResumeConfig{
+				SessionID: "ao-reconnect", ProviderConversationID: "thread-survived", DataDir: t.TempDir(),
+				WorkspacePath: "/tmp/ws", Permissions: ports.PermissionModeDefault, ReadOnly: tc.readOnly,
+			})
+			if err != nil {
+				t.Fatalf("Resume: %v", err)
+			}
+			defer func() { _ = conv.Close() }()
+
+			if err := sendWithMode(t, conv, ports.PermissionModeDefault); err != nil {
+				t.Fatalf("default turn: %v", err)
+			}
+			if err := sendWithMode(t, conv, ports.PermissionModeDefault); err != nil {
+				t.Fatalf("second default turn: %v", err)
+			}
+			postures := turnPostures(t, srv)
+			if tc.wantReset {
+				if !postures[0].isAskForApproval() {
+					t.Errorf("first default turn on a surviving host sent %+v, want the reset posture", postures[0])
+				}
+				if !postures[1].isEmpty() {
+					t.Errorf("second default turn sent %+v; once reset it overrides nothing", postures[1])
+				}
+				return
+			}
+			if postures[0].SandboxPolicy == nil || postures[0].SandboxPolicy.Type != "readOnly" {
+				t.Errorf("read-only turn sent %+v, want its fixed read-only posture", postures[0])
+			}
+		})
+	}
+}
+
+// A refused return to the default mode was a refusal of the posture AO sent, not of
+// "default" (which sends nothing). The error must name that posture and say why it
+// was sent, or the user is told a mode that asks for nothing was rejected.
+func TestRefusedResetNamesThePostureThatWasSent(t *testing.T) {
+	d, srv := newTestDriver(t)
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: "/tmp/ws", Permissions: ports.PermissionModeBypassPermissions,
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+	srv.mu.Lock()
+	srv.failures["turn/start"] = `{"code":-32600,"message":` + strconv.Quote(
+		"invalid value for `approval_policy`: `OnRequest` is not in the allowed set [Never] (set by enterprise-managed requirements x)") + `}`
+	srv.mu.Unlock()
+
+	err = sendWithMode(t, conv, ports.PermissionModeDefault)
+
+	var refused *ports.PermissionRejectedError
+	if !errors.As(err, &refused) {
+		t.Fatalf("error = %v, want a permission rejection", err)
+	}
+	if refused.Mode != ports.PermissionModeAcceptEdits {
+		t.Errorf("rejected mode = %q, want accept-edits: the posture AO actually sent", refused.Mode)
+	}
+	if !strings.Contains(err.Error(), "returning to Codex defaults sent the ask-for-approval posture") {
+		t.Errorf("error %q does not explain why that posture was sent", err.Error())
 	}
 }
