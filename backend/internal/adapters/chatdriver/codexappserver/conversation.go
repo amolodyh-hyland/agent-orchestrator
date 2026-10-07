@@ -319,6 +319,9 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 		} `json:"turn"`
 	}
 	if err := c.conn.request(ctx, "turn/start", params, &resp); err != nil {
+		if _, overridden := params["sandboxPolicy"]; overridden && !c.readOnly {
+			err = permissionRejection(msg.Settings.Approval, err)
+		}
 		return ports.ChatTurnRef{}, fmt.Errorf("turn/start: %w", err)
 	}
 

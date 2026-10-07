@@ -8782,6 +8782,10 @@ components:
           type: string
         model:
           type: string
+        permissionFallback:
+          type:
+          - "null"
+          - boolean
         permissions:
           type: string
       type: object
@@ -10184,6 +10188,13 @@ components:
           - tui
           type: string
         model:
+          type: string
+        permissions:
+          enum:
+          - default
+          - accept-edits
+          - auto
+          - bypass-permissions
           type: string
         pinnedAt:
           format: date-time

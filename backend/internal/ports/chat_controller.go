@@ -32,6 +32,9 @@ type ChatControllerStart struct {
 	Model         string
 	Effort        string
 	Permissions   PermissionMode
+	// DisablePermissionFallback turns off the step-down to a less permissive mode
+	// when the provider refuses Permissions. The zero value leaves the fallback on.
+	DisablePermissionFallback bool
 	// ReadOnly forces the provider's native sandbox to reject workspace writes.
 	// Reviewer-owned conversations set this independently of approval behavior.
 	ReadOnly              bool
@@ -81,6 +84,11 @@ type ChatControllerStarted struct {
 	ProviderConversationID string
 	ControllerGeneration   string
 	Conversation           domain.ConversationRecord
+	// EffectivePermissions is set only when the provider refused the requested
+	// permission mode at launch and the permission fallback started the
+	// controller with a less permissive one. ControllerReady must pin it on the
+	// session instead of the mode that was requested.
+	EffectivePermissions PermissionMode
 	// ProviderBoundary is non-nil when this launch owns a provider namespace
 	// that is not active yet. ControllerReady must commit it atomically with the
 	// session's provider handle and controller generation.

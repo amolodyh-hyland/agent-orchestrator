@@ -334,6 +334,9 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	defer cancel()
 	if err := conv.conn.request(openCtx, "thread/start", params, &resp); err != nil {
 		_ = conv.Terminate()
+		if sentApprovalOverride(policy, sandbox, reviewer) {
+			err = permissionRejection(cfg.Permissions, err)
+		}
 		return nil, fmt.Errorf("thread/start: %w", err)
 	}
 	if resp.Thread.ID == "" {
@@ -404,6 +407,9 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	err = conv.conn.request(resumeCtx, "thread/resume", params, &resp)
 	if err != nil {
 		_ = conv.Terminate()
+		if sentApprovalOverride(policy, sandbox, reviewer) {
+			err = permissionRejection(cfg.Permissions, err)
+		}
 		// Deliberately not falling back to thread/start: silently opening a new
 		// conversation would present unrelated history as continuous.
 		return nil, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, err)
@@ -575,6 +581,12 @@ func launchApprovalSettings(mode ports.PermissionMode, readOnly bool) (policy, s
 	}
 	policy, sandbox = approvalSettings(mode)
 	return policy, sandbox, approvalReviewer(mode)
+}
+
+// sentApprovalOverride reports whether a launch named any approval field, which
+// is the only case a permission refusal can be about it.
+func sentApprovalOverride(policy, sandbox, reviewer string) bool {
+	return policy != "" || sandbox != "" || reviewer != ""
 }
 
 // setApprovalParams adds the thread-level approval fields a launch chose. Empty

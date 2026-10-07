@@ -70,6 +70,9 @@ type recordingLauncher struct {
 	afterReady       func()
 	providerBoundary *domain.ConversationBranch
 	liveReconnect    bool
+	// effectivePermissions simulates the permission fallback having launched a
+	// lower mode than the one requested.
+	effectivePermissions ports.PermissionMode
 
 	preflighted          []domain.AgentHarness
 	preflightPermissions []ports.PermissionMode
@@ -182,6 +185,7 @@ func (l *recordingLauncher) StartChat(ctx context.Context, cfg ChatStart) (ChatS
 		ProviderConversationID: "thread-1",
 		ControllerGeneration:   "gen-1",
 		ProviderBoundary:       l.providerBoundary,
+		EffectivePermissions:   l.effectivePermissions,
 	}
 	if cfg.ControllerGeneration != "" {
 		started.ControllerGeneration = cfg.ControllerGeneration

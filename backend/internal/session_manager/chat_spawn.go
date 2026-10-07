@@ -246,9 +246,17 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 			in.record = prepared
 			return launchEnv, nil
 		},
+		// Off only when the project or role config turns the step-down off.
+		DisablePermissionFallback: !agentConfig.PermissionFallbackEnabled(),
 		ControllerReady: func(started ChatStarted) (ChatControllerCommit, error) {
+			permissions := in.record.Metadata.Permissions
+			if started.EffectivePermissions != "" {
+				// The provider refused the requested mode and the permission
+				// fallback launched a lower one; pin what is really running.
+				permissions = started.EffectivePermissions
+			}
 			metadata := domain.SessionMetadata{
-				Permissions:       in.record.Metadata.Permissions,
+				Permissions:       permissions,
 				Branch:            in.workspace.Branch,
 				WorkspacePath:     in.workspace.Path,
 				WorkspaceRepoPath: in.workspace.RepoPath,
@@ -489,6 +497,9 @@ func (m *Manager) resumeChatController(
 			rec = prepared
 			return launchEnv, nil
 		},
+		// Off only when the project or role config turns the step-down off.
+		DisablePermissionFallback: !agentConfig.PermissionFallbackEnabled(),
+
 		// The handle that makes this a resume rather than a new conversation.
 		ProviderConversationID: rec.Metadata.ProviderConversationID,
 		ProviderHandoff:        providerHandoff,
@@ -500,6 +511,11 @@ func (m *Manager) resumeChatController(
 		HistoryPolicy:        historyPolicy,
 		ControllerReady: func(started ChatStarted) (ChatControllerCommit, error) {
 			metadata := rec.Metadata
+			if started.EffectivePermissions != "" {
+				// The provider refused the pinned mode and the permission fallback
+				// resumed with a lower one; pin what is really running.
+				metadata.Permissions = started.EffectivePermissions
+			}
 			metadata.WorkspacePath = ws.Path
 			metadata.WorkspaceRepoPath = ws.RepoPath
 			if ws.Branch != "" {

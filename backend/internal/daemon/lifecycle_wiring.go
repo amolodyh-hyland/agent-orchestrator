@@ -215,6 +215,10 @@ type sessionLifecycle interface {
 	// session's durable metadata before the next prompt routes. A later TUI
 	// rebuild reads it back so ChatUI model changes survive the handoff.
 	PersistChatModel(ctx context.Context, id domain.SessionID, model string) error
+	// PersistChatPermissions records the permission mode a chat session really
+	// runs with after the provider refused the requested one and the permission
+	// fallback stepped down, so the session record and a later restore agree.
+	PersistChatPermissions(ctx context.Context, id domain.SessionID, permissions domain.PermissionMode) error
 }
 
 // sessionLifecycleMessenger adapts sessionLifecycle to ports.AgentMessenger so
