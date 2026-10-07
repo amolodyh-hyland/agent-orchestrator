@@ -7,11 +7,14 @@ import MakerNSIS from "./makers/maker-nsis";
 import MakerDMG, { isSigningConfigured, sealDmg, verifyDmg, verifyMacArtifact } from "./makers/maker-dmg";
 import { machoHasX86_64Slice } from "./makers/macho-archs";
 import MakerAppImage from "./makers/maker-appimage";
-import { existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { accessSync, constants, existsSync, lstatSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { MULTICA_DESKTOP_STAGE_DIR, stageMulticaDesktop } from "./scripts/stage-multica-desktop.mjs";
+// @ts-expect-error The staging helper is tested as an ESM script and intentionally has no declaration file in this unit.
+import { MULTICA_CLI_STAGE_DIR, stageMulticaCli } from "./scripts/stage-multica-cli.mjs";
 import { BUNDLED_TMUX_VERSION } from "./scripts/tmux-version.mjs";
 import { UPDATES_DISABLED_MARKER } from "./src/main/updates-disabled";
 
@@ -66,15 +69,25 @@ export function multicaDesktopOutDir(env: NodeJS.ProcessEnv = process.env): stri
 	return env.AO_MULTICA_DESKTOP_OUT?.trim() || undefined;
 }
 
+export function multicaCliBin(env: NodeJS.ProcessEnv = process.env): string | undefined {
+	return env.AO_MULTICA_CLI_BIN?.trim() || undefined;
+}
+
+export function multicaNoticeDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
+	return env.AO_MULTICA_NOTICE_DIR?.trim() || undefined;
+}
+
 export function extraResourcesForPlatform(
 	platform: NodeJS.Platform,
 	bundleMultica = multicaDesktopOutDir() !== undefined,
+	bundleMulticaCli = multicaCliBin() !== undefined,
 ): string[] {
 	return [
 		"daemon",
 		"agent-browser",
 		"resources/acp-runtime",
 		...(bundleMultica ? [MULTICA_DESKTOP_STAGE_DIR, UPDATES_DISABLED_MARKER] : []),
+		...(bundleMulticaCli ? [MULTICA_CLI_STAGE_DIR] : []),
 		...(platform === "darwin" ? ["update-helper"] : []),
 		...(platform === "darwin" || platform === "linux" ? ["tmux"] : []),
 		"assets/icon.png",
@@ -83,6 +96,97 @@ export function extraResourcesForPlatform(
 		"assets/trayIconTemplate@2x.png",
 		"app-update.yml",
 	];
+}
+
+export function writeMulticaCliSha256(stageDir: string, platform: NodeJS.Platform): string {
+	const binaryName = platform === "win32" ? "multica.exe" : "multica";
+	const binaryPath = path.join(stageDir, binaryName);
+	const digest = createHash("sha256").update(readFileSync(binaryPath)).digest("hex");
+	const checksumPath = path.join(stageDir, "multica.sha256");
+	writeFileSync(checksumPath, `${digest}  ${binaryName}\n`);
+	return checksumPath;
+}
+
+export function isMulticaCliSigningConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+	return Boolean(env.APPLE_SIGNING_IDENTITY?.trim() || env.CSC_LINK?.trim());
+}
+
+function hasExecutableMagic(contents: Buffer, platform: NodeJS.Platform): boolean {
+	const magic = contents.subarray(0, 4).toString("hex").toLowerCase();
+	if (platform === "darwin") {
+		return new Set(["feedface", "cefaedfe", "feedfacf", "cffaedfe", "cafebabe", "bebafeca", "cafebabf", "bfbafeca"]).has(magic);
+	}
+	if (platform === "linux") return magic === "7f454c46";
+	if (platform === "win32") return magic.startsWith("4d5a");
+	return false;
+}
+
+export function verifyMulticaCliResources(
+	cliDirectory: string,
+	platform: NodeJS.Platform,
+	options: { compareDigest?: boolean } = {},
+): void {
+	const binaryName = platform === "win32" ? "multica.exe" : "multica";
+	const binaryPath = path.join(cliDirectory, binaryName);
+	const checksumPath = path.join(cliDirectory, "multica.sha256");
+	const binaryStat = lstatSync(binaryPath);
+	if (!binaryStat.isFile() || binaryStat.isSymbolicLink()) throw new Error(`Multica CLI binary is not a regular file: ${binaryPath}`);
+	if (binaryStat.size === 0) throw new Error(`Multica CLI binary is empty: ${binaryPath}`);
+	if (!hasExecutableMagic(readFileSync(binaryPath), platform)) throw new Error(`Multica CLI binary has the wrong executable format for ${platform}: ${binaryPath}`);
+	if (platform !== "win32") {
+		try {
+			accessSync(binaryPath, constants.X_OK);
+		} catch {
+			throw new Error(`Multica CLI binary is not executable: ${binaryPath}`);
+		}
+	}
+	const checksumStat = lstatSync(checksumPath);
+	if (!checksumStat.isFile() || checksumStat.isSymbolicLink()) throw new Error(`Multica CLI checksum is not a regular file: ${checksumPath}`);
+	const checksum = readFileSync(checksumPath, "utf8");
+	const match = /^([\da-fA-F]{64})  ([^\r\n]+)\r?\n?$/.exec(checksum);
+	if (!match || match[2] !== binaryName) throw new Error(`Multica CLI checksum is malformed or names the wrong binary: ${checksumPath}`);
+	if (options.compareDigest !== false) {
+		const actualDigest = createHash("sha256").update(readFileSync(binaryPath)).digest("hex");
+		if (actualDigest.toLowerCase() !== match[1].toLowerCase()) throw new Error(`Multica CLI SHA-256 does not match ${binaryName}`);
+	}
+	for (const name of ["LICENSE", "NOTICE"]) {
+		const file = path.join(cliDirectory, name);
+		const fileStat = lstatSync(file);
+		if (!fileStat.isFile() || fileStat.isSymbolicLink()) throw new Error(`Multica CLI ${name} is not a regular file: ${file}`);
+		if (fileStat.size === 0) throw new Error(`Multica CLI ${name} is empty: ${file}`);
+	}
+}
+
+export function verifyPackagedMulticaCli(
+	resourcesPath: string,
+	platform: NodeJS.Platform,
+	env: NodeJS.ProcessEnv = process.env,
+	options: { verifyCodeSignature?: (binaryPath: string) => void } = {},
+): void {
+	const cliDirectory = path.join(resourcesPath, "multica-cli");
+	const signedMacBuild = platform === "darwin" && isMulticaCliSigningConfigured(env);
+	if (signedMacBuild) {
+		const binaryPath = path.join(cliDirectory, "multica");
+		(options.verifyCodeSignature ?? ((file) => execFileSync("codesign", ["--verify", "--strict", file], { stdio: "pipe" })))(binaryPath);
+	}
+	verifyMulticaCliResources(cliDirectory, platform, {
+		compareDigest: !signedMacBuild,
+	});
+}
+
+export function missingMulticaCliResources(
+	resourcesPath: string,
+	platform: NodeJS.Platform,
+	exists: (file: string) => boolean = existsSync,
+): string[] {
+	const binaryName = platform === "win32" ? "multica.exe" : "multica";
+	const files = [
+		`multica-cli/${binaryName}`,
+		"multica-cli/LICENSE",
+		"multica-cli/NOTICE",
+		"multica-cli/multica.sha256",
+	];
+	return files.filter((file) => !exists(path.join(resourcesPath, file)));
 }
 
 const ACP_RUNTIME_NODE_PATH = "/Contents/Resources/acp-runtime/node/bin/node";
@@ -200,6 +304,13 @@ const config: ForgeConfig = {
 				// Write the marker before signing, like app-update.yml, so Multica builds are sealed and cannot self-update to an official AO release.
 				writeFileSync(UPDATES_DISABLED_MARKER, "");
 			}
+			const cliBin = multicaCliBin();
+			if (cliBin) {
+				stageMulticaCli(cliBin, multicaNoticeDir(), path.resolve(MULTICA_CLI_STAGE_DIR), platform as NodeJS.Platform);
+				const cliStageDir = path.resolve(MULTICA_CLI_STAGE_DIR);
+				writeMulticaCliSha256(cliStageDir, platform as NodeJS.Platform);
+				verifyMulticaCliResources(cliStageDir, platform as NodeJS.Platform);
+			}
 			await prepareNativeDependencies(platform as NodeJS.Platform, arch);
 			if (platform === "darwin") {
 				const helperBuild = spawnSync(process.execPath, [path.resolve("scripts/build-update-helper.mjs"), "--arch", arch], { stdio: "inherit" });
@@ -233,7 +344,20 @@ const config: ForgeConfig = {
 		// pipeline. A source build succeeding is not enough: a missing extraResource
 		// would otherwise publish an app that silently fell back to machine tmux.
 		postPackage: async (_forgeConfig, packageResult) => {
-			if (packageResult.platform !== "darwin" && packageResult.platform !== "linux") return;
+			const verifyMulticaCli = multicaCliBin() !== undefined;
+			if (packageResult.platform !== "darwin" && packageResult.platform !== "linux") {
+				if (verifyMulticaCli) {
+					for (const outputPath of packageResult.outputPaths) {
+						const resourcesPath = path.join(outputPath, "resources");
+						const missing = missingMulticaCliResources(resourcesPath, packageResult.platform as NodeJS.Platform);
+						if (missing.length > 0) {
+							throw new Error(`packaged Multica CLI resources missing from ${resourcesPath}: ${missing.join(", ")}`);
+						}
+						verifyPackagedMulticaCli(resourcesPath, packageResult.platform as NodeJS.Platform);
+					}
+				}
+				return;
+			}
 			for (const outputPath of packageResult.outputPaths) {
 				let resourcesPath = path.join(outputPath, "resources");
 				if (packageResult.platform === "darwin") {
@@ -248,6 +372,13 @@ const config: ForgeConfig = {
 					if (missing.length > 0) {
 						throw new Error(`packaged Multica resources missing from ${resourcesPath}: ${missing.join(", ")}`);
 					}
+				}
+				if (verifyMulticaCli) {
+					const missing = missingMulticaCliResources(resourcesPath, packageResult.platform as NodeJS.Platform);
+					if (missing.length > 0) {
+						throw new Error(`packaged Multica CLI resources missing from ${resourcesPath}: ${missing.join(", ")}`);
+					}
+					verifyPackagedMulticaCli(resourcesPath, packageResult.platform as NodeJS.Platform);
 				}
 				const binary = path.join(resourcesPath, "tmux", "bin", "tmux");
 				if (!existsSync(binary)) throw new Error(`packaged tmux missing from ${binary}`);

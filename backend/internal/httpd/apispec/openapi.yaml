@@ -2399,6 +2399,136 @@ paths:
       summary: Check whether Connect Mobile's LAN bridge is enabled
       tags:
       - mobile
+  /api/v1/multica/restart:
+    post:
+      operationId: restartMulticaDaemon
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MulticaStatusResponse'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Restart the hosted Multica daemon
+      tags:
+      - multica
+  /api/v1/multica/start:
+    post:
+      operationId: startMulticaDaemon
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MulticaStatusResponse'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Start the hosted Multica daemon
+      tags:
+      - multica
+  /api/v1/multica/status:
+    get:
+      operationId: getMulticaStatus
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MulticaStatusResponse'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get the hosted Multica daemon status
+      tags:
+      - multica
+  /api/v1/multica/stop:
+    post:
+      operationId: stopMulticaDaemon
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MulticaStatusResponse'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Stop the hosted Multica daemon
+      tags:
+      - multica
   /api/v1/notifications:
     delete:
       operationId: clearNotifications
@@ -13129,6 +13259,122 @@ components:
       - location
       - lastError
       type: object
+    MulticaDaemonStatus:
+      properties:
+        desired:
+          enum:
+          - running
+          - stopped
+          type: string
+        enabled:
+          type: boolean
+        health:
+          $ref: '#/components/schemas/MulticaHealth'
+        healthPort:
+          type: integer
+        lastError:
+          type: string
+        lastExit:
+          $ref: '#/components/schemas/MulticaLastExit'
+        logLines:
+          items:
+            type: string
+          type: array
+        nextRetryAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        pid:
+          type: integer
+        profile:
+          type: string
+        restarts:
+          type: integer
+        startedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        state:
+          enum:
+          - disabled
+          - stopped
+          - starting
+          - running
+          - backoff
+          - failed
+          - external
+          type: string
+      required:
+      - enabled
+      - state
+      - desired
+      - profile
+      - healthPort
+      - restarts
+      type: object
+    MulticaHealth:
+      properties:
+        agents:
+          items:
+            type: string
+          type: array
+        daemonId:
+          type: string
+        deviceName:
+          type: string
+        pid:
+          type: integer
+        profile:
+          type: string
+        runtimeIds:
+          items:
+            type: string
+          type: array
+        serverUrl:
+          type: string
+        status:
+          type: string
+        workspaceCount:
+          type: integer
+      required:
+      - status
+      - pid
+      - daemonId
+      - profile
+      - deviceName
+      - serverUrl
+      - agents
+      - workspaceCount
+      - runtimeIds
+      type: object
+    MulticaLastExit:
+      properties:
+        at:
+          format: date-time
+          type: string
+        code:
+          type: integer
+        crash:
+          type: boolean
+        graceful:
+          type: boolean
+        signal:
+          type: string
+      required:
+      - code
+      - at
+      - graceful
+      - crash
+      type: object
+    MulticaStatusResponse:
+      properties:
+        daemon:
+          $ref: '#/components/schemas/MulticaDaemonStatus'
+      required:
+      - daemon
+      type: object
     MuteDeviceRequest:
       properties:
         muted:
@@ -16195,6 +16441,8 @@ tags:
   name: import
 - description: Developer-only maintenance operations
   name: dev
+- description: Lifecycle and status for AO's hosted Multica daemon
+  name: multica
 - description: Connect Mobile LAN bridge control (loopback/desktop only)
   name: mobile
 - description: Target-isolated desktop browser runtime (loopback only)

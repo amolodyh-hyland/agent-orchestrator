@@ -85,6 +85,8 @@ func Build() ([]byte, error) {
 			"Legacy AO project import (availability probe and run)"),
 		*(&openapi31.Tag{Name: "dev"}).WithDescription(
 			"Developer-only maintenance operations"),
+		*(&openapi31.Tag{Name: "multica"}).WithDescription(
+			"Lifecycle and status for AO's hosted Multica daemon"),
 		*(&openapi31.Tag{Name: "mobile"}).WithDescription(
 			"Connect Mobile LAN bridge control (loopback/desktop only)"),
 		*(&openapi31.Tag{Name: "browser"}).WithDescription(
@@ -479,6 +481,11 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	// httpd/controllers: dev wire envelopes
 	"ControllersDevImportProjectsRequest":  "DevImportProjectsRequest",
 	"ControllersDevImportProjectsResponse": "DevImportProjectsResponse",
+	// httpd/controllers: hosted Multica daemon wire envelopes
+	"ControllersMulticaStatusResponse": "MulticaStatusResponse",
+	"ControllersMulticaDaemonStatus":   "MulticaDaemonStatus",
+	"ControllersMulticaLastExit":       "MulticaLastExit",
+	"ControllersMulticaHealth":         "MulticaHealth",
 	// httpd/controllers: mobile wire envelopes
 	"ControllersMobileStatusResponse":  "MobileStatusResponse",
 	"MobilebridgeEndpoint":             "MobileEndpoint",
@@ -625,6 +632,7 @@ func operations() []operation {
 	ops = append(ops, importOperations()...)
 	ops = append(ops, fsOperations()...)
 	ops = append(ops, devOperations()...)
+	ops = append(ops, multicaOperations()...)
 	ops = append(ops, mobileOperations()...)
 	ops = append(ops, mobileDeviceOperations()...)
 	ops = append(ops, browserOperations()...)
@@ -1834,6 +1842,52 @@ func devOperations() []operation {
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+	}
+}
+
+func multicaOperations() []operation {
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/multica/status", id: "getMulticaStatus", tag: "multica",
+			summary: "Get the hosted Multica daemon status",
+			resps: []respUnit{
+				{http.StatusOK, controllers.MulticaStatusResponse{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/multica/start", id: "startMulticaDaemon", tag: "multica",
+			summary: "Start the hosted Multica daemon",
+			resps: []respUnit{
+				{http.StatusOK, controllers.MulticaStatusResponse{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+				{http.StatusServiceUnavailable, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/multica/stop", id: "stopMulticaDaemon", tag: "multica",
+			summary: "Stop the hosted Multica daemon",
+			resps: []respUnit{
+				{http.StatusOK, controllers.MulticaStatusResponse{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+				{http.StatusServiceUnavailable, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/multica/restart", id: "restartMulticaDaemon", tag: "multica",
+			summary: "Restart the hosted Multica daemon",
+			resps: []respUnit{
+				{http.StatusOK, controllers.MulticaStatusResponse{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+				{http.StatusServiceUnavailable, envelope.APIError{}},
 			},
 		},
 	}
