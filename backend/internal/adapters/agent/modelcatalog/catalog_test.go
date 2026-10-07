@@ -404,6 +404,50 @@ func TestUnrealCatalogShowsEffectiveModelAndAllowsOverride(t *testing.T) {
 	}
 }
 
+func TestClaudeFallbackEffortsCoverTheStaticAliases(t *testing.T) {
+	var aliases []string
+	for _, item := range claudeCodeModels() {
+		aliases = append(aliases, item.ID)
+		if _, known := ClaudeFallbackEfforts(item.ID); !known {
+			t.Fatalf("static alias %q has no fallback effort entry", item.ID)
+		}
+	}
+	if len(claudeFallbackEfforts) != len(aliases) {
+		t.Fatalf("fallback table has %d entries for %d static aliases", len(claudeFallbackEfforts), len(aliases))
+	}
+	if got := ClaudeFallbackModelIDs(); !reflect.DeepEqual(got, aliases) {
+		t.Fatalf("ClaudeFallbackModelIDs() = %v, want %v", got, aliases)
+	}
+}
+
+func TestClaudeFallbackEfforts(t *testing.T) {
+	levels := []string{"low", "medium", "high", "xhigh", "max"}
+	for _, tc := range []struct {
+		model     string
+		want      []string
+		wantKnown bool
+	}{
+		{model: "sonnet", want: levels, wantKnown: true},
+		{model: "opus[1m]", want: levels, wantKnown: true},
+		{model: "haiku", wantKnown: true},
+		{model: ""},
+		{model: "  "},
+		{model: "claude-opus-5-5"},
+		{model: "provider/model-vNext"},
+	} {
+		got, known := ClaudeFallbackEfforts(tc.model)
+		if known != tc.wantKnown || len(got) != len(tc.want) || (len(got) > 0 && !reflect.DeepEqual(got, tc.want)) {
+			t.Fatalf("ClaudeFallbackEfforts(%q) = %v, %v; want %v, %v", tc.model, got, known, tc.want, tc.wantKnown)
+		}
+	}
+
+	got, _ := ClaudeFallbackEfforts("sonnet")
+	got[0] = "changed"
+	if again, _ := ClaudeFallbackEfforts("sonnet"); again[0] != "low" {
+		t.Fatalf("mutating a returned slice changed the table: %v", again)
+	}
+}
+
 func TestClaudeReturnsStaticCatalogWithConfiguredFallback(t *testing.T) {
 	claudeRequest(t)
 	t.Setenv("ANTHROPIC_MODEL", "")

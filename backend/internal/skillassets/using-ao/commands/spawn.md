@@ -34,8 +34,19 @@ list `ultra`); Copilot supports `low`, `medium`, `high`, `xhigh`, and `max`.
 Effort is passed at launch as Claude Code `--effort <level>`, Codex
 `-c model_reasoning_effort=<level>`, or Copilot `--reasoning-effort <level>`.
 When a Claude Code spawn has an explicit `--model` or `--effort`, or a Codex
-spawn has an explicit `--effort`, validation uses the provider model catalog;
-if it cannot be refreshed, spawn fails with `MODEL_CAPABILITIES_UNAVAILABLE`.
+spawn has an explicit `--effort`, validation uses the provider model catalog.
+If a Codex catalog cannot be refreshed, spawn fails with
+`MODEL_CAPABILITIES_UNAVAILABLE`. If a Claude Code catalog is stale (for
+example, discovery finds no credential), validation falls back to a built-in
+table of Claude's aliases: `sonnet`, `fable`, `opus`, and `opus[1m]` accept
+`low`, `medium`, `high`, `xhigh`, and `max`, and `haiku` accepts no effort. The
+model checked is the resolved one, including a project or role model, or the
+default configured in the local Claude settings when none is set. The table
+assumes the aliases resolve to Claude's first-party models; it is not used when
+the catalog lists a configured custom or gateway model. In every other case
+(any other `--model`, an effort with no model and no configured default, no
+catalog service, or a failed discovery) spawn still fails with
+`MODEL_CAPABILITIES_UNAVAILABLE`.
 Explicit effort for a harness that cannot apply it fails with HTTP 400 / CLI
 exit 1 (`UNSUPPORTED_EFFORT`); the error names the harness and lists supported
 harnesses (`claude-code`, `codex`, `copilot`). An unsupported level also fails
