@@ -15,6 +15,10 @@ vi.mock("../lib/api-client", async (importOriginal) => ({
 	hasTrustedApiBaseUrl: () => true,
 }));
 
+// ChatWorkspace's header hosts the topbar tabs, which run their own workspace queries
+// through the mocked client; this suite counts conversation reads only.
+vi.mock("../components/topbar-tabs/TopbarTabs", () => ({ TopbarTabs: () => null }));
+
 class EventSourceStub extends EventTarget {
 	static instances: EventSourceStub[] = [];
 	readyState = 1;

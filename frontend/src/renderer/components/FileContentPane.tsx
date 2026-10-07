@@ -24,6 +24,7 @@ import { cn } from "../lib/utils";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
 import { rememberedFileDisplayMode, useUiStore, type FileDisplayMode } from "../stores/ui-store";
 import { isAbsoluteFileReference } from "../lib/workspace-file-path";
+import { useTopbarTabsStore } from "../stores/topbar-tabs-store";
 import { statusLabel, statusTone } from "../lib/workspace-file-status";
 import {
 	canSplitCompare,
@@ -216,6 +217,7 @@ export function FileContentPane({
 				hostId,
 			});
 			queryClient.setQueryData(sessionWorkspaceFileQueryKey(sessionId, path, scope, commitSha, hostId), saved);
+			useTopbarTabsStore.getState().markInteracted(sessionId);
 			await queryClient.invalidateQueries({
 				predicate: ({ queryKey }) => queryKey[1] === (hostId ?? sessionId)
 					&& (!hostId || queryKey[2] === sessionId) && [

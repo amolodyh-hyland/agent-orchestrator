@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { useCallback, useSyncExternalStore } from "react";
 import { aoBridge } from "../lib/bridge";
 import { developerModeStorageKey, windowTranslucencyStorageKey } from "../lib/window-translucency";
 import { sessionUiKey } from "../lib/hosts";
@@ -686,6 +687,13 @@ export const useUiStore = create<UiState>((set, get) => ({
 // main-process updater mirror. Until this completes, the updater is fail-closed.
 syncDeveloperModeToUpdater(initialDeveloperModeValue);
 
-export function useResolvedTheme(): Theme {
-	return useUiStore((state) => state.resolvedTheme);
+export function useResolvedTheme(subscribed = true): Theme {
+	const subscribe = useCallback((onStoreChange: () => void) => {
+		if (!subscribed) return () => {};
+		return useUiStore.subscribe((state, previousState) => {
+			if (state.resolvedTheme !== previousState.resolvedTheme) onStoreChange();
+		});
+	}, [subscribed]);
+	const getSnapshot = useCallback(() => useUiStore.getState().resolvedTheme, []);
+	return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

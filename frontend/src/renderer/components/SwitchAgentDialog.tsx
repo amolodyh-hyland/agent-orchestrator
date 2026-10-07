@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { LoaderCircle, Repeat2, TriangleAlert, X } from "lucide-react";
 import { type FormEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useTopbarTabsStore } from "../stores/topbar-tabs-store";
 import type { components } from "../../api/schema";
 import { agentModelsQueryOptions } from "../hooks/useAgentModelsQuery";
 import {
@@ -62,16 +63,15 @@ export function canSwitchAgentHarness(
 	);
 }
 
-// SwitchAgentDialog is opened from a DropdownMenuItem ("Switch agent" in the
-// session actions menu). Radix closes that dropdown on the same click that
-// opens this dialog; since the dialog is non-modal (see below), its
+// SwitchAgentDialog opens from a DropdownMenuItem in the active tab menu. Radix
+// closes that dropdown on the same click; since the dialog is non-modal (see below), its
 // DismissableLayer would otherwise treat the dropdown's residual pointer/
 // focus activity as an outside interaction and dismiss the dialog right
 // after it opens. Ignore only outside events that originate from the
 // just-dismissed menu/trigger so a genuine outside click still closes it.
 function isFromDismissedMenuTrigger(target: EventTarget | null): boolean {
 	if (!(target instanceof Element)) return false;
-	return Boolean(target.closest('[role="menuitem"], [role="menu"], [data-session-actions-trigger]'));
+	return Boolean(target.closest('[role="menuitem"], [role="menu"], [data-topbar-tab-options-trigger]'));
 }
 
 // Longest teardown this can still be covering: Radix keeps a closing menu
@@ -316,6 +316,7 @@ export function SwitchAgentDialog({ agentSwitch, container, open, session, onOpe
 	const submit = (event: FormEvent<HTMLFormElement>) => {
 		event.preventDefault();
 		if (admissionPending || durableSwitching || recoveryRequired) return;
+		useTopbarTabsStore.getState().markInteracted(session.id);
 		switchAgent.mutate(
 			{
 				session,
