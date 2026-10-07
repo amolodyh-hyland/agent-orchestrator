@@ -378,6 +378,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		// carries an override from before the restart). Assume it may be wider than
 		// the defaults, so the first default turn resets it rather than trusting it.
 		conv.widerThanDefaults = !cfg.ReadOnly
+		conv.widerAssumed = conv.widerThanDefaults
 		conv.start(cfg.ProviderConversationID, cfg.Model, cfg.Effort)
 		return conv, nil
 	}
@@ -433,6 +434,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	// with the default mode may still be on a wider posture, and the first default
 	// turn resets it. A resume that sent an override applied that one.
 	conv.widerThanDefaults = !cfg.ReadOnly
+	conv.widerAssumed = conv.widerThanDefaults && !sentApprovalOverride(policy, sandbox, reviewer)
 	conv.start(cfg.ProviderConversationID, resp.Model, resp.ReasoningEffort)
 	return conv, nil
 }

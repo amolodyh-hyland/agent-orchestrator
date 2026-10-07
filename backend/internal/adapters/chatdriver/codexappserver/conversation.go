@@ -58,7 +58,11 @@ type conversation struct {
 	// later turns too and cannot withdraw it, so returning to the default mode has
 	// to send a posture rather than nothing. Guarded by sendMu.
 	widerThanDefaults bool
-	events            chan ports.ChatEvent
+	// widerAssumed marks widerThanDefaults as a guess about a posture this process
+	// never saw (a resume that sent no override, or a host that outlived the daemon)
+	// rather than something it sent itself. Guarded by sendMu.
+	widerAssumed bool
+	events       chan ports.ChatEvent
 	// Effective defaults returned when Codex opened or resumed this thread.
 	threadModel, threadEffort string
 
@@ -342,6 +346,16 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 			err = permissionRejection(settings.Approval, err)
 			if resetToDefaults && errors.Is(err, ports.ErrPermissionRejected) {
 				err = fmt.Errorf("returning to Codex defaults sent the ask-for-approval posture, which was refused: %w", err)
+				if c.widerAssumed {
+					// Nothing this process sent is known to need withdrawing, and the provider
+					// does not allow the posture that would withdraw it, so asking again would
+					// refuse every default turn with no way out. Stop assuming: the next default
+					// turn sends nothing, and this error is the one warning that the thread may
+					// still carry an earlier override. A posture this process did send stays
+					// assumed wider, since the user can return to that mode.
+					c.widerThanDefaults, c.widerAssumed = false, false
+					err = fmt.Errorf("%w; the thread may still carry the permission override it had before it was reopened, and the next message in this mode is sent without one", err)
+				}
 			}
 		}
 		return ports.ChatTurnRef{}, fmt.Errorf("turn/start: %w", err)
@@ -351,6 +365,8 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 		// The reset itself leaves the thread at Codex's defaults; any other
 		// override may be wider than them.
 		c.widerThanDefaults = !resetToDefaults
+		// Whatever was sent is now the thread's known posture, not a guess.
+		c.widerAssumed = false
 	}
 
 	c.mu.Lock()

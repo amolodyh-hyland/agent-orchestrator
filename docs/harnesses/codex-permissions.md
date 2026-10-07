@@ -74,6 +74,20 @@ AO keeps its four modes; no new mode or API enum was added.
   a managed requirement refuses the reset posture, the error says so ("returning to
   Codex defaults sent the ask-for-approval posture, which was refused") and names
   `accept-edits`, the posture actually sent, rather than `default`.
+  A refused reset has a terminating rule so it cannot lock a conversation out. When
+  the posture to withdraw is only assumed (a resume or surviving host that sent no
+  override), a refusal means this process knows of nothing to withdraw and the
+  provider will not accept the posture that would withdraw it; asking again would
+  refuse every default turn, and under a policy that allows only approval `Never`
+  the explicit modes are refused too. So the refusal is reported once, with a warning
+  that the thread may still carry the override it had before it was reopened, and
+  the next `default` turn sends nothing. That never widens anything AO sent: nothing
+  is sent, and the one extra message is the user's confirmation. A posture this
+  process did send (a launch, a resume with an override, or an accepted turn
+  override) is known, not assumed, so a refused reset of it keeps being reported:
+  the user can return to that mode, and sending nothing would run the wider posture
+  under a "Codex defaults" label. Only a refusal of the posture ends the assumption;
+  any other failure asks for the reset again.
 - **Existing data:** conversations whose stored approval mode is `default` (the old
   picker showed it as "Full access"), sessions with no pinned permissions, and
   projects that stored `default` now launch or resume with no override instead of
