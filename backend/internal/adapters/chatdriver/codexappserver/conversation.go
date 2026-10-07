@@ -348,10 +348,15 @@ func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings, r
 		// `sandboxPolicy: {type: "workspaceWrite"}`. Sending a thread's shape to a
 		// turn is rejected as a missing `type`, so the two are mapped separately
 		// rather than assumed to be interchangeable.
-		policy, sandbox := approvalSettings(settings.Approval)
-		params["approvalPolicy"] = policy
-		params["approvalsReviewer"] = approvalReviewer(settings.Approval)
-		params["sandboxPolicy"] = turnSandboxPolicy(sandbox)
+		//
+		// The default mode overrides nothing. Codex has no way to withdraw an
+		// earlier per-turn override, so a thread keeps the posture of its last
+		// explicit choice until another one is made.
+		if policy, sandbox := approvalSettings(settings.Approval); policy != "" {
+			params["approvalPolicy"] = policy
+			params["approvalsReviewer"] = approvalReviewer(settings.Approval)
+			params["sandboxPolicy"] = turnSandboxPolicy(sandbox)
+		}
 	}
 	if readOnly {
 		params["approvalPolicy"] = "never"

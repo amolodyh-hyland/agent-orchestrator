@@ -545,11 +545,13 @@ describe("ProjectSettingsForm", () => {
 		renderSettings("proj-1", undefined, "agents");
 		const worker = await screen.findByRole("button", { name: "Worker approval" });
 		const orchestrator = screen.getByRole("button", { name: "Orchestrator approval" });
-		expect(worker).toHaveTextContent("Bypass permissions");
+		// Codex's default no longer means full access, so a saved default must not
+		// read as Bypass permissions.
+		expect(worker).toHaveTextContent("Use agent permissions");
 		expect(orchestrator).toHaveTextContent("Use Claude permissions");
 		await userEvent.click(worker);
 		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
-			"Auto", "Accept edits", "Bypass permissions",
+			"Use agent permissions", "Auto", "Accept edits", "Bypass permissions",
 		]);
 		await userEvent.keyboard("{Escape}");
 		await userEvent.click(orchestrator);

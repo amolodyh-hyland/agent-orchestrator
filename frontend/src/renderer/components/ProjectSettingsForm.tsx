@@ -895,16 +895,14 @@ function PermissionModeSelect({ ariaLabel, value, agentId, onChange }: { ariaLab
 		value: permission,
 		label: permission === "accept-edits" ? t("settings.project.permissionAcceptEdits") : permission === "auto" ? t("settings.project.permissionAuto") : t("settings.project.permissionBypass"),
 	}));
-	if (agentId !== "codex") {
-		options.unshift({
-			value: "default",
-			label: agentId === "claude-code" ? t("settings.project.permissionUseClaude") : t("settings.project.permissionUseAgent"),
-		});
-	}
+	options.unshift({
+		value: "default",
+		label: agentId === "claude-code" ? t("settings.project.permissionUseClaude") : t("settings.project.permissionUseAgent"),
+	});
 	return (
 		<SettingsOptionMenu
 			aria-label={ariaLabel}
-			value={value === "default" && agentId === "codex" ? "bypass-permissions" : value || "auto"}
+			value={value || "auto"}
 			options={options}
 			placeholder={t("settings.project.permissionNotReported")}
 			triggerClassName="w-full justify-between"

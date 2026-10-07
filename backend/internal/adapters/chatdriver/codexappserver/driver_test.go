@@ -279,9 +279,15 @@ func TestStartCompletesHandshakeAndOpensThread(t *testing.T) {
 	if _, ok := rawParams["reasoningEffort"]; ok {
 		t.Fatal("thread/start sent unsupported top-level reasoningEffort")
 	}
-	// Default permissions must match what AO already gives a Codex TUI session.
-	if params.ApprovalPolicy != "never" || params.Sandbox != "danger-full-access" {
-		t.Errorf("default posture = %q/%q, want never/danger-full-access", params.ApprovalPolicy, params.Sandbox)
+	// The default mode is the legacy no-override launch, like the Codex TUI
+	// session: Codex's own configuration decides the posture.
+	if params.ApprovalPolicy != "" || params.Sandbox != "" {
+		t.Errorf("default posture = %q/%q, want no override", params.ApprovalPolicy, params.Sandbox)
+	}
+	for _, key := range []string{"approvalPolicy", "approvalsReviewer", "sandbox"} {
+		if _, present := rawParams[key]; present {
+			t.Errorf("default launch sent %q; it must override nothing", key)
+		}
 	}
 }
 
@@ -1077,17 +1083,149 @@ func TestApprovalSettingsMirrorTUIPosture(t *testing.T) {
 		mode                      ports.PermissionMode
 		policy, sandbox, reviewer string
 	}{
-		{false, ports.PermissionModeDefault, "never", "danger-full-access", "user"},
-		{false, ports.PermissionModeBypassPermissions, "never", "danger-full-access", "user"},
+		// Legacy no-override: nothing is sent, so Codex's own configuration decides.
+		{false, ports.PermissionModeDefault, "", "", ""},
+		{false, ports.PermissionMode(""), "", "", ""},
+		{false, ports.PermissionMode("nonsense"), "", "", ""},
 		{false, ports.PermissionModeAcceptEdits, "on-request", "workspace-write", "user"},
+		// approve-for-me: auto review inside the workspace-write sandbox.
 		{false, ports.PermissionModeAuto, "on-request", "workspace-write", "auto_review"},
-		{false, ports.PermissionMode("nonsense"), "never", "danger-full-access", "user"},
+		// Explicit full access, sent exactly as asked.
+		{false, ports.PermissionModeBypassPermissions, "never", "danger-full-access", "user"},
 		{true, ports.PermissionModeAuto, "never", "read-only", "user"},
 	} {
 		policy, sandbox, reviewer := launchApprovalSettings(tc.mode, tc.readOnly)
 		if policy != tc.policy || sandbox != tc.sandbox || reviewer != tc.reviewer {
 			t.Errorf("approval settings(%q, readOnly=%t) = %q/%q/%q, want %q/%q/%q", tc.mode, tc.readOnly, policy, sandbox, reviewer, tc.policy, tc.sandbox, tc.reviewer)
 		}
+	}
+}
+
+// Only the explicit bypass-permissions mode may request danger-full-access, on a
+// thread or on a turn; approve-for-me and the no-override default never do.
+func TestOnlyExplicitBypassRequestsDangerFullAccess(t *testing.T) {
+	for _, mode := range []ports.PermissionMode{
+		ports.PermissionModeDefault, ports.PermissionModeAcceptEdits, ports.PermissionModeAuto,
+	} {
+		if _, sandbox, _ := launchApprovalSettings(mode, false); sandbox == "danger-full-access" {
+			t.Errorf("mode %q launches a thread with danger-full-access", mode)
+		}
+		params := map[string]any{}
+		applyTurnSettings(params, ports.ChatTurnSettings{Approval: mode}, false)
+		if reflect.DeepEqual(params["sandboxPolicy"], map[string]any{"type": "dangerFullAccess"}) {
+			t.Errorf("mode %q sends a dangerFullAccess turn", mode)
+		}
+	}
+	params := map[string]any{}
+	applyTurnSettings(params, ports.ChatTurnSettings{Approval: ports.PermissionModeBypassPermissions}, false)
+	if !reflect.DeepEqual(params["sandboxPolicy"], map[string]any{"type": "dangerFullAccess"}) ||
+		params["approvalPolicy"] != "never" {
+		t.Errorf("explicit bypass turn = %#v, want never/dangerFullAccess", params)
+	}
+}
+
+// The default mode overrides nothing on a turn either: an omitted field leaves
+// the thread on what it started with, instead of naming a sandbox a managed
+// install may reject.
+func TestDefaultModeTurnSendsNoApprovalFields(t *testing.T) {
+	params := map[string]any{}
+	applyTurnSettings(params, ports.ChatTurnSettings{Approval: ports.PermissionModeDefault}, false)
+	for _, key := range []string{"approvalPolicy", "approvalsReviewer", "sandboxPolicy"} {
+		if _, present := params[key]; present {
+			t.Errorf("default turn sent %q: %#v", key, params)
+		}
+	}
+}
+
+func TestApproveForMeTurnPinsWorkspaceWriteWithAutoReview(t *testing.T) {
+	params := map[string]any{}
+	applyTurnSettings(params, ports.ChatTurnSettings{Approval: ports.PermissionModeAuto}, false)
+	if params["approvalPolicy"] != "on-request" || params["approvalsReviewer"] != "auto_review" ||
+		!reflect.DeepEqual(params["sandboxPolicy"], map[string]any{"type": "workspaceWrite"}) {
+		t.Fatalf("approve-for-me turn = %#v", params)
+	}
+}
+
+// What the provider's start frame carries for each mode, as the wire sees it.
+func TestStartSendsEachModesPostureOnTheWire(t *testing.T) {
+	for _, tc := range []struct {
+		mode                      ports.PermissionMode
+		policy, sandbox, reviewer string
+	}{
+		{ports.PermissionModeDefault, "", "", ""},
+		{ports.PermissionModeAuto, "on-request", "workspace-write", "auto_review"},
+		{ports.PermissionModeBypassPermissions, "never", "danger-full-access", "user"},
+	} {
+		t.Run(string(tc.mode), func(t *testing.T) {
+			d, srv := newTestDriver(t)
+			conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws", Permissions: tc.mode})
+			if err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			defer func() { _ = conv.Close() }()
+
+			start := srv.awaitFrame(func(f frame) bool { return f.Method == "thread/start" })
+			var raw map[string]json.RawMessage
+			if err := json.Unmarshal(start.Params, &raw); err != nil {
+				t.Fatalf("thread/start params: %v", err)
+			}
+			params := map[string]string{}
+			for key, value := range raw {
+				var text string
+				if json.Unmarshal(value, &text) == nil {
+					params[key] = text
+				}
+			}
+			for key, want := range map[string]string{
+				"approvalPolicy": tc.policy, "sandbox": tc.sandbox, "approvalsReviewer": tc.reviewer,
+			} {
+				got, present := params[key]
+				if want == "" && present {
+					t.Errorf("%s sent as %q; the %s mode must not send it", key, got, tc.mode)
+				}
+				if want != "" && got != want {
+					t.Errorf("%s = %q, want %q", key, got, want)
+				}
+			}
+		})
+	}
+}
+
+// A managed requirement that rejects the explicit full-access request must reach
+// the caller verbatim: AO never retries around it inside the driver.
+func TestExplicitBypassTurnRejectionIsSurfacedVerbatim(t *testing.T) {
+	const message = "invalid thread settings override: invalid value for `sandbox_mode`: `DangerFullAccess` is not in the allowed set [ReadOnly, WorkspaceWrite] (set by enterprise-managed requirements Default requirements (6e1e489a))"
+	d, srv := newTestDriver(t)
+	srv.mu.Lock()
+	srv.failures["turn/start"] = `{"code":-32600,"message":` + strconv.Quote(message) + `}`
+	srv.mu.Unlock()
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+
+	_, err = conv.SendTurn(context.Background(), ports.ChatUserMessage{
+		Text:     "go",
+		Settings: ports.ChatTurnSettings{Approval: ports.PermissionModeBypassPermissions},
+	})
+	if err == nil || !strings.Contains(err.Error(), message) {
+		t.Fatalf("SendTurn error = %v, want the provider's message %q", err, message)
+	}
+	sent := srv.awaitFrame(func(f frame) bool { return f.Method == "turn/start" })
+	if !strings.Contains(string(sent.Params), `"dangerFullAccess"`) {
+		t.Fatalf("turn/start params %s did not carry the explicit full-access request", sent.Params)
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	turnStarts := 0
+	for _, f := range srv.seen {
+		if f.Method == "turn/start" {
+			turnStarts++
+		}
+	}
+	if turnStarts != 1 {
+		t.Fatalf("driver sent %d turn/start frames; it must not retry around a managed requirement", turnStarts)
 	}
 }
 

@@ -32,6 +32,11 @@ const (
 	PermissionAcceptEdits       PermissionPolicy = "accept-edits"
 	PermissionAuto              PermissionPolicy = "auto"
 	PermissionBypassPermissions PermissionPolicy = "bypass-permissions"
+	// PermissionAgentDefault launches the provider with no approval or sandbox
+	// flag, so its own configuration, and any enterprise-managed requirements
+	// layered over it, decide the posture. PermissionDefault is not that: for
+	// Codex it is the full-access launch Cloud workers still rely on.
+	PermissionAgentDefault PermissionPolicy = "agent-default"
 )
 
 // SessionMode is the durable Cloud execution mode.
@@ -160,7 +165,7 @@ func ClaudeSessionID(sessionID string) string {
 // provider's established default behavior.
 func NormalizePermissionPolicy(policy PermissionPolicy) PermissionPolicy {
 	switch policy {
-	case PermissionDefault, PermissionAcceptEdits, PermissionAuto, PermissionBypassPermissions:
+	case PermissionDefault, PermissionAcceptEdits, PermissionAuto, PermissionBypassPermissions, PermissionAgentDefault:
 		return policy
 	default:
 		return PermissionDefault
@@ -196,12 +201,18 @@ func ClaudePermissionArgs(policy PermissionPolicy) []string {
 }
 
 // CodexPermissionArgs maps AO policy onto Codex approval flags.
+//
+// Auto is Codex's approve-for-me posture (on-request approvals, auto review,
+// workspace-write sandbox). The sandbox is pinned so a user-level
+// sandbox_mode = "danger-full-access" cannot widen it.
 func CodexPermissionArgs(policy PermissionPolicy) []string {
 	switch NormalizePermissionPolicy(policy) {
 	case PermissionAcceptEdits:
 		return []string{"--ask-for-approval", "on-request"}
 	case PermissionAuto:
-		return []string{"--ask-for-approval", "on-request", "-c", `approvals_reviewer="auto_review"`}
+		return []string{"--ask-for-approval", "on-request", "--sandbox", "workspace-write", "-c", `approvals_reviewer="auto_review"`}
+	case PermissionAgentDefault:
+		return nil
 	default:
 		return []string{"--dangerously-bypass-approvals-and-sandbox"}
 	}

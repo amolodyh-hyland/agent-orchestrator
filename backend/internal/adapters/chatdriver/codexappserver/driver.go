@@ -305,12 +305,8 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
 	conv.readOnly = cfg.ReadOnly
-	params := map[string]any{
-		"cwd":               cfg.WorkspacePath,
-		"approvalPolicy":    policy,
-		"approvalsReviewer": reviewer,
-		"sandbox":           sandbox,
-	}
+	params := map[string]any{"cwd": cfg.WorkspacePath}
+	setApprovalParams(params, policy, sandbox, reviewer)
 	if cfg.Ephemeral {
 		params["ephemeral"] = true
 	}
@@ -380,12 +376,10 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
 	conv.readOnly = cfg.ReadOnly
 	params := map[string]any{
-		"threadId":          cfg.ProviderConversationID,
-		"cwd":               cfg.WorkspacePath,
-		"approvalPolicy":    policy,
-		"approvalsReviewer": reviewer,
-		"sandbox":           sandbox,
+		"threadId": cfg.ProviderConversationID,
+		"cwd":      cfg.WorkspacePath,
 	}
+	setApprovalParams(params, policy, sandbox, reviewer)
 	if cfg.Model != "" {
 		params["model"] = cfg.Model
 	}
@@ -535,32 +529,44 @@ func initializeConnection(ctx context.Context, connection *conn) error {
 	return nil
 }
 
-// approvalSettings maps AO's existing per-session permission mode onto Codex's
-// approval policy and sandbox.
+// approvalSettings maps AO's per-session permission mode onto Codex's approval
+// policy and sandbox, mirroring the terminal launch flags.
 //
-// The default matches what AO already passes a Codex TUI session
-// (--dangerously-bypass-approvals-and-sandbox): AO sessions run in isolated
-// worktrees and are expected to work without prompting. Chat does not quietly
-// become stricter than the terminal path for the same setting.
+//   - default sends nothing, so Codex's own configuration, and any
+//     enterprise-managed requirements over it, decide the posture. An empty
+//     policy and sandbox mean "do not override".
+//   - accept-edits asks on request inside the workspace sandbox.
+//   - auto is Codex's approve-for-me: on-request approvals with the
+//     workspace-write sandbox, reviewed by approvalReviewer.
+//   - bypass-permissions is the explicit full-access request. AO sends it as
+//     asked and never works around a managed requirement that rejects it: the
+//     provider's error is surfaced to the caller instead.
 func approvalSettings(mode ports.PermissionMode) (policy, sandbox string) {
 	switch ports.NormalizePermissionMode(mode) {
 	case ports.PermissionModeAcceptEdits, ports.PermissionModeAuto:
 		// on-request lets the provider decide when to ask; workspace-write keeps
 		// edits inside the worktree.
 		return "on-request", "workspace-write"
-	default:
+	case ports.PermissionModeBypassPermissions:
 		return "never", "danger-full-access"
+	default:
+		return "", ""
 	}
 }
 
 // approvalReviewer selects whether Codex asks the user directly or first lets
 // its built-in reviewer approve routine safe actions. Explicitly sending "user"
-// also resets a thread that previously used auto review.
+// also resets a thread that previously used auto review. Empty means the mode
+// overrides nothing.
 func approvalReviewer(mode ports.PermissionMode) string {
-	if ports.NormalizePermissionMode(mode) == ports.PermissionModeAuto {
+	switch ports.NormalizePermissionMode(mode) {
+	case ports.PermissionModeAuto:
 		return "auto_review"
+	case ports.PermissionModeDefault:
+		return ""
+	default:
+		return "user"
 	}
-	return "user"
 }
 
 func launchApprovalSettings(mode ports.PermissionMode, readOnly bool) (policy, sandbox, reviewer string) {
@@ -569,6 +575,21 @@ func launchApprovalSettings(mode ports.PermissionMode, readOnly bool) (policy, s
 	}
 	policy, sandbox = approvalSettings(mode)
 	return policy, sandbox, approvalReviewer(mode)
+}
+
+// setApprovalParams adds the thread-level approval fields a launch chose. Empty
+// values are left out entirely: Codex reads an absent field as "use the
+// configured default", which is how a managed install keeps its own sandbox.
+func setApprovalParams(params map[string]any, policy, sandbox, reviewer string) {
+	if policy != "" {
+		params["approvalPolicy"] = policy
+	}
+	if reviewer != "" {
+		params["approvalsReviewer"] = reviewer
+	}
+	if sandbox != "" {
+		params["sandbox"] = sandbox
+	}
 }
 
 // spawnAppServer is the real launcher.

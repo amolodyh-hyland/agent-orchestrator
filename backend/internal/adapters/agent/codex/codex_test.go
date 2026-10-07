@@ -540,9 +540,9 @@ func TestGetLaunchCommandMapsApprovalModes(t *testing.T) {
 		notExpected string
 	}{
 		{
-			name:       "default",
-			permission: ports.PermissionModeDefault,
-			want:       []string{"--dangerously-bypass-approvals-and-sandbox"},
+			name:        "default",
+			permission:  ports.PermissionModeDefault,
+			notExpected: "--dangerously-bypass-approvals-and-sandbox",
 		},
 		{
 			name:        "accept-edits",
@@ -553,7 +553,7 @@ func TestGetLaunchCommandMapsApprovalModes(t *testing.T) {
 		{
 			name:        "auto",
 			permission:  ports.PermissionModeAuto,
-			want:        []string{"--ask-for-approval", "on-request", "-c", `approvals_reviewer="auto_review"`},
+			want:        []string{"--ask-for-approval", "on-request", "--sandbox", "workspace-write", "-c", `approvals_reviewer="auto_review"`},
 			notExpected: "--dangerously-bypass-approvals-and-sandbox",
 		},
 		{
@@ -562,9 +562,9 @@ func TestGetLaunchCommandMapsApprovalModes(t *testing.T) {
 			want:       []string{"--dangerously-bypass-approvals-and-sandbox"},
 		},
 		{
-			name:       "empty",
-			permission: "",
-			want:       []string{"--dangerously-bypass-approvals-and-sandbox"},
+			name:        "empty",
+			permission:  "",
+			notExpected: "--dangerously-bypass-approvals-and-sandbox",
 		},
 	}
 
@@ -584,6 +584,78 @@ func TestGetLaunchCommandMapsApprovalModes(t *testing.T) {
 				t.Fatalf("command %#v contains %q", cmd, tt.notExpected)
 			}
 		})
+	}
+}
+
+// AO's default mode is the legacy no-override launch: Codex gets no approval or
+// sandbox flag, so its own configuration and any enterprise-managed requirements
+// decide. The same holds when resuming and for modes AO does not recognize.
+func TestDefaultModeSendsNoApprovalOrSandboxOverride(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "codex"}
+	workspace := canonicalTempDir(t)
+	for _, permission := range []ports.PermissionMode{ports.PermissionModeDefault, "", "nonsense"} {
+		t.Run("launch/"+string(permission), func(t *testing.T) {
+			cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{Permissions: permission})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertNoCodexPermissionFlags(t, cmd)
+		})
+		t.Run("restore/"+string(permission), func(t *testing.T) {
+			cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+				Permissions: permission,
+				Session: ports.SessionRef{
+					ID:            "session-123",
+					Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: "thread-123"},
+					WorkspacePath: workspace,
+				},
+			})
+			if err != nil || !ok {
+				t.Fatalf("GetRestoreCommand = (%v, %v)", ok, err)
+			}
+			assertNoCodexPermissionFlags(t, cmd)
+		})
+	}
+}
+
+// approve-for-me pins the workspace-write sandbox so a user-level
+// sandbox_mode = "danger-full-access" cannot widen it, and the explicit bypass
+// mode is the only one that names full access.
+func TestApproveForMeAndExplicitBypassAreDistinctLaunches(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "codex"}
+	auto, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{Permissions: ports.PermissionModeAuto})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsSubsequence(auto, []string{"--ask-for-approval", "on-request", "--sandbox", "workspace-write", "-c", `approvals_reviewer="auto_review"`}) {
+		t.Fatalf("auto command %#v is not approve-for-me with workspace-write", auto)
+	}
+	if contains(auto, "--dangerously-bypass-approvals-and-sandbox") {
+		t.Fatalf("auto command %#v requests full access", auto)
+	}
+	bypass, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{Permissions: ports.PermissionModeBypassPermissions})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(bypass, "--dangerously-bypass-approvals-and-sandbox") {
+		t.Fatalf("bypass command %#v does not request explicit full access", bypass)
+	}
+	if contains(bypass, "--sandbox") || contains(bypass, "--ask-for-approval") {
+		t.Fatalf("bypass command %#v mixes in other approval flags", bypass)
+	}
+}
+
+func assertNoCodexPermissionFlags(t *testing.T, cmd []string) {
+	t.Helper()
+	for _, flag := range []string{"--dangerously-bypass-approvals-and-sandbox", "--ask-for-approval", "--sandbox", "--approve-for-me"} {
+		if contains(cmd, flag) {
+			t.Fatalf("command %#v carries %q; the default mode must leave the posture to Codex", cmd, flag)
+		}
+	}
+	for _, arg := range cmd {
+		if strings.Contains(arg, "approvals_reviewer") || strings.Contains(arg, "sandbox_mode") {
+			t.Fatalf("command %#v overrides %q; the default mode must leave the posture to Codex", cmd, arg)
+		}
 	}
 }
 
@@ -870,7 +942,7 @@ func TestGetRestoreCommandReadsAgentSessionID(t *testing.T) {
 		"-c", "check_for_update_on_startup=false",
 		"-c", "notice.hide_rate_limit_model_nudge=true",
 		"--dangerously-bypass-hook-trust",
-		"--ask-for-approval", "on-request",
+		"--ask-for-approval", "on-request", "--sandbox", "workspace-write",
 		"-c", `approvals_reviewer="auto_review"`,
 	}
 	want = append(want, sessionHookFlags(t)...)
