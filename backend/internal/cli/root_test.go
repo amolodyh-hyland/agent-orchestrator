@@ -172,6 +172,7 @@ func TestCLIInvocationActorType(t *testing.T) {
 
 func TestTelemetryMetaClassifiesRegisteredCommandPaths(t *testing.T) {
 	systemCommands := map[string]struct{}{
+		"ao __multica_daemon":        {},
 		"ao agent-process":           {},
 		"ao agent-process supervise": {},
 		"ao chat-host":               {},

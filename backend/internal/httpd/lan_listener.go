@@ -55,6 +55,7 @@ func NewLANManager(handler http.Handler, state *authState, defaultPort int, log 
 // prefixes that must never be reachable through the LAN listener: /shutdown,
 // the telemetry routes under /internal/, and the Connect Mobile control
 // surface under /api/v1/mobile, developer maintenance routes under /api/v1/dev,
+// hosted Multica lifecycle routes under /api/v1/multica,
 // host-mutating installer routes under /api/v1/system/install, and personal
 // Codex account-management routes under /api/v1/agents/codex/accounts and
 // /api/v1/agents/codex/account-switches (the harmless read-only Codex model
@@ -69,6 +70,7 @@ var lanControlBlockedPrefixes = []string{
 	"/internal/",
 	"/api/v1/mobile",
 	"/api/v1/dev",
+	"/api/v1/multica",
 	"/api/v1/browser",
 	"/api/v1/desktop",
 	"/api/v1/system/install",

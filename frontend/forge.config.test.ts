@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MachOParseError } from "./makers/macho-archs";
@@ -24,10 +25,18 @@ vi.mock("./makers/maker-dmg", async (importOriginal) => {
 
 import config, {
 	extraResourcesForPlatform,
+	isMulticaCliSigningConfigured,
 	macSignOptionsForFile,
+	missingMulticaCliResources,
 	missingMulticaResources,
+	multicaCliBin,
 	multicaDesktopOutDir,
+	multicaNoticeDir,
+	writeMulticaCliSha256,
+	verifyMulticaCliResources,
+	verifyPackagedMulticaCli,
 } from "./forge.config";
+import { MULTICA_CLI_STAGE_DIR } from "./scripts/stage-multica-cli.mjs";
 
 // Minimal synthetic Mach-O headers (thin little-endian + fat big-endian), the
 // two on-disk layouts the signing selector must tell apart. Full parser
@@ -161,6 +170,193 @@ describe("Multica desktop resources", () => {
 		commonJsPreload.delete("multica-desktop/preload/index.js");
 		commonJsPreload.add("multica-desktop/preload/index.cjs");
 		expect(missingMulticaResources(resourcesPath, existsIn(commonJsPreload))).toEqual([]);
+	});
+});
+
+describe("Multica CLI resources", () => {
+	function executableFixture(platform: NodeJS.Platform): Buffer {
+		if (platform === "darwin") return thinMachO(CPU_TYPE_ARM64);
+		if (platform === "linux") return Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01]);
+		if (platform === "win32") return Buffer.from("MZ\x90\x00\x03\x00", "binary");
+		throw new Error(`unsupported fixture platform: ${platform}`);
+	}
+
+	function writeCliPackage(
+		cliDirectory: string,
+		platform: NodeJS.Platform = "darwin",
+		binaryContents = executableFixture(platform),
+		checksumContents?: string,
+	): void {
+		mkdirSync(cliDirectory, { recursive: true });
+		const binaryName = platform === "win32" ? "multica.exe" : "multica";
+		const binaryPath = join(cliDirectory, binaryName);
+		writeFileSync(binaryPath, binaryContents);
+		chmodSync(binaryPath, 0o755);
+		const digest = createHash("sha256").update(binaryContents).digest("hex");
+		writeFileSync(join(cliDirectory, "multica.sha256"), checksumContents ?? `${digest}  ${binaryName}\n`);
+		writeFileSync(join(cliDirectory, "LICENSE"), "license text");
+		writeFileSync(join(cliDirectory, "NOTICE"), "notice text");
+	}
+
+	it("trims the package-time CLI and notices inputs", () => {
+		expect(multicaCliBin({ AO_MULTICA_CLI_BIN: "  /build/multica  " })).toBe("/build/multica");
+		expect(multicaCliBin({ AO_MULTICA_CLI_BIN: "   " })).toBeUndefined();
+		expect(multicaNoticeDir({ AO_MULTICA_NOTICE_DIR: "  /source/multica  " })).toBe("/source/multica");
+		expect(multicaNoticeDir({})).toBeUndefined();
+	});
+
+	it("adds the staged CLI resource only when bundling it", () => {
+		vi.stubEnv("AO_MULTICA_CLI_BIN", undefined);
+		expect(extraResourcesForPlatform("darwin", false)).not.toContain(MULTICA_CLI_STAGE_DIR);
+		expect(extraResourcesForPlatform("darwin", false, true)).toContain(MULTICA_CLI_STAGE_DIR);
+	});
+
+	it("reports each missing packaged CLI file", () => {
+		const resourcesPath = "/fake/resources";
+		const complete = new Set([
+			"multica-cli/multica",
+			"multica-cli/LICENSE",
+			"multica-cli/NOTICE",
+			"multica-cli/multica.sha256",
+		]);
+		const existsIn = (files: Set<string>) => (file: string) =>
+			files.has(file.slice(resourcesPath.length + 1).replaceAll("\\", "/"));
+
+		expect(missingMulticaCliResources(resourcesPath, "darwin", existsIn(complete))).toEqual([]);
+		expect(missingMulticaCliResources(resourcesPath, "darwin", existsIn(new Set()))).toEqual([
+			"multica-cli/multica",
+			"multica-cli/LICENSE",
+			"multica-cli/NOTICE",
+			"multica-cli/multica.sha256",
+		]);
+		expect(missingMulticaCliResources(resourcesPath, "win32", existsIn(new Set()))[0]).toBe("multica-cli/multica.exe");
+	});
+
+	it("writes a SHA-256 record for the staged platform binary", () => {
+		const stageDir = join(fixtureDir, "multica-cli");
+		mkdirSync(stageDir, { recursive: true });
+		writeFileSync(join(stageDir, "multica"), "fake executable");
+
+		const checksumPath = writeMulticaCliSha256(stageDir, "darwin");
+		const expected = createHash("sha256").update("fake executable").digest("hex");
+		expect(checksumPath).toBe(join(stageDir, "multica.sha256"));
+		expect(readFileSync(checksumPath, "utf8")).toBe(`${expected}  multica\n`);
+	});
+
+	it("rejects an unsigned packaged binary whose bytes differ from the recorded checksum", () => {
+		const resourcesPath = join(fixtureDir, "resources");
+		const cliDirectory = join(resourcesPath, "multica-cli");
+		writeCliPackage(cliDirectory);
+		writeFileSync(join(cliDirectory, "multica"), Buffer.concat([executableFixture("darwin"), Buffer.from("tampered")]));
+
+		expect(() => verifyPackagedMulticaCli(resourcesPath, "darwin", {})).toThrow("SHA-256 does not match");
+	});
+
+	it("rejects a directory in place of the packaged executable", () => {
+		const cliDirectory = join(fixtureDir, "multica-cli");
+		mkdirSync(cliDirectory, { recursive: true });
+		mkdirSync(join(cliDirectory, "multica"));
+		writeFileSync(join(cliDirectory, "multica.sha256"), `${"a".repeat(64)}  multica\n`);
+
+		expect(() => verifyMulticaCliResources(cliDirectory, "darwin")).toThrow("not a regular file");
+	});
+
+	it.skipIf(process.platform === "win32")("rejects a packaged executable without its executable bit", () => {
+		const cliDirectory = join(fixtureDir, "multica-cli");
+		writeCliPackage(cliDirectory);
+		chmodSync(join(cliDirectory, "multica"), 0o644);
+
+		expect(() => verifyMulticaCliResources(cliDirectory, "darwin")).toThrow("not executable");
+	});
+
+	it("rejects a malformed checksum or a checksum naming another file", () => {
+		const cliDirectory = join(fixtureDir, "multica-cli");
+		writeCliPackage(cliDirectory, "darwin", executableFixture("darwin"), "sha256 multica\n");
+		expect(() => verifyMulticaCliResources(cliDirectory, "darwin")).toThrow("checksum is malformed");
+
+		const digest = createHash("sha256").update(executableFixture("darwin")).digest("hex");
+		writeFileSync(join(cliDirectory, "multica.sha256"), `${digest}  another-file\n`);
+		expect(() => verifyMulticaCliResources(cliDirectory, "darwin")).toThrow("checksum is malformed");
+	});
+
+	it("skips the digest comparison only after codesign verifies a signed macOS build", () => {
+		const resourcesPath = join(fixtureDir, "resources");
+		const cliDirectory = join(resourcesPath, "multica-cli");
+		writeCliPackage(cliDirectory);
+		writeFileSync(join(cliDirectory, "multica"), thinMachO(CPU_TYPE_X86_64));
+		const env = { APPLE_SIGNING_IDENTITY: "Developer ID Application", CSC_LINK: "" };
+		const verifyCodeSignature = vi.fn();
+
+		expect(isMulticaCliSigningConfigured(env)).toBe(true);
+		expect(() => verifyPackagedMulticaCli(resourcesPath, "darwin", env, { verifyCodeSignature })).not.toThrow();
+		expect(verifyCodeSignature).toHaveBeenCalledWith(join(cliDirectory, "multica"));
+		writeFileSync(join(cliDirectory, "multica.sha256"), "invalid checksum\n");
+		expect(() => verifyPackagedMulticaCli(resourcesPath, "darwin", env, { verifyCodeSignature })).toThrow("checksum is malformed");
+	});
+
+	it("fails packaging when codesign rejects the packaged binary", () => {
+		const resourcesPath = join(fixtureDir, "resources");
+		const cliDirectory = join(resourcesPath, "multica-cli");
+		writeCliPackage(cliDirectory);
+		const verifyCodeSignature = vi.fn(() => {
+			throw new Error("signature verification failed");
+		});
+
+		expect(() => verifyPackagedMulticaCli(resourcesPath, "darwin", { CSC_LINK: "certificate" }, { verifyCodeSignature })).toThrow(
+			"signature verification failed",
+		);
+		expect(verifyCodeSignature).toHaveBeenCalledOnce();
+	});
+
+	it("still checks the digest on Linux when macOS signing variables are set", () => {
+		const resourcesPath = join(fixtureDir, "resources");
+		const cliDirectory = join(resourcesPath, "multica-cli");
+		writeCliPackage(cliDirectory, "linux");
+		writeFileSync(join(cliDirectory, "multica"), Buffer.concat([executableFixture("linux"), Buffer.from("tampered")]));
+		const verifyCodeSignature = vi.fn();
+
+		expect(() =>
+			verifyPackagedMulticaCli(resourcesPath, "linux", { APPLE_SIGNING_IDENTITY: "identity" }, { verifyCodeSignature }),
+		).toThrow("SHA-256 does not match");
+		expect(verifyCodeSignature).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["darwin", "multica"],
+		["linux", "multica"],
+		["win32", "multica.exe"],
+	] as const)("accepts the %s executable header", (platform, binaryName) => {
+		const cliDirectory = join(fixtureDir, "multica-cli");
+		writeCliPackage(cliDirectory, platform);
+		expect(() => verifyMulticaCliResources(cliDirectory, platform)).not.toThrow();
+		expect(readFileSync(join(cliDirectory, binaryName)).length).toBeGreaterThan(0);
+	});
+
+	it("rejects an executable with the wrong target format", () => {
+		const cliDirectory = join(fixtureDir, "multica-cli");
+		writeCliPackage(cliDirectory);
+		writeFileSync(join(cliDirectory, "multica"), "wrong executable format");
+
+		expect(() => verifyMulticaCliResources(cliDirectory, "darwin")).toThrow("wrong executable format");
+	});
+
+	it("rejects a directory in place of the packaged NOTICE", () => {
+		const cliDirectory = join(fixtureDir, "multica-cli");
+		writeCliPackage(cliDirectory);
+		rmSync(join(cliDirectory, "NOTICE"));
+		mkdirSync(join(cliDirectory, "NOTICE"));
+
+		expect(() => verifyMulticaCliResources(cliDirectory, "darwin")).toThrow("NOTICE is not a regular file");
+	});
+
+	it("fails post-package verification when bundled CLI resources are missing", async () => {
+		vi.stubEnv("AO_MULTICA_CLI_BIN", "/build/multica");
+		const hook = config.hooks?.postPackage;
+		expect(hook).toBeTypeOf("function");
+		if (typeof hook !== "function") return;
+		await expect(hook(config, { platform: "win32", arch: "x64", outputPaths: [fixtureDir] })).rejects.toThrow(
+			"packaged Multica CLI resources missing",
+		);
 	});
 });
 

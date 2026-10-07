@@ -12,7 +12,9 @@ app-data location. The sole read exception is an explicit user-initiated import
 from a validated Chrome, Firefox, or Safari profile: read known source files
 without modifying them and keep snapshots and results under `~/.ao`.
 `frontend/src/main.ts` pins Electron's `userData` to
-`~/.ao/electron`; do not remove that override. See the hard rule in `AGENTS.md`.
+`~/.ao/electron`; do not remove that override. The one other exception is the optional
+Multica daemon that AO can host (`AO_MULTICA_DAEMON=1`), which keeps Multica's own state in
+`~/.multica` and `~/multica_workspaces`. See the hard rule in `AGENTS.md`.
 
 ## Design system
 
