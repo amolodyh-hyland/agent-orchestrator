@@ -292,3 +292,203 @@ func newSpawnEffortFixture(t *testing.T, projectConfig domain.ProjectConfig) (*M
 	})
 	return manager, store, runtime, workspace, agent
 }
+
+// staleClaudeCatalog is what discovery returns when it finds no credential: the
+// static aliases, flagged stale. Provider-looking efforts are included on
+// purpose, so a test fails if the fallback trusts the stale snapshot.
+func staleClaudeCatalog(defaultModel string, extra ...string) tuningCatalog {
+	catalog := ports.AgentModelCatalog{Stale: true}
+	for _, id := range []string{"sonnet", "fable", "opus", "haiku", "opus[1m]"} {
+		catalog.Models = append(catalog.Models, ports.AgentModelInfo{ID: id, IsDefault: id == defaultModel, Efforts: []string{"low"}})
+	}
+	for _, id := range extra {
+		catalog.Models = append(catalog.Models, ports.AgentModelInfo{ID: id, IsDefault: id == defaultModel})
+	}
+	return tuningCatalog{catalog: catalog}
+}
+
+func resolveClaudeTUI(m *Manager, project domain.ProjectConfig, agentConfig ports.AgentConfig) (ports.AgentConfig, error) {
+	return m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		RequestedMode: domain.SessionModeTUI, AgentConfig: agentConfig, EffortOverride: agentConfig.Effort != "",
+	}, project)
+}
+
+func TestResolveClaudeFallbackCapabilityTable(t *testing.T) {
+	roleProject := domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Model: "sonnet", Effort: "high"}}}
+	m := &Manager{modelCatalog: staleClaudeCatalog("")}
+
+	for _, tc := range []struct {
+		name       string
+		project    domain.ProjectConfig
+		request    ports.AgentConfig
+		wantModel  string
+		wantEffort string
+	}{
+		{name: "alias with effort", request: ports.AgentConfig{Model: "opus", Effort: "xhigh"}, wantModel: "opus", wantEffort: "xhigh"},
+		{name: "alias without effort", request: ports.AgentConfig{Model: "opus[1m]"}, wantModel: "opus[1m]"},
+		{name: "haiku without effort", request: ports.AgentConfig{Model: "haiku"}, wantModel: "haiku"},
+		{name: "model and effort inherited from the role", project: roleProject, wantModel: "sonnet", wantEffort: "high"},
+		{name: "inherited effort kept for a model that accepts it", project: roleProject, request: ports.AgentConfig{Model: "opus"}, wantModel: "opus", wantEffort: "high"},
+		{name: "inherited effort dropped for haiku", project: roleProject, request: ports.AgentConfig{Model: "haiku"}, wantModel: "haiku"},
+	} {
+		got, err := resolveClaudeTUI(m, tc.project, tc.request)
+		if err != nil {
+			t.Fatalf("%s: error = %v", tc.name, err)
+		}
+		if got.Model != tc.wantModel || got.Effort != tc.wantEffort {
+			t.Fatalf("%s: resolved model/effort = %q/%q, want %q/%q", tc.name, got.Model, got.Effort, tc.wantModel, tc.wantEffort)
+		}
+	}
+
+	_, err := resolveClaudeTUI(m, domain.ProjectConfig{}, ports.AgentConfig{Model: "haiku", Effort: "high"})
+	if !errors.Is(err, ports.ErrUnsupportedEffort) || !strings.Contains(err.Error(), `model "haiku" (supported: none)`) {
+		t.Fatalf("haiku effort error = %v, want ErrUnsupportedEffort naming the model and (supported: none)", err)
+	}
+	_, err = resolveClaudeTUI(m, domain.ProjectConfig{}, ports.AgentConfig{Model: "sonnet", Effort: "ultra"})
+	if !errors.Is(err, ports.ErrUnsupportedEffort) || !strings.Contains(err.Error(), "(supported: low, medium, high, xhigh, max)") {
+		t.Fatalf("unknown level error = %v, want ErrUnsupportedEffort listing the supported levels", err)
+	}
+	_, err = resolveClaudeTUI(m, roleProject, ports.AgentConfig{Effort: "ultra"})
+	if !errors.Is(err, ports.ErrUnsupportedEffort) {
+		t.Fatalf("unknown level on an inherited model error = %v, want ErrUnsupportedEffort", err)
+	}
+
+	for _, request := range []ports.AgentConfig{
+		{Model: "claude-opus-5-5", Effort: "high"},
+		{Model: "provider/model-vNext"},
+	} {
+		_, err = resolveClaudeTUI(m, domain.ProjectConfig{}, request)
+		if !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) {
+			t.Fatalf("model %q error = %v, want ErrModelCapabilitiesUnavailable", request.Model, err)
+		}
+		if !strings.Contains(err.Error(), "sonnet, fable, opus, haiku, opus[1m]") {
+			t.Fatalf("model %q error = %q, want it to list the models the table can validate", request.Model, err)
+		}
+	}
+}
+
+func TestResolveClaudeFallbackEffortWithoutModelUsesTheConfiguredDefault(t *testing.T) {
+	request := ports.AgentConfig{Effort: "high"}
+
+	got, err := resolveClaudeTUI(&Manager{modelCatalog: staleClaudeCatalog("opus")}, domain.ProjectConfig{}, request)
+	if err != nil || got.Effort != "high" {
+		t.Fatalf("configured alias default: resolved = %#v, %v; want effort high", got, err)
+	}
+
+	// A configured default that takes no effort must not let the effort through
+	// for the CLI to drop silently.
+	_, err = resolveClaudeTUI(&Manager{modelCatalog: staleClaudeCatalog("haiku")}, domain.ProjectConfig{}, request)
+	if !errors.Is(err, ports.ErrUnsupportedEffort) || !strings.Contains(err.Error(), `model "haiku" (supported: none)`) {
+		t.Fatalf("haiku default error = %v, want ErrUnsupportedEffort for haiku", err)
+	}
+
+	// No configured default: the model Claude would pick is unknown.
+	_, err = resolveClaudeTUI(&Manager{modelCatalog: staleClaudeCatalog("")}, domain.ProjectConfig{}, request)
+	if !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) || !strings.Contains(err.Error(), "no model is selected") {
+		t.Fatalf("no default error = %v, want ErrModelCapabilitiesUnavailable naming the missing model", err)
+	}
+}
+
+func TestResolveClaudeFallbackFailsClosedForConfiguredProviderModels(t *testing.T) {
+	// A custom or gateway model in the stale catalog means the provider decides
+	// what each model accepts; the alias table says nothing about it.
+	for name, catalog := range map[string]tuningCatalog{
+		"configured custom default": staleClaudeCatalog("claude-opus-4-6", "claude-opus-4-6"),
+		"gateway model listed":      staleClaudeCatalog("", "provider/model-vNext"),
+		"retained provider catalog": staleClaudeCatalog("", "claude-sonnet-5-5-20260301"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := &Manager{modelCatalog: catalog}
+			for _, request := range []ports.AgentConfig{
+				{Model: "opus", Effort: "xhigh"},
+				{Model: "opus"},
+				{Effort: "high"},
+			} {
+				_, err := resolveClaudeTUI(m, domain.ProjectConfig{}, request)
+				if !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) || !strings.Contains(err.Error(), "which is not a built-in alias") {
+					t.Fatalf("request %+v error = %v, want ErrModelCapabilitiesUnavailable naming the non-alias model", request, err)
+				}
+			}
+		})
+	}
+}
+
+func TestResolveClaudeFallbackOnlyAppliesToAStaleCatalog(t *testing.T) {
+	request := ports.AgentConfig{Model: "sonnet", Effort: "high"}
+
+	// No catalog service and a failed discovery stay fail-closed.
+	for name, m := range map[string]*Manager{
+		"no catalog service": {},
+		"discovery error":    {modelCatalog: tuningCatalog{err: errors.New("no credential could be resolved for this provider")}},
+	} {
+		if _, err := resolveClaudeTUI(m, domain.ProjectConfig{}, request); !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) {
+			t.Fatalf("%s: error = %v, want ErrModelCapabilitiesUnavailable", name, err)
+		}
+	}
+
+	// A live catalog is authoritative: its levels and its model list win.
+	live := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+		{ID: "sonnet", Efforts: []string{"low"}},
+	}}}}
+	_, err := resolveClaudeTUI(live, domain.ProjectConfig{}, request)
+	if !errors.Is(err, ports.ErrUnsupportedEffort) || !strings.Contains(err.Error(), "(supported: low)") {
+		t.Fatalf("live catalog error = %v, want the live catalog's levels, not the fallback table's", err)
+	}
+	_, err = resolveClaudeTUI(live, domain.ProjectConfig{}, ports.AgentConfig{Model: "opus"})
+	if !errors.Is(err, ErrUnsupportedModel) {
+		t.Fatalf("live catalog error = %v, want ErrUnsupportedModel", err)
+	}
+
+	// Codex has no table: a stale catalog still fails closed.
+	codex := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{
+		Stale: true, Models: []ports.AgentModelInfo{{ID: "gpt-5", Efforts: []string{"high"}}},
+	}}}
+	_, err = codex.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCodex,
+		AgentConfig: ports.AgentConfig{Model: "gpt-5", Effort: "high"},
+	}, domain.ProjectConfig{})
+	if !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) {
+		t.Fatalf("codex stale catalog error = %v, want ErrModelCapabilitiesUnavailable", err)
+	}
+}
+
+func TestSpawn_ClaudeTUIUsesFallbackTableWhenCatalogIsStale(t *testing.T) {
+	m, st, _, _, agent := newSpawnEffortFixture(t, domain.ProjectConfig{})
+	m.modelCatalog = staleClaudeCatalog("")
+	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+		ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		RequestedMode: domain.SessionModeTUI, AgentConfig: ports.AgentConfig{Model: "opus", Effort: "high"},
+	})
+	if err != nil {
+		t.Fatalf("Spawn() error = %v", err)
+	}
+	if got := agent.lastLaunch.Config; got.Model != "opus" || got.Effort != "high" {
+		t.Fatalf("adapter model/effort = %q/%q, want opus/high", got.Model, got.Effort)
+	}
+	if got := rec.Metadata; got.Model != "opus" || got.Effort != "high" {
+		t.Fatalf("returned metadata model/effort = %q/%q, want opus/high", got.Model, got.Effort)
+	}
+	if got := st.sessions[rec.ID].Metadata; got.Model != "opus" || got.Effort != "high" {
+		t.Fatalf("persisted metadata model/effort = %q/%q, want opus/high", got.Model, got.Effort)
+	}
+
+	rejected, rejectedStore, rejectedRuntime, rejectedWorkspace, _ := newSpawnEffortFixture(t, domain.ProjectConfig{})
+	rejected.modelCatalog = staleClaudeCatalog("")
+	for _, request := range []ports.AgentConfig{
+		{Model: "haiku", Effort: "high"},
+		{Model: "claude-opus-5-5"},
+		{Effort: "high"},
+	} {
+		_, _, _, err = rejected.Spawn(ctx, ports.SpawnConfig{
+			ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+			RequestedMode: domain.SessionModeTUI, AgentConfig: request,
+		})
+		if !errors.Is(err, ports.ErrUnsupportedEffort) && !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) {
+			t.Fatalf("Spawn(%+v) error = %v, want a capability error", request, err)
+		}
+	}
+	if len(rejectedStore.sessions) != 0 || rejectedWorkspace.createCount != 0 || rejectedRuntime.created != 0 {
+		t.Fatalf("rejected spawns created state: sessions=%d workspaces=%d runtimes=%d", len(rejectedStore.sessions), rejectedWorkspace.createCount, rejectedRuntime.created)
+	}
+}
