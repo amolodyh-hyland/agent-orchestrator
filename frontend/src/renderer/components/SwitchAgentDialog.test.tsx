@@ -4,6 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { agentModelsQueryKey } from "../hooks/useAgentModelsQuery";
 import { apiClient } from "../lib/api-client";
+import { EMPTY_TOPBAR_TABS, findSession } from "../lib/topbar-tabs";
+import { useTopbarTabsStore } from "../stores/topbar-tabs-store";
 import {
 	STANDALONE_WORKSPACE_ID,
 	type AgentSwitchSummary,
@@ -115,6 +117,15 @@ function renderDialog(
 }
 
 beforeEach(() => {
+	localStorage.clear();
+	useTopbarTabsStore.setState({
+		tabs: EMPTY_TOPBAR_TABS,
+		overflow: "scroll",
+		density: "comfortable",
+		colorCoding: false,
+		projectColors: {},
+		lastEviction: null,
+	});
 	switchMocks.clear.mockReset();
 	switchMocks.mutate.mockReset();
 	switchMocks.recoverMutate.mockReset();
@@ -160,12 +171,15 @@ describe("SwitchAgentDialog", () => {
 	});
 
 	it("closes only after switch admission succeeds", async () => {
+		useTopbarTabsStore.getState().activateSession({ sessionId: worker.id, groupId: "p", kind: "task" });
 		const { onOpenChange } = renderDialog();
 		const dialog = screen.getByRole("dialog", { name: "Switch agent" });
 		await userEvent.click(within(dialog).getByRole("button", { name: "Model" }));
 		await userEvent.click(screen.getByRole("menuitem", { name: "GPT-5.4 Mini" }));
+		expect(findSession(useTopbarTabsStore.getState().tabs, worker.id)?.mode).toBe("preview");
 
 		await userEvent.click(within(dialog).getByRole("button", { name: "Switch" }));
+		expect(findSession(useTopbarTabsStore.getState().tabs, worker.id)?.mode).toBe("persistent");
 
 		expect(switchMocks.mutate).toHaveBeenCalledWith(
 			{

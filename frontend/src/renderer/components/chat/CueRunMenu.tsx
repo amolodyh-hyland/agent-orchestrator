@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Loader2, MessageSquare, Play, Plus, TerminalSquare } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useUiStore } from "../../stores/ui-store";
+import { useTopbarTabsStore } from "../../stores/topbar-tabs-store";
 import { apiErrorMessage } from "../../lib/api-client";
 import { useInvokeCueMutation, useProjectCuesQuery } from "../../hooks/useCuesQuery";
 import { fetchProjectCues, projectCuesQueryKey, type CueDTO } from "../../lib/cues";
@@ -140,6 +141,7 @@ function CueRunMenuTrigger({
 			const result = await invokeMutation.mutateAsync({ cueId: cue.id, sessionId, shell });
 			if (result.kind === "command" && !result.shellTerminal) throw new Error(t("cues.invokeFailed"));
 			rememberLastRunCue(projectId, cue.id);
+			if (sessionId) useTopbarTabsStore.getState().markInteracted(sessionId);
 			if (result.kind === "command") {
 				if (!result.shellTerminal) throw new Error(t("cues.invokeFailed"));
 				const terminal = toShellTerminal(result.shellTerminal);

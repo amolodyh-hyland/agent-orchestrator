@@ -245,6 +245,9 @@ vi.mock("../components/DaemonStartupLoader", () => ({
 vi.mock("../components/CommandPalette", () => ({ CommandPalette: () => null }));
 vi.mock("../components/OrchestratorReplacementDialog", () => ({ OrchestratorReplacementDialog: () => null }));
 vi.mock("../components/ShellTopbar", () => ({ ShellTopbar: () => null }));
+vi.mock("../components/topbar-tabs/TopbarTabsLifecycle", () => ({ TopbarTabsLifecycle: () => null }));
+vi.mock("../components/topbar-tabs/TopbarTabsRouteSync", () => ({ TopbarTabsRouteSync: () => null }));
+vi.mock("../components/topbar-tabs/TopbarTabsRow", () => ({ TopbarTabsRow: () => null }));
 vi.mock("../components/TitlebarNav", async () => {
 	const { sidebarIsVisible, useUiStore: useStore } = await vi.importActual<
 		typeof import("../stores/ui-store")

@@ -31,13 +31,13 @@ import { SessionFileWorkspace } from "./SessionFileWorkspace";
 import { SessionFilesPopOut } from "./SessionFilesPopOut";
 import { isArtifactPreviewUrl } from "../lib/artifact-preview";
 import { SessionBrowserPopOut } from "./SessionBrowserPopOut";
-import { SessionActionsMenu } from "./SessionActionsMenu";
 import { SessionInspector } from "./SessionInspector";
 import { ShellTopbar } from "./ShellTopbar";
 import { SwitchAgentDialog } from "./SwitchAgentDialog";
 import { SessionTopbarHost } from "./SessionTopbarPortal";
 import { TerminalSwitchAgentButton } from "./TerminalSwitchAgentButton";
 import { TopbarButton } from "./TopbarButton";
+import type { SessionTabActions } from "./topbar-tabs/TopbarTab";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { MultiStepLoader } from "./ui/multi-step-loader";
 import { useBrowserView } from "../hooks/useBrowserView";
@@ -1443,13 +1443,19 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			switchError={handoffSwitchError}
 		/>
 	) : null, [handoffAgentSwitch, handoffControlPresentation, handoffDialogOpen, handoffSwitchError, handleHandoffDialogOpenChange, session]);
-	// Cloud sessions only expose the interface switch; agent handoff is local.
-	const sessionTabActions = useMemo(() => interfaceUi.unsupported ? null : (
-		<SessionActionsMenu inlineStatus={interfaceUi.inlineStatus}>
-			{interfaceUi.menuItem}
-			{handoffMenuItem}
-		</SessionActionsMenu>
-	), [handoffMenuItem, interfaceUi.inlineStatus, interfaceUi.menuItem, interfaceUi.unsupported]);
+	// Cloud sessions expose only the interface switch here; agent handoff is a
+	// local daemon feature. Hide the empty actions menu for harnesses without
+	// Chat, including when local settings identify one before transition status
+	// becomes available.
+	const sessionTabActions = useMemo<SessionTabActions>(() => {
+		if (interfaceUi.unsupported || (!interfaceUi.menuItem && !handoffMenuItem && !interfaceUi.inlineStatus)) {
+			return null;
+		}
+		return {
+			menuItems: <>{interfaceUi.menuItem}{handoffMenuItem}</>,
+			...(interfaceUi.inlineStatus ? { inlineStatus: interfaceUi.inlineStatus } : {}),
+		};
+	}, [handoffMenuItem, interfaceUi.inlineStatus, interfaceUi.menuItem, interfaceUi.unsupported]);
 	const sessionHeaderActions = (
 		<div
 			className="session-topbar-session-chrome flex shrink-0 items-center"
@@ -1459,10 +1465,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			<ShellTopbar embedded />
 		</div>
 	);
-	// Spinner replaces the ⋮ at the same size, so the tab title does not need a
-	// wider action slot while switching.
-	const sessionTabActionWide = false;
-
 	useEffect(() => {
 		setHandoffDialogOpen(false);
 	}, [sessionId]);
@@ -1809,7 +1811,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				>
 					<div className="relative flex h-full min-h-0 flex-col">
 						<SessionTopbarHost
-							className="relative z-chrome flex h-inspector-tabs w-full shrink-0 overflow-hidden"
+							className="relative z-chrome flex min-h-inspector-tabs w-full shrink-0 overflow-hidden"
 							data-testid="session-topbar-host"
 						/>
 						<div className="relative min-h-0 flex-1" ref={bindHandoffDialogContainer}>
@@ -1834,6 +1836,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									controllerTransitioning={interfaceUi.controllerTransitioning}
 									headerActions={sessionHeaderActions}
 									newWorkDisabled={interfaceUi.newWorkDisabled}
+									onSelectChat={selectSessionTerminal}
 									onConversationWorkChange={interfaceUi.onConversationWorkChange}
 									onOpenFiles={browserOnly ? undefined : prepareFilesInspector}
 									onOpenFile={openCenterFile}
@@ -1842,11 +1845,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									reviewerTerminal={reviewerTerminal}
 									onOpenReviewerTerminal={selectReviewerTerminal}
 									reviewerTarget={routedTerminalTarget.kind === "reviewer" ? routedTerminalTarget : undefined}
-									onSelectChat={selectSessionTerminal}
 									daemonReady={hostId ? Boolean(remoteBase) : daemonStatus.state === "ready"}
 									theme={theme}
 									auxiliaryTabOrder={resolvedAuxiliaryTabOrder}
 									onAuxiliaryTabOrderChange={setAuxiliaryTabOrder}
+									workspaceTabs={centerFileTabs}
+									workspaceActiveTabKey={activeWorkspaceTabKey}
 								/>
 							) : showChatSurface ? (
 								<>
@@ -1876,7 +1880,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									theme={theme}
 									headerActions={sessionHeaderActions}
 									sessionTabAction={sessionTabActions}
-									sessionTabActionWide={sessionTabActionWide}
 									tabStripAction={newShellTerminalAction}
 									handoffDialogOpen={handoffDialogOpen}
 									workspaceTabs={centerFileTabs}
@@ -1927,7 +1930,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									theme={theme}
 									topbarActions={sessionHeaderActions}
 									sessionTabAction={sessionTabActions}
-									sessionTabActionWide={sessionTabActionWide}
 									tabStripAction={newShellTerminalAction}
 									handoffDialogOpen={handoffDialogOpen}
 									workspaceTabs={centerFileTabs}

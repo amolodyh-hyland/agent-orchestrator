@@ -139,6 +139,7 @@ import type { RemoteHost } from "../hooks/useRemoteHosts";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { sessionUiKey } from "../lib/hosts";
 import { RemoteHostsSection } from "./RemoteHostsSection";
+import { useProjectColors } from "./topbar-tabs/useProjectColors";
 
 // macOS paints framed chrome: the fixed TitlebarNav cluster carries the
 // sidebar toggle + history arrows above this surface. Windows hangs the sidebar
@@ -620,6 +621,7 @@ export function Sidebar({
 }: SidebarProps) {
 	const { t } = useTranslation();
 	const remoteNavigate = useNavigate();
+	const { accentFor } = useProjectColors();
 	const selection = useSelection();
 	const { state, setOpen, toggleSidebar } = useSidebar();
 	const isCollapsed = state === "collapsed";
@@ -1046,6 +1048,7 @@ export function Sidebar({
 												<ProjectItem
 													key={workspace.id}
 													workspace={workspace}
+													accent={workspace.id === STANDALONE_WORKSPACE_ID ? undefined : accentFor(workspace.id)}
 													expanded={expandedIds.has(workspace.id) || (initialActiveSessionProjectId === workspace.id && !dismissedInitialActiveProjectIds.has(workspace.id))}
 													suppressInitialExpandAnimation={expandedIds.has(workspace.id)}
 													selection={selection}
@@ -1308,6 +1311,7 @@ type ProjectItemProps = {
 	workspace: WorkspaceSummary;
 	hostLabel?: string;
 	onOpenOrchestrator?: () => void;
+	accent?: string;
 	expanded: boolean;
 	selection: Selection;
 	isDragged: boolean;
@@ -1326,6 +1330,7 @@ const ProjectItem = memo(function ProjectItem({
 	workspace,
 	hostLabel,
 	onOpenOrchestrator,
+	accent,
 	expanded,
 	selection,
 	isDragged,
@@ -1352,6 +1357,7 @@ const ProjectItem = memo(function ProjectItem({
 		);
 	const projectActive = dashboardActive || orchestratorActive;
 	const queryClient = useQueryClient();
+	const projectRowRef = useRef<HTMLButtonElement>(null);
 	const [removeError, setRemoveError] = useState<string | null>(null);
 	const [isRemoving, setIsRemoving] = useState(false);
 	const [confirmOpen, setConfirmOpen] = useState(false);
@@ -1371,6 +1377,10 @@ const ProjectItem = memo(function ProjectItem({
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const projectIsDragging = isDragged;
+	const accentStyle = accent === undefined ? undefined : { "--project-accent": accent } as CSSProperties;
+	useLayoutEffect(() => {
+		if (accent === undefined) projectRowRef.current?.removeAttribute("style");
+	}, [accent]);
 	// Keep completed PR sessions reachable while their runtime still exists.
 	// Only termination removes a worker from the sidebar; archived sessions stay
 	// reachable through SessionsBoard.
@@ -1585,6 +1595,7 @@ const ProjectItem = memo(function ProjectItem({
 								{/* project-sidebar__proj-row */}
 								<SidebarMenuButton
 									aria-label={hostLabel ? t(isStandalone ? "shell.toggleProject" : "shell.openProjectDashboard", { name: nameWithHost }) : undefined}
+									ref={projectRowRef}
 									aria-current={dashboardActive ? "page" : undefined}
 									aria-expanded={expanded}
 									isActive={projectActive}
@@ -1599,11 +1610,20 @@ const ProjectItem = memo(function ProjectItem({
 										!workspace.hostId && "cursor-grab active:cursor-grabbing",
 										"pr-sidebar-project-actions",
 										"transition-none",
+										accent !== undefined && "relative",
 										projectIsDragging && "!cursor-grabbing",
 										projectDragInProgress && "hover:text-muted-foreground active:text-muted-foreground",
 										"group-data-[collapsible=icon]:size-control-board! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:rounded-lg group-data-[collapsible=icon]:p-0! group-data-[collapsible=icon]:font-semibold",
 									)}
+									style={accentStyle}
 								>
+									{accent !== undefined ? (
+										<span
+											aria-hidden="true"
+											className="pointer-events-none absolute inset-y-1 left-0 z-[1] w-[3px] bg-[var(--project-accent)]"
+											data-project-accent-bar=""
+										/>
+									) : null}
 									<NavRowHighlight active={projectActive} disabled={projectIsDragging} />
 									{/* Expanded sidebar: visual folder/chevron icon (decorative — toggle button is a sibling).
 		    size-icon-md matches the Projects section row; an 18px centered box was
@@ -1790,6 +1810,7 @@ const ProjectItem = memo(function ProjectItem({
 											<SessionReorderList
 										dndId={sessionDndId(projectKey)}
 										testId={`session-list-${projectKey}`}
+										accent={accent}
 												className={cn(
 													"mx-0 ml-3.5 translate-x-0 gap-px border-l-0 px-0 pt-1",
 													hiddenSessionCount > 0 ? "pb-px" : "pb-1",
@@ -2047,6 +2068,7 @@ const PinnedSessionRow = memo(function PinnedSessionRow({
 // plain SessionRows instead: that list is ordered by pin time, not by hand.
 const SortableSessionRow = memo(function SortableSessionRow({
 	session,
+	accent,
 	active,
 	consumeDragClick,
 	indented = true,
@@ -2057,6 +2079,7 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	onOpen,
 }: {
 	session: WorkspaceSession;
+	accent?: string;
 	active: boolean;
 	consumeDragClick: (id: string) => boolean;
 	indented?: boolean;
@@ -2072,6 +2095,7 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	return (
 		<SessionRow
 			session={session}
+			accent={accent}
 			active={active}
 			indented={indented}
 			onKilled={onKilled}
@@ -2100,6 +2124,7 @@ function SessionReorderList({
 	dndId,
 	testId,
 	className,
+	accent,
 	sessions,
 	sessionIds,
 	activeSessionId,
@@ -2112,6 +2137,7 @@ function SessionReorderList({
 	dndId: string;
 	testId: string;
 	className: string;
+	accent?: string;
 	sessions: WorkspaceSession[];
 	sessionIds: string[];
 	activeSessionId?: string;
@@ -2175,6 +2201,7 @@ function SessionReorderList({
 					<SessionRow
 						key={session.id}
 						session={session}
+						accent={accent}
 						active={activeSessionId === session.id}
 						indented={indented}
 						onKilled={onKilled}
@@ -2201,6 +2228,7 @@ function SessionReorderList({
 						<SortableSessionRow
 							key={session.id}
 							session={session}
+							accent={accent}
 							active={activeSessionId === session.id}
 							consumeDragClick={dragClickGuard.consumeClick}
 							indented={indented}
@@ -2226,6 +2254,7 @@ type SessionReorder = Pick<SortableRow, "isDragging" | "listeners" | "setActivat
 // Escape cancels) that persists through the daemon rename endpoint.
 function SessionRow({
 	session,
+	accent,
 	active,
 	hostLabel,
 	indented = true,
@@ -2236,6 +2265,7 @@ function SessionRow({
 	reorder,
 }: {
 	session: WorkspaceSession;
+	accent?: string;
 	active: boolean;
 	hostLabel?: string;
 	indented?: boolean;
@@ -2250,6 +2280,11 @@ function SessionRow({
 	reorder?: SessionReorder;
 }) {
 	const { t } = useTranslation();
+	const sessionRowRef = useRef<HTMLDivElement>(null);
+	const accentStyle = accent === undefined ? undefined : { "--project-accent": accent } as CSSProperties;
+	useLayoutEffect(() => {
+		if (accent === undefined) sessionRowRef.current?.removeAttribute("style");
+	}, [accent]);
 	const prefersReducedMotion = useReducedMotion();
 	useGrabbingCursor(Boolean(reorder?.isDragging));
 	const switchPresentation = deriveSessionAgentSwitchPresentation(session);
@@ -2294,12 +2329,21 @@ function SessionRow({
 		return (
 			<SidebarMenuSubItem className={cn(indented && "pl-0.5")}>
 				<div
+					ref={sessionRowRef}
 					className={cn(
 						"group/nav-row relative flex h-8 w-full items-center gap-1.5 rounded-lg py-0 pl-1.5 pr-1",
 						active && "text-foreground",
 					)}
 					data-session-row=""
+					style={accentStyle}
 				>
+					{accent !== undefined ? (
+						<span
+							aria-hidden="true"
+							className="pointer-events-none absolute inset-y-1 left-0 z-[1] w-[2px] bg-[var(--project-accent)]"
+							data-project-accent-bar=""
+						/>
+					) : null}
 					<NavRowHighlight active={active} />
 					<SessionStatusDot session={session} />
 					<input
@@ -2346,6 +2390,7 @@ function SessionRow({
 				transition={prefersReducedMotion ? { duration: 0 } : { layout: { type: "spring", stiffness: 520, damping: 42, mass: 0.55 } }}
 			>
 				<div
+					ref={sessionRowRef}
 					className={cn(
 						"group/session-row group/nav-row relative flex h-8 w-full items-center rounded-lg",
 						"hover:text-foreground",
@@ -2353,7 +2398,15 @@ function SessionRow({
 					)}
 					data-session-row=""
 					data-dragging={reorder?.isDragging ? "true" : undefined}
+					style={accentStyle}
 				>
+					{accent !== undefined ? (
+						<span
+							aria-hidden="true"
+							className="pointer-events-none absolute inset-y-1 left-0 z-[1] w-[2px] bg-[var(--project-accent)]"
+							data-project-accent-bar=""
+						/>
+					) : null}
 					<NavRowHighlight active={active} disabled={Boolean(reorder?.isDragging)} />
 					<div className={cn("relative z-[1] flex min-w-0 flex-1", reorder?.isDragging && "cursor-grabbing")}>
 						<button

@@ -4,6 +4,8 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
+import { EMPTY_TOPBAR_TABS, findSession } from "../lib/topbar-tabs";
+import { useTopbarTabsStore } from "../stores/topbar-tabs-store";
 import { FileContentPane } from "./FileContentPane";
 import type { FileAnnotationModel } from "./WorkspaceDiffView";
 import { TooltipProvider } from "./ui/tooltip";
@@ -50,6 +52,15 @@ function noopAnnotation(): FileAnnotationModel {
 
 describe("FileContentPane", () => {
 	beforeEach(() => {
+		localStorage.clear();
+		useTopbarTabsStore.setState({
+			tabs: EMPTY_TOPBAR_TABS,
+			overflow: "scroll",
+			density: "comfortable",
+			colorCoding: false,
+			projectColors: {},
+			lastEviction: null,
+		});
 		getMock.mockReset();
 		putMock.mockReset();
 		highlightReady.value = true;
@@ -276,6 +287,7 @@ describe("FileContentPane", () => {
 	});
 
 	it("edits and saves a text file with optimistic stale-write protection", async () => {
+		useTopbarTabsStore.getState().activateSession({ sessionId: "sess-1", groupId: "p", kind: "task" });
 		getMock.mockResolvedValue({
 			data: {
 				sessionId: "sess-1",
@@ -317,6 +329,7 @@ describe("FileContentPane", () => {
 
 		renderWithQuery(<FileContentPane annotation={noopAnnotation()} path="src/App.tsx" sessionId="sess-1" split={false} />);
 		await userEvent.click(await screen.findByRole("tab", { name: "File" }));
+		expect(findSession(useTopbarTabsStore.getState().tabs, "sess-1")?.mode).toBe("preview");
 		await userEvent.click(await screen.findByRole("button", { name: "Edit file" }));
 		expect(screen.queryByTestId("unsaved-file-indicator")).not.toBeInTheDocument();
 		const editor = screen.getByRole("textbox", { name: "Edit src/App.tsx" });
@@ -335,6 +348,7 @@ describe("FileContentPane", () => {
 				},
 			}),
 		));
+		await waitFor(() => expect(findSession(useTopbarTabsStore.getState().tabs, "sess-1")?.mode).toBe("persistent"));
 		expect(screen.queryByRole("textbox", { name: "Edit src/App.tsx" })).not.toBeInTheDocument();
 		expect(screen.queryByTestId("unsaved-file-indicator")).not.toBeInTheDocument();
 	});
