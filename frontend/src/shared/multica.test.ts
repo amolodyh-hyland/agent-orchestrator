@@ -202,8 +202,33 @@ describe("resolveMulticaServer", () => {
 			wsUrl: "wss://multica.example.com/ws",
 			appUrl: "https://multica.example.com",
 		});
-		expect(sameOrigin?.cliProfile).toBe("ao-multica.example.com");
+		expect(sameOrigin?.cliProfile).toBe("ao-multica.example.com--multica.example.com");
 		expect(resolveMulticaServer({ mode: "local", customUrl: "http://192.168.1.5:3000", apiUrl: "" })?.cliProfile).toBe("ao-192.168.1.5-3000");
+	});
+
+	it("never shares a partition, key or CLI profile between two API addresses of the same web address", () => {
+		const web = "https://multica.example.com";
+		const derived = resolveMulticaServer({ mode: "local", customUrl: web, apiUrl: "" })!;
+		const a = resolveMulticaServer({ mode: "local", customUrl: web, apiUrl: "https://api-a.example.com" })!;
+		const b = resolveMulticaServer({ mode: "local", customUrl: web, apiUrl: "https://api-b.example.com" })!;
+		expect(new Set([derived.partition, a.partition, b.partition]).size).toBe(3);
+		expect(new Set([derived.key, a.key, b.key]).size).toBe(3);
+		expect(new Set([derived.cliProfile, a.cliProfile, b.cliProfile]).size).toBe(3);
+
+		const local = resolveMulticaServer(DEFAULT_MULTICA_SETTINGS)!;
+		const rerouted = resolveMulticaServer({ mode: "local", customUrl: "http://localhost:3000", apiUrl: "https://attacker.example" })!;
+		expect(rerouted.partition).not.toBe(local.partition);
+		expect(rerouted.partition).not.toBe(MULTICA_PARTITION);
+		expect(rerouted.key).not.toBe(local.key);
+		expect(rerouted.cliProfile).not.toBeNull();
+	});
+
+	it("keeps the same identity when the explicit API address equals the derived one", () => {
+		const base = resolveMulticaServer({ mode: "local", customUrl: "http://localhost:3000", apiUrl: "" })!;
+		const explicit = resolveMulticaServer({ mode: "local", customUrl: "http://localhost:3000", apiUrl: "http://localhost:8080" })!;
+		expect(explicit.key).toBe(base.key);
+		expect(explicit.partition).toBe(MULTICA_PARTITION);
+		expect(explicit.cliProfile).toBeNull();
 	});
 
 	it("is off without a custom URL", () => {

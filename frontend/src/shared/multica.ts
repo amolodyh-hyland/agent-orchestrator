@@ -196,7 +196,7 @@ export function multicaRuntimeConfig(rawAppUrl: string): MulticaRuntimeConfigRes
 }
 
 export type MulticaServer = {
-	/** Stable identity of the server: "cloud" or the web origin. Tags issue links. */
+	/** Stable identity of the server: "cloud", the web origin, or `<web origin>|<api origin>` when the API is not the derived one. Tags issue links. */
 	key: string;
 	mode: MulticaServerMode;
 	appUrl: string;
@@ -225,15 +225,17 @@ function hashOrigin(value: string): string {
  * to the partition). The original partition stays with the default local server
  * so existing sign-ins survive.
  */
-export function multicaPartitionFor(mode: MulticaServerMode, origin: string): string {
+export function multicaPartitionFor(mode: MulticaServerMode, identity: string): string {
 	if (mode === "cloud") return MULTICA_CLOUD_PARTITION;
-	if (origin === new URL(MULTICA_DEFAULT_URL).origin) return MULTICA_PARTITION;
-	return `${MULTICA_PARTITION}-${hashOrigin(origin)}`;
+	if (identity === new URL(MULTICA_DEFAULT_URL).origin) return MULTICA_PARTITION;
+	return `${MULTICA_PARTITION}-${hashOrigin(identity)}`;
 }
 
-function cliProfileFor(mode: MulticaServerMode, origin: string): string | null {
-	if (mode === "local" && origin === new URL(MULTICA_DEFAULT_URL).origin) return null;
-	return `ao-${new URL(origin).host.replace(/[^a-z0-9.-]/gi, "-").toLowerCase()}`;
+const profilePart = (origin: string): string => new URL(origin).host.replace(/[^a-z0-9.-]/gi, "-").toLowerCase();
+
+function cliProfileFor(mode: MulticaServerMode, identity: string, appOrigin: string, apiOrigin: string | null): string | null {
+	if (mode === "local" && identity === new URL(MULTICA_DEFAULT_URL).origin) return null;
+	return `ao-${profilePart(appOrigin)}${apiOrigin ? `--${profilePart(apiOrigin)}` : ""}`;
 }
 
 /** The server the settings select, or null when the view is off. */
@@ -250,7 +252,7 @@ export function resolveMulticaServer(settings: MulticaSettings): MulticaServer |
 				appUrl: MULTICA_CLOUD_APP_URL,
 			},
 			partition: MULTICA_CLOUD_PARTITION,
-			cliProfile: cliProfileFor("cloud", MULTICA_CLOUD_APP_URL),
+			cliProfile: cliProfileFor("cloud", "cloud", MULTICA_CLOUD_APP_URL, null),
 		};
 	}
 	const derived = multicaRuntimeConfig(settings.customUrl);
@@ -264,13 +266,17 @@ export function resolveMulticaServer(settings: MulticaSettings): MulticaServer |
 		ws.pathname = "/ws";
 		config.wsUrl = ws.href;
 	}
+	// The sign-in token lives in the partition and is sent to the API, so a
+	// different API address is a different server even for the same web address.
+	const apiOverride = config.apiUrl !== derived.config.apiUrl;
+	const identity = apiOverride ? `${config.appUrl}|${config.apiUrl}` : config.appUrl;
 	return {
-		key: config.appUrl,
+		key: identity,
 		mode: "local",
 		appUrl: config.appUrl,
 		config,
-		partition: multicaPartitionFor("local", config.appUrl),
-		cliProfile: cliProfileFor("local", config.appUrl),
+		partition: multicaPartitionFor("local", identity),
+		cliProfile: cliProfileFor("local", identity, config.appUrl, apiOverride ? config.apiUrl : null),
 	};
 }
 

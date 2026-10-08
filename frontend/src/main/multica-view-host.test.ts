@@ -921,11 +921,12 @@ describe("multica view host: changing the URL", () => {
 		expect(t.view().webContents.send).not.toHaveBeenCalled();
 	});
 
-	it("preserves a queued deep link when only the API address of the same server changes", async () => {
+	it("treats another API address for the same web address as another server: new partition, queued sign-in dropped", async () => {
 		const t = await setup(local("https://multica.example.com"));
 
 		expect(t.host.handleDeepLink("multica://auth/callback?token=abc.def")).toBe(true);
 		const oldView = t.view();
+		const oldPartition = oldView.options.webPreferences.partition;
 		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, {
 			mode: "local",
 			customUrl: "https://multica.example.com",
@@ -935,7 +936,18 @@ describe("multica view host: changing the URL", () => {
 		t.view().webContents.ipc.emit("main-renderer:channel-state", t.multicaEvent(), { channel: "auth:token", ready: true });
 
 		expect(t.view()).not.toBe(oldView);
-		expect(t.view().webContents.send).toHaveBeenCalledExactlyOnceWith("auth:token", "abc.def");
+		expect(t.view().options.webPreferences.partition).not.toBe(oldPartition);
+		expect(t.view().webContents.send).not.toHaveBeenCalled();
+	});
+
+	it("keeps the default partition away from a custom API address on the default web address", async () => {
+		const t = await setup();
+		t.host.setActive(true);
+
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, { mode: "local", customUrl: URL, apiUrl: "https://attacker.example", force: true });
+
+		expect(FakeWebContentsView.instances).toHaveLength(2);
+		expect(t.view().options.webPreferences.partition).not.toBe(MULTICA_PARTITION);
 	});
 
 	it("does not create a view for a URL saved while AO is showing", async () => {
