@@ -229,6 +229,7 @@ export function ShellTopbar({
 				className="workspace-topbar-actions flex shrink-0 items-center"
 				data-compact-actions={compactActions ? "true" : "false"}
 				data-testid="workspace-topbar-actions"
+				style={noDragStyle}
 			>
 				{isProjectBoardRoute || isOrchestrator ? <ProjectTerminationFeedback projectId={projectId} hostId={hostId} /> : null}
 				{!boardActionsInPanel && isProjectBoardRoute ? (

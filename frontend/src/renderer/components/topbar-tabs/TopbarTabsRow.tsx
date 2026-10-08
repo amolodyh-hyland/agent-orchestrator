@@ -20,7 +20,6 @@ export function TopbarTabsRow(): JSX.Element | null {
 		!isFullScreen && !isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
 	);
 	const dragStyle = isMac ? ({ WebkitAppRegion: "drag" } as CSSProperties) : undefined;
-	const noDragStyle = isMac ? ({ WebkitAppRegion: "no-drag" } as CSSProperties) : undefined;
 
 	return (
 		<div className="topbar-toolbar flex w-full shrink-0 flex-col bg-sidebar" data-density={density} data-testid="topbar-tabs-row">
@@ -32,7 +31,6 @@ export function TopbarTabsRow(): JSX.Element | null {
 				<div
 					className={cn("min-w-0 flex-1", clearanceClassName)}
 					data-testid="topbar-tabs-row-strip"
-					style={noDragStyle}
 				>
 					<TopbarTabs actionsReservePx={0} />
 				</div>
