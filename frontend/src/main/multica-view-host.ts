@@ -95,8 +95,8 @@ export type MulticaViewHost = {
 /**
  * Owns the single embedded Multica desktop view. Multica's built renderer runs
  * in a native WebContentsView that covers the whole AO window (sidebar, content
- * and toolbar), so switching between AO and Multica only shows or hides it:
- * neither side is reloaded or unmounted. AO's main process answers the IPC
+ * and toolbar), so switching between AO and Multica only attaches or detaches
+ * it: neither side is reloaded or unmounted. AO's main process answers the IPC
  * Multica's own main process would (see multica-desktop-bridge.ts).
  *
  * The view is untrusted web content with a privileged preload, so it gets its
@@ -113,6 +113,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 	let view: MulticaViewLike | undefined;
 	let rendererUrl = "";
 	let shown = false;
+	let attached = false;
 	let loadFailed = false;
 	let carriedPending: Array<[string, unknown[]]> = [];
 
@@ -160,11 +161,27 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 	};
 	mainWindow.contentView.on("bounds-changed", fit);
 
+	const detachView = (target: MulticaViewLike): void => {
+		attached = false;
+		try {
+			mainWindow.contentView.removeChildView(target as unknown as WebContentsView);
+		} catch {
+			// The BaseWindow may already have destroyed its content hierarchy.
+		}
+	};
+
+	// While AO is showing, the Multica view must not be a child of the window at
+	// all. A hidden but attached view keeps contributing the window-drag regions
+	// of its page (Multica's own top bar) to the native hit test, and those
+	// override AO's no-drag carve-outs over the toolbar.
 	function applyView(): void {
 		if (!view || view.webContents.isDestroyed()) return;
 		if (!(active && status === "ready")) {
-			if (shown) {
+			if (attached) {
 				view.setVisible(false);
+				detachView(view);
+			}
+			if (shown) {
 				shown = false;
 				options.onTakeover?.(false);
 			}
@@ -172,9 +189,10 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 		}
 		fit();
 		if (shown) return;
-		// Re-adding an existing child raises it above AO's own native views (the
-		// per-worker browser pages), which stay mounted underneath.
+		// Adding the child places it above AO's own native views (the per-worker
+		// browser pages), which stay mounted underneath.
 		mainWindow.contentView.addChildView(view as unknown as WebContentsView);
+		attached = true;
 		view.setVisible(true);
 		view.webContents.focus();
 		shown = true;
@@ -200,7 +218,6 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 			},
 		});
 		created.setVisible(false);
-		mainWindow.contentView.addChildView(created as unknown as WebContentsView);
 		const contents = created.webContents;
 
 		contents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
@@ -315,11 +332,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 		bridge = undefined;
 		if (!current) return;
 		options.notifications.reset();
-		try {
-			mainWindow.contentView.removeChildView(current as unknown as WebContentsView);
-		} catch {
-			// The BaseWindow may already have destroyed its content hierarchy.
-		}
+		detachView(current);
 		try {
 			current.webContents.close();
 		} catch {
@@ -371,8 +384,9 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 			load();
 			return;
 		}
-		if (!active && !shellWebContents.isDestroyed()) shellWebContents.focus();
 		applyView();
+		// Focus after the view is detached so the shell, not the departing page, ends up focused.
+		if (!active && !shellWebContents.isDestroyed()) shellWebContents.focus();
 		pushState();
 	}
 

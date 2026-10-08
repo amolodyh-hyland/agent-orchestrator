@@ -107,9 +107,15 @@ async function setup(initial: MulticaSettings = { url: URL }, overrides: Partial
 	};
 	const contentViewListeners = new Map<string, () => void>();
 	const contentBounds = { width: 1200, height: 800 };
+	const attachedChildren = new Set<unknown>();
 	const contentView = {
-		addChildView: vi.fn(),
-		removeChildView: vi.fn(),
+		attachedChildren,
+		addChildView: vi.fn((child: unknown) => {
+			attachedChildren.add(child);
+		}),
+		removeChildView: vi.fn((child: unknown) => {
+			attachedChildren.delete(child);
+		}),
 		getBounds: vi.fn(() => ({ x: 0, y: 0, ...contentBounds })),
 		on: vi.fn((event: string, listener: () => void) => {
 			contentViewListeners.set(event, listener);
@@ -266,6 +272,66 @@ describe("multica view host: lazy creation and switching", () => {
 		expect(t.view().setVisible).toHaveBeenLastCalledWith(true);
 	});
 
+	it("leaves exactly one attached view and AO focused after repeated AO -> Multica -> AO switches", async () => {
+		const t = await setup();
+		t.host.setActive(true);
+		// Creating the view must not attach it: only a ready, shown page belongs to the window.
+		expect(t.contentView.attachedChildren.size).toBe(0);
+		t.view().webContents.emit("did-finish-load");
+
+		for (let i = 0; i < 5; i++) {
+			expect(t.contentView.attachedChildren).toEqual(new Set([t.view()]));
+			t.shell.focus.mockClear();
+
+			t.host.setActive(false);
+			expect(t.contentView.attachedChildren.size).toBe(0);
+			expect(t.shell.focus).toHaveBeenCalledOnce();
+			expect(t.host.isShown()).toBe(false);
+
+			t.host.setActive(true);
+		}
+		expect(t.contentView.attachedChildren).toEqual(new Set([t.view()]));
+		expect(FakeWebContentsView.instances).toHaveLength(1);
+		expect(t.view().webContents.close).not.toHaveBeenCalled();
+	});
+
+	it("focuses the shell only after the Multica view has been detached", async () => {
+		const t = await setup();
+		ready(t);
+
+		t.host.setActive(false);
+
+		const detachedAt = t.contentView.removeChildView.mock.invocationCallOrder[0];
+		expect(detachedAt).toBeLessThan(t.shell.focus.mock.invocationCallOrder[0]);
+	});
+
+	it("makes switching idempotent and detaches when the page stops being ready while shown", async () => {
+		const t = await setup();
+		ready(t);
+		t.host.setActive(true);
+		t.host.setActive(true);
+		expect(t.contentView.addChildView).toHaveBeenCalledOnce();
+
+		await t.ipc.invoke(MULTICA_RELOAD_CHANNEL, t.shellEvent);
+		expect(t.contentView.attachedChildren.size).toBe(0);
+
+		t.host.setActive(false);
+		t.host.setActive(false);
+		expect(t.contentView.removeChildView).toHaveBeenCalledOnce();
+		expect(t.contentView.attachedChildren.size).toBe(0);
+	});
+
+	it("keeps a page that finishes loading while AO is showing detached", async () => {
+		const t = await setup();
+		t.host.setActive(true);
+		t.host.setActive(false);
+
+		t.view().webContents.emit("did-finish-load");
+
+		expect(t.contentView.addChildView).not.toHaveBeenCalled();
+		expect(t.contentView.attachedChildren.size).toBe(0);
+	});
+
 	it("reports whether the ready Multica view covers the AO window", async () => {
 		const t = await setup();
 		expect(t.host.isShown()).toBe(false);
@@ -296,6 +362,7 @@ describe("multica view host: lazy creation and switching", () => {
 		t.host.setActive(false);
 
 		expect(t.view().setVisible).toHaveBeenLastCalledWith(false);
+		expect(t.contentView.removeChildView).toHaveBeenCalledWith(t.view());
 		expect(t.shell.focus).toHaveBeenCalled();
 		expect(t.onTakeover).toHaveBeenLastCalledWith(false);
 	});
