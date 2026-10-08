@@ -4,6 +4,7 @@ import { useTopbarTabsStore } from "../../stores/topbar-tabs-store";
 import { TopbarTabs } from "./TopbarTabs";
 import type { TopbarTabsProps } from "./TopbarTabs";
 import type { SessionTabActions } from "./TopbarTab";
+import { TopbarDragFiller } from "./TopbarDragFiller";
 import { topbarDragStyle, topbarNoDragStyle } from "./topbar-drag-region";
 
 export type TopbarToolbarProps = {
@@ -86,6 +87,7 @@ export function TopbarToolbar({
 							style={{ height: "var(--topbar-row-h)", paddingRight: actionsReservePx, ...topbarNoDragStyle() }}
 						>
 							{remoteSessionTab}
+							<TopbarDragFiller />
 						</div>
 					) : (
 						<TopbarTabs
@@ -108,7 +110,7 @@ export function TopbarToolbar({
 				)}
 			</div>
 			{subTabs ? (
-				<div className="flex h-8 items-stretch" data-testid="session-sub-tabs">
+				<div className="flex h-8 items-stretch" data-testid="session-sub-tabs" style={topbarDragStyle()}>
 					{subTabs}
 				</div>
 			) : null}

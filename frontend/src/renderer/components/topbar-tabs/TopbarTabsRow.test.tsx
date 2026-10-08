@@ -126,14 +126,18 @@ describe("TopbarTabsRow", () => {
 		expect(tabs.style.getPropertyValue("--topbar-actions-w")).toBe("0px");
 	});
 
-	it("uses macOS no-drag tabs and titlebar clearance with the sidebar closed", () => {
+	it("uses a no-drag tab viewport and draggable titlebar clearance with the sidebar closed", () => {
 		platformMocks.isMacPlatform.mockReturnValue(true);
 		useUiStore.setState({ isSidebarOpen: false });
 		renderRow();
 
 		const strip = screen.getByTestId("topbar-tabs-row-strip");
 		expect(strip).toHaveClass("session-topbar-titlebar-clearance-mac");
-		expect((strip.style as CSSStyleDeclaration & { WebkitAppRegion?: string }).WebkitAppRegion).toBe("no-drag");
+		expect((strip.style as CSSStyleDeclaration & { WebkitAppRegion?: string }).WebkitAppRegion).toBeUndefined();
+		expect(
+			(screen.getByTestId("topbar-tabs-viewport").style as CSSStyleDeclaration & { WebkitAppRegion?: string })
+				.WebkitAppRegion,
+		).toBe("no-drag");
 		expect(
 			(screen.getByTestId("topbar-tabs-row-surface").style as CSSStyleDeclaration & { WebkitAppRegion?: string })
 				.WebkitAppRegion,

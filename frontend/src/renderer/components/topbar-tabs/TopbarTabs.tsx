@@ -10,7 +10,8 @@ import { useTopbarTabsStore } from "../../stores/topbar-tabs-store";
 import { findProjectOrchestrator, STANDALONE_WORKSPACE_ID } from "../../types/workspace";
 import type { SessionTabActions, TopbarTabProps } from "./TopbarTab";
 import { TopbarTabGroup } from "./TopbarTabGroup";
-import { topbarDragStyle, topbarNoDragStyle } from "./topbar-drag-region";
+import { TopbarDragFiller } from "./TopbarDragFiller";
+import { topbarNoDragStyle } from "./topbar-drag-region";
 import { useTopbarTabMenu } from "./TopbarTabMenu";
 import { useProjectColors } from "./useProjectColors";
 import { useTopbarTabsActions } from "./useTopbarTabsActions";
@@ -141,6 +142,8 @@ export function TopbarTabs({
 	};
 	const viewportStyle: CSSProperties & { "--topbar-actions-w": string } = {
 		"--topbar-actions-w": `${actionsReserve}px`,
+		// Wrapped rows have no trailing flex space for a filler: size the no-drag viewport to its tabs instead.
+		...(overflow === "wrap" ? { width: "fit-content", maxWidth: "100%" } : {}),
 		...topbarNoDragStyle(),
 	};
 
@@ -206,7 +209,9 @@ export function TopbarTabs({
 				data-testid="topbar-tabs-viewport"
 				style={viewportStyle}
 			>
-				<div {...tabListProps} />
+				<div {...tabListProps}>
+					<TopbarDragFiller />
+				</div>
 			</div>
 		);
 	}
@@ -243,14 +248,7 @@ export function TopbarTabs({
 						tabAction={tabAction}
 					/>
 				))}
-				{overflow === "scroll" ? (
-					<span
-						aria-hidden="true"
-						className="topbar-tabs__drag-filler"
-						data-testid="topbar-tabs-drag-filler"
-						style={topbarDragStyle()}
-					/>
-				) : null}
+				{overflow === "scroll" ? <TopbarDragFiller /> : null}
 			</div>
 			{showScrollControls && canScrollLeft ? (
 				<>

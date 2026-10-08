@@ -132,6 +132,49 @@ describe("macOS topbar drag regions", () => {
 		expect(draggers.filter((node) => node.querySelector("button, [role='tab']") === null)).toEqual([filler]);
 	});
 
+	it("keeps the traffic-light clearance region draggable and the remote strip draggable through a filler", () => {
+		const { unmount } = render(tree(<TopbarToolbar actions={null} remoteSessionTab={<button role="tab" type="button">Remote</button>} />));
+		expect(region(screen.getByTestId("session-terminal-region"))).toBe("drag");
+		const filler = screen.getByTestId("topbar-tabs-drag-filler");
+		expect(region(filler)).toBe("drag");
+		expect(filler.parentElement).toHaveAttribute("role", "tablist");
+		unmount();
+
+		render(tree(<TopbarTabsRow />));
+		expect(region(screen.getByTestId("topbar-tabs-row-surface"))).toBe("drag");
+		expect(region(screen.getByTestId("topbar-tabs-row-strip"))).toBe("");
+	});
+
+	it("keeps empty space draggable with no tab groups and in wrap overflow mode", () => {
+		useTopbarTabsStore.setState({ tabs: { version: 1, groups: [] } });
+		const { unmount } = render(tree(<TopbarToolbar actions={null} />));
+		expect(region(screen.getByTestId("topbar-tabs-drag-filler"))).toBe("drag");
+		unmount();
+
+		useTopbarTabsStore.setState({
+			tabs: {
+				version: 1,
+				groups: [{
+					id: "project-1",
+					collapsed: false,
+					head: { sessionId: null, mode: "persistent", lastActiveAt: 0 },
+					tabs: [{ sessionId: "task-1", mode: "persistent", lastActiveAt: 0 }],
+				}],
+			},
+			overflow: "wrap",
+		});
+		render(tree(<TopbarToolbar actions={null} />));
+		const viewport = screen.getByTestId("topbar-tabs-viewport");
+		expect(region(viewport)).toBe("no-drag");
+		expect(viewport.style.width).toBe("fit-content");
+	});
+
+	it("keeps the sub-tabs row draggable around its no-drag tab content", () => {
+		render(tree(<TopbarToolbar actions={null} subTabs={<button type="button">Shell</button>} />));
+
+		expect(region(screen.getByTestId("session-sub-tabs"))).toBe("drag");
+	});
+
 	it("declares no app region on non-mac platforms", () => {
 		platformMocks.isMacPlatform.mockReturnValue(false);
 		render(tree(<TopbarToolbar actions={<button type="button">Action</button>} />));
