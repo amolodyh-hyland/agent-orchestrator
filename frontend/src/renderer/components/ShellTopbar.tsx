@@ -227,6 +227,7 @@ export function ShellTopbar({
 				className="workspace-topbar-actions flex shrink-0 items-center"
 				data-compact-actions={compactActions ? "true" : "false"}
 				data-testid="workspace-topbar-actions"
+				style={noDragStyle}
 			>
 				{!boardActionsInPanel && isProjectBoardRoute ? (
 					<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={project?.kind === CLOUD_PROJECT_KIND} style={noDragStyle} />

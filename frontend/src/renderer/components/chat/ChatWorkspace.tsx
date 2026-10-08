@@ -96,6 +96,7 @@ import { ConfirmDialog } from "../ConfirmDialog";
 import { SessionTopbarPortal } from "../SessionTopbarPortal";
 import { ShellTerminalTab } from "../ShellTerminalTab";
 import { TerminalPane } from "../TerminalPane";
+import { topbarNoDragStyle } from "../topbar-tabs/topbar-drag-region";
 import { TopbarToolbar } from "../topbar-tabs/TopbarToolbar";
 import {
 	ActivityRow,
@@ -1931,7 +1932,7 @@ function ChatHeader({
 		>
 			<div className="relative min-w-0 flex-1 self-stretch overflow-hidden">
 				<div ref={tabsOverflowRef} className="scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto">
-					<div className="flex w-max items-stretch">
+					<div className="flex w-max items-stretch" style={topbarNoDragStyle()}>
 						<Reorder.Group
 							as="div"
 							axis="x"
