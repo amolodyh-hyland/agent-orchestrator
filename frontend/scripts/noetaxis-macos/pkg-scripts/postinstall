@@ -1,0 +1,12 @@
+#!/bin/bash
+set -euo pipefail
+
+script_dir="$(cd "$(/usr/bin/dirname "$0")" && pwd)"
+. "$script_dir/common.sh"
+
+app_path="$(noetaxis_apps_dir)/$NOETAXIS_APP_NAME"
+noetaxis_clear_quarantine "$app_path"
+noetaxis_verify_build_metadata "$app_path"
+[[ -f "$app_path/Contents/Resources/ao-updates-disabled" ]] || { noetaxis_error "Updates-disabled marker is missing from $app_path."; exit 48; }
+noetaxis_report_handler "$app_path"
+printf 'Installed %s\n' "$(noetaxis_plist_value "$app_path/Contents/Info.plist" CFBundleShortVersionString)"

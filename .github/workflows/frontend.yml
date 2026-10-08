@@ -37,6 +37,8 @@ jobs:
         run: node --test scripts/build-update-helper.node-test.mjs
       - name: Test repair installer packaging and guards
         run: node --test scripts/build-mac-repair-installer.node-test.mjs
+      - name: Test custom macOS installer artifacts in isolation
+        run: node --test scripts/noetaxis-macos.node-test.mjs
       - name: Compile helper for both macOS architectures
         run: |
           node scripts/build-update-helper.mjs --arch x64
