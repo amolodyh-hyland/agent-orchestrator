@@ -166,6 +166,8 @@ async function internalRegistryEnv(registry) {
 		npm_config_loglevel: "error",
 		NPM_CONFIG_LOGLEVEL: "error",
 		COREPACK_NPM_REGISTRY: registry,
+		// The internal registry mirror does not serve npm signature metadata, so corepack cannot verify it.
+		COREPACK_INTEGRITY_KEYS: "0",
 	};
 }
 
