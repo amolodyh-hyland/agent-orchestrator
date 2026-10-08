@@ -295,6 +295,16 @@ describe("multica view host: lazy creation and switching", () => {
 		expect(t.view().webContents.close).not.toHaveBeenCalled();
 	});
 
+	it("focuses the shell only after the Multica view has been detached", async () => {
+		const t = await setup();
+		ready(t);
+
+		t.host.setActive(false);
+
+		const detachedAt = t.contentView.removeChildView.mock.invocationCallOrder[0];
+		expect(detachedAt).toBeLessThan(t.shell.focus.mock.invocationCallOrder[0]);
+	});
+
 	it("makes switching idempotent and detaches when the page stops being ready while shown", async () => {
 		const t = await setup();
 		ready(t);
