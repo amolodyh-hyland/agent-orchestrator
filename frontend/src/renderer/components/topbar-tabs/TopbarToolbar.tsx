@@ -4,6 +4,7 @@ import { useTopbarTabsStore } from "../../stores/topbar-tabs-store";
 import { TopbarTabs } from "./TopbarTabs";
 import type { TopbarTabsProps } from "./TopbarTabs";
 import type { SessionTabActions } from "./TopbarTab";
+import { topbarDragStyle, topbarNoDragStyle } from "./topbar-drag-region";
 
 export type TopbarToolbarProps = {
 	actions: ReactNode;
@@ -71,6 +72,7 @@ export function TopbarToolbar({
 					className={cn("min-w-0 flex-1", clearanceClassName)}
 					data-testid="session-terminal-region"
 					ref={clearanceRef}
+					style={topbarDragStyle()}
 					onKeyDown={(event) => {
 						if (event.key === "Tab" && event.ctrlKey && !event.altKey && !event.metaKey) {
 							onTabsKeyDown?.(event);
@@ -81,7 +83,7 @@ export function TopbarToolbar({
 						<div
 							className="flex items-stretch"
 							role="tablist"
-							style={{ height: "var(--topbar-row-h)", paddingRight: actionsReservePx }}
+							style={{ height: "var(--topbar-row-h)", paddingRight: actionsReservePx, ...topbarNoDragStyle() }}
 						>
 							{remoteSessionTab}
 						</div>
@@ -99,7 +101,7 @@ export function TopbarToolbar({
 						className="absolute right-0 top-0 flex items-center gap-1 pl-2 pr-3"
 						data-testid="session-action-region"
 						ref={actionRegionRef}
-						style={{ height: "var(--topbar-row-h)" }}
+						style={{ height: "var(--topbar-row-h)", ...topbarNoDragStyle() }}
 					>
 						{actions}
 					</div>

@@ -10,6 +10,7 @@ import { useTopbarTabsStore } from "../../stores/topbar-tabs-store";
 import { findProjectOrchestrator, STANDALONE_WORKSPACE_ID } from "../../types/workspace";
 import type { SessionTabActions, TopbarTabProps } from "./TopbarTab";
 import { TopbarTabGroup } from "./TopbarTabGroup";
+import { topbarDragStyle, topbarNoDragStyle } from "./topbar-drag-region";
 import { useTopbarTabMenu } from "./TopbarTabMenu";
 import { useProjectColors } from "./useProjectColors";
 import { useTopbarTabsActions } from "./useTopbarTabsActions";
@@ -140,6 +141,7 @@ export function TopbarTabs({
 	};
 	const viewportStyle: CSSProperties & { "--topbar-actions-w": string } = {
 		"--topbar-actions-w": `${actionsReserve}px`,
+		...topbarNoDragStyle(),
 	};
 
 	useEffect(() => {
@@ -241,6 +243,14 @@ export function TopbarTabs({
 						tabAction={tabAction}
 					/>
 				))}
+				{overflow === "scroll" ? (
+					<span
+						aria-hidden="true"
+						className="topbar-tabs__drag-filler"
+						data-testid="topbar-tabs-drag-filler"
+						style={topbarDragStyle()}
+					/>
+				) : null}
 			</div>
 			{showScrollControls && canScrollLeft ? (
 				<>
