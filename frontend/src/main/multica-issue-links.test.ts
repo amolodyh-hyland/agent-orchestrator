@@ -38,6 +38,32 @@ describe("multica issue link store", () => {
 		}
 	});
 
+	it("keeps the same session, workspace and identifier apart on two servers", async () => {
+		const store = createMulticaIssueLinkStore(stateDir);
+		const base = { sessionId: "session-1", projectId: "project-1", workspaceSlug: "acme", issueIdentifier: "MUL-1" };
+		await store.add({ ...base, serverKey: "cloud" });
+		const both = await store.add({ ...base, serverKey: "http://localhost:3000" });
+
+		expect(both.map((link) => link.serverKey)).toEqual(["cloud", "http://localhost:3000"]);
+		const afterRemove = await store.remove({ sessionId: "session-1", workspaceSlug: "acme", issueIdentifier: "MUL-1", serverKey: "cloud" });
+		expect(afterRemove.map((link) => link.serverKey)).toEqual(["http://localhost:3000"]);
+		expect(await createMulticaIssueLinkStore(stateDir).list()).toEqual(afterRemove);
+	});
+
+	it("adopts links without a server for the given server once, and leaves tagged links alone", async () => {
+		const legacy = { sessionId: "old", projectId: "p", workspaceSlug: "acme", issueIdentifier: "MUL-1", createdAt: "2026-01-01T00:00:00.000Z" };
+		const tagged = { ...legacy, sessionId: "tagged", serverKey: "cloud" };
+		await writeFile(path.join(stateDir, MULTICA_ISSUE_LINKS_FILE), JSON.stringify({ version: 1, links: [legacy, tagged] }));
+		const store = createMulticaIssueLinkStore(stateDir);
+
+		expect((await store.adoptLegacy("http://localhost:3000")).map((link) => [link.sessionId, link.serverKey])).toEqual([
+			["old", "http://localhost:3000"],
+			["tagged", "cloud"],
+		]);
+		expect((await store.adoptLegacy("https://other.example.com")).map((link) => link.serverKey)).toEqual(["http://localhost:3000", "cloud"]);
+		expect((await createMulticaIssueLinkStore(stateDir).list()).map((link) => link.serverKey)).toEqual(["http://localhost:3000", "cloud"]);
+	});
+
 	it("creates a missing nested state directory when adding a link", async () => {
 		const nestedStateDir = path.join(stateDir, "a", "b");
 		const store = createMulticaIssueLinkStore(nestedStateDir);

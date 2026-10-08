@@ -110,11 +110,14 @@ export type MulticaDaemonServiceOptions = {
 	isBundledBinary?: (binaryPath: string) => boolean;
 	execFile?: ExecFileLike;
 	pollMs?: number;
+	/** Multica CLI profile of the selected server; null or absent targets the default profile. */
+	profile?: string | null;
 };
 
 export function createMulticaDaemonService(options: MulticaDaemonServiceOptions): MulticaDaemonService {
 	const exec: ExecFileLike = options.execFile ?? ((file, args, opts, callback) => nodeExecFile(file, args, opts, (error, stdout, stderr) => callback(error, String(stdout), String(stderr))));
 	let binary: string | null | undefined;
+	const profileArgs = options.profile ? ["--profile", options.profile] : [];
 	let disposed = false;
 	let pollTimer: NodeJS.Timeout | undefined;
 	let polling = false;
@@ -148,7 +151,7 @@ export function createMulticaDaemonService(options: MulticaDaemonServiceOptions)
 			const bin = locate();
 			if (!bin) return { status: { state: "cli_not_found" }, known: false };
 			// A stopped daemon may exit non-zero; the JSON (when any) still says so.
-			const result = await run(bin, ["daemon", "status", "--output", "json"], STATUS_TIMEOUT_MS);
+			const result = await run(bin, [...profileArgs, "daemon", "status", "--output", "json"], STATUS_TIMEOUT_MS);
 			const status = mapDaemonStatus(result.stdout);
 			let statusName: string | undefined;
 			try {
@@ -380,9 +383,9 @@ export function createMulticaDaemonService(options: MulticaDaemonServiceOptions)
 
 	return {
 		getStatus: readStatus,
-		start: () => lifecycle(["daemon", "start"], START_TIMEOUT_MS, "starting", "start"),
-		stop: () => lifecycle(["daemon", "stop"], STOP_TIMEOUT_MS, "stopping", "stop"),
-		restart: () => lifecycle(["daemon", "restart"], RESTART_TIMEOUT_MS, "starting", "restart"),
+		start: () => lifecycle([...profileArgs, "daemon", "start"], START_TIMEOUT_MS, "starting", "start"),
+		stop: () => lifecycle([...profileArgs, "daemon", "stop"], STOP_TIMEOUT_MS, "stopping", "stop"),
+		restart: () => lifecycle([...profileArgs, "daemon", "restart"], RESTART_TIMEOUT_MS, "starting", "restart"),
 		isInstalled: async () => locate() !== null,
 		refreshBinary: () => {
 			binary = undefined;

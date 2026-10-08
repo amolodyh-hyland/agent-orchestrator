@@ -21,7 +21,7 @@ AO_MULTICA_DESKTOP_OUT=/path/to/multica/apps/desktop/out npm run dev
 
 For packaged builds, see [Package it](#package-it). Packaged apps read `<resources>/multica-desktop` and ignore `AO_MULTICA_DESKTOP_OUT` at run time.
 
-The Multica URL in Settings (default `http://localhost:3000`) feeds Multica's runtime config: a local or IP-address host uses its API on `:8080`, any other host uses `api.<host>`. Changing it reloads the Multica view.
+The server chosen in Settings feeds Multica's runtime config (see [Choosing the Multica server](#choosing-the-multica-server)). Changing it reloads the Multica view.
 
 ## Package it
 
@@ -115,7 +115,32 @@ An AO session can be linked to Multica issues. Nothing changes in the Multica re
 - Storage: `multica-issue-links.json` next to `multica-settings.json` in the AO state directory (`~/.ao` by default), written atomically with mode `0600`. Desktop only: the daemon, CLI and mobile do not see links, and links are not removed when a session is deleted.
 - Loading: the links store is loaded once by `MulticaPane` at the shell level, so the Open in AO linked markers and Send to AO duplicate check work even when the session links chip is not shown.
 - Fragile dependencies on Multica internals, each in one place with a unit test: the issue page title format (`parseMulticaIssueTitle`) and the `multica:navigate` event (`navigatePath` in `multica-view-host.ts`). If either changes, the header action may not appear or opening a linked issue may only surface Multica; nothing else breaks.
-- Limits: lookups from the Multica page match on the identifier alone, so two workspaces with the same prefix share links.
+- Limits: lookups from the Multica page match on the identifier alone, so two workspaces with the same prefix share links. Links carry the key of the server they were made on and only the selected server's links are listed, opened and marked (see [Choosing the Multica server](#choosing-the-multica-server)).
+
+## Choosing the Multica server
+
+Settings → General → Multica has a **Server** switch: **Multica Cloud** or **Local / self-hosted**. Local takes the server's web address (default `http://localhost:3000`) and an optional API address. Nothing changes for an existing install: with no saved choice, or a saved version 1 file, AO stays on the local default.
+
+Settings file `multica-settings.json` (AO state dir, mode `0600`, atomic writes): `{ "version": 2, "mode": "cloud" | "local", "customUrl": "<web origin>", "apiUrl": "<api origin or empty>" }`. A version 1 file (`{ "url": ... }`) is read as cloud when it named `https://multica.ai`, local otherwise. No tokens or passwords are stored. `resolveMulticaServer` in `src/shared/multica.ts` turns the settings into the server the view uses; it is the only place that derives the API address, partition, CLI profile and issue-link key.
+
+| | Multica Cloud | Local / self-hosted |
+| --- | --- | --- |
+| Web app | `https://multica.ai` | the saved address |
+| API / WebSocket | `https://api.multica.ai`, `wss://api.multica.ai/ws` (Multica Desktop's own defaults) | the explicit API address; else `localhost` or an IP address on `:8080`, any other host on `api.<host>`; the check also tries the web origin itself (a reverse proxy serving `/api` and `/ws` on one origin) and stores that address when it is the one that answers |
+| Session partition | `persist:ao-multica-cloud` | `persist:ao-multica` for `http://localhost:3000` (so existing sign-ins survive), otherwise `persist:ao-multica-<16 hex of a hash of the origin>` |
+| CLI profile | `ao-multica.ai` | default profile for `http://localhost:3000`, otherwise `ao-<host>` (`:` becomes `-`) |
+
+**Validation.** Local addresses are http(s) origins without credentials, path or query. `https://` is required except for `localhost`, loopback, RFC 1918, link-local, CGNAT (`100.64.0.0/10`), unique-local IPv6, single-label names and the `.local`, `.lan`, `.internal`, `.home.arpa` suffixes (judged by name, not by DNS). Saving a local server first checks it (`src/main/multica-server-check.ts`): `GET <api>/api/config` must answer 200 with Multica's JSON (an `allow_signup` boolean), in 5 s, with no redirect followed and the body capped at 64 KiB; a 503 from `/healthz` is reported as not ready. Failures show a message per cause (unreachable, timeout, certificate not trusted, not a Multica server, not ready) and offer **Save anyway**; invalid, insecure and path errors cannot be forced. Cloud is not checked.
+
+**What a switch does.** The change is applied from a pending bar in Settings (Save and switch / Cancel) that warns that the other server has its own accounts and data. Then the settings are written, the Multica view is destroyed and created again against the new server and partition (shown again if it was showing), queued sign-in and invite deep links are dropped (a token minted for one server is never delivered to another; they are kept only when the same server just gets another API address), and notifications, the badge share and the signed-in account are reset. Switching back finds the earlier sign-in because each server keeps its partition. One-time cost: a user who had saved a custom address other than `http://localhost:3000` signs in again once, because the original partition now belongs to the default local server.
+
+**Send to AO, links and live status** follow the selected server: the issue read uses its API address and the issue link points at its web app. `multica-issue-links.json` entries carry an optional `serverKey` (`cloud` or the web origin); the first server selected after the upgrade adopts the entries that have none, and the link list, chip, Open in AO markers and live status only use the selected server's entries. The other servers' links stay stored.
+
+**Daemon.** The CLI-driven daemon panel passes `--profile ao-<host>` for every server except the default local one, so a daemon is never started against the wrong server and each server has its own token, pid and health port. AO still does not log in or sync a token: the Settings section shows the sign-in command for the profile (`multica login --profile …` for Cloud, `multica setup self-host --profile … --server-url … --app-url …` for a self-hosted server). The hosted daemon (`AO_MULTICA_DAEMON=1`) is **not** reconfigured by the switch: its server and profile come from AO's daemon environment and the profile config at daemon start, and it still refuses non-loopback servers (see [`docs/multica-hosted-daemon.md`](../../docs/multica-hosted-daemon.md)). With hosting on, set `AO_MULTICA_PROFILE` to the profile of the server you want it to follow and restart AO.
+
+**Self-hosted server requirements** (from Multica's self-hosting guide): set `FRONTEND_ORIGIN` / `CORS_ALLOWED_ORIGINS` to the address entered here (the WebSocket handshake presents it as its origin), sign in with the email code (SMTP or Resend; without either the code is in the server log), and note that Google sign-in leaves the embedded view for the system browser and cannot finish in AO.
+
+**Security.** Mode and URLs only in the settings file; the check logs and returns only an error code, never the URL or the transport message; no certificate-verification bypass; IPC stays limited to the trusted shell; the WebSocket origin rewrite applies to the selected server's API origin only.
 
 ## Send to AO
 
@@ -249,7 +274,7 @@ cluster returns; both controls are never shown together.
 
 ## Security model
 
-Multica's preload is attached to the Multica view only, in its own persistent partition (`persist:ao-multica`), with sandbox and context isolation on, every web permission denied, and main-frame navigation pinned to the built bundle (anything else goes to the system browser).
+Multica's preload is attached to the Multica view only, in its own persistent partition per server (`persist:ao-multica` for the default local server), with sandbox and context isolation on, every web permission denied, and main-frame navigation pinned to the built bundle (anything else goes to the system browser).
 
 Multica's preload also exposes a generic `window.electron.ipcRenderer`, and several of its channel names (`daemon:start`, `daemon:stop`, `daemon:restart`) collide with AO's own global handlers. Two layers deal with that:
 

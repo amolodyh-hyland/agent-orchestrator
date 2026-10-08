@@ -30,13 +30,24 @@ export const MULTICA_RELOAD_CHANNEL = "multica:reload";
 export const MULTICA_STATE_CHANNEL = "multica:state";
 export const MULTICA_GET_SETTINGS_CHANNEL = "multica:getSettings";
 export const MULTICA_SET_SETTINGS_CHANNEL = "multica:setSettings";
+export const MULTICA_CHECK_SERVER_CHANNEL = "multica:checkServer";
+
+/** Multica Cloud, from Multica Desktop's built-in default runtime config. */
+export const MULTICA_CLOUD_APP_URL = "https://multica.ai";
+export const MULTICA_CLOUD_API_URL = "https://api.multica.ai";
+export const MULTICA_CLOUD_PARTITION = "persist:ao-multica-cloud";
+
+export type MulticaServerMode = "cloud" | "local";
 
 export type MulticaSettings = {
-	/** Empty string means "not set". */
-	url: string;
+	mode: MulticaServerMode;
+	/** Web origin of the local / self-hosted server. Empty string means "not set". Kept while the mode is cloud. */
+	customUrl: string;
+	/** Explicit API origin for a self-hosted server whose API is not at the derived address. Empty means derive it. */
+	apiUrl: string;
 };
 
-export const DEFAULT_MULTICA_SETTINGS: MulticaSettings = { url: MULTICA_DEFAULT_URL };
+export const DEFAULT_MULTICA_SETTINGS: MulticaSettings = { mode: "local", customUrl: MULTICA_DEFAULT_URL, apiUrl: "" };
 
 export type MulticaStatus = "unconfigured" | "idle" | "loading" | "ready" | "error";
 
@@ -76,16 +87,74 @@ export function parseMulticaUrl(raw: unknown): MulticaUrl {
 	return { ok: true, url: url.href, origin: url.origin };
 }
 
+function originOrEmpty(raw: unknown): string {
+	const parsed = parseMulticaUrl(raw);
+	return parsed.ok ? parsed.origin : "";
+}
+
 /**
- * Missing or non-object input yields the default URL. A persisted value that
- * is not a valid URL is treated as unset rather than silently replaced.
+ * Missing or non-object input yields the defaults. A persisted URL that is not
+ * valid is treated as unset rather than silently replaced. A version 1 file
+ * (`{ url }`) becomes cloud when it named Multica Cloud's web app, local
+ * otherwise; paths are reduced to the origin.
  */
 export function coerceMulticaSettings(raw: unknown): MulticaSettings {
 	if (!raw || typeof raw !== "object") return { ...DEFAULT_MULTICA_SETTINGS };
-	const url = (raw as Record<string, unknown>).url;
-	if (typeof url !== "string") return { ...DEFAULT_MULTICA_SETTINGS };
-	const parsed = parseMulticaUrl(url);
-	return { url: parsed.ok ? parsed.url : "" };
+	const record = raw as Record<string, unknown>;
+	if (record.mode === "cloud" || record.mode === "local") {
+		return {
+			mode: record.mode,
+			customUrl: typeof record.customUrl === "string" ? originOrEmpty(record.customUrl) : DEFAULT_MULTICA_SETTINGS.customUrl,
+			apiUrl: typeof record.apiUrl === "string" ? originOrEmpty(record.apiUrl) : "",
+		};
+	}
+	if (typeof record.url !== "string") return { ...DEFAULT_MULTICA_SETTINGS };
+	const origin = originOrEmpty(record.url);
+	if (origin === MULTICA_CLOUD_APP_URL) return { mode: "cloud", customUrl: DEFAULT_MULTICA_SETTINGS.customUrl, apiUrl: "" };
+	return { mode: "local", customUrl: origin, apiUrl: "" };
+}
+
+export type MulticaServerUrlError = "invalid_url" | "insecure_http" | "path_not_allowed";
+
+/**
+ * Hosts where plain http is acceptable: loopback, RFC 1918, link-local, CGNAT
+ * (VPN overlays), unique-local IPv6, single-label names and the usual private
+ * suffixes. Judged by name only (no DNS), so this is a usability guard.
+ */
+export function isPrivateMulticaHost(hostname: string): boolean {
+	const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+	if (host === "localhost" || host.endsWith(".localhost") || host === "::1") return true;
+	const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+	if (v4) {
+		const [a, b] = [Number(v4[1]), Number(v4[2])];
+		return (
+			a === 127 ||
+			a === 10 ||
+			(a === 172 && b >= 16 && b <= 31) ||
+			(a === 192 && b === 168) ||
+			(a === 169 && b === 254) ||
+			(a === 100 && b >= 64 && b <= 127)
+		);
+	}
+	if (host.includes(":")) return /^f[cd][0-9a-f]{2}:/.test(host) || /^fe[89ab][0-9a-f]:/.test(host);
+	if (!host.includes(".")) return true;
+	return [".local", ".lan", ".internal", ".home.arpa"].some((suffix) => host.endsWith(suffix));
+}
+
+export type MulticaServerUrl = { ok: true; origin: string } | { ok: false; error: MulticaServerUrlError };
+
+/**
+ * Strict form used when the user saves a server: http(s) without credentials,
+ * an origin only (no path or query), and https unless the host is local or on a
+ * private network.
+ */
+export function validateMulticaServerUrl(raw: unknown): MulticaServerUrl {
+	const parsed = parseMulticaUrl(raw);
+	if (!parsed.ok) return { ok: false, error: "invalid_url" };
+	const url = new URL(parsed.url);
+	if ((url.pathname !== "/" && url.pathname !== "") || url.search) return { ok: false, error: "path_not_allowed" };
+	if (url.protocol === "http:" && !isPrivateMulticaHost(url.hostname)) return { ok: false, error: "insecure_http" };
+	return { ok: true, origin: parsed.origin };
 }
 
 export type MulticaRuntimeConfig = {
@@ -125,6 +194,114 @@ export function multicaRuntimeConfig(rawAppUrl: string): MulticaRuntimeConfigRes
 		config: { schemaVersion: 1, apiUrl: api.origin, wsUrl: ws.href, appUrl: app.origin },
 	};
 }
+
+export type MulticaServer = {
+	/** Stable identity of the server: "cloud" or the web origin. Tags issue links. */
+	key: string;
+	mode: MulticaServerMode;
+	appUrl: string;
+	config: MulticaRuntimeConfig;
+	/** Session partition holding this server's sign-in. */
+	partition: string;
+	/** CLI profile AO passes to `multica`; null for the default profile (the default local server). */
+	cliProfile: string | null;
+};
+
+/** 64 bits from two FNV-1a passes; only needs to keep origins apart, not to be secret. */
+function hashOrigin(value: string): string {
+	let a = 0x811c9dc5;
+	let b = 0x01000193 ^ 0xdeadbeef;
+	for (let i = 0; i < value.length; i += 1) {
+		const code = value.charCodeAt(i);
+		a = Math.imul(a ^ code, 0x01000193) >>> 0;
+		b = Math.imul(b ^ code, 0x85ebca6b) >>> 0;
+	}
+	return a.toString(16).padStart(8, "0") + b.toString(16).padStart(8, "0");
+}
+
+/**
+ * One partition per server so a sign-in for one server is never offered to
+ * another (the file:// renderer keeps its token in localStorage, which belongs
+ * to the partition). The original partition stays with the default local server
+ * so existing sign-ins survive.
+ */
+export function multicaPartitionFor(mode: MulticaServerMode, origin: string): string {
+	if (mode === "cloud") return MULTICA_CLOUD_PARTITION;
+	if (origin === new URL(MULTICA_DEFAULT_URL).origin) return MULTICA_PARTITION;
+	return `${MULTICA_PARTITION}-${hashOrigin(origin)}`;
+}
+
+function cliProfileFor(mode: MulticaServerMode, origin: string): string | null {
+	if (mode === "local" && origin === new URL(MULTICA_DEFAULT_URL).origin) return null;
+	return `ao-${new URL(origin).host.replace(/[^a-z0-9.-]/gi, "-").toLowerCase()}`;
+}
+
+/** The server the settings select, or null when the view is off. */
+export function resolveMulticaServer(settings: MulticaSettings): MulticaServer | null {
+	if (settings.mode === "cloud") {
+		return {
+			key: "cloud",
+			mode: "cloud",
+			appUrl: MULTICA_CLOUD_APP_URL,
+			config: {
+				schemaVersion: 1,
+				apiUrl: MULTICA_CLOUD_API_URL,
+				wsUrl: "wss://api.multica.ai/ws",
+				appUrl: MULTICA_CLOUD_APP_URL,
+			},
+			partition: MULTICA_CLOUD_PARTITION,
+			cliProfile: cliProfileFor("cloud", MULTICA_CLOUD_APP_URL),
+		};
+	}
+	const derived = multicaRuntimeConfig(settings.customUrl);
+	if (!derived.ok) return null;
+	const config = { ...derived.config };
+	const api = settings.apiUrl ? parseMulticaUrl(settings.apiUrl) : null;
+	if (api?.ok) {
+		config.apiUrl = api.origin;
+		const ws = new URL(api.origin);
+		ws.protocol = ws.protocol === "https:" ? "wss:" : "ws:";
+		ws.pathname = "/ws";
+		config.wsUrl = ws.href;
+	}
+	return {
+		key: config.appUrl,
+		mode: "local",
+		appUrl: config.appUrl,
+		config,
+		partition: multicaPartitionFor("local", config.appUrl),
+		cliProfile: cliProfileFor("local", config.appUrl),
+	};
+}
+
+/** The command that signs the CLI profile of a non-default server in; AO never logs in or syncs a token itself. */
+export function multicaCliSignInCommand(server: MulticaServer): string | null {
+	if (!server.cliProfile) return null;
+	if (server.mode === "cloud") return `multica login --profile ${server.cliProfile}`;
+	return `multica setup self-host --profile ${server.cliProfile} --server-url ${server.config.apiUrl} --app-url ${server.appUrl}`;
+}
+
+export type MulticaServerCheckError =
+	| MulticaServerUrlError
+	| "unreachable"
+	| "timeout"
+	| "tls"
+	| "not_multica"
+	| "not_ready";
+
+export type MulticaSetSettingsRequest = {
+	mode: MulticaServerMode;
+	customUrl: string;
+	apiUrl?: string;
+	/** Save although the connection check failed (not for invalid or insecure URLs). */
+	force?: boolean;
+};
+
+export type MulticaCheckResult = { ok: true; apiUrl: string } | { ok: false; error: MulticaServerCheckError };
+
+export type MulticaSetSettingsResult =
+	| { ok: true; settings: MulticaSettings }
+	| { ok: false; error: MulticaServerCheckError; forceable: boolean };
 
 export const MULTICA_DEEP_LINK_PROTOCOL = "multica:";
 
@@ -172,19 +349,18 @@ export function parseMulticaDeepLink(raw: string): MulticaDeepLink | null {
 export function multicaWebSocketHeaders(
 	requestUrl: string,
 	headers: Record<string, string>,
-	appUrl: string,
+	config: MulticaRuntimeConfig | null,
 ): Record<string, string> {
 	const originKey = Object.keys(headers).find((key) => key.toLowerCase() === "origin");
 	if (!originKey || (headers[originKey] !== "null" && headers[originKey] !== "file://")) return headers;
-	const config = multicaRuntimeConfig(appUrl);
-	if (!config.ok) return headers;
+	if (!config) return headers;
 	try {
 		const target = new URL(requestUrl);
 		if (target.protocol !== "ws:" && target.protocol !== "wss:") return headers;
 		target.protocol = target.protocol === "wss:" ? "https:" : "http:";
-		if (target.origin !== new URL(config.config.apiUrl).origin) return headers;
+		if (target.origin !== new URL(config.apiUrl).origin) return headers;
 	} catch {
 		return headers;
 	}
-	return { ...headers, [originKey]: config.config.appUrl };
+	return { ...headers, [originKey]: config.appUrl };
 }

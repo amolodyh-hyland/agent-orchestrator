@@ -41,7 +41,7 @@ function setup(overrides: Partial<MulticaSendToAoOptions> = {}) {
 		shellWebContents: shell as unknown as MulticaSendToAoOptions["shellWebContents"],
 		getHost: () => currentHost,
 		getCurrentIssue: () => ({ identifier: "MUL-1", title: "Fix login" }),
-		readSettings: async () => ({ url: "https://multica.example.com" }),
+		readSettings: async () => ({ mode: "local", customUrl: "https://multica.example.com", apiUrl: "" }),
 		...overrides,
 	};
 	const service = createMulticaSendToAo(options);
@@ -81,6 +81,30 @@ describe("Multica send to AO", () => {
 			},
 		});
 		expect(t.order).toEqual(["evaluate", "setActive", "send"]);
+	});
+
+	it("reads from Multica Cloud's API and links to its web app in cloud mode", async () => {
+		const t = setup({ readSettings: async () => ({ mode: "cloud", customUrl: "http://localhost:3000", apiUrl: "" }) });
+		t.service.request();
+		await flushPromises();
+
+		expect(t.host.evaluateInPage.mock.calls[0][0]).toContain("https://api.multica.ai");
+		expect(t.host.evaluateInPage.mock.calls[0][0]).not.toContain("localhost");
+		expect(t.shell.send).toHaveBeenCalledExactlyOnceWith(
+			MULTICA_SEND_REQUEST_CHANNEL,
+			expect.objectContaining({ ok: true, issue: expect.objectContaining({ url: "https://multica.ai/acme/issues/MUL-1" }) }),
+		);
+	});
+
+	it("reads from the explicit API origin of a same-origin self-hosted server", async () => {
+		const t = setup({
+			readSettings: async () => ({ mode: "local", customUrl: "https://multica.example.com", apiUrl: "https://multica.example.com" }),
+		});
+		t.service.request();
+		await flushPromises();
+
+		expect(t.host.evaluateInPage.mock.calls[0][0]).not.toContain("api.multica.example.com");
+		expect(t.host.evaluateInPage.mock.calls[0][0]).toContain("https://multica.example.com");
 	});
 
 	it("includes the requested project id after a successful read", async () => {
@@ -246,7 +270,7 @@ describe("Multica send to AO", () => {
 	});
 
 	it("reports unreadable for invalid Multica settings", async () => {
-		const t = setup({ readSettings: async () => ({ url: "" }) });
+		const t = setup({ readSettings: async () => ({ mode: "local", customUrl: "", apiUrl: "" }) });
 		t.service.request();
 		await flushPromises();
 

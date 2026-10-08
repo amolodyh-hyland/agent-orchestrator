@@ -1,17 +1,21 @@
 import type { IpcMain, IpcMainEvent, IpcMainInvokeEvent, Session, View, WebContents, WebContentsView } from "electron";
 import {
+	MULTICA_CHECK_SERVER_CHANNEL,
 	MULTICA_GET_SETTINGS_CHANNEL,
 	MULTICA_GET_STATE_CHANNEL,
-	MULTICA_PARTITION,
 	MULTICA_RELOAD_CHANNEL,
 	MULTICA_SET_ACTIVE_CHANNEL,
 	MULTICA_SET_SETTINGS_CHANNEL,
 	MULTICA_STATE_CHANNEL,
 	TOGGLE_MULTICA_SHORTCUT_CHANNEL,
-	multicaRuntimeConfig,
 	multicaWebSocketHeaders,
 	parseMulticaDeepLink,
-	parseMulticaUrl,
+	resolveMulticaServer,
+	validateMulticaServerUrl,
+	type MulticaCheckResult,
+	type MulticaServer,
+	type MulticaSetSettingsRequest,
+	type MulticaSetSettingsResult,
 	type MulticaSettings,
 	type MulticaErrorKind,
 	type MulticaStatus,
@@ -50,7 +54,9 @@ export type MulticaViewHostOptions = {
 	getKeybindingOverrides: () => KeybindingOverrides;
 	isKeybindingRecording: () => boolean;
 	readSettings: () => Promise<MulticaSettings>;
-	writeUrl: (url: string) => Promise<MulticaSettings>;
+	writeSettings: (settings: MulticaSettings) => Promise<MulticaSettings>;
+	/** Probes a self-hosted server before it is saved. */
+	checkServer: (request: Pick<MulticaSetSettingsRequest, "customUrl" | "apiUrl">) => Promise<MulticaCheckResult>;
 	/** Locates Multica's built renderer and preload; null when they have not been built. */
 	resolveBundle: () => MulticaDesktopBundle | null;
 	/** Preload run in the Multica view before Multica's own, confining its IPC (see multica-ipc-jail.ts). */
@@ -62,8 +68,10 @@ export type MulticaViewHostOptions = {
 	/** Handles Multica's notification, auth-session and badge messages; the host resets it when the view is torn down. */
 	notifications: MulticaNotifications;
 	hostName: () => string;
-	/** Builds the daemon service for a new view; `emit` pushes messages to that view. */
-	createDaemonService: (emit: (channel: string, payload: unknown) => void) => MulticaDaemonService;
+	/** Builds the daemon service for a new view; `emit` pushes messages to that view, `server` is the one the view talks to. */
+	createDaemonService: (emit: (channel: string, payload: unknown) => void, server: MulticaServer) => MulticaDaemonService;
+	/** Called when the selected server changes (including to none), with its key or "". */
+	onServerChange?: (serverKey: string) => void;
 	/** Called when the Multica view takes over the whole window or gives it back. */
 	onTakeover?: (takenOver: boolean) => void;
 	/** Receives every page title the Multica view reports (Multica sets "MUL-1: Title" on an issue page). */
@@ -92,6 +100,20 @@ export type MulticaViewHost = {
 	dispose: () => void;
 };
 
+function parseSetSettingsRequest(value: unknown): MulticaSetSettingsRequest | null {
+	if (!value || typeof value !== "object") return null;
+	const record = value as Record<string, unknown>;
+	if (record.mode !== "cloud" && record.mode !== "local") return null;
+	if (typeof record.customUrl !== "string") return null;
+	if (record.apiUrl !== undefined && typeof record.apiUrl !== "string") return null;
+	return {
+		mode: record.mode,
+		customUrl: record.customUrl,
+		...(record.apiUrl !== undefined ? { apiUrl: record.apiUrl } : {}),
+		...(record.force === true ? { force: true } : {}),
+	};
+}
+
 /**
  * Owns the single embedded Multica desktop view. Multica's built renderer runs
  * in a native WebContentsView that covers the whole AO window (sidebar, content
@@ -105,6 +127,7 @@ export type MulticaViewHost = {
  */
 export async function createMulticaViewHost(options: MulticaViewHostOptions): Promise<MulticaViewHost> {
 	const { mainWindow, shellWebContents } = options;
+	let server: MulticaServer | null = null;
 	let url = "";
 	let active = false;
 	let status: MulticaStatus = "unconfigured";
@@ -201,6 +224,8 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 
 	const createView = (): MulticaViewLike | undefined => {
 		const bundle = options.resolveBundle();
+		if (!server) return undefined;
+		const viewServer = server;
 		if (!bundle) {
 			setStatus("error", BUNDLE_MISSING_MESSAGE, "bundle-missing");
 			return undefined;
@@ -208,7 +233,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 		rendererUrl = bundle.rendererUrl;
 		const created = new options.WebContentsView({
 			webPreferences: {
-				partition: MULTICA_PARTITION,
+				partition: viewServer.partition,
 				preload: bundle.preloadPath,
 				contextIsolation: true,
 				nodeIntegration: false,
@@ -228,20 +253,20 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 		// The file:// renderer's WebSocket handshake carries `Origin: null`, which a
 		// Multica server rejects (403) unless its allowlist names it.
 		contents.session.webRequest.onBeforeSendHeaders({ urls: ["ws://*/*", "wss://*/*"] }, (details, callback) => {
-			callback({ requestHeaders: multicaWebSocketHeaders(details.url, details.requestHeaders, url) });
+			callback({ requestHeaders: multicaWebSocketHeaders(details.url, details.requestHeaders, viewServer.config) });
 		});
 
 		bridge = createMulticaDesktopBridge({
 			ipc: contents.ipc,
 			isMulticaSender: (sender) => !contents.isDestroyed() && sender.id === contents.id,
 			getAppInfo: () => options.appInfo,
-			getRuntimeConfig: () => multicaRuntimeConfig(url),
+			getRuntimeConfig: () => ({ ok: true, config: viewServer.config }),
 			getHostName: options.hostName,
 			notifications: options.notifications,
 			initialPending: carriedPending,
 			daemon: options.createDaemonService((channel, payload) => {
 				if (!contents.isDestroyed()) contents.send(channel, payload);
-			}),
+			}, viewServer),
 			openExternal: (target) => openAllowedAppExternalURL(target, options.shell),
 			send: (channel, payload) => {
 				if (!contents.isDestroyed()) contents.send(channel, payload);
@@ -351,28 +376,73 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 		void view.webContents.loadURL(rendererUrl).catch(() => undefined);
 	};
 
+	// A view is replaced when its identity changes: another server (its own
+	// sign-in partition) or another API address for the same server.
+	const identityOf = (candidate: MulticaServer | null): string =>
+		candidate ? `${candidate.partition}|${candidate.config.apiUrl}|${candidate.config.wsUrl}` : "";
+
 	const applySettings = (settings: MulticaSettings): void => {
-		const parsed = parseMulticaUrl(settings.url);
-		const nextUrl = parsed.ok ? parsed.url : "";
-		if (nextUrl === url) return;
-		url = nextUrl;
-		if (!url) {
+		const next = resolveMulticaServer(settings);
+		if (identityOf(next) === identityOf(server)) return;
+		const previous = server;
+		server = next;
+		url = next?.appUrl ?? "";
+		const sameServer = !!previous && !!next && previous.partition === next.partition;
+		options.onServerChange?.(next?.key ?? "");
+		if (!next) {
 			destroyView();
 			setStatus("unconfigured");
 		} else if (view || active) {
 			const carried = bridge?.pendingSnapshot() ?? [];
 			const hadView = Boolean(view);
 			destroyView();
-			if (hadView) {
+			// Queued sign-in and invite links belong to one server: a token minted for
+			// another must not be delivered to the new one.
+			if (hadView && sameServer) {
 				carriedPending = carried;
 			} else {
-				options.notifications.reset();
+				if (!hadView) options.notifications.reset();
 				carriedPending = [];
 			}
 			load();
 		} else {
+			carriedPending = [];
 			setStatus("idle");
 		}
+	};
+
+	const saveSettings = async (value: unknown): Promise<MulticaSetSettingsResult> => {
+		const request = parseSetSettingsRequest(value);
+		if (!request) return { ok: false, error: "invalid_url", forceable: false };
+		let customUrl = request.customUrl.trim();
+		let apiUrl = (request.apiUrl ?? "").trim();
+		if (request.mode === "local" && customUrl !== "") {
+			const web = validateMulticaServerUrl(customUrl);
+			if (!web.ok) return { ok: false, error: web.error, forceable: false };
+			customUrl = web.origin;
+			if (apiUrl !== "") {
+				const api = validateMulticaServerUrl(apiUrl);
+				if (!api.ok) return { ok: false, error: api.error, forceable: false };
+				apiUrl = api.origin;
+			}
+			const checked = await options.checkServer({ customUrl, apiUrl });
+			if (!checked.ok && !request.force) return { ok: false, error: checked.error, forceable: true };
+			// A same-origin deployment is only reachable through the discovered API address.
+			if (checked.ok && apiUrl === "") {
+				const derived = resolveMulticaServer({ mode: "local", customUrl, apiUrl: "" });
+				if (derived && derived.config.apiUrl !== checked.apiUrl) apiUrl = checked.apiUrl;
+			}
+		} else if (request.mode === "local") {
+			apiUrl = "";
+		} else {
+			// Cloud keeps the remembered custom URL, but only a valid one.
+			const remembered = customUrl === "" ? { ok: true as const, origin: "" } : validateMulticaServerUrl(customUrl);
+			customUrl = remembered.ok ? remembered.origin : "";
+			apiUrl = "";
+		}
+		const saved = await options.writeSettings({ mode: request.mode, customUrl, apiUrl });
+		applySettings(saved);
+		return { ok: true, settings: saved };
 	};
 
 	function setActive(next: boolean): void {
@@ -390,7 +460,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 		pushState();
 	}
 
-	applySettings(await options.readSettings().catch(() => ({ url: "" })));
+	applySettings(await options.readSettings().catch(() => ({ mode: "local" as const, customUrl: "", apiUrl: "" })));
 
 	const handlers: Array<[string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown]> = [
 		[MULTICA_GET_STATE_CHANNEL, (event) => (isTrustedShell(event) ? getState() : undefined)],
@@ -412,10 +482,16 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 		[
 			MULTICA_SET_SETTINGS_CHANNEL,
 			async (event, value) => {
-				if (!isTrustedShell(event) || typeof value !== "string") return undefined;
-				const saved = await options.writeUrl(value);
-				applySettings(saved);
-				return saved;
+				if (!isTrustedShell(event)) return undefined;
+				return saveSettings(value);
+			},
+		],
+		[
+			MULTICA_CHECK_SERVER_CHANNEL,
+			async (event, value) => {
+				if (!isTrustedShell(event)) return undefined;
+				const request = parseSetSettingsRequest(value);
+				return request ? options.checkServer(request) : ({ ok: false, error: "invalid_url" } satisfies MulticaCheckResult);
 			},
 		],
 	];

@@ -172,7 +172,8 @@ import {
 	toastSilent,
 } from "./main/notification-signals";
 import { buildLinuxAppMenuTemplate, buildMacAppMenuTemplate, buildWindowsAppMenuTemplate } from "./main/menu";
-import { readMulticaSettings, writeMulticaUrl } from "./main/multica-settings";
+import { readMulticaSettings, writeMulticaSettings } from "./main/multica-settings";
+import { checkMulticaServer, createMulticaCheckGet } from "./main/multica-server-check";
 import { createMulticaDaemonService, findMulticaBinary } from "./main/multica-daemon-cli";
 import {
 	createHostedFetchJson,
@@ -864,7 +865,9 @@ async function createWindowInternal(): Promise<void> {
 		getKeybindingOverrides: () => keybindingOverrides,
 		isKeybindingRecording: () => keybindingRecordingActive,
 		readSettings: () => readMulticaSettings(browserProfileStateDir()),
-		writeUrl: (url) => writeMulticaUrl(browserProfileStateDir(), url),
+		writeSettings: (settings) => writeMulticaSettings(browserProfileStateDir(), settings),
+		checkServer: (request) => checkMulticaServer(request, createMulticaCheckGet((url, init) => net.fetch(url, init))),
+		onServerChange: () => multicaIssueLinkService?.handleServerChange(),
 		// Packaged builds only trust the bundle shipped in resources; the env
 		// override is for development runs against a local Multica checkout.
 		resolveBundle: () =>
@@ -881,7 +884,7 @@ async function createWindowInternal(): Promise<void> {
 		hostName: () => os.hostname(),
 		// The daemon is driven through the installed multica CLI (AO_MULTICA_CLI
 		// overrides where it is found).
-		createDaemonService: (emit) => {
+		createDaemonService: (emit, server) => {
 			const homeDirectory = os.homedir();
 			const defaultLogPath = path.join(homeDirectory, ".multica", "daemon.log");
 			let modeAware: ReturnType<typeof createModeAwareMulticaDaemonService> | undefined;
@@ -912,8 +915,14 @@ async function createWindowInternal(): Promise<void> {
 				emit,
 				findBinary: () => findMulticaBinary(multicaBinaryOptions()),
 				cliNotFoundMessage: app.isPackaged ? "The Multica CLI isn't bundled with this build and was not found on PATH" : undefined,
+				// The hosted daemon keeps the profile AO's daemon was started with; the CLI path follows the selected server.
+				profile: server.cliProfile,
 				logPath: () =>
-					modeAware?.getMode() === "hosted" ? hostedMulticaLogPath(homeDirectory, process.env.AO_MULTICA_PROFILE) : defaultLogPath,
+					modeAware?.getMode() === "hosted"
+						? hostedMulticaLogPath(homeDirectory, process.env.AO_MULTICA_PROFILE)
+						: server.cliProfile
+							? hostedMulticaLogPath(homeDirectory, server.cliProfile)
+							: defaultLogPath,
 				isOwnedDaemon: ownerStore.isOwnedDaemon,
 				listRunningDaemons: () => listRunningMulticaDaemons(guardOptions),
 				writeOwnerMarker: ownerStore.write,

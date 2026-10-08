@@ -16,6 +16,7 @@ import {
 	type OpenWithAoSnapshot,
 } from "../shared/multica-open-with-ao";
 import { AO_SEND_ISSUE_URL, MULTICA_SEND_REQUEST_CHANNEL } from "../shared/multica-send-to-ao";
+import type { MulticaSettings } from "../shared/multica";
 import type { MulticaIssueLinkStore } from "./multica-issue-links";
 import { createMulticaIssueLinkService, type MulticaIssueLinkServiceOptions } from "./multica-issue-link-service";
 
@@ -39,6 +40,8 @@ function fakeIpc() {
 	};
 }
 
+const SERVER_KEY = "https://multica.example.com";
+
 function link(overrides: Partial<MulticaIssueLink> = {}): MulticaIssueLink {
 	return {
 		sessionId: "a-1",
@@ -46,6 +49,7 @@ function link(overrides: Partial<MulticaIssueLink> = {}): MulticaIssueLink {
 		workspaceSlug: "acme",
 		issueIdentifier: "MUL-1",
 		createdAt: "2026-01-01T00:00:00.000Z",
+		serverKey: SERVER_KEY,
 		...overrides,
 	};
 }
@@ -94,13 +98,7 @@ function actionNonce(script: string): string {
 	return match[1];
 }
 
-function pagePayload(script: string): { projects: Array<{ id: string; linked: boolean }> } {
-	const match = script.match(/const payload = (.*);\n\tconst version/);
-	if (!match) throw new Error("Open in AO payload was not found");
-	return JSON.parse(match[1]) as { projects: Array<{ id: string; linked: boolean }> };
-}
-
-async function setup(initial: MulticaIssueLink[] = [], withHost = true, initialList?: Promise<MulticaIssueLink[]>) {
+async function setup(initial: MulticaIssueLink[] = [], withHost = true) {
 	const ipc = fakeIpc();
 	const shell = { id: 7, isDestroyed: vi.fn(() => false), send: vi.fn() };
 	const host = {
@@ -113,13 +111,9 @@ async function setup(initial: MulticaIssueLink[] = [], withHost = true, initialL
 		),
 	};
 	let current = [...initial];
-	let listCalls = 0;
+	let settings: MulticaSettings = { mode: "local", customUrl: "https://multica.example.com", apiUrl: "" };
 	const store = {
-		list: vi.fn(async () => {
-			listCalls += 1;
-			if (listCalls === 1 && initialList) return initialList;
-			return [...current];
-		}),
+		list: vi.fn(async () => [...current]),
 		add: vi.fn(async (newLink) => {
 			current = [...current, { ...newLink, createdAt: "2026-01-01T00:00:00.000Z" }];
 			return [...current];
@@ -129,8 +123,13 @@ async function setup(initial: MulticaIssueLink[] = [], withHost = true, initialL
 				(entry) =>
 					entry.sessionId !== key.sessionId ||
 					entry.workspaceSlug !== key.workspaceSlug ||
-					entry.issueIdentifier !== key.issueIdentifier,
+					entry.issueIdentifier !== key.issueIdentifier ||
+					entry.serverKey !== key.serverKey,
 			);
+			return [...current];
+		}),
+		adoptLegacy: vi.fn(async (serverKey: string) => {
+			current = current.map((entry) => (entry.serverKey === undefined ? { ...entry, serverKey } : entry));
 			return [...current];
 		}),
 	} satisfies MulticaIssueLinkStore;
@@ -140,9 +139,9 @@ async function setup(initial: MulticaIssueLink[] = [], withHost = true, initialL
 		shellWebContents: shell,
 		store,
 		getHost: () => currentHost,
-		readSettings: async () => ({ url: "https://multica.example.com" }),
+		readSettings: async () => settings,
 	} as unknown as MulticaIssueLinkServiceOptions);
-	await Promise.resolve();
+	await new Promise((resolve) => setTimeout(resolve, 0));
 	host.runInAoWorld.mockClear();
 	const shellEvent = { sender: shell } as FakeEvent;
 	return {
@@ -150,6 +149,9 @@ async function setup(initial: MulticaIssueLink[] = [], withHost = true, initialL
 		shell,
 		host,
 		store,
+		setSettings: (next: MulticaSettings) => {
+			settings = next;
+		},
 		service,
 		shellEvent,
 		setHostAvailable: (available: boolean) => {
@@ -209,6 +211,7 @@ describe("multica issue link service: add and remove", () => {
 		).resolves.toEqual({ ok: true, links: [link({ sessionId: "session-1", projectId: "project-1" })] });
 
 		expect(t.store.add).toHaveBeenCalledExactlyOnceWith({
+			serverKey: SERVER_KEY,
 			sessionId: "session-1",
 			projectId: "project-1",
 			workspaceSlug: "acme",
@@ -261,6 +264,7 @@ describe("multica issue link service: add and remove", () => {
 			}),
 		).resolves.toEqual([second]);
 		expect(t.store.remove).toHaveBeenCalledExactlyOnceWith({
+			serverKey: SERVER_KEY,
 			sessionId: first.sessionId,
 			workspaceSlug: first.workspaceSlug,
 			issueIdentifier: first.issueIdentifier,
@@ -388,6 +392,7 @@ describe("multica issue link service: Open in AO page integration", () => {
 		);
 
 		expect(t.store.add).toHaveBeenCalledExactlyOnceWith({
+			serverKey: SERVER_KEY,
 			sessionId: "worker-1",
 			projectId: "project-1",
 			workspaceSlug: "acme",
@@ -527,35 +532,56 @@ describe("multica issue link service: Open in AO page integration", () => {
 	});
 });
 
-describe("multica issue link service: initial cache version", () => {
-	it.each(["list", "add"] as const)("keeps a %s result that arrives before the initial cache load", async (operation) => {
-		const initialLoad = deferred<MulticaIssueLink[]>();
-		const fresh = link({ sessionId: "fresh", projectId: "fresh" });
-		const stale = link({ sessionId: "stale", projectId: "stale" });
-		const t = await setup([], true, initialLoad.promise);
+describe("multica issue link service: servers", () => {
+	const OTHER = "https://other.example.com";
 
-		if (operation === "list") {
-			vi.mocked(t.store.list).mockResolvedValueOnce([fresh]);
-			await t.ipc.invoke(MULTICA_LINKS_LIST_CHANNEL, t.shellEvent);
-		} else {
-			await t.ipc.invoke(MULTICA_LINKS_ADD_CHANNEL, t.shellEvent, {
-				sessionId: fresh.sessionId,
-				projectId: fresh.projectId,
-				issue: "/acme/issues/MUL-1",
-			});
-		}
+	it("adopts links made before servers could be switched for the server selected at startup", async () => {
+		const t = await setup([link({ serverKey: undefined })]);
 
-		initialLoad.resolve([stale]);
-		await initialLoad.promise;
-		await Promise.resolve();
-		t.service.handlePageTitle("MUL-1: Fix login");
-		const published = snapshot("fresh", ["fresh"]);
-		published.projects.push({ ...snapshot("stale", ["stale"]).projects[0]! });
-		expect(t.ipc.invoke(MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL, t.shellEvent, published)).toEqual({ ok: true });
+		expect(t.store.adoptLegacy).toHaveBeenCalledExactlyOnceWith(SERVER_KEY);
+		await expect(t.ipc.invoke(MULTICA_LINKS_LIST_CHANNEL, t.shellEvent)).resolves.toEqual([link()]);
+	});
 
-		const projects = pagePayload(t.host.runInAoWorld.mock.calls.at(-1)?.[0] ?? "").projects;
-		expect(projects.find((project) => project.id === "fresh")?.linked).toBe(true);
-		expect(projects.find((project) => project.id === "stale")?.linked).toBe(false);
+	it("lists only the links of the selected server and shows the others again when switching back", async () => {
+		const here = link({ sessionId: "here" });
+		const there = link({ sessionId: "there", serverKey: OTHER });
+		const t = await setup([here, there]);
+		await expect(t.ipc.invoke(MULTICA_LINKS_LIST_CHANNEL, t.shellEvent)).resolves.toEqual([here]);
+
+		t.setSettings({ mode: "local", customUrl: OTHER, apiUrl: "" });
+		t.shell.send.mockClear();
+		t.service.handleServerChange();
+		await vi.waitFor(() => expect(t.shell.send).toHaveBeenCalledWith(MULTICA_LINKS_CHANGED_CHANNEL, [there]));
+		await expect(t.ipc.invoke(MULTICA_LINKS_LIST_CHANNEL, t.shellEvent)).resolves.toEqual([there]);
+
+		t.setSettings({ mode: "local", customUrl: SERVER_KEY, apiUrl: "" });
+		t.service.handleServerChange();
+		await vi.waitFor(() => expect(t.shell.send).toHaveBeenLastCalledWith(MULTICA_LINKS_CHANGED_CHANNEL, [here]));
+	});
+
+	it("tags new links with the selected server, so the same identifier on two servers stays apart", async () => {
+		const here = link({ sessionId: "s1" });
+		const t = await setup([here]);
+		t.setSettings({ mode: "cloud", customUrl: "", apiUrl: "" });
+		t.service.handleServerChange();
+		await vi.waitFor(() => expect(t.shell.send).toHaveBeenCalledWith(MULTICA_LINKS_CHANGED_CHANNEL, []));
+
+		const added = await t.ipc.invoke(MULTICA_LINKS_ADD_CHANNEL, t.shellEvent, { sessionId: "s1", projectId: "a", issue: "/acme/issues/MUL-1" });
+		expect(added).toMatchObject({ ok: true, links: [{ sessionId: "s1", serverKey: "cloud" }] });
+		await t.ipc.invoke(MULTICA_LINKS_REMOVE_CHANNEL, t.shellEvent, { sessionId: "s1", workspaceSlug: "acme", issueIdentifier: "MUL-1" });
+		t.setSettings({ mode: "local", customUrl: SERVER_KEY, apiUrl: "" });
+		t.service.handleServerChange();
+		await vi.waitFor(() => expect(t.shell.send).toHaveBeenLastCalledWith(MULTICA_LINKS_CHANGED_CHANNEL, [here]));
+	});
+
+	it("shows no links and refuses new ones while no server is selected", async () => {
+		const t = await setup([link()]);
+		t.setSettings({ mode: "local", customUrl: "", apiUrl: "" });
+		t.service.handleServerChange();
+		await vi.waitFor(() => expect(t.shell.send).toHaveBeenCalledWith(MULTICA_LINKS_CHANGED_CHANNEL, []));
+		await expect(
+			t.ipc.invoke(MULTICA_LINKS_ADD_CHANNEL, t.shellEvent, { sessionId: "s2", projectId: "a", issue: "/acme/issues/MUL-3" }),
+		).resolves.toEqual({ ok: false, reason: "save_failed" });
 	});
 });
 

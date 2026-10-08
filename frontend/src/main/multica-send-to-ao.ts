@@ -1,5 +1,5 @@
 import type { WebContents } from "electron";
-import { multicaRuntimeConfig, type MulticaSettings } from "../shared/multica";
+import { resolveMulticaServer, type MulticaSettings } from "../shared/multica";
 import { multicaIssuePath, parseMulticaIssueRef } from "../shared/multica-issue-links";
 import {
 	MULTICA_SEND_REQUEST_CHANNEL,
@@ -48,8 +48,8 @@ export function createMulticaSendToAo(options: MulticaSendToAoOptions): MulticaS
 
 			const settings = await options.readSettings();
 			if (disposed) return;
-			const config = multicaRuntimeConfig(settings.url);
-			if (!config.ok) {
+			const server = resolveMulticaServer(settings);
+			if (!server) {
 				deliver({ ok: false, reason: "unreadable" });
 				return;
 			}
@@ -67,7 +67,7 @@ export function createMulticaSendToAo(options: MulticaSendToAoOptions): MulticaS
 					timer = setTimeout(() => resolve(undefined), READ_ISSUE_TIMEOUT_MS + 2000);
 				});
 				raw = await Promise.race([
-					host.evaluateInPage(buildReadIssueScript({ apiUrl: config.config.apiUrl, identifier: issue.identifier })),
+					host.evaluateInPage(buildReadIssueScript({ apiUrl: server.config.apiUrl, identifier: issue.identifier })),
 					timeout,
 				]);
 			} finally {
@@ -95,7 +95,7 @@ export function createMulticaSendToAo(options: MulticaSendToAoOptions): MulticaS
 					issueIdentifier: issueRef.issueIdentifier,
 					title: Array.from(result.title).slice(0, 500).join(""),
 					description: Array.from(result.description).slice(0, 50000).join(""),
-					url: multicaIssueWebUrl(config.config.appUrl, issueRef),
+					url: multicaIssueWebUrl(server.config.appUrl, issueRef),
 				},
 			});
 		} catch {

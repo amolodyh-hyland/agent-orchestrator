@@ -60,6 +60,10 @@ describe("isMulticaHostingEnabled and daemon environment", () => {
 		expect(hostedMulticaCliEnv({ AO_MULTICA_DAEMON: "1" }, findBinary)).toEqual({ AO_MULTICA_CLI: "/opt/multica" });
 		expect(findBinary).toHaveBeenCalledTimes(1);
 		expect(hostedMulticaCliEnv({ AO_MULTICA_DAEMON: "0" }, findBinary)).toEqual({});
+		// The hosted daemon follows AO's environment and the profile config, not the server chosen in Settings.
+		expect(
+			hostedMulticaCliEnv({ AO_MULTICA_DAEMON: "1", AO_MULTICA_PROFILE: "work", MULTICA_SERVER_URL: "http://localhost:8080" }, findBinary),
+		).toEqual({ AO_MULTICA_CLI: "/opt/multica" });
 		expect(hostedMulticaCliEnv({ AO_MULTICA_DAEMON: "on", AO_MULTICA_CLI: "/chosen/multica" }, findBinary)).toEqual({});
 		expect(hostedMulticaCliEnv({ AO_MULTICA_DAEMON: "on" }, () => null)).toEqual({});
 	});
