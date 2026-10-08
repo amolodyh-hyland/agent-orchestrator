@@ -142,7 +142,7 @@ function plistRead(plistPath, key) {
 }
 
 function clearQuarantine(appPath) {
-	const attributes = spawnSync("/usr/bin/xattr", ["-lr", appPath], { encoding: "utf8" });
+	const attributes = spawnSync("/usr/bin/xattr", ["-lr", appPath], { encoding: "utf8", maxBuffer: 512 * 1024 * 1024 });
 	if (attributes.error) throw attributes.error;
 	if (attributes.status !== 0) throw new Error("Could not inspect app quarantine attributes");
 	if (attributes.stdout.includes("com.apple.quarantine")) run("/usr/bin/xattr", ["-dr", "com.apple.quarantine", appPath]);
