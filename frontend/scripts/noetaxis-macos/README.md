@@ -86,7 +86,7 @@ The new signature may trigger a Keychain prompt for **Agent Orchestrator Safe St
 ## Verification
 
 ```bash
-shellcheck frontend/scripts/noetaxis-macos/*.sh \
+shellcheck -x frontend/scripts/noetaxis-macos/*.sh \
   frontend/scripts/noetaxis-macos/pkg-scripts/*
 node --test frontend/scripts/noetaxis-macos.node-test.mjs
 ```
