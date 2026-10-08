@@ -584,7 +584,7 @@ describe("TopbarTabs", () => {
 		const tabList = screen.getByRole("tablist", { name: "Project tabs" });
 		expect(tabList).toHaveAttribute("data-testid", "topbar-tabs");
 		expect(tabList).toHaveClass("topbar-tabs");
-		expect(tabList.childElementCount).toBe(0);
+		expect(Array.from(tabList.children).map((child) => child.getAttribute("data-testid"))).toEqual(["topbar-tabs-drag-filler"]);
 		expect(tabList.style.getPropertyValue("--topbar-actions-w")).toBe("48px");
 		expect(screen.getByTestId("topbar-tabs-viewport")).toHaveClass("topbar-tabs__viewport");
 		expect(container.querySelector("[role=tab]")).not.toBeInTheDocument();

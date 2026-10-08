@@ -63,6 +63,7 @@ import { TerminalTabFrame } from "./TerminalTabFrame";
 import { TerminalPane } from "./TerminalPane";
 import { sessionUiKey } from "../lib/hosts";
 import { SessionTopbarPortal } from "./SessionTopbarPortal";
+import { topbarNoDragStyle } from "./topbar-tabs/topbar-drag-region";
 import { TopbarToolbar } from "./topbar-tabs/TopbarToolbar";
 import type { SessionTabActions } from "./topbar-tabs/TopbarTab";
 import { RemoteSessionTabAction } from "./topbar-tabs/RemoteSessionTabAction";
@@ -634,7 +635,7 @@ export function CenterPane({
 					className="session-tab-scroll-region scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto"
 					layoutScroll
 				>
-					<div className="flex w-max items-stretch">
+					<div className="flex w-max items-stretch" style={topbarNoDragStyle()}>
 						<Reorder.Group
 							as="div"
 							axis="x"
