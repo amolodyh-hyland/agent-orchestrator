@@ -16,7 +16,7 @@ import {
 	type OpenWithAoSnapshot,
 } from "../shared/multica-open-with-ao";
 import { AO_SEND_ISSUE_URL, MULTICA_SEND_REQUEST_CHANNEL } from "../shared/multica-send-to-ao";
-import type { MulticaSettings } from "../shared/multica";
+import { resolveMulticaServer, type MulticaSettings } from "../shared/multica";
 import type { MulticaIssueLinkStore } from "./multica-issue-links";
 import { createMulticaIssueLinkService, type MulticaIssueLinkServiceOptions } from "./multica-issue-link-service";
 
@@ -106,12 +106,17 @@ async function setup(initial: MulticaIssueLink[] = [], withHost = true) {
 		runInPage: vi.fn(),
 		runInAoWorld: vi.fn(),
 		setActive: vi.fn(),
+		getServer: vi.fn(() => {
+			const server = resolveMulticaServer(settings);
+			return viewKey === null || !server ? null : { ...server, key: viewKey };
+		}),
 		evaluateInPage: vi.fn(async (_script: string) =>
 			JSON.stringify({ ok: true, workspaceSlug: "acme", issueIdentifier: "MUL-1", title: "Fix from page", description: "Description" }),
 		),
 	};
 	let current = [...initial];
 	let settings: MulticaSettings = { mode: "local", customUrl: "https://multica.example.com", apiUrl: "" };
+	let viewKey: string | null = "https://multica.example.com";
 	const store = {
 		list: vi.fn(async () => [...current]),
 		add: vi.fn(async (newLink) => {
@@ -151,6 +156,16 @@ async function setup(initial: MulticaIssueLink[] = [], withHost = true) {
 		store,
 		setSettings: (next: MulticaSettings) => {
 			settings = next;
+		},
+		/** What the view host does on a switch: the live view and the announcement change together. */
+		switchTo: (next: MulticaSettings) => {
+			settings = next;
+			const key = resolveMulticaServer(next)?.key ?? "";
+			viewKey = key || null;
+			service.handleServerChange(key);
+		},
+		setViewKey: (key: string | null) => {
+			viewKey = key;
 		},
 		service,
 		shellEvent,
@@ -548,36 +563,51 @@ describe("multica issue link service: servers", () => {
 		const t = await setup([here, there]);
 		await expect(t.ipc.invoke(MULTICA_LINKS_LIST_CHANNEL, t.shellEvent)).resolves.toEqual([here]);
 
-		t.setSettings({ mode: "local", customUrl: OTHER, apiUrl: "" });
+		t.switchTo({ mode: "local", customUrl: OTHER, apiUrl: "" });
 		t.shell.send.mockClear();
-		t.service.handleServerChange();
 		await vi.waitFor(() => expect(t.shell.send).toHaveBeenCalledWith(MULTICA_LINKS_CHANGED_CHANNEL, [there]));
 		await expect(t.ipc.invoke(MULTICA_LINKS_LIST_CHANNEL, t.shellEvent)).resolves.toEqual([there]);
 
-		t.setSettings({ mode: "local", customUrl: SERVER_KEY, apiUrl: "" });
-		t.service.handleServerChange();
+		t.switchTo({ mode: "local", customUrl: SERVER_KEY, apiUrl: "" });
 		await vi.waitFor(() => expect(t.shell.send).toHaveBeenLastCalledWith(MULTICA_LINKS_CHANGED_CHANNEL, [here]));
 	});
 
 	it("tags new links with the selected server, so the same identifier on two servers stays apart", async () => {
 		const here = link({ sessionId: "s1" });
 		const t = await setup([here]);
-		t.setSettings({ mode: "cloud", customUrl: "", apiUrl: "" });
-		t.service.handleServerChange();
+		t.switchTo({ mode: "cloud", customUrl: "", apiUrl: "" });
 		await vi.waitFor(() => expect(t.shell.send).toHaveBeenCalledWith(MULTICA_LINKS_CHANGED_CHANNEL, []));
 
 		const added = await t.ipc.invoke(MULTICA_LINKS_ADD_CHANNEL, t.shellEvent, { sessionId: "s1", projectId: "a", issue: "/acme/issues/MUL-1" });
 		expect(added).toMatchObject({ ok: true, links: [{ sessionId: "s1", serverKey: "cloud" }] });
 		await t.ipc.invoke(MULTICA_LINKS_REMOVE_CHANNEL, t.shellEvent, { sessionId: "s1", workspaceSlug: "acme", issueIdentifier: "MUL-1" });
-		t.setSettings({ mode: "local", customUrl: SERVER_KEY, apiUrl: "" });
-		t.service.handleServerChange();
+		t.switchTo({ mode: "local", customUrl: SERVER_KEY, apiUrl: "" });
 		await vi.waitFor(() => expect(t.shell.send).toHaveBeenLastCalledWith(MULTICA_LINKS_CHANGED_CHANNEL, [here]));
+	});
+
+	it("tags and lists by the server announced by the host at once, before any reload finishes", async () => {
+		const t = await setup([link({ sessionId: "here" })]);
+
+		t.switchTo({ mode: "cloud", customUrl: "", apiUrl: "" });
+		const added = await t.ipc.invoke(MULTICA_LINKS_ADD_CHANNEL, t.shellEvent, { sessionId: "s9", projectId: "a", issue: "/acme/issues/MUL-9" });
+
+		expect(added).toMatchObject({ ok: true, links: [{ sessionId: "s9", serverKey: "cloud" }] });
+		expect(t.store.add).toHaveBeenLastCalledWith(expect.objectContaining({ serverKey: "cloud" }));
+	});
+
+	it("refuses to add a link when the live page belongs to another server than the selected one", async () => {
+		const t = await setup([]);
+		t.setViewKey("cloud");
+
+		await expect(
+			t.ipc.invoke(MULTICA_LINKS_ADD_CHANNEL, t.shellEvent, { sessionId: "s2", projectId: "a", issue: "/acme/issues/MUL-3" }),
+		).resolves.toEqual({ ok: false, reason: "save_failed" });
+		expect(t.store.add).not.toHaveBeenCalled();
 	});
 
 	it("shows no links and refuses new ones while no server is selected", async () => {
 		const t = await setup([link()]);
-		t.setSettings({ mode: "local", customUrl: "", apiUrl: "" });
-		t.service.handleServerChange();
+		t.switchTo({ mode: "local", customUrl: "", apiUrl: "" });
 		await vi.waitFor(() => expect(t.shell.send).toHaveBeenCalledWith(MULTICA_LINKS_CHANGED_CHANNEL, []));
 		await expect(
 			t.ipc.invoke(MULTICA_LINKS_ADD_CHANNEL, t.shellEvent, { sessionId: "s2", projectId: "a", issue: "/acme/issues/MUL-3" }),
@@ -623,7 +653,7 @@ describe("multica issue link service: Send to AO", () => {
 		await Promise.resolve();
 		await Promise.resolve();
 
-		expect(t.host.evaluateInPage).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("MUL-1"));
+		expect(t.host.evaluateInPage).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("MUL-1"), "https://multica.example.com");
 		expect(t.shell.send).toHaveBeenCalledExactlyOnceWith(MULTICA_SEND_REQUEST_CHANNEL, {
 			ok: true,
 			issue: {
@@ -696,6 +726,7 @@ describe("multica issue link service: lifecycle", () => {
 			runInAoWorld: vi.fn(),
 			setActive: vi.fn(),
 			evaluateInPage: vi.fn(),
+			getServer: vi.fn(() => null),
 		};
 
 		t.service.dispose();

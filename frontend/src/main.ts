@@ -867,7 +867,7 @@ async function createWindowInternal(): Promise<void> {
 		readSettings: () => readMulticaSettings(browserProfileStateDir()),
 		writeSettings: (settings) => writeMulticaSettings(browserProfileStateDir(), settings),
 		checkServer: (request) => checkMulticaServer(request, createMulticaCheckGet((url, init) => net.fetch(url, init))),
-		onServerChange: () => multicaIssueLinkService?.handleServerChange(),
+		onServerChange: (serverKey) => multicaIssueLinkService?.handleServerChange(serverKey),
 		// Packaged builds only trust the bundle shipped in resources; the env
 		// override is for development runs against a local Multica checkout.
 		resolveBundle: () =>

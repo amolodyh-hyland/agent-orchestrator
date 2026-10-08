@@ -1134,6 +1134,30 @@ describe("multica view host: choosing the server", () => {
 		expect(FakeWebContentsView.instances).toHaveLength(1);
 	});
 
+	it("runs a script bound to a server only in a live view of that server, even right after a switch", async () => {
+		const t = await setup();
+		ready(t);
+		const oldContents = t.view().webContents;
+		expect(t.host.getServer()?.key).toBe(URL);
+
+		await t.host.evaluateInPage("read()", URL);
+		expect(oldContents.executeJavaScript).toHaveBeenCalledWith("read()");
+
+		await save(t, { mode: "cloud", customUrl: URL });
+		// The script was built for the old server: it must not reach the new view, nor run unbound checks wrongly.
+		await expect(t.host.evaluateInPage("read()", URL)).resolves.toBeUndefined();
+		expect(t.view().webContents.executeJavaScript).not.toHaveBeenCalled();
+		expect(t.host.getServer()?.key).toBe("cloud");
+		await t.host.evaluateInPage("read()", "cloud");
+		expect(t.view().webContents.executeJavaScript).toHaveBeenCalledWith("read()");
+	});
+
+	it("reports no server while there is no live view", async () => {
+		const t = await setup();
+		expect(t.host.getServer()).toBeNull();
+		await expect(t.host.evaluateInPage("x()", URL)).resolves.toBeUndefined();
+	});
+
 	it("only answers the trusted shell on the check channel", async () => {
 		const t = await setup();
 

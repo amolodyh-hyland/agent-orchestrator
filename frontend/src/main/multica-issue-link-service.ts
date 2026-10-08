@@ -27,13 +27,13 @@ export type MulticaIssueLinkServiceOptions = {
 	shellWebContents: Pick<WebContents, "id" | "isDestroyed" | "send">;
 	store: MulticaIssueLinkStore;
 	/** The Multica view host is created after this service, so it is looked up lazily. */
-	getHost: () => Pick<MulticaViewHost, "navigatePath" | "runInPage" | "runInAoWorld" | "setActive" | "evaluateInPage"> | undefined;
+	getHost: () => Pick<MulticaViewHost, "navigatePath" | "runInPage" | "runInAoWorld" | "setActive" | "evaluateInPage" | "getServer"> | undefined;
 	readSettings: () => Promise<MulticaSettings>;
 };
 
 export type MulticaIssueLinkService = {
-	/** The selected Multica server changed: show the links of the new one. */
-	handleServerChange: () => void;
+	/** The selected Multica server changed (`serverKey` is "" when none): show the links of the new one. */
+	handleServerChange: (serverKey: string) => void;
 	/** Feed every page title of the Multica view here. */
 	handlePageTitle: (title: string) => void;
 	/** Offered every external-open target of the Multica view. True when it was an ao://sessions URL (handled or swallowed). */
@@ -54,6 +54,8 @@ function isStringRecord(value: unknown, keys: readonly string[]): value is Recor
 export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOptions): MulticaIssueLinkService {
 	let links: MulticaIssueLink[] = [];
 	let serverKey = "";
+	// Once the view host has announced the server, settings are no longer consulted for it.
+	let serverAnnounced = false;
 	let currentIssue: string | null = null;
 	let currentTitle: string | null = null;
 	let disposed = false;
@@ -78,7 +80,8 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 		result?: { links?: MulticaIssueLink[]; error?: unknown },
 	): Promise<boolean> {
 		try {
-			if (!serverKey) throw new Error("no server");
+			// Tag with the server selected right now, and refuse when the live page belongs to another one.
+			if (!serverKey || (options.getHost()?.getServer()?.key ?? serverKey) !== serverKey) throw new Error("no server");
 			const next = visible(await options.store.add({ ...link, serverKey }));
 			if (result) result.links = next;
 			if (!disposed) {
@@ -97,7 +100,6 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 		shellWebContents: options.shellWebContents,
 		getHost: options.getHost,
 		getCurrentIssue: () => (currentIssue ? { identifier: currentIssue, title: currentTitle ?? "" } : null),
-		readSettings: options.readSettings,
 	});
 	const openWithAo = createMulticaOpenWithAo({
 		getHost: options.getHost,
@@ -118,10 +120,10 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 	// switched (they belong to the server that was configured then), and loads
 	// the links of that server.
 	const loadForServer = async (announce: boolean): Promise<void> => {
-		const server = resolveMulticaServer(await options.readSettings());
-		serverKey = server?.key ?? "";
-		const all = serverKey ? await options.store.adoptLegacy(serverKey) : await options.store.list();
-		if (disposed) return;
+		if (!serverAnnounced) serverKey = resolveMulticaServer(await options.readSettings())?.key ?? "";
+		const key = serverKey;
+		const all = key ? await options.store.adoptLegacy(key) : await options.store.list();
+		if (disposed || key !== serverKey) return;
 		replaceLinks(visible(all));
 		if (announce) pushChanged(links);
 		refreshOpenWithAo();
@@ -228,8 +230,12 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 	for (const [channel, handler] of handlers) options.ipcMain.handle(channel, handler);
 
 	return {
-		handleServerChange: () => {
+		handleServerChange: (key) => {
 			if (disposed) return;
+			// Synchronously, so an add or open arriving before the reload already sees the new server.
+			serverAnnounced = true;
+			serverKey = key;
+			replaceLinks([]);
 			void reload(true);
 		},
 		handlePageTitle: (title) => {

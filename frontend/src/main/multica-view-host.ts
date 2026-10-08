@@ -94,7 +94,14 @@ export type MulticaViewHost = {
 	runInPage: (script: string) => void;
 	/** Runs a script in AO's isolated world, sharing the DOM but not page globals. */
 	runInAoWorld: (script: string) => void;
-	evaluateInPage: (script: string) => Promise<unknown>;
+	/**
+	 * Runs a script in the Multica page. When `serverKey` is given the script only
+	 * runs if the live view belongs to that server, so a script built for one
+	 * server (its API address) can never run, with its token, in another's page.
+	 */
+	evaluateInPage: (script: string, serverKey?: string) => Promise<unknown>;
+	/** The server the live view was created for; null without a live view. */
+	getServer: () => MulticaServer | null;
 	/** Surfaces Multica and asks its renderer to open an inbox item. False when ignored (no Multica URL, no view). */
 	openInboxItem: (target: MulticaInboxTarget) => boolean;
 	dispose: () => void;
@@ -134,6 +141,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 	let error: string | undefined;
 	let errorKind: MulticaErrorKind | undefined;
 	let view: MulticaViewLike | undefined;
+	let viewServer: MulticaServer | undefined;
 	let rendererUrl = "";
 	let shown = false;
 	let attached = false;
@@ -162,8 +170,9 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 		if (!view || view.webContents.isDestroyed()) return;
 		void view.webContents.executeJavaScriptInIsolatedWorld(MULTICA_AO_WORLD_ID, [{ code: script }]).catch(() => undefined);
 	};
-	const evaluateInPage = async (script: string): Promise<unknown> => {
+	const evaluateInPage = async (script: string, serverKey?: string): Promise<unknown> => {
 		if (!view || view.webContents.isDestroyed()) return undefined;
+		if (serverKey !== undefined && viewServer?.key !== serverKey) return undefined;
 		return await view.webContents.executeJavaScript(script).catch(() => undefined);
 	};
 
@@ -225,7 +234,8 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 	const createView = (): MulticaViewLike | undefined => {
 		const bundle = options.resolveBundle();
 		if (!server) return undefined;
-		const viewServer = server;
+		const createdFor = server;
+		viewServer = createdFor;
 		if (!bundle) {
 			setStatus("error", BUNDLE_MISSING_MESSAGE, "bundle-missing");
 			return undefined;
@@ -233,7 +243,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 		rendererUrl = bundle.rendererUrl;
 		const created = new options.WebContentsView({
 			webPreferences: {
-				partition: viewServer.partition,
+				partition: createdFor.partition,
 				preload: bundle.preloadPath,
 				contextIsolation: true,
 				nodeIntegration: false,
@@ -253,20 +263,20 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 		// The file:// renderer's WebSocket handshake carries `Origin: null`, which a
 		// Multica server rejects (403) unless its allowlist names it.
 		contents.session.webRequest.onBeforeSendHeaders({ urls: ["ws://*/*", "wss://*/*"] }, (details, callback) => {
-			callback({ requestHeaders: multicaWebSocketHeaders(details.url, details.requestHeaders, viewServer.config) });
+			callback({ requestHeaders: multicaWebSocketHeaders(details.url, details.requestHeaders, createdFor.config) });
 		});
 
 		bridge = createMulticaDesktopBridge({
 			ipc: contents.ipc,
 			isMulticaSender: (sender) => !contents.isDestroyed() && sender.id === contents.id,
 			getAppInfo: () => options.appInfo,
-			getRuntimeConfig: () => ({ ok: true, config: viewServer.config }),
+			getRuntimeConfig: () => ({ ok: true, config: createdFor.config }),
 			getHostName: options.hostName,
 			notifications: options.notifications,
 			initialPending: carriedPending,
 			daemon: options.createDaemonService((channel, payload) => {
 				if (!contents.isDestroyed()) contents.send(channel, payload);
-			}, viewServer),
+			}, createdFor),
 			openExternal: (target) => openAllowedAppExternalURL(target, options.shell),
 			send: (channel, payload) => {
 				if (!contents.isDestroyed()) contents.send(channel, payload);
@@ -351,6 +361,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 	const destroyView = (notify = true): void => {
 		const current = view;
 		view = undefined;
+		viewServer = undefined;
 		const wasShown = shown;
 		shown = false;
 		bridge?.dispose();
@@ -523,6 +534,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 		runInPage,
 		runInAoWorld,
 		evaluateInPage,
+		getServer: () => (view && !view.webContents.isDestroyed() ? (viewServer ?? null) : null),
 		openInboxItem: (target) => {
 			if (!url) return false;
 			setActive(true);
