@@ -74,4 +74,4 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-replace github.com/multica-ai/multica/server => github.com/amolodyh-hyland/multica/server v0.0.0-20261007172956-730184d835ff
+replace github.com/multica-ai/multica/server => github.com/amolodyh-hyland/multica/server v0.0.0-20261008212958-f8bb241f1243
