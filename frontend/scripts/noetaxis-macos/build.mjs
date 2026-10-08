@@ -161,8 +161,8 @@ async function internalRegistryEnv(registry) {
 		...process.env,
 		npm_config_registry: registry,
 		NPM_CONFIG_REGISTRY: registry,
-		npm_config_replace_registry_host: "always",
-		NPM_CONFIG_REPLACE_REGISTRY_HOST: "always",
+		npm_config_replace_registry_host: "npmjs",
+		NPM_CONFIG_REPLACE_REGISTRY_HOST: "npmjs",
 		npm_config_loglevel: "error",
 		NPM_CONFIG_LOGLEVEL: "error",
 		COREPACK_NPM_REGISTRY: registry,
@@ -177,7 +177,7 @@ async function seedAgentBrowserLicenses(workDir, env, frontendDir) {
 	run("npm", [
 		"pack", `agent-browser@${agentBrowserVersion}`, "--ignore-scripts",
 		"--pack-destination", archiveDir, "--registry", env.npm_config_registry,
-		"--replace-registry-host", "always",
+		"--replace-registry-host", "npmjs",
 	], { cwd: frontendDir, env });
 	const archive = path.join(archiveDir, (await readdir(archiveDir)).find((name) => name.endsWith(".tgz")) || "");
 	if (!archive.endsWith(".tgz")) throw new Error("Internal registry did not provide the pinned agent-browser package");
@@ -235,8 +235,8 @@ export async function buildNoetaxis(options) {
 		const productUiDir = path.join(sourceWorktree, "packages/product-ui");
 		const multicaDir = path.join(workDir, "multica");
 		const npmEnv = await internalRegistryEnv(registry);
-		run("npm", ["ci", "--ignore-scripts", "--registry", registry, "--replace-registry-host", "always"], { cwd: frontendDir, env: npmEnv });
-		run("npm", ["ci", "--ignore-scripts", "--registry", registry, "--replace-registry-host", "always"], { cwd: productUiDir, env: npmEnv });
+		run("npm", ["ci", "--ignore-scripts", "--registry", registry, "--replace-registry-host", "npmjs"], { cwd: frontendDir, env: npmEnv });
+		run("npm", ["ci", "--ignore-scripts", "--registry", registry, "--replace-registry-host", "npmjs"], { cwd: productUiDir, env: npmEnv });
 		const licenseDir = await seedAgentBrowserLicenses(workDir, npmEnv, frontendDir);
 		run("git", ["clone", "--filter=blob:none", "--no-checkout", `https://${multicaPin.repository}.git`, multicaDir], { cwd: workDir });
 		run("git", ["-C", multicaDir, "checkout", "--detach", multicaPin.shortRevision]);
