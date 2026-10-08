@@ -267,9 +267,9 @@ export async function buildNoetaxis(options) {
 		run("npm", ["run", "build:tmux"], { cwd: frontendDir, env: buildEnv });
 		run("npm", ["run", "browser-runtime:prepare"], { cwd: frontendDir, env: buildEnv });
 		run("npm", ["run", "build:acp-runtime"], { cwd: frontendDir, env: buildEnv });
-		const forgeOut = path.join(workDir, "forge-out");
+		const forgeOut = path.join(frontendDir, "out");
 		const forgeBin = path.join(frontendDir, "node_modules/.bin/electron-forge");
-		run(forgeBin, ["package", "--platform=darwin", "--arch=arm64", `--out-dir=${forgeOut}`], { cwd: frontendDir, env: buildEnv });
+		run(forgeBin, ["package", "--platform=darwin", "--arch=arm64"], { cwd: frontendDir, env: buildEnv });
 		const packagedApp = await findAppBundle(forgeOut);
 		if (!packagedApp) throw new Error(`electron-forge did not create ${appName} in ${forgeOut}`);
 		const resources = path.join(packagedApp, "Contents/Resources");
