@@ -346,6 +346,14 @@ noetaxis_write_backup_record() {
 		/bin/rm -f "$temporary_record"
 		return 1
 	fi
+	# Run by Installer as root, hand the state copies back to the user so they can inspect or delete them.
+	if [[ "$(id -u)" -eq 0 ]]; then
+		local user_name
+		user_name="$(noetaxis_user_name)"
+		if [[ -n "$user_name" && "$user_name" != root ]]; then
+			/usr/sbin/chown -R "$(id -u "$user_name"):$(id -g "$user_name")" "$backup_dir" || true
+		fi
+	fi
 }
 
 noetaxis_schema_query() {
@@ -385,9 +393,10 @@ noetaxis_print_post_install_checks() {
 		return 28
 	fi
 	printf '\nOffline CLI checks:\n'
-	"$cli" version
-	"$cli" spawn --help | /usr/bin/grep -- --effort
-	"$cli" project set-config --help | /usr/bin/grep -- --permission-fallback
+	# The app is already installed at this point, so a failing check is a labelled warning.
+	"$cli" version || printf 'WARNING: "ao version" failed; the install itself completed.\n'
+	"$cli" spawn --help | /usr/bin/grep -- --effort || printf 'WARNING: the bundled ao CLI does not list spawn --effort; the install itself completed.\n'
+	"$cli" project set-config --help | /usr/bin/grep -- --permission-fallback || printf 'WARNING: the bundled ao CLI does not list project set-config --permission-fallback; the install itself completed.\n'
 	if [[ -f "$database" ]]; then
 		noetaxis_print_schema_version "$database"
 	else

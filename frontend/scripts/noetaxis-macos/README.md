@@ -4,7 +4,7 @@ This flow creates an arm64 desktop app, `MANIFEST.sha256`, an unsigned installer
 
 ## Build
 
-Run from the AO fork checkout on an Apple Silicon Mac with macOS, Node 24, npm 11, Go 1.27.1 or newer, Xcode command line tools, and Corepack available. Join the company VPN first. Every npm and pnpm registry request is pinned to the internal ProGet endpoint `https://proget.onbase.net/npm/npm`. Package credentials are read through the normal npm configuration and are never printed by these scripts. The build also downloads the checksum-pinned agent-browser binary and the source assets used by the AO packaging scripts.
+Run from the AO fork checkout on an Apple Silicon Mac with macOS, Node 24, npm 11, Go 1.27.1 or newer, Xcode command line tools, and Corepack available. Join the company VPN first. Every npm and pnpm registry request is pinned to the internal ProGet endpoint `https://proget.onbase.net/npm/npm`. Package credentials are read through the normal npm configuration and are never printed by these scripts. Not every network request is a registry request. Besides the registry, the build contacts: `github.com` (git clone of the Multica fork and the checksum-pinned agent-browser release binary), the Electron binary download used by Electron Forge, and the Go module proxy. Check that your VPN and policy allow these. `COREPACK_INTEGRITY_KEYS=0` is set only for the pnpm install step, and the pnpm tarball is not hash-pinned.
 
 ```bash
 node frontend/scripts/noetaxis-macos/build.mjs
@@ -42,7 +42,7 @@ frontend/scripts/noetaxis-macos/install.sh \
   "$HOME/ao-builds/noetaxis-8e2bc21/Applications/Agent Orchestrator.app"
 ```
 
-The script checks the manifest, bundle version and full source revision, free space, app processes, and ShipIt. It stages the app with `ditto`, then backs up `ao.db` and its WAL/SHM files, `app-state.json`, `update-settings.json`, `editor-settings.json`, and the previous app before replacing anything. Backups are stored in `~/ao-backups/<stamp>/`; the previous bundle ends in `.app.bak` so Finder does not treat it as another installed app. The install script will not move the old app until all selected AO state backups verify successfully.
+The script checks the manifest, bundle version and source revision (the app's `NoetaxisSourceRevision` must start with the 7-character version suffix), free space, app processes, and ShipIt. It stages the app with `ditto`, then backs up `ao.db` and its WAL/SHM files (the Electron user-data directory is not included), `app-state.json`, `update-settings.json`, `editor-settings.json`, and the previous app before replacing anything. Backups are stored in `~/ao-backups/<stamp>/`; the previous bundle ends in `.app.bak` so Finder does not treat it as another installed app. The install script will not move the old app until all selected AO state backups verify successfully.
 
 `AO_SESSION_ID` and any `AO_*` environment setting, or an AO app/daemon process in the command's ancestry, blocks installation. `--allow-ao-session` overrides this guard. Use it only when ending the active sessions is intentional. `APPS_DIR` and `AO_HOME` can point at isolated test roots; setting `AO_HOME` also triggers the guard unless the explicit override is supplied.
 
