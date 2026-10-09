@@ -420,3 +420,16 @@ export function createModeAwareMulticaDaemonService(options: {
 		getMode: () => currentMode,
 	};
 }
+
+/**
+ * The hosted daemon (AO's supervised child) serves the default local server. For
+ * any other server the panel drives the CLI with that server's profile, so it
+ * never starts, stops or shows a daemon that belongs to a different server.
+ */
+export function chooseMulticaDaemonService<T extends MulticaDaemonService>(options: {
+	cliProfile: string | null;
+	cli: MulticaDaemonService;
+	modeAware: () => T;
+}): MulticaDaemonService | T {
+	return options.cliProfile ? options.cli : options.modeAware();
+}
