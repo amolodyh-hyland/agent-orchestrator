@@ -116,6 +116,9 @@ export function coerceMulticaSettings(raw: unknown): MulticaSettings {
 
 export type MulticaServerUrlError = "invalid_url" | "insecure_http" | "path_not_allowed";
 
+/** Cloud metadata service names, which the single-label and `.internal` rules would otherwise let through over http. */
+const METADATA_HOSTS = new Set(["metadata", "metadata.google.internal", "instance-data", "instance-data.ec2.internal", "metadata.azure.internal"]);
+
 /**
  * Hosts where plain http is acceptable: loopback, RFC 1918, CGNAT (VPN
  * overlays), unique-local IPv6, single-label names and the usual private
@@ -124,7 +127,8 @@ export type MulticaServerUrlError = "invalid_url" | "insecure_http" | "path_not_
  * usability guard, not a security boundary.
  */
 export function isPrivateMulticaHost(hostname: string): boolean {
-	const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+	const host = hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+	if (METADATA_HOSTS.has(host)) return false;
 	if (host === "localhost" || host.endsWith(".localhost") || host === "::1") return true;
 	const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
 	if (v4) {
@@ -234,7 +238,7 @@ export function multicaPartitionFor(mode: MulticaServerMode, identity: string): 
 }
 
 /**
- * `ao-<readable host>-<hash of the identity>`: the hash keeps hosts that
+ * `ao-<readable host>-<64-bit hash of the identity>`: the hash keeps hosts that
  * sanitize alike (`a.b:1`, `a.b-1`) and the same host over http and https on
  * separate CLI profiles, so one profile never holds two servers' sign-in.
  */
@@ -242,7 +246,7 @@ function cliProfileFor(mode: MulticaServerMode, identity: string, appOrigin: str
 	if (mode === "local" && identity === new URL(MULTICA_DEFAULT_URL).origin) return null;
 	if (mode === "cloud") return "ao-multica.ai";
 	const host = new URL(appOrigin).host.replace(/[^a-z0-9.]/gi, "-").toLowerCase().slice(0, 40);
-	return `ao-${host}-${hashOrigin(identity).slice(0, 8)}`;
+	return `ao-${host}-${hashOrigin(identity)}`;
 }
 
 /** The server the settings select, or null when the view is off. */
