@@ -33,6 +33,17 @@ noetaxis_user_home() {
 	printf '%s' "${HOME:-}"
 }
 
+# Running as root with no resolvable console user would resolve to /var/root and
+# back up nothing of the real user's ~/.ao while still replacing the app.
+noetaxis_require_human_user() {
+	local name
+	name="$(noetaxis_user_name)"
+	if [[ "$(id -u)" -eq 0 && ( -z "$name" || "$name" == root ) ]]; then
+		noetaxis_error "Running as root without a console user; refusing to install without backing up the human user's ~/.ao. Run it as the signed-in user."
+		exit 29
+	fi
+}
+
 noetaxis_ao_home() {
 	if [[ -n "${AO_HOME:-}" ]]; then
 		printf '%s' "$AO_HOME"

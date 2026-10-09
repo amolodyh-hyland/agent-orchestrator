@@ -51,6 +51,7 @@ done
 apps_dir="$(noetaxis_apps_dir)"
 target_app="$apps_dir/$NOETAXIS_APP_NAME"
 user_home="$(noetaxis_user_home)"
+noetaxis_require_human_user
 ao_home="$(noetaxis_ao_home)"
 backup_root="$user_home/ao-backups"
 if [[ -z "$backup_dir" ]]; then
@@ -113,7 +114,7 @@ fi
 if [[ "$restore_db" -eq 1 ]]; then
 	database_backup="$backup_dir/data"
 	database_dir="$ao_home/data"
-	current_database_backup="$backup_dir/rollback-current-data"
+	current_database_backup="$backup_dir/rollback-current-data-$(date '+%Y%m%d-%H%M%S')-$$"
 	[[ -f "$database_backup/ao.db" ]] || { noetaxis_error "Database backup is missing: $database_backup/ao.db"; exit 45; }
 	/bin/mkdir -p "$current_database_backup" "$database_dir"
 	for name in ao.db ao.db-wal ao.db-shm; do

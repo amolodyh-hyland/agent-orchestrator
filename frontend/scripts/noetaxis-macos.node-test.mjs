@@ -228,7 +228,18 @@ test("isolated install is dry-runnable, backed up, idempotent, and reversible", 
 	const databaseRollback = execute("/bin/bash", [rollbackScript, "--allow-ao-session", "--restore-db", "--backup-dir", backupDir], { cwd: repoRoot, env });
 	assert.equal(databaseRollback.status, 0, databaseRollback.stderr);
 	assert.equal(execute("/usr/bin/sqlite3", [database, "select max(version_id) from goose_db_version where is_applied=1;"]).stdout.trim(), "999");
-	assert.equal(execute("/usr/bin/sqlite3", [path.join(backupDir, "rollback-current-data/ao.db"), "select max(version_id) from goose_db_version where is_applied=1;"]).stdout.trim(), "888");
+	const savedDirs = async () => (await readdir(backupDir)).filter((name) => name.startsWith("rollback-current-data-")).sort();
+	const firstSaved = await savedDirs();
+	assert.equal(firstSaved.length, 1);
+	const savedVersion = (name) => execute("/usr/bin/sqlite3", [path.join(backupDir, name, "ao.db"), "select max(version_id) from goose_db_version where is_applied=1;"]).stdout.trim();
+	assert.equal(savedVersion(firstSaved[0]), "888");
+	assert.equal(execute("/usr/bin/sqlite3", [database, "delete from goose_db_version; insert into goose_db_version values (777,1);"]).status, 0);
+	const repeatedRollback = execute("/bin/bash", [rollbackScript, "--allow-ao-session", "--restore-db", "--backup-dir", backupDir], { cwd: repoRoot, env });
+	assert.equal(repeatedRollback.status, 0, repeatedRollback.stderr);
+	const allSaved = await savedDirs();
+	assert.equal(allSaved.length, 2);
+	assert.equal(savedVersion(firstSaved[0]), "888");
+	assert.deepEqual(allSaved.filter((name) => name !== firstSaved[0]).map(savedVersion), ["777"]);
 });
 
 test("schema check reads a WAL database that has no -wal/-shm files and never fails", { skip: process.platform !== "darwin" }, async (t) => {
@@ -246,6 +257,18 @@ test("schema check reads a WAL database that has no -wal/-shm files and never fa
 	const unreadable = check(path.join(root, "missing.db"));
 	assert.equal(unreadable.status, 0, unreadable.stderr);
 	assert.match(unreadable.stdout, /could not be read/);
+});
+
+test("install refuses to run as root without a console user", { skip: process.platform !== "darwin" }, async (t) => {
+	const root = await testRoot(t, "noetaxis-root-test");
+	const bin = path.join(root, "bin");
+	await mkdir(bin, { recursive: true });
+	await writeFile(path.join(bin, "id"), "#!/bin/sh\necho 0\n", { mode: 0o755 });
+	const check = execute("/bin/bash", ["-c", 'source "$1"; noetaxis_require_human_user', "check", path.join(scriptDir, "noetaxis-macos/common.sh")], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, SUDO_USER: "root", USER: "root" } });
+	assert.equal(check.status, 29);
+	assert.match(check.stderr, /without a console user/);
+	const human = execute("/bin/bash", ["-c", 'source "$1"; noetaxis_require_human_user', "check", path.join(scriptDir, "noetaxis-macos/common.sh")], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, SUDO_USER: "someone" } });
+	assert.equal(human.status, 0, human.stderr);
 });
 
 test("native PKG structure is verifiable without running Installer", { skip: process.platform !== "darwin" }, async (t) => {
