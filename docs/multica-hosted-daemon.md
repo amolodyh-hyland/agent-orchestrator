@@ -80,4 +80,4 @@ Bumping the pin:
 - The status `logLines` are the child's recent output as it wrote it, unredacted; they are served only on the loopback listener.
 - `multica daemon restart` run directly leaves a standalone daemon outside AO's supervision (see the table above).
 - The Multica daemon's auto-update and auto-reload are off; updating the Multica code means bumping the pin.
-- Multica Cloud is out of scope: the server must be local.
+- Multica Cloud is out of scope: the server must be local. The server switch in Settings (Cloud or a self-hosted address) only changes the embedded view and the CLI-driven daemon panel; it does not reconfigure the hosted daemon, which keeps the profile and server it was started with.

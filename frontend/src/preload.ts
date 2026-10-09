@@ -54,6 +54,7 @@ import type {
 import type { UpdateOutcome } from "./shared/update-telemetry";
 import type { UiSettings } from "./main/ui-settings";
 import {
+	MULTICA_CHECK_SERVER_CHANNEL,
 	MULTICA_GET_SETTINGS_CHANNEL,
 	MULTICA_GET_STATE_CHANNEL,
 	MULTICA_RELOAD_CHANNEL,
@@ -61,6 +62,9 @@ import {
 	MULTICA_SET_SETTINGS_CHANNEL,
 	MULTICA_STATE_CHANNEL,
 	TOGGLE_MULTICA_SHORTCUT_CHANNEL,
+	type MulticaCheckResult,
+	type MulticaSetSettingsRequest,
+	type MulticaSetSettingsResult,
 	type MulticaSettings,
 	type MulticaViewState,
 } from "./shared/multica";
@@ -692,7 +696,10 @@ const api = {
 		setActive: (active: boolean) => ipcRenderer.invoke(MULTICA_SET_ACTIVE_CHANNEL, active) as Promise<MulticaViewState>,
 		reload: () => ipcRenderer.invoke(MULTICA_RELOAD_CHANNEL) as Promise<MulticaViewState>,
 		getSettings: () => ipcRenderer.invoke(MULTICA_GET_SETTINGS_CHANNEL) as Promise<MulticaSettings>,
-		setSettings: (url: string) => ipcRenderer.invoke(MULTICA_SET_SETTINGS_CHANNEL, url) as Promise<MulticaSettings>,
+		setSettings: (request: MulticaSetSettingsRequest) =>
+			ipcRenderer.invoke(MULTICA_SET_SETTINGS_CHANNEL, request) as Promise<MulticaSetSettingsResult>,
+		checkServer: (request: Pick<MulticaSetSettingsRequest, "customUrl" | "apiUrl">) =>
+			ipcRenderer.invoke(MULTICA_CHECK_SERVER_CHANNEL, request) as Promise<MulticaCheckResult>,
 		onState: (listener: (state: MulticaViewState) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, state: MulticaViewState) => listener(state);
 			ipcRenderer.on(MULTICA_STATE_CHANNEL, wrapped);

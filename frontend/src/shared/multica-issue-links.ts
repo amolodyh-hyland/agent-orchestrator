@@ -18,6 +18,8 @@ export type MulticaIssueLink = {
 	workspaceSlug: string;
 	issueIdentifier: string;
 	createdAt: string;
+	/** Key of the Multica server the issue lives on (`MulticaServer.key`). Absent on links made before servers could be switched. */
+	serverKey?: string;
 };
 
 export type MulticaIssueRef = { workspaceSlug: string; issueIdentifier: string };
@@ -125,7 +127,13 @@ export function isMulticaIssueLink(value: unknown): value is MulticaIssueLink {
 	if (!isSessionIdentifier(link.sessionId) || !isSessionIdentifier(link.projectId)) return false;
 	if (typeof link.workspaceSlug !== "string" || !/^[a-z0-9][a-z0-9_-]{0,62}$/.test(link.workspaceSlug)) return false;
 	if (typeof link.issueIdentifier !== "string" || !UPPERCASE_ISSUE_IDENTIFIER.test(link.issueIdentifier)) return false;
+	if (link.serverKey !== undefined && !isServerKey(link.serverKey)) return false;
 	return typeof link.createdAt === "string" && !Number.isNaN(Date.parse(link.createdAt));
+}
+
+/** The links that belong to one server, or to none yet (made before servers could be switched). */
+export function linksForServer(links: MulticaIssueLink[], serverKey: string): MulticaIssueLink[] {
+	return links.filter((link) => link.serverKey === serverKey);
 }
 
 export function coerceMulticaIssueLinks(raw: unknown): MulticaIssueLink[] {
@@ -137,7 +145,7 @@ export function coerceMulticaIssueLinks(raw: unknown): MulticaIssueLink[] {
 	const seen = new Set<string>();
 	for (const value of file.links) {
 		if (!isMulticaIssueLink(value)) continue;
-		const key = JSON.stringify([value.sessionId, value.workspaceSlug, value.issueIdentifier]);
+		const key = JSON.stringify([value.sessionId, value.workspaceSlug, value.issueIdentifier, value.serverKey ?? null]);
 		if (seen.has(key)) continue;
 		seen.add(key);
 		links.push({
@@ -146,9 +154,14 @@ export function coerceMulticaIssueLinks(raw: unknown): MulticaIssueLink[] {
 			workspaceSlug: value.workspaceSlug,
 			issueIdentifier: value.issueIdentifier,
 			createdAt: value.createdAt,
+			...(value.serverKey !== undefined ? { serverKey: value.serverKey } : {}),
 		});
 	}
 	return links.length > MAX_MULTICA_ISSUE_LINKS ? links.slice(-MAX_MULTICA_ISSUE_LINKS) : links;
+}
+
+function isServerKey(value: unknown): value is string {
+	return typeof value === "string" && value.length > 0 && value.length <= 300 && !CONTROL_CHARACTERS.test(value);
 }
 
 function isSessionIdentifier(value: unknown): value is string {

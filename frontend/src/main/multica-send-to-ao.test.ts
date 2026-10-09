@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveMulticaServer, type MulticaSettings } from "../shared/multica";
 import { MULTICA_SEND_REQUEST_CHANNEL } from "../shared/multica-send-to-ao";
 import { READ_ISSUE_TIMEOUT_MS } from "./multica-issue-reader";
 import { createMulticaSendToAo, type MulticaSendToAoOptions } from "./multica-send-to-ao";
@@ -26,14 +27,17 @@ async function flushPromises(): Promise<void> {
 	await Promise.resolve();
 }
 
-function setup(overrides: Partial<MulticaSendToAoOptions> = {}) {
+const LOCAL: MulticaSettings = { mode: "local", customUrl: "https://multica.example.com", apiUrl: "" };
+
+function setup(overrides: Partial<MulticaSendToAoOptions> = {}, settings: MulticaSettings = LOCAL) {
 	const order: string[] = [];
 	const shell = { isDestroyed: vi.fn(() => false), send: vi.fn((..._args: unknown[]) => order.push("send")) };
 	const host = {
-		evaluateInPage: vi.fn(async (_script: string): Promise<unknown> => {
+		evaluateInPage: vi.fn(async (_script: string, _serverKey?: string): Promise<unknown> => {
 			order.push("evaluate");
 			return successfulRead;
 		}),
+		getServer: vi.fn(() => resolveMulticaServer(settings)),
 		setActive: vi.fn((_active: boolean) => order.push("setActive")),
 	};
 	let currentHost: typeof host | undefined = host;
@@ -41,7 +45,6 @@ function setup(overrides: Partial<MulticaSendToAoOptions> = {}) {
 		shellWebContents: shell as unknown as MulticaSendToAoOptions["shellWebContents"],
 		getHost: () => currentHost,
 		getCurrentIssue: () => ({ identifier: "MUL-1", title: "Fix login" }),
-		readSettings: async () => ({ url: "https://multica.example.com" }),
 		...overrides,
 	};
 	const service = createMulticaSendToAo(options);
@@ -81,6 +84,46 @@ describe("Multica send to AO", () => {
 			},
 		});
 		expect(t.order).toEqual(["evaluate", "setActive", "send"]);
+	});
+
+	it("reads from Multica Cloud's API and links to its web app in cloud mode", async () => {
+		const t = setup({}, { mode: "cloud", customUrl: "http://localhost:3000", apiUrl: "" });
+		t.service.request();
+		await flushPromises();
+
+		expect(t.host.evaluateInPage.mock.calls[0][0]).toContain("https://api.multica.ai");
+		expect(t.host.evaluateInPage.mock.calls[0][0]).not.toContain("localhost");
+		expect(t.shell.send).toHaveBeenCalledExactlyOnceWith(
+			MULTICA_SEND_REQUEST_CHANNEL,
+			expect.objectContaining({ ok: true, issue: expect.objectContaining({ url: "https://multica.ai/acme/issues/MUL-1" }) }),
+		);
+	});
+
+	it("reads from the explicit API origin of a same-origin self-hosted server", async () => {
+		const t = setup({}, { mode: "local", customUrl: "https://multica.example.com", apiUrl: "https://multica.example.com" });
+		t.service.request();
+		await flushPromises();
+
+		expect(t.host.evaluateInPage.mock.calls[0][0]).not.toContain("api.multica.example.com");
+		expect(t.host.evaluateInPage.mock.calls[0][0]).toContain("https://multica.example.com");
+	});
+
+	it("binds the read to the server of the live view, so a switch cannot run one server's script in another's page", async () => {
+		const t = setup();
+		t.service.request();
+		await flushPromises();
+
+		const [script, serverKey] = t.host.evaluateInPage.mock.calls[0];
+		expect(serverKey).toBe("https://multica.example.com");
+		expect(script).toContain("https://api.multica.example.com");
+	});
+
+	it("reads the server synchronously from the host right before evaluating, with no settings read in between", async () => {
+		const t = setup();
+		t.service.request();
+
+		expect(t.host.getServer).toHaveBeenCalledOnce();
+		expect(t.host.evaluateInPage).toHaveBeenCalledOnce();
 	});
 
 	it("includes the requested project id after a successful read", async () => {
@@ -245,8 +288,8 @@ describe("Multica send to AO", () => {
 		expect(t.host.evaluateInPage).not.toHaveBeenCalled();
 	});
 
-	it("reports unreadable for invalid Multica settings", async () => {
-		const t = setup({ readSettings: async () => ({ url: "" }) });
+	it("reports unreadable when the Multica view has no server", async () => {
+		const t = setup({}, { mode: "local", customUrl: "", apiUrl: "" });
 		t.service.request();
 		await flushPromises();
 
