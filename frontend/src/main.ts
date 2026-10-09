@@ -178,6 +178,7 @@ import { createMulticaDaemonService, findMulticaBinary } from "./main/multica-da
 import {
 	createHostedFetchJson,
 	createHostedMulticaDaemonControl,
+	chooseMulticaDaemonService,
 	createModeAwareMulticaDaemonService,
 	hostedMulticaCliEnv,
 	hostedMulticaLogPath,
@@ -938,14 +939,20 @@ async function createWindowInternal(): Promise<void> {
 				timeoutMs: 65_000,
 				fetchJson: createHostedFetchJson((url, init) => net.fetch(String(url), init)),
 			});
-			modeAware = createModeAwareMulticaDaemonService({
+			return chooseMulticaDaemonService({
+				cliProfile: server.cliProfile,
 				cli,
-				hosted,
-				baseUrl: multicaBaseUrl,
-				hostingEnabled: () => isMulticaHostingEnabled(process.env),
-				emit,
+				modeAware: () => {
+					modeAware = createModeAwareMulticaDaemonService({
+						cli,
+						hosted,
+						baseUrl: multicaBaseUrl,
+						hostingEnabled: () => isMulticaHostingEnabled(process.env),
+						emit,
+					});
+					return modeAware;
+				},
 			});
-			return modeAware;
 		},
 		onPageTitleChange: (title) => multicaIssueLinkService?.handlePageTitle(title),
 		onAoSessionLink: (url) => multicaIssueLinkService?.handleAoSessionLink(url) ?? false,

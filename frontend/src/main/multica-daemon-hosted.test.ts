@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DAEMON_BUSY_MESSAGE, type MulticaDaemonService } from "./multica-daemon-cli";
 import {
+	chooseMulticaDaemonService,
 	createHostedMulticaDaemonControl,
 	createHostedFetchJson,
 	createModeAwareMulticaDaemonService,
@@ -608,5 +609,22 @@ describe("createModeAwareMulticaDaemonService", () => {
 		await vi.advanceTimersByTimeAsync(5_000);
 		expect(getStatus).toHaveBeenCalledTimes(3);
 		expect(cli.dispose).toHaveBeenCalledOnce();
+	});
+});
+
+describe("chooseMulticaDaemonService", () => {
+	const cli = { name: "cli" } as unknown as MulticaDaemonService;
+	const aware = { name: "mode-aware" } as unknown as MulticaDaemonService;
+
+	it("uses the mode-aware service, so hosting can apply, only for the default local server", () => {
+		const modeAware = vi.fn(() => aware);
+		expect(chooseMulticaDaemonService({ cliProfile: null, cli, modeAware })).toBe(aware);
+		expect(modeAware).toHaveBeenCalledOnce();
+	});
+
+	it("drives the profile-bound CLI service for every other server and never builds the hosted one", () => {
+		const modeAware = vi.fn(() => aware);
+		expect(chooseMulticaDaemonService({ cliProfile: "ao-multica.ai", cli, modeAware })).toBe(cli);
+		expect(modeAware).not.toHaveBeenCalled();
 	});
 });

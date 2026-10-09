@@ -30,6 +30,7 @@ import { createMulticaDesktopBridge, type MulticaAppInfo, type MulticaDesktopBri
 import type { MulticaDesktopBundle } from "./multica-desktop-bundle";
 import type { MulticaInboxTarget, MulticaNotifications } from "./multica-notifications";
 
+const SIGN_IN_WINDOW_MS = 10 * 60 * 1000;
 const CLOSE_ACTIVE_TAB_CHANNEL = "tab:close-active";
 const BUNDLE_MISSING_MESSAGE = "Multica desktop bundle not found. Build it and set AO_MULTICA_DESKTOP_OUT.";
 // Electron reserves 999 for context isolation and 1<<20.. for extensions.
@@ -70,6 +71,8 @@ export type MulticaViewHostOptions = {
 	hostName: () => string;
 	/** Builds the daemon service for a new view; `emit` pushes messages to that view, `server` is the one the view talks to. */
 	createDaemonService: (emit: (channel: string, payload: unknown) => void, server: MulticaServer) => MulticaDaemonService;
+	/** Clock for the sign-in window; tests replace it. */
+	now?: () => number;
 	/** Called when the selected server changes (including to none), with its key or "". */
 	onServerChange?: (serverKey: string) => void;
 	/** Called when the Multica view takes over the whole window or gives it back. */
@@ -107,6 +110,16 @@ export type MulticaViewHost = {
 	dispose: () => void;
 };
 
+/** The page Multica's desktop login opens in the browser: `<web app>/login?platform=desktop`. */
+function isSignInPage(target: string, server: MulticaServer): boolean {
+	try {
+		const parsed = new URL(target);
+		return parsed.origin === server.appUrl && parsed.pathname === "/login" && parsed.searchParams.get("platform") === "desktop";
+	} catch {
+		return false;
+	}
+}
+
 function parseSetSettingsRequest(value: unknown): MulticaSetSettingsRequest | null {
 	if (!value || typeof value !== "object") return null;
 	const record = value as Record<string, unknown>;
@@ -142,6 +155,11 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 	let errorKind: MulticaErrorKind | undefined;
 	let view: MulticaViewLike | undefined;
 	let viewServer: MulticaServer | undefined;
+	// A `multica://auth/callback?token=` link names no server, so it is only accepted
+	// while a sign-in that this view started (it opened its server's /login page in
+	// the browser) is pending.
+	let signInUntil = 0;
+	const now = options.now ?? Date.now;
 	let rendererUrl = "";
 	let shown = false;
 	let attached = false;
@@ -277,7 +295,10 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 			daemon: options.createDaemonService((channel, payload) => {
 				if (!contents.isDestroyed()) contents.send(channel, payload);
 			}, createdFor),
-			openExternal: (target) => openAllowedAppExternalURL(target, options.shell),
+			openExternal: (target) => {
+				if (isSignInPage(target, createdFor)) signInUntil = now() + SIGN_IN_WINDOW_MS;
+				return openAllowedAppExternalURL(target, options.shell);
+			},
 			send: (channel, payload) => {
 				if (!contents.isDestroyed()) contents.send(channel, payload);
 			},
@@ -362,6 +383,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 		const current = view;
 		view = undefined;
 		viewServer = undefined;
+		signInUntil = 0;
 		const wasShown = shown;
 		shown = false;
 		bridge?.dispose();
@@ -516,6 +538,12 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 		handleDeepLink: (rawUrl) => {
 			const link = parseMulticaDeepLink(rawUrl);
 			if (!link || !url) return false;
+			// A token minted in the browser carries no server: take it only for a sign-in this view started.
+			if (link.channel === "auth:token") {
+				const live = view && !view.webContents.isDestroyed() ? viewServer : undefined;
+				if (!live || now() >= signInUntil) return false;
+				signInUntil = 0;
+			}
 			// Surfacing Multica creates the view (and its bridge) on first use.
 			setActive(true);
 			if (!bridge) return false;

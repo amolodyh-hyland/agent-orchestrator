@@ -248,6 +248,12 @@ function notificationPayload(itemId: string) {
 }
 
 
+/** What Multica's login page does: open `<web app>/login?platform=desktop` in the browser from the view. */
+async function startSignIn(t: Awaited<ReturnType<typeof setup>>, base = URL) {
+	const contents = t.view().webContents;
+	await contents.ipc.invoke("shell:openExternal", { sender: contents }, `${base}/login?platform=desktop`);
+}
+
 function ready(t: Awaited<ReturnType<typeof setup>>) {
 	t.host.setActive(true);
 	t.view().webContents.emit("did-finish-load");
@@ -910,6 +916,8 @@ describe("multica view host: changing the URL", () => {
 
 	it("drops a queued sign-in link when another server is selected: its token belongs to the old one", async () => {
 		const t = await setup();
+		t.host.setActive(true);
+		await startSignIn(t);
 
 		expect(t.host.handleDeepLink("multica://auth/callback?token=abc.def")).toBe(true);
 		const oldView = t.view();
@@ -923,6 +931,8 @@ describe("multica view host: changing the URL", () => {
 
 	it("treats another API address for the same web address as another server: new partition, queued sign-in dropped", async () => {
 		const t = await setup(local("https://multica.example.com"));
+		t.host.setActive(true);
+		await startSignIn(t, "https://multica.example.com");
 
 		expect(t.host.handleDeepLink("multica://auth/callback?token=abc.def")).toBe(true);
 		const oldView = t.view();
@@ -1312,6 +1322,8 @@ describe("multica view host: a stale document after a URL change", () => {
 describe("multica view host: deep links", () => {
 	it("holds a sign-in token until the renderer subscribes, then delivers it and surfaces Multica", async () => {
 		const t = await setup();
+		t.host.setActive(true);
+		await startSignIn(t);
 
 		expect(t.host.handleDeepLink("multica://auth/callback?token=abc.def")).toBe(true);
 
@@ -1326,12 +1338,79 @@ describe("multica view host: deep links", () => {
 	it("waits again after the page reloads, since reloading drops the renderer's listeners", async () => {
 		const t = await setup();
 		ready(t);
+		await startSignIn(t);
 		t.view().webContents.ipc.emit("main-renderer:channel-state", t.multicaEvent(), { channel: "auth:token", ready: true });
 
 		t.view().webContents.emit("did-start-loading");
 		t.host.handleDeepLink("multica://auth/callback?token=late");
 
 		expect(t.view().webContents.send).not.toHaveBeenCalled();
+	});
+
+	describe("sign-in links name no server, so they need a sign-in this view started", () => {
+		const LINK = "multica://auth/callback?token=abc.def";
+
+		it("ignores a token link when no sign-in was started in this view, without creating the view", async () => {
+			const t = await setup();
+
+			expect(t.host.handleDeepLink(LINK)).toBe(false);
+			expect(FakeWebContentsView.instances).toHaveLength(0);
+			expect(t.host.getState().active).toBe(false);
+
+			ready(t);
+			expect(t.host.handleDeepLink(LINK)).toBe(false);
+			expect(t.view().webContents.send).not.toHaveBeenCalled();
+		});
+
+		it("only counts the login page of the view's own server as the start of a sign-in", async () => {
+			const t = await setup();
+			ready(t);
+
+			for (const target of [
+				"https://other.example.com/login?platform=desktop",
+				`${URL}/login`,
+				`${URL}/settings?platform=desktop`,
+				"https://multica.ai/login?platform=desktop",
+			]) {
+				await t.view().webContents.ipc.invoke("shell:openExternal", { sender: t.view().webContents }, target);
+			}
+
+			expect(t.host.handleDeepLink(LINK)).toBe(false);
+		});
+
+		it("takes one token link per sign-in, within ten minutes", async () => {
+			let clock = 1_000_000;
+			const t = await setup(local(URL), { now: () => clock });
+			ready(t);
+			await startSignIn(t);
+
+			expect(t.host.handleDeepLink(LINK)).toBe(true);
+			expect(t.host.handleDeepLink(LINK)).toBe(false);
+
+			await startSignIn(t);
+			clock += 10 * 60 * 1000 + 1;
+			expect(t.host.handleDeepLink(LINK)).toBe(false);
+		});
+
+		it("forgets a pending sign-in when another server is selected: a Cloud token never reaches a self-hosted API", async () => {
+			const t = await setup(local(URL));
+			ready(t);
+			await startSignIn(t);
+			await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, { mode: "cloud", customUrl: URL });
+			t.view().webContents.emit("did-finish-load");
+
+			expect(t.host.handleDeepLink(LINK)).toBe(false);
+			expect(t.view().webContents.send).not.toHaveBeenCalled();
+			// The new server's own sign-in works.
+			await startSignIn(t, "https://multica.ai");
+			expect(t.host.handleDeepLink(LINK)).toBe(true);
+		});
+
+		it("still routes invitation links without a sign-in", async () => {
+			const t = await setup();
+
+			expect(t.host.handleDeepLink("multica://invite/abc-123")).toBe(true);
+		});
 	});
 
 	it("ignores anything that is not a multica deep link, and does so when no URL is configured", async () => {
