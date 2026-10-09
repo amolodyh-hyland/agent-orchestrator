@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, FOCUS_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL } from "./shared/shortcuts";
 import { SET_CHAT_DRAFT_RISK_CHANNEL } from "./shared/chat-draft-risk";
 import {
+	MULTICA_CHECK_SERVER_CHANNEL,
 	MULTICA_GET_SETTINGS_CHANNEL,
 	MULTICA_GET_STATE_CHANNEL,
 	MULTICA_RELOAD_CHANNEL,
@@ -444,14 +445,16 @@ describe("preload multica bridge", () => {
 		await bridge.setActive(true);
 		await bridge.reload();
 		await bridge.getSettings();
-		await bridge.setSettings("http://localhost:3000");
+		await bridge.setSettings({ mode: "local", customUrl: "http://localhost:3000" });
+		await bridge.checkServer({ customUrl: "http://localhost:3000", apiUrl: "" });
 
 		expect(electronMocks.invoke.mock.calls).toEqual([
 			[MULTICA_GET_STATE_CHANNEL],
 			[MULTICA_SET_ACTIVE_CHANNEL, true],
 			[MULTICA_RELOAD_CHANNEL],
 			[MULTICA_GET_SETTINGS_CHANNEL],
-			[MULTICA_SET_SETTINGS_CHANNEL, "http://localhost:3000"],
+			[MULTICA_SET_SETTINGS_CHANNEL, { mode: "local", customUrl: "http://localhost:3000" }],
+			[MULTICA_CHECK_SERVER_CHANNEL, { customUrl: "http://localhost:3000", apiUrl: "" }],
 		]);
 	});
 

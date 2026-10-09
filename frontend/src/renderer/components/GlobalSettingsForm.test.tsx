@@ -103,7 +103,11 @@ vi.mock("../lib/bridge", () => ({
 			setMacDifferentialUpdates,
 		},
 		uiSettings: { get: getUiSettings, set: setUiSettings },
-		multica: { getSettings: async () => ({ url: "" }), setSettings: async (url: string) => ({ url }) },
+		multica: {
+			getSettings: async () => ({ mode: "local", customUrl: "", apiUrl: "" }),
+			setSettings: async () => ({ ok: true, settings: { mode: "local", customUrl: "", apiUrl: "" } }),
+			checkServer: async () => ({ ok: true, apiUrl: "" }),
+		},
 		keybindings: {
 			get: getKeybindings,
 			set: setKeybindings,

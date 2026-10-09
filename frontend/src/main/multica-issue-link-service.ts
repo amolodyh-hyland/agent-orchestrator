@@ -1,5 +1,5 @@
 import type { IpcMain, IpcMainInvokeEvent, WebContents } from "electron";
-import type { MulticaSettings } from "../shared/multica";
+import { resolveMulticaServer, type MulticaSettings } from "../shared/multica";
 import {
 	MULTICA_LINKS_ADD_CHANNEL,
 	MULTICA_LINKS_CHANGED_CHANNEL,
@@ -8,6 +8,7 @@ import {
 	MULTICA_LINKS_OPEN_SESSION_CHANNEL,
 	MULTICA_LINKS_REMOVE_CHANNEL,
 	isMulticaIssuePath,
+	linksForServer,
 	multicaIssuePath,
 	parseAoSessionUrl,
 	parseMulticaIssueRef,
@@ -26,11 +27,13 @@ export type MulticaIssueLinkServiceOptions = {
 	shellWebContents: Pick<WebContents, "id" | "isDestroyed" | "send">;
 	store: MulticaIssueLinkStore;
 	/** The Multica view host is created after this service, so it is looked up lazily. */
-	getHost: () => Pick<MulticaViewHost, "navigatePath" | "runInPage" | "runInAoWorld" | "setActive" | "evaluateInPage"> | undefined;
+	getHost: () => Pick<MulticaViewHost, "navigatePath" | "runInPage" | "runInAoWorld" | "setActive" | "evaluateInPage" | "getServer"> | undefined;
 	readSettings: () => Promise<MulticaSettings>;
 };
 
 export type MulticaIssueLinkService = {
+	/** The selected Multica server changed (`serverKey` is "" when none): show the links of the new one. */
+	handleServerChange: (serverKey: string) => void;
 	/** Feed every page title of the Multica view here. */
 	handlePageTitle: (title: string) => void;
 	/** Offered every external-open target of the Multica view. True when it was an ao://sessions URL (handled or swallowed). */
@@ -50,13 +53,17 @@ function isStringRecord(value: unknown, keys: readonly string[]): value is Recor
 
 export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOptions): MulticaIssueLinkService {
 	let links: MulticaIssueLink[] = [];
-	let cacheVersion = 0;
+	let serverKey = "";
+	// Once the view host has announced the server, settings are no longer consulted for it.
+	let serverAnnounced = false;
 	let currentIssue: string | null = null;
 	let currentTitle: string | null = null;
 	let disposed = false;
+	// Links belong to the server they were made on; the rest stay stored and
+	// reappear when that server is selected again.
+	const visible = (all: MulticaIssueLink[]): MulticaIssueLink[] => (serverKey ? linksForServer(all, serverKey) : []);
 	const replaceLinks = (next: MulticaIssueLink[]): void => {
 		links = next;
-		cacheVersion += 1;
 	};
 
 	const pushChanged = (next: MulticaIssueLink[]): void => {
@@ -73,7 +80,9 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 		result?: { links?: MulticaIssueLink[]; error?: unknown },
 	): Promise<boolean> {
 		try {
-			const next = await options.store.add(link);
+			// Tag with the server selected right now, and refuse when the live page belongs to another one.
+			if (!serverKey || (options.getHost()?.getServer()?.key ?? serverKey) !== serverKey) throw new Error("no server");
+			const next = visible(await options.store.add({ ...link, serverKey }));
 			if (result) result.links = next;
 			if (!disposed) {
 				replaceLinks(next);
@@ -91,7 +100,6 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 		shellWebContents: options.shellWebContents,
 		getHost: options.getHost,
 		getCurrentIssue: () => (currentIssue ? { identifier: currentIssue, title: currentTitle ?? "" } : null),
-		readSettings: options.readSettings,
 	});
 	const openWithAo = createMulticaOpenWithAo({
 		getHost: options.getHost,
@@ -108,16 +116,25 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 
 	const isTrustedShell = (event: IpcMainInvokeEvent): boolean => event.sender.id === options.shellWebContents.id;
 
+	// Resolves the selected server, adopts links made before servers could be
+	// switched (they belong to the server that was configured then), and loads
+	// the links of that server.
+	const loadForServer = async (announce: boolean): Promise<void> => {
+		if (!serverAnnounced) serverKey = resolveMulticaServer(await options.readSettings())?.key ?? "";
+		const key = serverKey;
+		const all = key ? await options.store.adoptLegacy(key) : await options.store.list();
+		if (disposed || key !== serverKey) return;
+		replaceLinks(visible(all));
+		if (announce) pushChanged(links);
+		refreshOpenWithAo();
+	};
+	let loading: Promise<void> = Promise.resolve();
+	const reload = (announce: boolean): Promise<void> => {
+		loading = loading.then(() => loadForServer(announce)).catch(() => undefined);
+		return loading;
+	};
 	try {
-		void options.store
-			.list()
-			.then((loaded) => {
-				if (!disposed && cacheVersion === 0) {
-					links = loaded;
-					refreshOpenWithAo();
-				}
-			})
-			.catch(() => undefined);
+		void reload(false);
 	} catch {
 		// The store may be unavailable while the app is starting.
 	}
@@ -127,11 +144,11 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 			MULTICA_LINKS_LIST_CHANNEL,
 			async (event) => {
 				if (disposed || !isTrustedShell(event)) return undefined;
-				const listed = await options.store.list();
-				if (!disposed) {
-					replaceLinks(listed);
-					refreshOpenWithAo();
-				}
+				await loading;
+				if (disposed) return undefined;
+				const listed = visible(await options.store.list());
+				replaceLinks(listed);
+				refreshOpenWithAo();
 				return listed;
 			},
 		],
@@ -139,6 +156,7 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 			MULTICA_LINKS_ADD_CHANNEL,
 			async (event, payload) => {
 				if (disposed || !isTrustedShell(event)) return undefined;
+				await loading;
 				if (!isStringRecord(payload, ["sessionId", "projectId", "issue"])) {
 					return { ok: false, reason: "invalid_session" };
 				}
@@ -165,13 +183,17 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 			MULTICA_LINKS_REMOVE_CHANNEL,
 			async (event, payload) => {
 				if (disposed || !isTrustedShell(event)) return undefined;
+				await loading;
 				if (!isStringRecord(payload, ["sessionId", "workspaceSlug", "issueIdentifier"])) return links;
 				try {
-					const next = await options.store.remove({
-						sessionId: payload.sessionId,
-						workspaceSlug: payload.workspaceSlug,
-						issueIdentifier: payload.issueIdentifier,
-					});
+					const next = visible(
+						await options.store.remove({
+							sessionId: payload.sessionId,
+							workspaceSlug: payload.workspaceSlug,
+							issueIdentifier: payload.issueIdentifier,
+							serverKey,
+						}),
+					);
 					if (!disposed) {
 						replaceLinks(next);
 						pushChanged(next);
@@ -208,6 +230,14 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 	for (const [channel, handler] of handlers) options.ipcMain.handle(channel, handler);
 
 	return {
+		handleServerChange: (key) => {
+			if (disposed) return;
+			// Synchronously, so an add or open arriving before the reload already sees the new server.
+			serverAnnounced = true;
+			serverKey = key;
+			replaceLinks([]);
+			void reload(true);
+		},
 		handlePageTitle: (title) => {
 			if (disposed) return;
 			const parts = parseMulticaIssueTitleParts(title);

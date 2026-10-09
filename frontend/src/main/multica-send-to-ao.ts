@@ -1,5 +1,4 @@
 import type { WebContents } from "electron";
-import { multicaRuntimeConfig, type MulticaSettings } from "../shared/multica";
 import { multicaIssuePath, parseMulticaIssueRef } from "../shared/multica-issue-links";
 import {
 	MULTICA_SEND_REQUEST_CHANNEL,
@@ -11,9 +10,8 @@ import type { MulticaViewHost } from "./multica-view-host";
 
 export type MulticaSendToAoOptions = {
 	shellWebContents: Pick<WebContents, "isDestroyed" | "send">;
-	getHost: () => Pick<MulticaViewHost, "evaluateInPage" | "setActive"> | undefined;
+	getHost: () => Pick<MulticaViewHost, "evaluateInPage" | "getServer" | "setActive"> | undefined;
 	getCurrentIssue: () => { identifier: string; title: string } | null;
-	readSettings: () => Promise<MulticaSettings>;
 };
 
 export type MulticaSendToAo = { request: (options?: { projectId?: string }) => void; dispose: () => void };
@@ -46,16 +44,11 @@ export function createMulticaSendToAo(options: MulticaSendToAoOptions): MulticaS
 				return;
 			}
 
-			const settings = await options.readSettings();
-			if (disposed) return;
-			const config = multicaRuntimeConfig(settings.url);
-			if (!config.ok) {
-				deliver({ ok: false, reason: "unreadable" });
-				return;
-			}
-
 			const host = options.getHost();
-			if (!host) {
+			// The server comes from the live view itself and the script is bound to it,
+			// so a switch while this runs cannot send one server's token to another's API.
+			const server = host?.getServer();
+			if (!host || !server) {
 				deliver({ ok: false, reason: "unreadable" });
 				return;
 			}
@@ -67,7 +60,7 @@ export function createMulticaSendToAo(options: MulticaSendToAoOptions): MulticaS
 					timer = setTimeout(() => resolve(undefined), READ_ISSUE_TIMEOUT_MS + 2000);
 				});
 				raw = await Promise.race([
-					host.evaluateInPage(buildReadIssueScript({ apiUrl: config.config.apiUrl, identifier: issue.identifier })),
+					host.evaluateInPage(buildReadIssueScript({ apiUrl: server.config.apiUrl, identifier: issue.identifier }), server.key),
 					timeout,
 				]);
 			} finally {
@@ -95,7 +88,7 @@ export function createMulticaSendToAo(options: MulticaSendToAoOptions): MulticaS
 					issueIdentifier: issueRef.issueIdentifier,
 					title: Array.from(result.title).slice(0, 500).join(""),
 					description: Array.from(result.description).slice(0, 50000).join(""),
-					url: multicaIssueWebUrl(config.config.appUrl, issueRef),
+					url: multicaIssueWebUrl(server.config.appUrl, issueRef),
 				},
 			});
 		} catch {
