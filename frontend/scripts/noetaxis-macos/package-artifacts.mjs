@@ -110,7 +110,12 @@ export async function buildPackages({ appPath, outputDir, version, revision, cre
 			await cp(source, destination);
 			if (name !== "common.sh") await chmod(destination, 0o755);
 		}
+		const componentPlist = path.join(workDir, "component.plist");
+		run("/usr/bin/pkgbuild", ["--analyze", "--root", pkgRoot, componentPlist]);
+		run("/usr/bin/plutil", ["-replace", "0.BundleIsRelocatable", "-bool", "false", componentPlist]);
+		run("/usr/bin/plutil", ["-replace", "0.BundleOverwriteAction", "-string", "upgrade", componentPlist]);
 		run("/usr/bin/pkgbuild", [
+			"--component-plist", componentPlist,
 			"--root", pkgRoot,
 			"--identifier", "dev.agent-orchestrator.desktop",
 			"--version", version,

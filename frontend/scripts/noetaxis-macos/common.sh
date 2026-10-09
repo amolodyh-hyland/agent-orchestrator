@@ -78,7 +78,10 @@ noetaxis_check_safe_origin() {
 		return 20
 	fi
 	pid="$$"
-	while [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 ]]; do
+	# No ordering assumption between pid and ppid (pids wrap); stop at launchd, an
+	# unreadable parent, a self-parent, or a depth cap so a cycle cannot loop forever.
+	local depth=0
+	while [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 && "$depth" -lt 64 ]]; do
 		command_line="$(ps -ww -o command= -p "$pid" 2>/dev/null || true)"
 		case "$command_line" in
 			*"Agent Orchestrator.app/Contents/"*|*"/Contents/Resources/daemon/ao daemon"*)
@@ -87,10 +90,11 @@ noetaxis_check_safe_origin() {
 				;;
 		esac
 		parent="$(ps -o ppid= -p "$pid" 2>/dev/null | /usr/bin/tr -d '[:space:]' || true)"
-		if [[ ! "$parent" =~ ^[0-9]+$ || "$parent" -ge "$pid" ]]; then
+		if [[ ! "$parent" =~ ^[0-9]+$ || "$parent" -eq "$pid" ]]; then
 			break
 		fi
 		pid="$parent"
+		depth=$((depth + 1))
 	done
 }
 
@@ -144,12 +148,30 @@ noetaxis_verify_manifest() {
 	local app_path="$1" manifest_path="$2"
 	[[ -d "$app_path" ]] || { noetaxis_error "App bundle not found: $app_path"; return 24; }
 	[[ -f "$manifest_path" ]] || { noetaxis_error "Manifest not found: $manifest_path"; return 24; }
-	if (cd "$app_path" && /usr/bin/shasum -a 256 -c "$manifest_path" >/dev/null 2>&1); then
+	if (cd "$app_path" && /usr/bin/shasum -a 256 -c "$manifest_path" >/dev/null 2>&1) \
+		&& [[ "$(cd "$app_path" && /usr/bin/find . -type f | LC_ALL=C /usr/bin/sort)" == "$(/usr/bin/sed 's/^[0-9a-f]*  //' "$manifest_path" | LC_ALL=C /usr/bin/sort)" ]]; then
 		return 0
 	fi
-	noetaxis_error "App bundle does not match manifest $manifest_path. Mismatches follow."
+	noetaxis_error "App bundle does not match manifest $manifest_path. Mismatches or files missing from the manifest follow."
 	(cd "$app_path" && /usr/bin/shasum -a 256 -c "$manifest_path" 2>&1 | /usr/bin/grep -v ': OK$' || true) >&2
+	/usr/bin/comm -23 <(cd "$app_path" && /usr/bin/find . -type f | LC_ALL=C /usr/bin/sort) <(/usr/bin/sed 's/^[0-9a-f]*  //' "$manifest_path" | LC_ALL=C /usr/bin/sort) | /usr/bin/sed 's/^/Not in manifest: /' >&2 || true
 	return 24
+}
+
+noetaxis_verify_signature() {
+	local app_path="$1"
+	if ! /usr/bin/codesign --verify --deep --strict "$app_path" >/dev/null 2>&1; then
+		noetaxis_error "Code signature verification failed for $app_path (expected a valid ad-hoc signature)."
+		return 26
+	fi
+}
+
+# Put the previous app back when an interrupted install left /Applications without one.
+noetaxis_restore_previous_app() {
+	local target_app="$1" old_app="$2"
+	if [[ -n "$old_app" && -d "$old_app" && ! -e "$target_app" ]]; then
+		noetaxis_run_privileged /bin/mv "$old_app" "$target_app" || true
+	fi
 }
 
 noetaxis_report_handler() {

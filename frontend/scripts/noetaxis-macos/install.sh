@@ -86,8 +86,23 @@ if [[ "$dry_run" -eq 1 ]]; then
 	exit 0
 fi
 
+# Until the new app is in place, an interruption (INT/TERM/HUP, or any failing
+# command) removes the staged copy and puts the previous app back if it was moved.
+install_complete=0
+old_app_path=""
+noetaxis_install_cleanup() {
+	if [[ "$install_complete" -eq 0 ]]; then
+		noetaxis_run_privileged /bin/rm -rf "$staged_app" || true
+		noetaxis_restore_previous_app "$target_app" "$old_app_path"
+	fi
+}
+trap noetaxis_install_cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
 noetaxis_run_privileged /usr/bin/ditto "$source_app" "$staged_app"
-if ! noetaxis_verify_manifest "$staged_app" "$manifest"; then
+if ! noetaxis_verify_manifest "$staged_app" "$manifest" || ! noetaxis_verify_signature "$staged_app"; then
 	noetaxis_run_privileged /bin/rm -rf "$staged_app"
 	exit 31
 fi
@@ -119,6 +134,7 @@ if ! noetaxis_write_backup_record "$backup_dir" "$old_app_backup" "$old_version"
 	noetaxis_error "Could not write the backup record. The installed app was left in place; backup data remains at $backup_dir"
 	exit 35
 fi
+old_app_path="$backup_dir/$old_app_backup"
 if [[ "$old_app_backup" != NONE ]] && ! noetaxis_run_privileged /bin/mv "$target_app" "$backup_dir/$old_app_backup"; then
 	/bin/rm -f "$backup_dir/BACKUP_COMPLETE"
 	noetaxis_run_privileged /bin/rm -rf "$staged_app"
@@ -134,9 +150,11 @@ if ! noetaxis_run_privileged /bin/mv "$staged_app" "$target_app"; then
 	noetaxis_error "The new app could not be placed in $apps_dir. Backup retained at $backup_dir"
 	exit 34
 fi
+install_complete=1
 
 noetaxis_clear_quarantine "$target_app"
 noetaxis_verify_manifest "$target_app" "$manifest"
+noetaxis_verify_signature "$target_app"
 noetaxis_verify_build_metadata "$target_app"
 noetaxis_report_handler "$target_app"
 printf 'Backup: %s\n' "$backup_dir"

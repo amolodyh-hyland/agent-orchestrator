@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -69,6 +69,10 @@ esac
 	const cliPath = path.join(resources, "daemon/ao");
 	await writeFile(cliPath, cli, { mode: 0o755 });
 	await chmod(cliPath, 0o755);
+	if (sourceRevision) {
+		const signed = execute("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", "--timestamp=none", appPath]);
+		assert.equal(signed.status, 0, signed.stderr);
+	}
 	return appPath;
 }
 
@@ -87,7 +91,11 @@ case "$*" in *ShipIt*) exit 1;; *) exit 0;; esac
 `
 		: "#!/bin/sh\nexit 1\n";
 	await writeFile(path.join(bin, "pgrep"), pgrep, { mode: 0o755 });
-	const ps = psMode === "ao-ancestor"
+	const ps = psMode === "wrapped-ancestor"
+		? `#!/bin/sh
+case "$*" in *command=*"-p 4000000"*|*"-p 4000000"*command=*) printf '%s\\n' '/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao daemon';; *command=*) printf '%s\\n' 'zsh';; *ppid=*"-p 4000000"*) printf '1\\n';; *ppid=*) printf '4000000\\n';; *) exit 1;; esac
+`
+		: psMode === "ao-ancestor"
 		? `#!/bin/sh
 case "$*" in *command=*) printf '%s\\n' '/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao daemon';; *ppid=*) printf '1\\n';; *) exit 1;; esac
 `
@@ -156,15 +164,24 @@ test("install guard blocks inherited AO environment and daemon ancestry", async 
 	await makeApp(appPath, version, revision);
 	await writeManifest(appPath, path.join(artifactDir, "MANIFEST.sha256"));
 	const handlerPlist = await makeHandlerFixture(home);
-	const bin = await makeFakeBin(root, "idle", "ao-ancestor");
-	const env = installEnv({ home, appsDir, aoHome, handlerPlist, bin });
-	const session = execute("/bin/bash", [installScript, "--dry-run", appPath], {
-		cwd: repoRoot,
-		env: { ...env, AO_SESSION_ID: "fixture-session" },
-	});
+	// AO_HOME itself would trip the environment check, so these runs rely on the default ~/.ao.
+	const guardEnv = (bin) => {
+		const { AO_HOME, ...env } = installEnv({ home, appsDir, aoHome, handlerPlist, bin });
+		return env;
+	};
+	const plainEnv = guardEnv(await makeFakeBin(root, "idle", "plain"));
+	const dryRun = (env) => execute("/bin/bash", [installScript, "--dry-run", appPath], { cwd: repoRoot, env });
+	const control = dryRun(plainEnv);
+	assert.equal(control.status, 0, control.stderr);
+	const session = dryRun({ ...plainEnv, AO_SESSION_ID: "fixture-session" });
 	assert.equal(session.status, 20, session.stderr);
-	const ancestry = execute("/bin/bash", [installScript, "--dry-run", appPath], { cwd: repoRoot, env });
+	assert.match(session.stderr, /inherited Agent Orchestrator environment/);
+	const ancestry = dryRun(guardEnv(await makeFakeBin(root, "idle", "ao-ancestor")));
 	assert.equal(ancestry.status, 20, ancestry.stderr);
+	assert.match(ancestry.stderr, /running inside Agent Orchestrator/);
+	const wrapped = dryRun(guardEnv(await makeFakeBin(root, "idle", "wrapped-ancestor")));
+	assert.equal(wrapped.status, 20, wrapped.stderr);
+	assert.match(wrapped.stderr, /running inside Agent Orchestrator/);
 	assert.equal(await readdir(appsDir).then((entries) => entries.length), 0);
 });
 
@@ -271,6 +288,124 @@ test("install refuses to run as root without a console user", { skip: process.pl
 	assert.equal(human.status, 0, human.stderr);
 });
 
+async function installFixture(t, label) {
+	const root = await testRoot(t, label);
+	const home = path.join(root, "home");
+	const aoHome = path.join(home, ".ao");
+	const appsDir = path.join(root, "Applications");
+	const artifactDir = path.join(root, "build");
+	const sourceApp = path.join(artifactDir, "Applications/Agent Orchestrator.app");
+	const targetApp = path.join(appsDir, "Agent Orchestrator.app");
+	await mkdir(path.dirname(sourceApp), { recursive: true });
+	await mkdir(path.join(aoHome, "data"), { recursive: true });
+	await mkdir(appsDir, { recursive: true });
+	await makeApp(sourceApp, version, revision);
+	await writeManifest(sourceApp, path.join(artifactDir, "MANIFEST.sha256"));
+	const bin = await makeFakeBin(root);
+	const env = installEnv({ home, appsDir, aoHome, handlerPlist: await makeHandlerFixture(home), bin });
+	return { root, home, aoHome, appsDir, artifactDir, sourceApp, targetApp, bin, env };
+}
+
+const installedVersion = (app) => readFile(path.join(app, "Contents/Info.plist"), "utf8").then((text) => text.includes(version) ? "new" : "old");
+
+test("install refuses an app that fails manifest or signature verification and leaves the current app alone", { skip: process.platform !== "darwin" }, async (t) => {
+	const f = await installFixture(t, "noetaxis-verify-test");
+	await makeApp(f.targetApp, "0.13.4");
+	const run = () => execute("/bin/bash", [installScript, "--allow-ao-session", f.sourceApp], { cwd: repoRoot, env: f.env });
+	await writeFile(path.join(f.sourceApp, "Contents/Resources/extra-file"), "not in the manifest");
+	const extra = run();
+	assert.equal(extra.status, 24, extra.stderr);
+	assert.match(extra.stderr, /Not in manifest: \.\/Contents\/Resources\/extra-file/);
+	await rm(path.join(f.sourceApp, "Contents/Resources/extra-file"));
+	await writeFile(path.join(f.sourceApp, "Contents/Resources/ao-updates-disabled"), "tampered");
+	const tampered = run();
+	assert.equal(tampered.status, 24, tampered.stderr);
+	await writeFile(path.join(f.sourceApp, "Contents/Resources/ao-updates-disabled"), "");
+	await rm(path.join(f.artifactDir, "MANIFEST.sha256"));
+	const missing = run();
+	assert.equal(missing.status, 24, missing.stderr);
+	await rm(path.join(f.sourceApp, "Contents/_CodeSignature"), { recursive: true, force: true });
+	await writeManifest(f.sourceApp, path.join(f.artifactDir, "MANIFEST.sha256"));
+	const unsigned = run();
+	assert.equal(unsigned.status, 31, unsigned.stderr);
+	assert.match(unsigned.stderr, /Code signature verification failed/);
+	assert.equal(await installedVersion(f.targetApp), "old");
+	assert.deepEqual((await readdir(f.appsDir)).sort(), ["Agent Orchestrator.app"]);
+	assert.equal(await readdir(path.join(f.home, "ao-backups")).catch(() => []).then((entries) => entries.length), 0);
+});
+
+test("rollback ignores a backup that has no BACKUP_COMPLETE record", { skip: process.platform !== "darwin" }, async (t) => {
+	const f = await installFixture(t, "noetaxis-incomplete-backup-test");
+	await makeApp(f.targetApp, "0.13.4");
+	const install = execute("/bin/bash", [installScript, "--allow-ao-session", f.sourceApp], { cwd: repoRoot, env: f.env });
+	assert.equal(install.status, 0, install.stderr);
+	const backupRoot = path.join(f.home, "ao-backups");
+	const [complete] = await readdir(backupRoot);
+	const incomplete = path.join(backupRoot, `${complete}-zz-incomplete`);
+	await mkdir(incomplete, { recursive: true });
+	await makeApp(path.join(incomplete, "Agent Orchestrator.app.bak"), "0.0.1");
+	const rollback = execute("/bin/bash", [rollbackScript, "--allow-ao-session"], { cwd: repoRoot, env: f.env });
+	assert.equal(rollback.status, 0, rollback.stderr);
+	assert.match(rollback.stdout, /Restored app version: 0\.13\.4/);
+	assert.equal(await installedVersion(f.targetApp), "old");
+	const noComplete = execute("/bin/bash", [rollbackScript, "--allow-ao-session", "--backup-dir", incomplete], { cwd: repoRoot, env: f.env });
+	assert.equal(noComplete.status, 40, noComplete.stderr);
+});
+
+test("an interrupted install restores the previous app when /Applications has none", { skip: process.platform !== "darwin" }, async (t) => {
+	const f = await installFixture(t, "noetaxis-restore-test");
+	const oldApp = path.join(f.root, "backup/Agent Orchestrator.app.bak");
+	await mkdir(path.dirname(oldApp), { recursive: true });
+	await makeApp(oldApp, "0.13.4");
+	const restore = () => execute("/bin/bash", ["-c", 'source "$1"; noetaxis_restore_previous_app "$2" "$3"', "check", path.join(scriptDir, "noetaxis-macos/common.sh"), f.targetApp, oldApp], { env: f.env });
+	const restored = restore();
+	assert.equal(restored.status, 0, restored.stderr);
+	assert.equal(await installedVersion(f.targetApp), "old");
+	assert.equal(await lstat(oldApp).catch(() => undefined), undefined);
+	await makeApp(oldApp, "0.0.1");
+	const keptNew = restore();
+	assert.equal(keptNew.status, 0, keptNew.stderr);
+	assert.ok(await lstat(oldApp), "an installed app must not be replaced by the backup");
+});
+
+test("PKG preinstall backs up state before moving the app, and postinstall verifies the installed app", { skip: process.platform !== "darwin" }, async (t) => {
+	const f = await installFixture(t, "noetaxis-pkg-scripts-test");
+	delete f.env.AO_HOME;
+	await makeApp(f.targetApp, "0.13.4");
+	await writeFile(path.join(f.aoHome, "app-state.json"), "state");
+	const packaged = path.join(f.root, "pkg-scripts");
+	await mkdir(packaged, { recursive: true });
+	for (const [from, name] of [["pkg-scripts/preinstall", "preinstall"], ["pkg-scripts/postinstall", "postinstall"], ["common.sh", "common.sh"]]) {
+		await cp(path.join(scriptDir, "noetaxis-macos", from), path.join(packaged, name));
+	}
+	const pre = path.join(packaged, "preinstall");
+	const post = path.join(packaged, "postinstall");
+	const idBin = path.join(f.root, "root-bin");
+	await mkdir(idBin, { recursive: true });
+	await writeFile(path.join(idBin, "id"), "#!/bin/sh\necho 0\n", { mode: 0o755 });
+	const noUser = execute("/bin/bash", [pre], { cwd: repoRoot, env: { ...f.env, PATH: `${idBin}:${f.env.PATH}`, SUDO_USER: "root", USER: "root" } });
+	assert.equal(noUser.status, 29, noUser.stderr);
+	assert.equal(await installedVersion(f.targetApp), "old");
+	assert.equal(await readdir(path.join(f.home, "ao-backups")).catch(() => []).then((entries) => entries.length), 0);
+	const ran = execute("/bin/bash", [pre], { cwd: repoRoot, env: f.env });
+	assert.equal(ran.status, 0, ran.stderr);
+	const backupRoot = path.join(f.home, "ao-backups");
+	const [backup] = await readdir(backupRoot);
+	const backupDir = path.join(backupRoot, backup);
+	assert.match(await readFile(path.join(backupDir, "BACKUP_COMPLETE"), "utf8"), /app_backup=Agent Orchestrator-0\.13\.4-[^\n]*\.app\.bak\napp_version=0\.13\.4/);
+	assert.equal(await readFile(path.join(backupDir, "app-state.json"), "utf8"), "state");
+	assert.equal(await lstat(f.targetApp).catch(() => undefined), undefined);
+	const missing = execute("/bin/bash", [post], { cwd: repoRoot, env: f.env });
+	assert.notEqual(missing.status, 0);
+	await cp(f.sourceApp, f.targetApp, { recursive: true, verbatimSymlinks: true });
+	const verified = execute("/bin/bash", [post], { cwd: repoRoot, env: f.env });
+	assert.equal(verified.status, 0, verified.stderr);
+	assert.match(verified.stdout, /Installed 0\.13\.4-noetaxis\.8e2bc21/);
+	await rm(path.join(f.targetApp, "Contents/Resources/ao-updates-disabled"));
+	const broken = execute("/bin/bash", [post], { cwd: repoRoot, env: f.env });
+	assert.notEqual(broken.status, 0);
+});
+
 test("native PKG structure is verifiable without running Installer", { skip: process.platform !== "darwin" }, async (t) => {
 	const root = await testRoot(t, "noetaxis-packaging-test", true);
 	const sourceApp = path.join(root, "source/Applications/Agent Orchestrator.app");
@@ -292,6 +427,8 @@ test("native PKG structure is verifiable without running Installer", { skip: pro
 	assert.ok(expandedFiles.some((file) => file.includes(path.join("Payload", "Agent Orchestrator.app", "Contents", "Info.plist"))));
 	assert.ok(expandedFiles.some((file) => path.basename(file) === "preinstall"));
 	assert.ok(expandedFiles.some((file) => path.basename(file) === "postinstall"));
+	const packageInfo = await Promise.all(expandedFiles.filter((file) => path.basename(file) === "PackageInfo").map((file) => readFile(file, "utf8")));
+	assert.ok(packageInfo.some((text) => /relocatable="false"/.test(text) && /<upgrade-bundle>/.test(text)), packageInfo.join("\n"));
 	assert.equal(artifacts.dmgPath, "");
 });
 

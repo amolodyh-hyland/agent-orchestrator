@@ -156,6 +156,10 @@ function parseDatabaseSchema(root) {
 	return Math.max(...versions);
 }
 
+// The internal registry mirror serves no npm signature metadata, so corepack cannot
+// verify the pnpm download. Applied only to the corepack/pnpm steps, never to other children.
+const corepackEnv = { COREPACK_INTEGRITY_KEYS: "0" };
+
 async function internalRegistryEnv(registry) {
 	return {
 		...process.env,
@@ -166,8 +170,6 @@ async function internalRegistryEnv(registry) {
 		npm_config_loglevel: "error",
 		NPM_CONFIG_LOGLEVEL: "error",
 		COREPACK_NPM_REGISTRY: registry,
-		// The internal registry mirror does not serve npm signature metadata, so corepack cannot verify it.
-		COREPACK_INTEGRITY_KEYS: "0",
 	};
 }
 
@@ -246,11 +248,11 @@ export async function buildNoetaxis(options) {
 		const pnpmCommand = "corepack";
 		run(pnpmCommand, ["pnpm@10.28.2", "install", "--frozen-lockfile", "--ignore-scripts", "--filter", "@multica/desktop...", `--registry=${registry}`], {
 			cwd: multicaDir,
-			env: { ...npmEnv, npm_config_registry: registry, NPM_CONFIG_REGISTRY: registry, COREPACK_NPM_REGISTRY: registry },
+			env: { ...npmEnv, ...corepackEnv },
 		});
 		run(pnpmCommand, ["pnpm@10.28.2", "--filter", "@multica/desktop", "exec", "electron-vite", "build"], {
 			cwd: multicaDir,
-			env: { ...npmEnv, npm_config_registry: registry, NPM_CONFIG_REGISTRY: registry, COREPACK_NPM_REGISTRY: registry },
+			env: { ...npmEnv, ...corepackEnv },
 		});
 		const multicaRevision = capture("git", ["-C", multicaDir, "rev-parse", "HEAD"]);
 		if (!multicaRevision.startsWith(multicaPin.shortRevision)) throw new Error("Multica checkout does not match backend/go.mod pin");
