@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { copyAgentBrowserLicenses } from "./agent-browser-license.mjs";
 
 const VERSION = "0.38.1";
 const RELEASE_BASE = `https://github.com/vercel-labs/agent-browser/releases/download/v${VERSION}`;
@@ -62,20 +63,24 @@ if ((await fileSHA256(binaryPath)) !== target.sha256) {
 }
 
 if ((await readText(licenseVersionPath)).trim() !== VERSION) {
-	await Promise.all([
-		downloadText(
-			`https://unpkg.com/agent-browser@${VERSION}/LICENSE`,
-			path.join(OUTPUT_DIR, "LICENSE-agent-browser"),
-		),
-		downloadText(
-			`https://unpkg.com/agent-browser@${VERSION}/cli/src/native/a11y/LICENSE-axe-core.txt`,
-			path.join(OUTPUT_DIR, "LICENSE-axe-core"),
-		),
-		downloadText(
-			`https://unpkg.com/agent-browser@${VERSION}/cli/src/native/a11y/LICENSE-axe-core-THIRD-PARTY.txt`,
-			path.join(OUTPUT_DIR, "LICENSE-axe-core-THIRD-PARTY"),
-		),
-	]);
+	if (process.env.AO_AGENT_BROWSER_LICENSE_DIR) {
+		await copyAgentBrowserLicenses(process.env.AO_AGENT_BROWSER_LICENSE_DIR, OUTPUT_DIR);
+	} else {
+		await Promise.all([
+			downloadText(
+				`https://unpkg.com/agent-browser@${VERSION}/LICENSE`,
+				path.join(OUTPUT_DIR, "LICENSE-agent-browser"),
+			),
+			downloadText(
+				`https://unpkg.com/agent-browser@${VERSION}/cli/src/native/a11y/LICENSE-axe-core.txt`,
+				path.join(OUTPUT_DIR, "LICENSE-axe-core"),
+			),
+			downloadText(
+				`https://unpkg.com/agent-browser@${VERSION}/cli/src/native/a11y/LICENSE-axe-core-THIRD-PARTY.txt`,
+				path.join(OUTPUT_DIR, "LICENSE-axe-core-THIRD-PARTY"),
+			),
+		]);
+	}
 	await writeFile(licenseVersionPath, `${VERSION}\n`, "utf8");
 }
 
