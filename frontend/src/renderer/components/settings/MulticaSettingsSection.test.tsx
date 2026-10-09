@@ -73,6 +73,42 @@ describe("MulticaSettingsSection", () => {
 		expect(screen.getByText(/multica login --profile ao-multica\.ai/)).toBeInTheDocument();
 	});
 
+	it("explains what a switch leaves behind, in a polite live region the buttons are described by", async () => {
+		await open();
+
+		await chooseMode("Multica Cloud");
+
+		const notes = screen.getByText(/has its own accounts and data/).closest("[role='status']")!;
+		expect(notes).toHaveAttribute("aria-live", "polite");
+		expect(notes).toHaveTextContent("Issue links made on the other server stay hidden");
+		expect(notes).toHaveTextContent("keeps running");
+		expect(notes).toHaveTextContent("hosted daemon only serves the default local server");
+		expect(screen.getByRole("button", { name: "Save and switch" })).toHaveAttribute("aria-describedby", notes.id);
+	});
+
+	it("warns when only the API address of the same web address changes, since that is another server", async () => {
+		await open();
+
+		await userEvent.click(screen.getByRole("button", { name: "Edit API URL (optional)" }));
+		const input = screen.getByRole("textbox", { name: "API URL (optional)" });
+		await userEvent.type(input, "https://api.other.example.com{Enter}");
+
+		expect(screen.getByText(/has its own accounts and data/)).toBeInTheDocument();
+	});
+
+	it("announces that the server is being checked", async () => {
+		let finish!: (result: MulticaSetSettingsResult) => void;
+		window.ao!.multica.setSettings = vi.fn(() => new Promise<MulticaSetSettingsResult>((resolve) => (finish = resolve)));
+		await open();
+		await chooseMode("Multica Cloud");
+
+		await userEvent.click(screen.getByRole("button", { name: "Save and switch" }));
+
+		expect(screen.getAllByRole("status").some((node) => node.textContent === "Checking the server…")).toBe(true);
+		finish({ ok: true, settings: { mode: "cloud", customUrl: "http://localhost:3000", apiUrl: "" } });
+		await waitFor(() => expect(screen.queryByRole("button", { name: "Save and switch" })).not.toBeInTheDocument());
+	});
+
 	it("applies a custom URL and shows the CLI sign-in command for that server", async () => {
 		await open();
 

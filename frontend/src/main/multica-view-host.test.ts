@@ -1183,6 +1183,46 @@ describe("multica view host: choosing the server", () => {
 		await expect(t.host.evaluateInPage("x()", URL)).resolves.toBeUndefined();
 	});
 
+	it("does not build a hidden view for the new server while Multica is not showing; it is created when Multica is next shown", async () => {
+		const t = await setup();
+		ready(t);
+		t.host.setActive(false);
+		const oldView = t.view();
+
+		await save(t, { mode: "cloud", customUrl: URL });
+
+		expect(oldView.webContents.close).toHaveBeenCalledOnce();
+		expect(FakeWebContentsView.instances).toHaveLength(1);
+		expect(t.host.getState()).toMatchObject({ active: false, status: "idle", url: "https://multica.ai" });
+
+		t.host.setActive(true);
+		expect(FakeWebContentsView.instances).toHaveLength(2);
+		expect(partitionOf(1)).toBe(MULTICA_CLOUD_PARTITION);
+	});
+
+	it("runs saves one at a time, so the last request, not the slowest check, wins", async () => {
+		const t = await setup();
+		let release!: () => void;
+		const slow = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		t.checkServer.mockImplementationOnce(async () => {
+			await slow;
+			return { ok: true as const, apiUrl: "https://api.first.example.com" };
+		});
+
+		const first = save(t, { mode: "local", customUrl: "https://first.example.com" });
+		const second = save(t, { mode: "local", customUrl: "https://second.example.com" });
+		await Promise.resolve();
+		expect(t.checkServer).toHaveBeenCalledTimes(1);
+
+		release();
+		await Promise.all([first, second]);
+
+		expect(t.writeSettings.mock.calls.map(([settings]) => settings.customUrl)).toEqual(["https://first.example.com", "https://second.example.com"]);
+		expect(t.host.getState().url).toBe("https://second.example.com");
+	});
+
 	it("only answers the trusted shell on the check channel", async () => {
 		const t = await setup();
 

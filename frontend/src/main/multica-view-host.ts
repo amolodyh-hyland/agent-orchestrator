@@ -425,7 +425,7 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 		if (!next) {
 			destroyView();
 			setStatus("unconfigured");
-		} else if (view || active) {
+		} else if (active) {
 			const carried = bridge?.pendingSnapshot() ?? [];
 			const hadView = Boolean(view);
 			destroyView();
@@ -439,12 +439,23 @@ export async function createMulticaViewHost(options: MulticaViewHostOptions): Pr
 			}
 			load();
 		} else {
+			// Not showing: drop a hidden view of the old server and create the new one
+			// only when Multica is next shown, instead of building a hidden one now.
+			if (view) destroyView();
 			carriedPending = [];
 			setStatus("idle");
 		}
 	};
 
-	const saveSettings = async (value: unknown): Promise<MulticaSetSettingsResult> => {
+	// One save at a time: the connection check can take seconds, and the last one to finish must not win.
+	let saveQueue: Promise<unknown> = Promise.resolve();
+	const saveSettings = (value: unknown): Promise<MulticaSetSettingsResult> => {
+		const run = saveQueue.then(() => saveSettingsNow(value));
+		saveQueue = run.catch(() => undefined);
+		return run;
+	};
+
+	const saveSettingsNow = async (value: unknown): Promise<MulticaSetSettingsResult> => {
 		const request = parseSetSettingsRequest(value);
 		if (!request) return { ok: false, error: "invalid_url", forceable: false };
 		let customUrl = request.customUrl.trim();

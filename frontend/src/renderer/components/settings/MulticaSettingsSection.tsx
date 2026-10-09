@@ -132,16 +132,37 @@ export function MulticaSettingsSection() {
 			) : null}
 			{pending ? (
 				<div className="flex flex-col gap-2 px-3 py-3">
-					{serverChanges ? <p className="text-caption leading-4 text-muted-foreground">{t("multica.settings.switchWarning")}</p> : null}
+					{serverChanges ? (
+						<div role="status" aria-live="polite" id="multica-switch-notes" className="flex flex-col gap-1 text-caption leading-4 text-muted-foreground">
+							<p>{t("multica.settings.switchWarning")}</p>
+							<p>{t("multica.settings.switchNotes")}</p>
+						</div>
+					) : null}
+					<span role="status" aria-live="polite" className="sr-only">
+						{busy ? t("multica.settings.checking") : ""}
+					</span>
 					<div className="flex items-center gap-2">
-						<Button size="sm" type="button" disabled={busy} onClick={() => void apply(false)}>
+						<Button
+							size="sm"
+							type="button"
+							disabled={busy}
+							aria-describedby={serverChanges ? "multica-switch-notes" : undefined}
+							onClick={() => void apply(false)}
+						>
 							{busy ? t("multica.settings.checking") : t("multica.settings.apply")}
 						</Button>
 						<Button size="sm" type="button" variant="ghost" disabled={busy} onClick={cancel}>
 							{t("multica.settings.cancel")}
 						</Button>
 						{failure && failure !== "save" && failure.forceable ? (
-							<Button size="sm" type="button" variant="outline" disabled={busy} onClick={() => void apply(true)}>
+							<Button
+								size="sm"
+								type="button"
+								variant="outline"
+								disabled={busy}
+								aria-describedby={serverChanges ? "multica-switch-notes" : undefined}
+								onClick={() => void apply(true)}
+							>
 								{t("multica.settings.saveAnyway")}
 							</Button>
 						) : null}

@@ -844,6 +844,7 @@
 	"multica.settings.saveAnyway": "Save anyway",
 	"multica.settings.saveFailed": "Couldn't save the Multica URL.",
 	"multica.settings.selfHostNote": "The server must list this address as its frontend origin (FRONTEND_ORIGIN / CORS_ALLOWED_ORIGINS). Sign in with the email code: Google sign-in opens in your browser and can't finish in AO.",
+	"multica.settings.switchNotes": "Issue links made on the other server stay hidden until you switch back. A daemon already running for the other server keeps running. AO's hosted daemon only serves the default local server.",
 	"multica.settings.switchWarning": "The other server has its own accounts and data. You will need to sign in again there, and nothing is copied between servers.",
 	"multica.settings.url": "Multica URL",
 	"multica.title": "Multica",

@@ -854,6 +854,7 @@
 	"multica.settings.saveAnyway": "Guardar de todos modos",
 	"multica.settings.saveFailed": "No se pudo guardar la URL de Multica.",
 	"multica.settings.selfHostNote": "El servidor debe incluir esta dirección como su origen del frontend (FRONTEND_ORIGIN / CORS_ALLOWED_ORIGINS). Inicia sesión con el código por correo: el inicio de sesión con Google se abre en el navegador y no puede completarse en AO.",
+	"multica.settings.switchNotes": "Los enlaces a incidencias creados en el otro servidor permanecen ocultos hasta que vuelvas a cambiar. Un daemon que ya esté en marcha para el otro servidor sigue funcionando. El daemon alojado por AO solo atiende al servidor local predeterminado.",
 	"multica.settings.switchWarning": "El otro servidor tiene sus propias cuentas y datos. Tendrás que iniciar sesión de nuevo allí y no se copia nada entre servidores.",
 	"multica.settings.url": "URL de Multica",
 	"multica.title": "Multica",
