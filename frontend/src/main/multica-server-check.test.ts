@@ -131,6 +131,25 @@ describe("classifyMulticaFetchError", () => {
 	});
 });
 
+describe("createMulticaCheckGet reading", () => {
+	it("stops reading a body that never ends once the cap is reached", async () => {
+		let reads = 0;
+		const chunk = new Uint8Array(16 * 1024).fill(120);
+		const endless = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				reads += 1;
+				controller.enqueue(chunk);
+			},
+		});
+		const get = createMulticaCheckGet(async () => new Response(endless, { status: 200 }));
+
+		const result = await get("https://multica.example.com/api/config", new AbortController().signal);
+
+		expect(result.body.length).toBe(64 * 1024);
+		expect(reads).toBeLessThan(16);
+	});
+});
+
 describe("createMulticaCheckGet", () => {
 	it("does not follow redirects, omits credentials and caps the body", async () => {
 		const fetchImpl = vi.fn(async () => new Response("x".repeat(200_000), { status: 200 }));
