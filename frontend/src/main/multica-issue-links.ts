@@ -10,11 +10,13 @@ import {
 
 export const MULTICA_ISSUE_LINKS_FILE = "multica-issue-links.json";
 
-export type MulticaIssueLinkKey = { sessionId: string; workspaceSlug: string; issueIdentifier: string };
+export type MulticaIssueLinkKey = { sessionId: string; workspaceSlug: string; issueIdentifier: string; serverKey?: string };
 export type MulticaIssueLinkStore = {
 	list: () => Promise<MulticaIssueLink[]>;
 	add: (link: Omit<MulticaIssueLink, "createdAt">) => Promise<MulticaIssueLink[]>;
 	remove: (key: MulticaIssueLinkKey) => Promise<MulticaIssueLink[]>;
+	/** Gives every link made before servers could be switched to `serverKey`; returns all links. */
+	adoptLegacy: (serverKey: string) => Promise<MulticaIssueLink[]>;
 };
 
 let linkOperationQueue: Promise<void> = Promise.resolve();
@@ -53,7 +55,8 @@ function hasSameKey(link: MulticaIssueLink, key: MulticaIssueLinkKey): boolean {
 	return (
 		link.sessionId === key.sessionId &&
 		link.workspaceSlug === key.workspaceSlug &&
-		link.issueIdentifier === key.issueIdentifier
+		link.issueIdentifier === key.issueIdentifier &&
+		link.serverKey === key.serverKey
 	);
 }
 
@@ -77,6 +80,14 @@ export function createMulticaIssueLinkStore(stateDir: string, now: () => Date = 
 				const links = await readUnlocked(stateDir);
 				const next = links.filter((link) => !hasSameKey(link, key));
 				if (next.length !== links.length) await writeUnlocked(stateDir, next);
+				return next;
+			}),
+		adoptLegacy: (serverKey) =>
+			runLinkOperation(async () => {
+				const links = await readUnlocked(stateDir);
+				if (links.every((link) => link.serverKey !== undefined)) return links;
+				const next = links.map((link) => (link.serverKey === undefined ? { ...link, serverKey } : link));
+				await writeUnlocked(stateDir, next);
 				return next;
 			}),
 	};

@@ -15,10 +15,12 @@ Multica repository changes.
   to AO.
 - Switching only shows or hides a native view. AO's routes stay mounted and the
   Multica page stays loaded, so neither side reloads or resets.
-- The URL lives in Settings → General → Multica (default
-  `http://localhost:3000`, the web port from Multica's self-hosting guide).
-  Clearing it turns the view off and shows an empty state. An unreachable server
-  shows an error state with a retry button.
+- The server is chosen in Settings → General → Multica: **Multica Cloud** or
+  **Local / self-hosted** (default, address `http://localhost:3000`, the web port
+  from Multica's self-hosting guide, or any custom address). Clearing the address
+  turns the view off and shows an empty state. An unreachable server shows an
+  error state with a retry button. See
+  [Choosing the Multica server](../frontend/docs/multica-desktop-embed.md#choosing-the-multica-server).
 
 ## Security model
 
@@ -26,7 +28,7 @@ The Multica page is untrusted web content in its own `WebContentsView`:
 
 | Control | Value |
 | --- | --- |
-| Session | `persist:ao-multica`: separate cookies and storage from the shell and from per-worker browser profiles |
+| Session | One persistent partition per server (`persist:ao-multica` for the default local server, `persist:ao-multica-cloud`, `persist:ao-multica-<hash>` for any other): separate cookies and storage from the shell, from per-worker browser profiles and from each other |
 | `contextIsolation` / `nodeIntegration` / `sandbox` | `true` / `false` / `true` |
 | Preload | none, so no AO bridge and no IPC |
 | Permissions | every request and check denied |
@@ -42,7 +44,7 @@ email-code sign-in.
 
 | Area | Files |
 | --- | --- |
-| Main process | `frontend/src/main/multica-view-host.ts` (view, lockdown, IPC), `frontend/src/main/multica-settings.ts` (`multica-settings.json` in the AO state dir) |
+| Main process | `frontend/src/main/multica-view-host.ts` (view, lockdown, IPC), `frontend/src/main/multica-settings.ts` (`multica-settings.json` in the AO state dir), `frontend/src/main/multica-server-check.ts` (connection check) |
 | Shared | `frontend/src/shared/multica.ts` (URL parsing, constants, state types) |
 | Renderer | `components/MulticaPane.tsx`, `components/MulticaSidebarToggle.tsx`, `components/settings/MulticaSettingsSection.tsx`, `stores/multica-store.ts` |
 

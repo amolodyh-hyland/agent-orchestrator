@@ -3,6 +3,9 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
 	coerceMulticaSettings,
+	multicaRuntimeConfig,
+	MULTICA_CHECK_SERVER_CHANNEL,
+	MULTICA_CLOUD_PARTITION,
 	MULTICA_GET_SETTINGS_CHANNEL,
 	MULTICA_GET_STATE_CHANNEL,
 	MULTICA_PARTITION,
@@ -16,7 +19,9 @@ import {
 import { createMulticaNotifications } from "./multica-notifications";
 import { createMulticaViewHost, type MulticaViewHostOptions } from "./multica-view-host";
 
-const URL = "http://localhost:3000/";
+const URL = "http://localhost:3000";
+const local = (customUrl: string): MulticaSettings => ({ mode: "local", customUrl, apiUrl: "" });
+const localRequest = (customUrl: string) => ({ mode: "local" as const, customUrl, force: true });
 const BUNDLE = { rendererUrl: "file:///multica/out/renderer/index.html", preloadPath: "/multica/out/preload/index.js" };
 
 class FakeWebContents extends EventEmitter {
@@ -96,7 +101,7 @@ function fakeIpc() {
 	};
 }
 
-async function setup(initial: MulticaSettings = { url: URL }, overrides: Partial<MulticaViewHostOptions> = {}) {
+async function setup(initial: MulticaSettings = local(URL), overrides: Partial<MulticaViewHostOptions> = {}) {
 	FakeWebContentsView.instances = [];
 	const shell = {
 		id: 1,
@@ -134,7 +139,11 @@ async function setup(initial: MulticaSettings = { url: URL }, overrides: Partial
 	};
 	const ipc = fakeIpc();
 	const openExternal = vi.fn(async (_url: string) => undefined);
-	const writeUrl = vi.fn(async (url: string) => coerceMulticaSettings({ url }));
+	const writeSettings = vi.fn(async (settings: MulticaSettings) => coerceMulticaSettings(settings));
+	const checkServer = vi.fn(async (request: { customUrl: string }) => {
+		const derived = multicaRuntimeConfig(request.customUrl);
+		return { ok: true as const, apiUrl: derived.ok ? derived.config.apiUrl : "" };
+	});
 	const latestView = () => FakeWebContentsView.instances[FakeWebContentsView.instances.length - 1];
 	const host = await createMulticaViewHost({
 		mainWindow: { contentView },
@@ -146,7 +155,8 @@ async function setup(initial: MulticaSettings = { url: URL }, overrides: Partial
 		getKeybindingOverrides: () => ({}),
 		isKeybindingRecording: () => false,
 		readSettings: async () => initial,
-		writeUrl,
+		writeSettings,
+		checkServer,
 		resolveBundle: () => BUNDLE,
 		ipcJailPreload: "/ao/multica-ipc-jail.cjs",
 		webSecurity: true,
@@ -184,7 +194,8 @@ async function setup(initial: MulticaSettings = { url: URL }, overrides: Partial
 		notifications,
 		ipc,
 		openExternal,
-		writeUrl,
+		writeSettings,
+		checkServer,
 		view: latestView,
 		multicaEvent: () => ({ sender: latestView().webContents, returnValue: undefined as unknown }),
 		stateChannelPayloads: () =>
@@ -236,6 +247,12 @@ function notificationPayload(itemId: string) {
 	};
 }
 
+
+/** What Multica's login page does: open `<web app>/login?platform=desktop` in the browser from the view. */
+async function startSignIn(t: Awaited<ReturnType<typeof setup>>, base = URL) {
+	const contents = t.view().webContents;
+	await contents.ipc.invoke("shell:openExternal", { sender: contents }, `${base}/login?platform=desktop`);
+}
 
 function ready(t: Awaited<ReturnType<typeof setup>>) {
 	t.host.setActive(true);
@@ -543,7 +560,7 @@ describe("multica view host: navigation", () => {
 
 	it("offers window-open targets to the AO session-link handler before the external allowlist", async () => {
 		const onAoSessionLink = vi.fn(() => true);
-		const t = await setup({ url: URL }, { onAoSessionLink });
+		const t = await setup(local(URL), { onAoSessionLink });
 		t.host.setActive(true);
 		const contents = t.view().webContents;
 		const target = "ao://sessions/p/s";
@@ -556,7 +573,7 @@ describe("multica view host: navigation", () => {
 
 	it("keeps the external allowlist behavior when the AO session-link handler declines or is absent", async () => {
 		const onAoSessionLink = vi.fn(() => false);
-		const declined = await setup({ url: URL }, { onAoSessionLink });
+		const declined = await setup(local(URL), { onAoSessionLink });
 		declined.host.setActive(true);
 		const declinedContents = declined.view().webContents;
 		declinedContents.windowOpenHandler?.({ url: "ao://sessions/p/s" });
@@ -577,7 +594,7 @@ describe("multica view host: navigation", () => {
 
 	it("offers blocked will-navigate targets to the AO session-link handler", async () => {
 		const onAoSessionLink = vi.fn(() => true);
-		const t = await setup({ url: URL }, { onAoSessionLink });
+		const t = await setup(local(URL), { onAoSessionLink });
 		t.host.setActive(true);
 		const event = { preventDefault: vi.fn() };
 
@@ -592,7 +609,7 @@ describe("multica view host: navigation", () => {
 describe("multica view host: page hooks", () => {
 	it("reports every page title and tolerates an absent title handler", async () => {
 		const onPageTitleChange = vi.fn();
-		const t = await setup({ url: URL }, { onPageTitleChange });
+		const t = await setup(local(URL), { onPageTitleChange });
 		t.host.setActive(true);
 
 		t.view().webContents.emit("page-title-updated", {}, "MUL-1: First title");
@@ -720,11 +737,11 @@ describe("multica view host: issue navigation", () => {
 	);
 
 	it("returns false when Multica is unconfigured or its bundle is missing", async () => {
-		const unconfigured = await setup({ url: "" });
+		const unconfigured = await setup(local(""));
 		expect(unconfigured.host.navigatePath("/acme/issues/MUL-1")).toBe(false);
 		expect(FakeWebContentsView.instances).toHaveLength(0);
 
-		const missingBundle = await setup({ url: URL }, { resolveBundle: () => null });
+		const missingBundle = await setup(local(URL), { resolveBundle: () => null });
 		expect(missingBundle.host.navigatePath("/acme/issues/MUL-1")).toBe(false);
 		expect(FakeWebContentsView.instances).toHaveLength(0);
 	});
@@ -796,7 +813,7 @@ describe("multica view host: load state", () => {
 
 	it("reports a missing bundle and retries creating the view on reload", async () => {
 		let bundle: typeof BUNDLE | null = null;
-		const t = await setup({ url: URL }, { resolveBundle: () => bundle });
+		const t = await setup(local(URL), { resolveBundle: () => bundle });
 
 		t.host.setActive(true);
 
@@ -821,7 +838,7 @@ describe("multica view host: load state", () => {
 
 describe("multica view host: not configured", () => {
 	it("shows the empty state without creating a view", async () => {
-		const t = await setup({ url: "" });
+		const t = await setup(local(""));
 		expect(t.host.getState()).toEqual({ active: false, status: "unconfigured", url: "" });
 
 		t.host.setActive(true);
@@ -831,10 +848,10 @@ describe("multica view host: not configured", () => {
 	});
 
 	it("loads the page when a URL is saved while the empty state is showing", async () => {
-		const t = await setup({ url: "" });
+		const t = await setup(local(""));
 		t.host.setActive(true);
 
-		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "localhost:3000");
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, localRequest("localhost:3000"));
 
 		expect(FakeWebContentsView.instances).toHaveLength(1);
 		expect(t.view().webContents.loadURL).toHaveBeenCalledExactlyOnceWith(BUNDLE.rendererUrl);
@@ -845,7 +862,7 @@ describe("multica view host: not configured", () => {
 		const t = await setup();
 		ready(t);
 
-		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "");
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, localRequest(""));
 
 		expect(t.contentView.removeChildView).toHaveBeenCalledWith(t.view());
 		expect(t.view().webContents.close).toHaveBeenCalledOnce();
@@ -860,7 +877,7 @@ describe("multica view host: changing the URL", () => {
 		ready(t);
 		const oldView = t.view();
 
-		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "https://multica.example.com");
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, localRequest("https://multica.example.com"));
 
 		expect(FakeWebContentsView.instances).toHaveLength(2);
 		expect(oldView.webContents.close).toHaveBeenCalledOnce();
@@ -876,7 +893,7 @@ describe("multica view host: changing the URL", () => {
 		const t = await setup();
 		ready(t);
 
-		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, URL);
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, localRequest(URL));
 
 		expect(t.notifications.reset).not.toHaveBeenCalled();
 		expect(FakeWebContentsView.instances).toHaveLength(1);
@@ -888,7 +905,7 @@ describe("multica view host: changing the URL", () => {
 
 		expect(t.host.openInboxItem(target)).toBe(true);
 		const oldView = t.view();
-		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "https://multica.example.com");
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, localRequest("https://multica.example.com"));
 		t.view().webContents.ipc.emit("main-renderer:channel-state", t.multicaEvent(), { channel: "inbox:open", ready: true });
 
 		expect(t.view()).not.toBe(oldView);
@@ -897,36 +914,321 @@ describe("multica view host: changing the URL", () => {
 		expect(t.view().webContents.send).not.toHaveBeenCalled();
 	});
 
-	it("preserves a queued deep link when the URL changes before renderer readiness", async () => {
+	it("drops a queued sign-in link when another server is selected: its token belongs to the old one", async () => {
 		const t = await setup();
+		t.host.setActive(true);
+		await startSignIn(t);
 
 		expect(t.host.handleDeepLink("multica://auth/callback?token=abc.def")).toBe(true);
 		const oldView = t.view();
-		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "https://multica.example.com");
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, localRequest("https://multica.example.com"));
 		t.view().webContents.ipc.emit("main-renderer:channel-state", t.multicaEvent(), { channel: "auth:token", ready: true });
 
 		expect(t.view()).not.toBe(oldView);
 		expect(oldView.webContents.close).toHaveBeenCalledOnce();
-		expect(t.view().webContents.send).toHaveBeenCalledExactlyOnceWith("auth:token", "abc.def");
+		expect(t.view().webContents.send).not.toHaveBeenCalled();
+	});
+
+	it("treats another API address for the same web address as another server: new partition, queued sign-in dropped", async () => {
+		const t = await setup(local("https://multica.example.com"));
+		t.host.setActive(true);
+		await startSignIn(t, "https://multica.example.com");
+
+		expect(t.host.handleDeepLink("multica://auth/callback?token=abc.def")).toBe(true);
+		const oldView = t.view();
+		const oldPartition = oldView.options.webPreferences.partition;
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, {
+			mode: "local",
+			customUrl: "https://multica.example.com",
+			apiUrl: "https://api2.example.com",
+			force: true,
+		});
+		t.view().webContents.ipc.emit("main-renderer:channel-state", t.multicaEvent(), { channel: "auth:token", ready: true });
+
+		expect(t.view()).not.toBe(oldView);
+		expect(t.view().options.webPreferences.partition).not.toBe(oldPartition);
+		expect(t.view().webContents.send).not.toHaveBeenCalled();
+	});
+
+	it("keeps the default partition away from a custom API address on the default web address", async () => {
+		const t = await setup();
+		t.host.setActive(true);
+
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, { mode: "local", customUrl: URL, apiUrl: "https://attacker.example", force: true });
+
+		expect(FakeWebContentsView.instances).toHaveLength(2);
+		expect(t.view().options.webPreferences.partition).not.toBe(MULTICA_PARTITION);
 	});
 
 	it("does not create a view for a URL saved while AO is showing", async () => {
-		const t = await setup({ url: "" });
+		const t = await setup(local(""));
 
-		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, URL);
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, localRequest(URL));
 
 		expect(FakeWebContentsView.instances).toHaveLength(0);
 		expect(t.host.getState()).toEqual({ active: false, status: "idle", url: URL });
 		expect(t.notifications.reset).not.toHaveBeenCalled();
 	});
 
-	it("rejects an invalid URL without changing state", async () => {
+	it("rejects an invalid URL without changing state or writing", async () => {
 		const t = await setup();
-		t.writeUrl.mockRejectedValueOnce(new Error("Invalid Multica URL"));
 
-		await expect(t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "ftp://x")).rejects.toThrow();
+		await expect(t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, localRequest("ftp://x"))).resolves.toEqual({
+			ok: false,
+			error: "invalid_url",
+			forceable: false,
+		});
+
+		expect(t.writeSettings).not.toHaveBeenCalled();
+		expect(t.host.getState().url).toBe(URL);
+	});
+
+	it("reports a failed write and leaves the state alone", async () => {
+		const t = await setup();
+		t.writeSettings.mockRejectedValueOnce(new Error("disk full"));
+
+		await expect(t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, localRequest("https://multica.example.com"))).rejects.toThrow("disk full");
 
 		expect(t.host.getState().url).toBe(URL);
+	});
+});
+
+describe("multica view host: choosing the server", () => {
+	const partitionOf = (index: number) => FakeWebContentsView.instances[index].options.webPreferences.partition;
+	const save = (t: Awaited<ReturnType<typeof setup>>, request: Record<string, unknown>) =>
+		t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, request);
+
+	it("keeps the original partition for the default local server", async () => {
+		const t = await setup();
+		t.host.setActive(true);
+
+		expect(partitionOf(0)).toBe(MULTICA_PARTITION);
+	});
+
+	it("switches to Multica Cloud with its own partition and config, and back to the first partition", async () => {
+		const t = await setup();
+		ready(t);
+
+		await expect(save(t, { mode: "cloud", customUrl: URL })).resolves.toMatchObject({ ok: true, settings: { mode: "cloud" } });
+
+		expect(FakeWebContentsView.instances).toHaveLength(2);
+		expect(partitionOf(1)).toBe(MULTICA_CLOUD_PARTITION);
+		expect(partitionOf(1)).not.toBe(MULTICA_PARTITION);
+		expect(t.view().webContents.loadURL).toHaveBeenCalledExactlyOnceWith(BUNDLE.rendererUrl);
+		const event = t.multicaEvent();
+		t.view().webContents.ipc.emit("runtime-config:get", event);
+		expect(event.returnValue).toMatchObject({
+			ok: true,
+			config: { apiUrl: "https://api.multica.ai", wsUrl: "wss://api.multica.ai/ws", appUrl: "https://multica.ai" },
+		});
+		expect(t.host.getState()).toMatchObject({ active: true, url: "https://multica.ai" });
+		expect(t.checkServer).not.toHaveBeenCalled();
+
+		await save(t, { mode: "local", customUrl: URL });
+
+		expect(FakeWebContentsView.instances).toHaveLength(3);
+		expect(partitionOf(2)).toBe(MULTICA_PARTITION);
+	});
+
+	it("gives every other server a stable partition of its own, apart from the default and from Cloud", async () => {
+		const t = await setup();
+		t.host.setActive(true);
+
+		await save(t, localRequest("https://multica.example.com"));
+		await save(t, localRequest("https://other.example.com"));
+		await save(t, localRequest("https://multica.example.com"));
+
+		const [, first, second, again] = [0, 1, 2, 3].map(partitionOf);
+		expect(new Set([MULTICA_PARTITION, MULTICA_CLOUD_PARTITION, first, second]).size).toBe(4);
+		expect(first).toBe(again);
+		expect(first).toMatch(/^persist:ao-multica-[0-9a-f]{16}$/);
+	});
+
+	it("keeps the remembered custom URL while in cloud mode and does not probe a server for it", async () => {
+		const t = await setup();
+
+		await save(t, { mode: "cloud", customUrl: "https://multica.example.com" });
+
+		expect(t.writeSettings).toHaveBeenCalledExactlyOnceWith({ mode: "cloud", customUrl: "https://multica.example.com", apiUrl: "" });
+		expect(t.checkServer).not.toHaveBeenCalled();
+	});
+
+	it("never stores an unvalidated custom URL, not even as the remembered one in cloud mode", async () => {
+		const t = await setup();
+
+		await save(t, { mode: "cloud", customUrl: "javascript:alert(1)" });
+		await save(t, { mode: "cloud", customUrl: "http://public.example.com" });
+		await save(t, { mode: "cloud", customUrl: "https://multica.example.com/with/path" });
+
+		expect(t.writeSettings.mock.calls.map(([settings]) => settings)).toEqual([
+			{ mode: "cloud", customUrl: "", apiUrl: "" },
+			{ mode: "cloud", customUrl: "", apiUrl: "" },
+			{ mode: "cloud", customUrl: "", apiUrl: "" },
+		]);
+		expect(t.checkServer).not.toHaveBeenCalled();
+	});
+
+	it("does not save a server that fails the check, unless forced, and says which errors can be forced", async () => {
+		const t = await setup();
+		t.checkServer.mockResolvedValueOnce({ ok: false as never, error: "unreachable" } as never);
+
+		await expect(save(t, { mode: "local", customUrl: "https://multica.example.com" })).resolves.toEqual({
+			ok: false,
+			error: "unreachable",
+			forceable: true,
+		});
+		expect(t.writeSettings).not.toHaveBeenCalled();
+		expect(t.host.getState().url).toBe(URL);
+
+		t.checkServer.mockResolvedValueOnce({ ok: false as never, error: "unreachable" } as never);
+		await expect(save(t, { mode: "local", customUrl: "https://multica.example.com", force: true })).resolves.toMatchObject({ ok: true });
+		expect(t.host.getState().url).toBe("https://multica.example.com");
+	});
+
+	it("refuses plain http to a public host and a path in the address, without probing or writing", async () => {
+		const t = await setup();
+
+		await expect(save(t, localRequest("http://multica.example.com"))).resolves.toEqual({ ok: false, error: "insecure_http", forceable: false });
+		await expect(save(t, localRequest("https://multica.example.com/app"))).resolves.toEqual({ ok: false, error: "path_not_allowed", forceable: false });
+		await expect(save(t, { mode: "local", customUrl: "https://multica.example.com", apiUrl: "http://api.example.com", force: true })).resolves.toEqual({
+			ok: false,
+			error: "insecure_http",
+			forceable: false,
+		});
+		await expect(save(t, { mode: "bogus", customUrl: URL })).resolves.toMatchObject({ ok: false });
+
+		expect(t.checkServer).not.toHaveBeenCalled();
+		expect(t.writeSettings).not.toHaveBeenCalled();
+	});
+
+	it("stores the API address the check found when a same-origin deployment has no api.<host>", async () => {
+		const t = await setup();
+		t.checkServer.mockResolvedValueOnce({ ok: true, apiUrl: "https://multica.example.com" });
+
+		await save(t, { mode: "local", customUrl: "https://multica.example.com" });
+
+		expect(t.writeSettings).toHaveBeenCalledExactlyOnceWith({
+			mode: "local",
+			customUrl: "https://multica.example.com",
+			apiUrl: "https://multica.example.com",
+		});
+		t.host.setActive(true);
+		const event = t.multicaEvent();
+		t.view().webContents.ipc.emit("runtime-config:get", event);
+		expect(event.returnValue).toMatchObject({ config: { apiUrl: "https://multica.example.com", wsUrl: "wss://multica.example.com/ws" } });
+	});
+
+	it("rewrites the WebSocket origin for the server that is selected now, not the one at startup", async () => {
+		const t = await setup();
+		ready(t);
+		await save(t, { mode: "cloud", customUrl: URL });
+		const callback = vi.fn();
+
+		FakeWebContents.lastHeaderHandler?.({ url: "wss://api.multica.ai/ws", requestHeaders: { Origin: "null" } }, callback);
+
+		expect(callback).toHaveBeenCalledExactlyOnceWith({ requestHeaders: { Origin: "https://multica.ai" } });
+	});
+
+	it("tells the daemon service which server its view talks to, and announces server changes", async () => {
+		const stubDaemon = { getStatus: vi.fn(), start: vi.fn(), stop: vi.fn(), restart: vi.fn(), isInstalled: vi.fn(), refreshBinary: vi.fn(), probeRuntimes: vi.fn(), startLogStream: vi.fn(), stopLogStream: vi.fn(), startPolling: vi.fn(), stopPolling: vi.fn(), dispose: vi.fn() };
+		const createDaemonService = vi.fn((_emit: unknown, _server: unknown) => stubDaemon);
+		const onServerChange = vi.fn();
+		const t = await setup(local(URL), { createDaemonService: createDaemonService as never, onServerChange });
+		expect(onServerChange).toHaveBeenLastCalledWith(URL);
+		ready(t);
+		expect(createDaemonService.mock.calls[0][1]).toMatchObject({ key: URL, cliProfile: null });
+
+		await save(t, { mode: "cloud", customUrl: URL });
+
+		expect(onServerChange).toHaveBeenLastCalledWith("cloud");
+		expect(createDaemonService.mock.calls[1][1]).toMatchObject({ key: "cloud", cliProfile: "ao-multica.ai" });
+
+		await save(t, { mode: "local", customUrl: "", force: true });
+		expect(onServerChange).toHaveBeenLastCalledWith("");
+	});
+
+	it("does not announce or reload when the same server is saved again", async () => {
+		const onServerChange = vi.fn();
+		const t = await setup(local(URL), { onServerChange });
+		ready(t);
+		onServerChange.mockClear();
+
+		await save(t, localRequest(URL));
+
+		expect(onServerChange).not.toHaveBeenCalled();
+		expect(FakeWebContentsView.instances).toHaveLength(1);
+	});
+
+	it("runs a script bound to a server only in a live view of that server, even right after a switch", async () => {
+		const t = await setup();
+		ready(t);
+		const oldContents = t.view().webContents;
+		expect(t.host.getServer()?.key).toBe(URL);
+
+		await t.host.evaluateInPage("read()", URL);
+		expect(oldContents.executeJavaScript).toHaveBeenCalledWith("read()");
+
+		await save(t, { mode: "cloud", customUrl: URL });
+		// The script was built for the old server: it must not reach the new view, nor run unbound checks wrongly.
+		await expect(t.host.evaluateInPage("read()", URL)).resolves.toBeUndefined();
+		expect(t.view().webContents.executeJavaScript).not.toHaveBeenCalled();
+		expect(t.host.getServer()?.key).toBe("cloud");
+		await t.host.evaluateInPage("read()", "cloud");
+		expect(t.view().webContents.executeJavaScript).toHaveBeenCalledWith("read()");
+	});
+
+	it("reports no server while there is no live view", async () => {
+		const t = await setup();
+		expect(t.host.getServer()).toBeNull();
+		await expect(t.host.evaluateInPage("x()", URL)).resolves.toBeUndefined();
+	});
+
+	it("does not build a hidden view for the new server while Multica is not showing; it is created when Multica is next shown", async () => {
+		const t = await setup();
+		ready(t);
+		t.host.setActive(false);
+		const oldView = t.view();
+
+		await save(t, { mode: "cloud", customUrl: URL });
+
+		expect(oldView.webContents.close).toHaveBeenCalledOnce();
+		expect(FakeWebContentsView.instances).toHaveLength(1);
+		expect(t.host.getState()).toMatchObject({ active: false, status: "idle", url: "https://multica.ai" });
+
+		t.host.setActive(true);
+		expect(FakeWebContentsView.instances).toHaveLength(2);
+		expect(partitionOf(1)).toBe(MULTICA_CLOUD_PARTITION);
+	});
+
+	it("runs saves one at a time, so the last request, not the slowest check, wins", async () => {
+		const t = await setup();
+		let release!: () => void;
+		const slow = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		t.checkServer.mockImplementationOnce(async () => {
+			await slow;
+			return { ok: true as const, apiUrl: "https://api.first.example.com" };
+		});
+
+		const first = save(t, { mode: "local", customUrl: "https://first.example.com" });
+		const second = save(t, { mode: "local", customUrl: "https://second.example.com" });
+		await Promise.resolve();
+		expect(t.checkServer).toHaveBeenCalledTimes(1);
+
+		release();
+		await Promise.all([first, second]);
+
+		expect(t.writeSettings.mock.calls.map(([settings]) => settings.customUrl)).toEqual(["https://first.example.com", "https://second.example.com"]);
+		expect(t.host.getState().url).toBe("https://second.example.com");
+	});
+
+	it("only answers the trusted shell on the check channel", async () => {
+		const t = await setup();
+
+		expect(await t.ipc.invoke(MULTICA_CHECK_SERVER_CHANNEL, { sender: { id: 99 } }, { mode: "local", customUrl: URL })).toBeUndefined();
+		await expect(t.ipc.invoke(MULTICA_CHECK_SERVER_CHANNEL, t.shellEvent, { mode: "local", customUrl: URL })).resolves.toMatchObject({ ok: true });
+		await expect(t.ipc.invoke(MULTICA_CHECK_SERVER_CHANNEL, t.shellEvent, "nope")).resolves.toEqual({ ok: false, error: "invalid_url" });
 	});
 });
 
@@ -946,11 +1248,11 @@ describe("multica view host: a stale document after a URL change", () => {
 			stopPolling: vi.fn(),
 			dispose: vi.fn(),
 		};
-		const t = await setup({ url: URL }, { createDaemonService: () => daemon });
+		const t = await setup(local(URL), { createDaemonService: () => daemon });
 		t.host.setActive(true);
 		const oldView = t.view();
 
-		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "https://multica.example.com");
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, localRequest("https://multica.example.com"));
 		expect(t.view()).not.toBe(oldView);
 		for (const channel of ["daemon:stop", "daemon:restart", "shell:openExternal"]) {
 			expect(oldView.webContents.ipc.handlers.has(channel)).toBe(true);
@@ -976,7 +1278,7 @@ describe("multica view host: a stale document after a URL change", () => {
 
 	it("removes the old notification listeners before the old document can report state", async () => {
 		const real = setupRealNotifications();
-		const t = await setup({ url: URL }, { notifications: real.service });
+		const t = await setup(local(URL), { notifications: real.service });
 		t.host.setActive(true);
 		const oldView = t.view();
 		const oldEvent = { sender: oldView.webContents };
@@ -984,7 +1286,7 @@ describe("multica view host: a stale document after a URL change", () => {
 		oldView.webContents.ipc.emit("notification:show", oldEvent, notificationPayload("before-change"));
 		const originalBanner = real.banners[0];
 
-		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "https://multica.example.com");
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, localRequest("https://multica.example.com"));
 		const newView = t.view();
 		oldView.webContents.ipc.emit("auth:session-state", oldEvent, "user-a");
 		oldView.webContents.ipc.emit("notification:show", oldEvent, notificationPayload("from-stale-page"));
@@ -1000,14 +1302,14 @@ describe("multica view host: a stale document after a URL change", () => {
 
 	it("keeps a prior banner stale across the same user signing in on the replacement", async () => {
 		const real = setupRealNotifications();
-		const t = await setup({ url: URL }, { notifications: real.service });
+		const t = await setup(local(URL), { notifications: real.service });
 		t.host.setActive(true);
 		const oldView = t.view();
 		oldView.webContents.ipc.emit("auth:session-state", { sender: oldView.webContents }, "user-a");
 		oldView.webContents.ipc.emit("notification:show", { sender: oldView.webContents }, notificationPayload("old-banner"));
 		const oldBanner = real.banners[0];
 
-		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "https://multica.example.com");
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, localRequest("https://multica.example.com"));
 		const newView = t.view();
 		newView.webContents.ipc.emit("auth:session-state", { sender: newView.webContents }, "user-a");
 		oldBanner.click();
@@ -1024,10 +1326,10 @@ describe("multica view host: a stale document after a URL change", () => {
 
 	it("handles the replacement renderer's first auth report immediately", async () => {
 		const real = setupRealNotifications();
-		const t = await setup({ url: URL }, { notifications: real.service });
+		const t = await setup(local(URL), { notifications: real.service });
 		t.host.setActive(true);
 		const oldView = t.view();
-		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "https://multica.example.com");
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, localRequest("https://multica.example.com"));
 		const newView = t.view();
 
 		newView.webContents.ipc.emit("auth:session-state", { sender: newView.webContents }, "user-a");
@@ -1043,7 +1345,7 @@ describe("multica view host: a stale document after a URL change", () => {
 		const oldView = t.view();
 		oldView.webContents.emit("did-finish-load");
 
-		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "https://multica.example.com");
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, localRequest("https://multica.example.com"));
 		const newView = t.view();
 		oldView.webContents.emit("did-finish-load");
 		expect(t.host.getState().status).toBe("loading");
@@ -1051,9 +1353,9 @@ describe("multica view host: a stale document after a URL change", () => {
 		oldView.webContents.emit("render-process-gone", {}, { reason: "crashed" });
 
 		expect(newView).not.toBe(oldView);
-		expect(t.host.getState()).toEqual({ active: true, status: "loading", url: "https://multica.example.com/" });
+		expect(t.host.getState()).toEqual({ active: true, status: "loading", url: "https://multica.example.com" });
 		newView.webContents.emit("did-finish-load");
-		expect(t.host.getState()).toEqual({ active: true, status: "ready", url: "https://multica.example.com/" });
+		expect(t.host.getState()).toEqual({ active: true, status: "ready", url: "https://multica.example.com" });
 	});
 
 	it("keeps the replacement readiness when the old view starts loading late", async () => {
@@ -1061,7 +1363,7 @@ describe("multica view host: a stale document after a URL change", () => {
 		t.host.setActive(true);
 		const oldView = t.view();
 
-		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "https://multica.example.com");
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, localRequest("https://multica.example.com"));
 		const newView = t.view();
 		const target = { slug: "team/project", itemId: "42", issueKey: "AO-42" };
 		newView.webContents.ipc.emit("main-renderer:channel-state", { sender: newView.webContents }, { channel: "inbox:open", ready: true });
@@ -1075,6 +1377,8 @@ describe("multica view host: a stale document after a URL change", () => {
 describe("multica view host: deep links", () => {
 	it("holds a sign-in token until the renderer subscribes, then delivers it and surfaces Multica", async () => {
 		const t = await setup();
+		t.host.setActive(true);
+		await startSignIn(t);
 
 		expect(t.host.handleDeepLink("multica://auth/callback?token=abc.def")).toBe(true);
 
@@ -1089,6 +1393,7 @@ describe("multica view host: deep links", () => {
 	it("waits again after the page reloads, since reloading drops the renderer's listeners", async () => {
 		const t = await setup();
 		ready(t);
+		await startSignIn(t);
 		t.view().webContents.ipc.emit("main-renderer:channel-state", t.multicaEvent(), { channel: "auth:token", ready: true });
 
 		t.view().webContents.emit("did-start-loading");
@@ -1097,20 +1402,86 @@ describe("multica view host: deep links", () => {
 		expect(t.view().webContents.send).not.toHaveBeenCalled();
 	});
 
+	describe("sign-in links name no server, so they need a sign-in this view started", () => {
+		const LINK = "multica://auth/callback?token=abc.def";
+
+		it("ignores a token link when no sign-in was started in this view, without creating the view", async () => {
+			const t = await setup();
+
+			expect(t.host.handleDeepLink(LINK)).toBe(false);
+			expect(FakeWebContentsView.instances).toHaveLength(0);
+			expect(t.host.getState().active).toBe(false);
+
+			ready(t);
+			expect(t.host.handleDeepLink(LINK)).toBe(false);
+			expect(t.view().webContents.send).not.toHaveBeenCalled();
+		});
+
+		it("only counts the login page of the view's own server as the start of a sign-in", async () => {
+			const t = await setup();
+			ready(t);
+
+			for (const target of [
+				"https://other.example.com/login?platform=desktop",
+				`${URL}/login`,
+				`${URL}/settings?platform=desktop`,
+				"https://multica.ai/login?platform=desktop",
+			]) {
+				await t.view().webContents.ipc.invoke("shell:openExternal", { sender: t.view().webContents }, target);
+			}
+
+			expect(t.host.handleDeepLink(LINK)).toBe(false);
+		});
+
+		it("takes one token link per sign-in, within ten minutes", async () => {
+			let clock = 1_000_000;
+			const t = await setup(local(URL), { now: () => clock });
+			ready(t);
+			await startSignIn(t);
+
+			expect(t.host.handleDeepLink(LINK)).toBe(true);
+			expect(t.host.handleDeepLink(LINK)).toBe(false);
+
+			await startSignIn(t);
+			clock += 10 * 60 * 1000 + 1;
+			expect(t.host.handleDeepLink(LINK)).toBe(false);
+		});
+
+		it("forgets a pending sign-in when another server is selected: a Cloud token never reaches a self-hosted API", async () => {
+			const t = await setup(local(URL));
+			ready(t);
+			await startSignIn(t);
+			await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, { mode: "cloud", customUrl: URL });
+			t.view().webContents.emit("did-finish-load");
+
+			expect(t.host.handleDeepLink(LINK)).toBe(false);
+			expect(t.view().webContents.send).not.toHaveBeenCalled();
+			// The new server's own sign-in works.
+			await startSignIn(t, "https://multica.ai");
+			expect(t.host.handleDeepLink(LINK)).toBe(true);
+		});
+
+		it("still routes invitation links without a sign-in", async () => {
+			const t = await setup();
+
+			expect(t.host.handleDeepLink("multica://invite/abc-123")).toBe(true);
+		});
+	});
+
 	it("ignores anything that is not a multica deep link, and does so when no URL is configured", async () => {
 		const t = await setup();
 		expect(t.host.handleDeepLink("ao-app://callback?token=x")).toBe(false);
 		expect(t.host.handleDeepLink("multica://auth/callback")).toBe(false);
 		expect(t.host.getState().active).toBe(false);
 
-		const unconfigured = await setup({ url: "" });
+		const unconfigured = await setup(local(""));
 		expect(unconfigured.host.handleDeepLink("multica://auth/callback?token=abc")).toBe(false);
 	});
 });
 
 describe("multica view host: inbox items", () => {
 	it("ignores inbox items when no Multica URL is configured", async () => {
-		const t = await setup({ url: "" });
+		const t = await setup(local(""));
 
 		expect(t.host.openInboxItem({ slug: "team/project", itemId: "42", issueKey: "AO-42" })).toBe(false);
 		expect(t.host.getState().active).toBe(false);
@@ -1172,11 +1543,11 @@ describe("multica view host: IPC trust", () => {
 		t.ipc.invoke(MULTICA_SET_ACTIVE_CHANNEL, stranger, true);
 		t.ipc.invoke(MULTICA_RELOAD_CHANNEL, stranger);
 		expect(t.ipc.invoke(MULTICA_GET_SETTINGS_CHANNEL, stranger)).toBeUndefined();
-		await expect(t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, stranger, "http://evil.test")).resolves.toBeUndefined();
+		await expect(t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, stranger, localRequest("http://evil.test"))).resolves.toBeUndefined();
 
 		expect(t.host.getState().active).toBe(false);
 		expect(FakeWebContentsView.instances).toHaveLength(0);
-		expect(t.writeUrl).not.toHaveBeenCalled();
+		expect(t.writeSettings).not.toHaveBeenCalled();
 	});
 
 	it("does not let the Multica page drive AO's own switch and settings channels", async () => {
@@ -1221,7 +1592,7 @@ describe("multica view host: dispose", () => {
 		const t = await setup();
 		t.host.setActive(true);
 
-		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "");
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, localRequest(""));
 
 		expect(t.notifications.reset).toHaveBeenCalledOnce();
 		t.host.dispose();
@@ -1240,7 +1611,7 @@ describe("multica view host: dispose", () => {
 		const t = await setup();
 		t.host.setActive(true);
 
-		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, "");
+		await t.ipc.invoke(MULTICA_SET_SETTINGS_CHANNEL, t.shellEvent, localRequest(""));
 
 		expect(t.daemonDispose).toHaveBeenCalledOnce();
 	});

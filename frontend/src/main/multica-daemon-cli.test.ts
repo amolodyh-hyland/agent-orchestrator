@@ -111,6 +111,26 @@ describe("multica daemon service", () => {
 		expect(calls).toEqual([{ file: "/usr/local/bin/multica", args: ["daemon", "status", "--output", "json"], timeout: 10_000 }]);
 	});
 
+	it("targets the selected server's CLI profile for status and lifecycle, and the default profile when none is selected", async () => {
+		const status = { "--profile ao-multica.ai daemon status --output json": { stdout: RUNNING } };
+		const { service, calls } = setup(status, undefined, { isOwnedDaemon: () => true, profile: "ao-multica.ai" });
+
+		expect((await service.getStatus()).state).toBe("running");
+		await service.start();
+		await service.stop();
+		await service.restart();
+
+		expect(calls.map((call) => call.args.slice(0, 3).join(" "))).toEqual(
+			expect.arrayContaining(["--profile ao-multica.ai daemon", "--profile ao-multica.ai daemon"]),
+		);
+		expect(calls.every((call) => call.args[0] === "--profile" && call.args[1] === "ao-multica.ai")).toBe(true);
+		expect(calls.map((call) => call.args[3])).toEqual(expect.arrayContaining(["status", "start", "stop", "restart"]));
+
+		const defaults = setup({ "daemon status --output json": { stdout: RUNNING } }, undefined, { profile: null });
+		await defaults.service.getStatus();
+		expect(defaults.calls[0].args).toEqual(["daemon", "status", "--output", "json"]);
+	});
+
 	it("maps stopped JSON even when the CLI exits non-zero", async () => {
 		const { service } = setup({ "daemon status --output json": { stdout: '{\n  "status": "stopped"\n}', error: new Error("exit 1") } });
 
