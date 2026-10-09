@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -487,6 +487,15 @@ for (const [point, signal, code] of [["after-staged", "SIGTERM", 143], ["after-r
 	});
 }
 
+test("SIGTERM between the swap and the completion flag keeps the new app and its completed backup", { skip: process.platform !== "darwin" }, async (t) => {
+	const f = await installFixture(t, "noetaxis-signal-window-test");
+	await makeApp(f.targetApp, "0.13.4");
+	assert.equal(await interruptInstall(f, f.sourceApp, "after-swap", "SIGTERM", async () => {}), 143);
+	assert.equal(await installedVersion(f.targetApp), "new");
+	const [backup] = await backupEntries(f);
+	assert.ok(backup.files.includes("BACKUP_COMPLETE") && !backup.files.includes("BACKUP_ABORTED"));
+});
+
 test("SIGTERM after the new app is in place keeps it and its completed backup", { skip: process.platform !== "darwin" }, async (t) => {
 	const f = await installFixture(t, "noetaxis-signal-installed-test");
 	await makeApp(f.targetApp, "0.13.4");
@@ -512,15 +521,54 @@ test("good install, interrupted install, then rollback still restores the origin
 	assert.equal(await installedVersion(f.targetApp), "old");
 });
 
+test("a bundled CLI that fails its post-install checks produces labelled warnings, not a failed install", { skip: process.platform !== "darwin" }, async (t) => {
+	const f = await installFixture(t, "noetaxis-warning-test");
+	await writeFile(path.join(f.sourceApp, "Contents/Resources/daemon/ao"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+	execute("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", "--timestamp=none", f.sourceApp]);
+	await writeManifest(f.sourceApp, path.join(f.artifactDir, "MANIFEST.sha256"));
+	const install = execute("/bin/bash", [installScript, "--allow-ao-session", f.sourceApp], { cwd: repoRoot, env: f.env });
+	assert.equal(install.status, 0, install.stderr);
+	assert.match(install.stdout, /WARNING: "ao version" failed/);
+	assert.match(install.stdout, /WARNING: the bundled ao CLI does not list spawn --effort/);
+	assert.match(install.stdout, /WARNING: the bundled ao CLI does not list project set-config --permission-fallback/);
+	assert.equal(await installedVersion(f.targetApp), "new");
+});
+
+test("backup record hands a root-made backup to the console user without following symlinks", { skip: process.platform !== "darwin" }, async (t) => {
+	const root = await testRoot(t, "noetaxis-chown-test");
+	const bin = path.join(root, "bin");
+	const backup = path.join(root, "backup");
+	const outside = path.join(root, "outside");
+	await mkdir(bin, { recursive: true });
+	await mkdir(backup, { recursive: true });
+	await writeFile(outside, "x");
+	await symlink(outside, path.join(backup, "link"));
+	await writeFile(path.join(backup, "ao.db"), "db");
+	// Fake root for `id -u` only; `id -u <name>` and `id -g <name>` fall through to the real id.
+	await writeFile(path.join(bin, "id"), '#!/bin/sh\nif [ "$*" = "-u" ]; then echo 0; else exec /usr/bin/id "$@"; fi\n', { mode: 0o755 });
+	const me = os.userInfo().username;
+	const run = execute("/bin/bash", ["-c", 'source "$1"; noetaxis_write_backup_record "$2" NONE NONE', "check", path.join(scriptDir, "noetaxis-macos/common.sh"), backup], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, SUDO_USER: me } });
+	assert.equal(run.status, 0, run.stderr);
+	assert.match(await readFile(path.join(backup, "BACKUP_COMPLETE"), "utf8"), /app_backup=NONE/);
+	assert.equal(await readFile(outside, "utf8"), "x");
+});
+
 test("install removes stale staging directories of dead processes only", { skip: process.platform !== "darwin" }, async (t) => {
 	const f = await installFixture(t, "noetaxis-stale-staging-test");
 	const stale = path.join(f.appsDir, ".Agent-Orchestrator-installing-20200101-000000-99999999.app");
 	const live = path.join(f.appsDir, `.Agent-Orchestrator-installing-20200101-000000-${process.pid}.app`);
 	const unrelated = path.join(f.appsDir, "Other.app");
-	for (const dir of [stale, live, unrelated]) await mkdir(dir, { recursive: true });
+	// pid 1 is alive but owned by root: kill -0 would report EPERM and wrongly call it dead.
+	const otherUser = path.join(f.appsDir, ".Agent-Orchestrator-installing-20200101-000000-1.app");
+	const outside = path.join(f.root, "outside");
+	const link = path.join(f.appsDir, ".Agent-Orchestrator-installing-20200101-000000-99999998.app");
+	for (const dir of [stale, live, unrelated, otherUser, outside]) await mkdir(dir, { recursive: true });
+	await writeFile(path.join(outside, "keep"), "keep");
+	await symlink(outside, link);
 	const install = execute("/bin/bash", [installScript, "--allow-ao-session", f.sourceApp], { cwd: repoRoot, env: f.env });
 	assert.equal(install.status, 0, install.stderr);
-	assert.deepEqual((await readdir(f.appsDir)).sort(), [path.basename(live), "Agent Orchestrator.app", "Other.app"].sort());
+	assert.deepEqual((await readdir(f.appsDir)).sort(), [path.basename(live), path.basename(otherUser), path.basename(link), "Agent Orchestrator.app", "Other.app"].sort());
+	assert.equal(await readFile(path.join(outside, "keep"), "utf8"), "keep");
 });
 
 test("native PKG structure is verifiable without running Installer", { skip: process.platform !== "darwin" }, async (t) => {

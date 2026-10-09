@@ -185,7 +185,8 @@ noetaxis_remove_stale_staging() {
 		name="${candidate##*/}"
 		owner="${name%.app}"
 		owner="${owner##*-}"
-		if [[ "$owner" =~ ^[0-9]+$ ]] && ! kill -0 "$owner" 2>/dev/null; then
+		# ps, not kill -0: kill reports EPERM for a live pid owned by another user (root).
+		if [[ "$owner" =~ ^[0-9]+$ ]] && ! /bin/ps -p "$owner" >/dev/null 2>&1; then
 			noetaxis_run_privileged /bin/rm -rf "$candidate" || true
 		fi
 	done
@@ -351,7 +352,7 @@ noetaxis_write_backup_record() {
 		local user_name
 		user_name="$(noetaxis_user_name)"
 		if [[ -n "$user_name" && "$user_name" != root ]]; then
-			/usr/sbin/chown -R "$(id -u "$user_name"):$(id -g "$user_name")" "$backup_dir" || true
+			/usr/sbin/chown -R -h "$(id -u "$user_name"):$(id -g "$user_name")" "$backup_dir" || true
 		fi
 	fi
 }

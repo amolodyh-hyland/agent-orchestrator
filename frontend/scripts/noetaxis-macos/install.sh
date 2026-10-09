@@ -93,8 +93,13 @@ fi
 # newest real one). State copies in the directory are kept.
 install_complete=0
 old_app_path=""
+old_moved=0
 backup_dir=""
 noetaxis_install_cleanup() {
+	# Complete once the new app is in place, even if the signal landed before the flag was set.
+	if [[ "$old_moved" -eq 1 && ! -e "$staged_app" && -d "$target_app" ]]; then
+		install_complete=1
+	fi
 	if [[ "$install_complete" -eq 0 ]]; then
 		noetaxis_run_privileged /bin/rm -rf "$staged_app" || true
 		noetaxis_restore_previous_app "$target_app" "$old_app_path"
@@ -151,6 +156,7 @@ if [[ "$old_app_backup" != NONE ]] && ! noetaxis_run_privileged /bin/mv "$target
 	noetaxis_error "The old app could not be backed up. It remains in place; partial backup: $backup_dir"
 	exit 33
 fi
+old_moved=1
 noetaxis_test_pause after-old-moved
 
 if ! noetaxis_run_privileged /bin/mv "$staged_app" "$target_app"; then
@@ -160,6 +166,7 @@ if ! noetaxis_run_privileged /bin/mv "$staged_app" "$target_app"; then
 	noetaxis_error "The new app could not be placed in $apps_dir. Backup retained at $backup_dir"
 	exit 34
 fi
+noetaxis_test_pause after-swap
 install_complete=1
 noetaxis_test_pause after-installed
 
