@@ -235,6 +235,9 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 			// Synchronously, so an add or open arriving before the reload already sees the new server.
 			serverAnnounced = true;
 			serverKey = key;
+			// The issue on the old server's page is not on the new one until its page reports a title.
+			currentIssue = null;
+			currentTitle = null;
 			replaceLinks([]);
 			void reload(true);
 		},
