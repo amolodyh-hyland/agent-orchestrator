@@ -154,6 +154,10 @@ describe("validateMulticaServerUrl", () => {
 		["http://8.8.8.8:3000", "insecure_http"],
 		["http://172.32.0.1", "insecure_http"],
 		["http://169.254.169.254", "insecure_http"],
+		["http://metadata", "insecure_http"],
+		["http://metadata.google.internal", "insecure_http"],
+		["http://metadata.google.internal.", "insecure_http"],
+		["http://instance-data", "insecure_http"],
 		["http://169.254.1.1:3000", "insecure_http"],
 		["http://[fe80::1]", "insecure_http"],
 		["http://[::ffff:127.0.0.1]:3000", "insecure_http"],
@@ -212,8 +216,8 @@ describe("resolveMulticaServer", () => {
 			wsUrl: "wss://multica.example.com/ws",
 			appUrl: "https://multica.example.com",
 		});
-		expect(sameOrigin?.cliProfile).toMatch(/^ao-multica\.example\.com-[0-9a-f]{8}$/);
-		expect(resolveMulticaServer({ mode: "local", customUrl: "http://192.168.1.5:3000", apiUrl: "" })?.cliProfile).toMatch(/^ao-192\.168\.1\.5-3000-[0-9a-f]{8}$/);
+		expect(sameOrigin?.cliProfile).toMatch(/^ao-multica\.example\.com-[0-9a-f]{16}$/);
+		expect(resolveMulticaServer({ mode: "local", customUrl: "http://192.168.1.5:3000", apiUrl: "" })?.cliProfile).toMatch(/^ao-192\.168\.1\.5-3000-[0-9a-f]{16}$/);
 	});
 
 	it("never shares a partition, key or CLI profile between two API addresses of the same web address", () => {
@@ -245,7 +249,7 @@ describe("resolveMulticaServer", () => {
 		const profile = (customUrl: string) => resolveMulticaServer({ mode: "local", customUrl, apiUrl: "" })!.cliProfile;
 		const profiles = [profile("https://a.example.com:1"), profile("https://a.example.com-1"), profile("http://box.lan:3000"), profile("https://box.lan:3000")];
 		expect(new Set(profiles).size).toBe(4);
-		for (const name of profiles) expect(name).toMatch(/^ao-[a-z0-9.-]+-[0-9a-f]{8}$/);
+		for (const name of profiles) expect(name).toMatch(/^ao-[a-z0-9.-]+-[0-9a-f]{16}$/);
 		expect(profile("https://a.example.com:1")).toBe(profile("https://a.example.com:1"));
 	});
 
@@ -282,7 +286,7 @@ describe("resolveMulticaServer", () => {
 		expect(multicaCliSignInCommand(resolveMulticaServer(cloud)!)).toBe("multica login --profile ao-multica.ai");
 		expect(multicaCliSignInCommand(resolveMulticaServer({ mode: "local", customUrl: "https://multica.example.com", apiUrl: "" })!)).toEqual(
 			expect.stringMatching(
-				/^multica setup self-host --profile ao-multica\.example\.com-[0-9a-f]{8} --server-url https:\/\/api\.multica\.example\.com --app-url https:\/\/multica\.example\.com$/,
+				/^multica setup self-host --profile ao-multica\.example\.com-[0-9a-f]{16} --server-url https:\/\/api\.multica\.example\.com --app-url https:\/\/multica\.example\.com$/,
 			),
 		);
 	});
