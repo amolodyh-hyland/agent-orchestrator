@@ -117,9 +117,11 @@ export function coerceMulticaSettings(raw: unknown): MulticaSettings {
 export type MulticaServerUrlError = "invalid_url" | "insecure_http" | "path_not_allowed";
 
 /**
- * Hosts where plain http is acceptable: loopback, RFC 1918, link-local, CGNAT
- * (VPN overlays), unique-local IPv6, single-label names and the usual private
- * suffixes. Judged by name only (no DNS), so this is a usability guard.
+ * Hosts where plain http is acceptable: loopback, RFC 1918, CGNAT (VPN
+ * overlays), unique-local IPv6, single-label names and the usual private
+ * suffixes. Link-local addresses (169.254/16, fe80::/10) are not: that range
+ * holds cloud metadata services. Judged by name only (no DNS), so this is a
+ * usability guard, not a security boundary.
  */
 export function isPrivateMulticaHost(hostname: string): boolean {
 	const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
@@ -132,11 +134,10 @@ export function isPrivateMulticaHost(hostname: string): boolean {
 			a === 10 ||
 			(a === 172 && b >= 16 && b <= 31) ||
 			(a === 192 && b === 168) ||
-			(a === 169 && b === 254) ||
 			(a === 100 && b >= 64 && b <= 127)
 		);
 	}
-	if (host.includes(":")) return /^f[cd][0-9a-f]{2}:/.test(host) || /^fe[89ab][0-9a-f]:/.test(host);
+	if (host.includes(":")) return /^f[cd][0-9a-f]{2}:/.test(host);
 	if (!host.includes(".")) return true;
 	return [".local", ".lan", ".internal", ".home.arpa"].some((suffix) => host.endsWith(suffix));
 }
@@ -173,15 +174,16 @@ const IP_LITERAL = /^(\d{1,3}(\.\d{1,3}){3}|\[.*\])$/;
 /**
  * Builds the runtime config Multica's desktop renderer reads at boot from the
  * configured Multica web URL. A local or LAN web app (Multica's self-hosting
- * default: web on :3000) talks to its API on :8080 of the same host. Any other
- * host follows Multica's cloud convention of `api.<web host>`.
+ * default: web on :3000) talks to its API on :8080 of the same host, and so does
+ * a plain-http name on a private network (`http://mybox:3000`, `http://box.lan`).
+ * Any other host follows Multica's cloud convention of `api.<web host>`.
  */
 export function multicaRuntimeConfig(rawAppUrl: string): MulticaRuntimeConfigResult {
 	const parsed = parseMulticaUrl(rawAppUrl);
 	if (!parsed.ok) return { ok: false, error: { message: "Multica URL is not set" } };
 	const app = new URL(parsed.origin);
 	const api = new URL(app.origin);
-	if (app.hostname === "localhost" || IP_LITERAL.test(app.hostname)) {
+	if (app.hostname === "localhost" || IP_LITERAL.test(app.hostname) || (app.protocol === "http:" && isPrivateMulticaHost(app.hostname))) {
 		api.port = "8080";
 	} else if (!app.hostname.startsWith("api.")) {
 		api.hostname = `api.${app.hostname}`;
@@ -231,11 +233,16 @@ export function multicaPartitionFor(mode: MulticaServerMode, identity: string): 
 	return `${MULTICA_PARTITION}-${hashOrigin(identity)}`;
 }
 
-const profilePart = (origin: string): string => new URL(origin).host.replace(/[^a-z0-9.-]/gi, "-").toLowerCase();
-
-function cliProfileFor(mode: MulticaServerMode, identity: string, appOrigin: string, apiOrigin: string | null): string | null {
+/**
+ * `ao-<readable host>-<hash of the identity>`: the hash keeps hosts that
+ * sanitize alike (`a.b:1`, `a.b-1`) and the same host over http and https on
+ * separate CLI profiles, so one profile never holds two servers' sign-in.
+ */
+function cliProfileFor(mode: MulticaServerMode, identity: string, appOrigin: string): string | null {
 	if (mode === "local" && identity === new URL(MULTICA_DEFAULT_URL).origin) return null;
-	return `ao-${profilePart(appOrigin)}${apiOrigin ? `--${profilePart(apiOrigin)}` : ""}`;
+	if (mode === "cloud") return "ao-multica.ai";
+	const host = new URL(appOrigin).host.replace(/[^a-z0-9.]/gi, "-").toLowerCase().slice(0, 40);
+	return `ao-${host}-${hashOrigin(identity).slice(0, 8)}`;
 }
 
 /** The server the settings select, or null when the view is off. */
@@ -252,7 +259,7 @@ export function resolveMulticaServer(settings: MulticaSettings): MulticaServer |
 				appUrl: MULTICA_CLOUD_APP_URL,
 			},
 			partition: MULTICA_CLOUD_PARTITION,
-			cliProfile: cliProfileFor("cloud", "cloud", MULTICA_CLOUD_APP_URL, null),
+			cliProfile: cliProfileFor("cloud", "cloud", MULTICA_CLOUD_APP_URL),
 		};
 	}
 	const derived = multicaRuntimeConfig(settings.customUrl);
@@ -276,7 +283,7 @@ export function resolveMulticaServer(settings: MulticaSettings): MulticaServer |
 		appUrl: config.appUrl,
 		config,
 		partition: multicaPartitionFor("local", identity),
-		cliProfile: cliProfileFor("local", identity, config.appUrl, apiOverride ? config.apiUrl : null),
+		cliProfile: cliProfileFor("local", identity, config.appUrl),
 	};
 }
 
