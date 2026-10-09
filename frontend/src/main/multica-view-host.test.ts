@@ -1053,6 +1053,21 @@ describe("multica view host: choosing the server", () => {
 		expect(t.checkServer).not.toHaveBeenCalled();
 	});
 
+	it("never stores an unvalidated custom URL, not even as the remembered one in cloud mode", async () => {
+		const t = await setup();
+
+		await save(t, { mode: "cloud", customUrl: "javascript:alert(1)" });
+		await save(t, { mode: "cloud", customUrl: "http://public.example.com" });
+		await save(t, { mode: "cloud", customUrl: "https://multica.example.com/with/path" });
+
+		expect(t.writeSettings.mock.calls.map(([settings]) => settings)).toEqual([
+			{ mode: "cloud", customUrl: "", apiUrl: "" },
+			{ mode: "cloud", customUrl: "", apiUrl: "" },
+			{ mode: "cloud", customUrl: "", apiUrl: "" },
+		]);
+		expect(t.checkServer).not.toHaveBeenCalled();
+	});
+
 	it("does not save a server that fails the check, unless forced, and says which errors can be forced", async () => {
 		const t = await setup();
 		t.checkServer.mockResolvedValueOnce({ ok: false as never, error: "unreachable" } as never);

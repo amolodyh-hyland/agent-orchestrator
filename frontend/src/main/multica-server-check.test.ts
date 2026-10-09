@@ -77,6 +77,40 @@ describe("checkMulticaServer", () => {
 		expect(get).not.toHaveBeenCalled();
 	});
 
+	it.each([
+		[500, "server error"],
+		[404, "not found"],
+		[204, "no content"],
+	])("does not accept status %i even when the body looks like Multica's config", async (status) => {
+		const get = serve({
+			"http://localhost:8080/api/config": { status, body: CONFIG },
+			"http://localhost:3000/api/config": { status, body: CONFIG },
+		});
+		expect(await checkMulticaServer({ customUrl: "http://localhost:3000", apiUrl: "" }, get)).toEqual({ ok: false, error: "not_multica" });
+	});
+
+	it("gives up on a server that never answers after five seconds", async () => {
+		vi.useFakeTimers();
+		try {
+			const get: MulticaCheckGet = (_url, signal) =>
+				new Promise((_resolve, reject) => {
+					signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+				});
+			const pending = checkMulticaServer({ customUrl: "http://localhost:3000", apiUrl: "http://localhost:8080" }, get);
+
+			await vi.advanceTimersByTimeAsync(4999);
+			let settled = false;
+			void pending.then(() => (settled = true));
+			await vi.advanceTimersByTimeAsync(0);
+			expect(settled).toBe(false);
+
+			await vi.advanceTimersByTimeAsync(1);
+			expect(await pending).toEqual({ ok: false, error: "timeout" });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("never puts the URL or the transport message in the result", async () => {
 		const get = serve({ "http://localhost:8080/api/config": new Error("connect ECONNREFUSED http://localhost:8080 token=secret") });
 		const result = await checkMulticaServer({ customUrl: "http://localhost:3000", apiUrl: "" }, get);
