@@ -675,6 +675,17 @@ describe("multica issue link service: Send to AO", () => {
 		expect(t.shell.send).toHaveBeenCalledExactlyOnceWith(MULTICA_SEND_REQUEST_CHANNEL, { ok: false, reason: "no_issue" });
 	});
 
+	it("forgets the issue of the old server's page when the server changes, until the new page reports a title", async () => {
+		const t = await setup();
+		t.service.handlePageTitle("MUL-1: Fix");
+
+		t.switchTo({ mode: "cloud", customUrl: "", apiUrl: "" });
+		expect(t.service.handleAoSessionLink(AO_SEND_ISSUE_URL)).toBe(true);
+
+		expect(t.host.evaluateInPage).not.toHaveBeenCalled();
+		expect(t.shell.send).toHaveBeenLastCalledWith(MULTICA_SEND_REQUEST_CHANNEL, { ok: false, reason: "no_issue" });
+	});
+
 	it("returns false after disposal", async () => {
 		const t = await setup();
 		t.service.dispose();
