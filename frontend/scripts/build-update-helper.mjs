@@ -18,11 +18,12 @@ export function helperBuildOptions(arch, root = frontend) {
   };
 }
 
-export function buildUpdateHelper({ arch = process.arch, platform = process.platform, run = spawnSync } = {}) {
+export function buildUpdateHelper({ arch = process.arch, platform = process.platform, run = spawnSync, root = frontend } = {}) {
   if (platform !== "darwin") throw new Error("The macOS update helper must be built on macOS");
-  const { output, args } = helperBuildOptions(arch);
+  const { output, args } = helperBuildOptions(arch, root);
   mkdirSync(path.dirname(output), { recursive: true });
-  const moduleCache = path.join(homedir(), ".ao", "build-cache", "update-helper", arch);
+  const moduleCacheRoot = process.env.AO_SCRATCH_SWIFT_CACHE || path.join(homedir(), ".ao", "build-cache");
+  const moduleCache = path.join(moduleCacheRoot, "update-helper", arch);
   mkdirSync(moduleCache, { recursive: true });
   const result = run("xcrun", [...args, "-module-cache-path", moduleCache], { stdio: "inherit" });
   if (result.error) throw result.error;
