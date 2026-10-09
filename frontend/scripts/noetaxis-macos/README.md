@@ -54,7 +54,7 @@ frontend/scripts/noetaxis-macos/rollback.sh
 
 To restore the database files too, add `--restore-db`. This replaces current database files with the selected backup; the rollback script first saves the current database files under `rollback-current-data/` in that backup directory. Use `--backup-dir <path>` to select a specific backup.
 
-The scripts use the full bundled CLI path. The install script checks `ao version`, the `spawn --effort` and `project set-config --permission-fallback` flags, and the database schema using read-only SQLite access. Open the app from Finder before checking daemon status:
+The scripts use the full bundled CLI path. The install script checks `ao version`, the `spawn --effort` and `project set-config --permission-fallback` flags, and the database schema using read-only SQLite access. A WAL database with no `-wal`/`-shm` files (the daemon is not running) cannot be opened read-only, so the schema check then reads a temporary copy; if that fails too it prints a notice and does not fail the install. Open the app from Finder before checking daemon status:
 
 ```bash
 AO="/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao"

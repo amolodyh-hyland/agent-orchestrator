@@ -290,6 +290,34 @@ noetaxis_write_backup_record() {
 	fi
 }
 
+noetaxis_schema_query() {
+	/usr/bin/sqlite3 "${@:2}" "$1" 'select max(version_id) from goose_db_version where is_applied=1;'
+}
+
+# A WAL-mode database with no -wal/-shm files (the daemon is not running) cannot
+# be opened with -readonly: SQLite would need to create the -shm file. Read a
+# temporary copy in that case so the real data directory is never written.
+# The check is informational and never fails the install.
+noetaxis_print_schema_version() {
+	local database="$1" version copy_dir
+	if version="$(noetaxis_schema_query "$database" -readonly 2>/dev/null)"; then
+		printf 'SQLite schema version: %s\n' "$version"
+		return 0
+	fi
+	copy_dir="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/noetaxis-schema.XXXXXX")" || copy_dir=""
+	if [[ -n "$copy_dir" ]]; then
+		/bin/cp "$database" "$copy_dir/ao.db" 2>/dev/null || true
+		[[ -f "$database-wal" ]] && { /bin/cp "$database-wal" "$copy_dir/ao.db-wal" 2>/dev/null || true; }
+		version="$(noetaxis_schema_query "$copy_dir/ao.db" 2>/dev/null)" || version=""
+		/bin/rm -rf "$copy_dir"
+		if [[ -n "$version" ]]; then
+			printf 'SQLite schema version: %s (read from a temporary copy; the daemon is not running)\n' "$version"
+			return 0
+		fi
+	fi
+	printf 'SQLite schema version: could not be read from %s (non-fatal check; run the sqlite3 command from the README after opening the app).\n' "$database"
+}
+
 noetaxis_print_post_install_checks() {
 	local app_path="$1" ao_home="$2" cli database
 	cli="$app_path/Contents/Resources/daemon/ao"
@@ -303,8 +331,7 @@ noetaxis_print_post_install_checks() {
 	"$cli" spawn --help | /usr/bin/grep -- --effort
 	"$cli" project set-config --help | /usr/bin/grep -- --permission-fallback
 	if [[ -f "$database" ]]; then
-		printf 'SQLite schema version: '
-		/usr/bin/sqlite3 -readonly "$database" 'select max(version_id) from goose_db_version where is_applied=1;'
+		noetaxis_print_schema_version "$database"
 	else
 		printf 'SQLite schema check skipped until the app has created %s.\n' "$database"
 	fi

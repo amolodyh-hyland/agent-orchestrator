@@ -231,6 +231,23 @@ test("isolated install is dry-runnable, backed up, idempotent, and reversible", 
 	assert.equal(execute("/usr/bin/sqlite3", [path.join(backupDir, "rollback-current-data/ao.db"), "select max(version_id) from goose_db_version where is_applied=1;"]).stdout.trim(), "888");
 });
 
+test("schema check reads a WAL database that has no -wal/-shm files and never fails", { skip: process.platform !== "darwin" }, async (t) => {
+	const root = await testRoot(t, "noetaxis-schema-test");
+	const database = path.join(root, "ao.db");
+	const setup = execute("/usr/bin/sqlite3", [database, "pragma journal_mode=wal; create table goose_db_version (version_id integer, is_applied integer); insert into goose_db_version values (190,1);"]);
+	assert.equal(setup.status, 0, setup.stderr);
+	await rm(`${database}-wal`, { force: true });
+	await rm(`${database}-shm`, { force: true });
+	const check = (target) => execute("/bin/bash", ["-c", 'source "$1"; noetaxis_print_schema_version "$2"', "check", path.join(scriptDir, "noetaxis-macos/common.sh"), target], { env: { ...process.env, TMPDIR: root } });
+	const readable = check(database);
+	assert.equal(readable.status, 0, readable.stderr);
+	assert.match(readable.stdout, /SQLite schema version: 190/);
+	assert.deepEqual((await readdir(root)).sort(), ["ao.db"]);
+	const unreadable = check(path.join(root, "missing.db"));
+	assert.equal(unreadable.status, 0, unreadable.stderr);
+	assert.match(unreadable.stdout, /could not be read/);
+});
+
 test("native PKG structure is verifiable without running Installer", { skip: process.platform !== "darwin" }, async (t) => {
 	const root = await testRoot(t, "noetaxis-packaging-test", true);
 	const sourceApp = path.join(root, "source/Applications/Agent Orchestrator.app");
