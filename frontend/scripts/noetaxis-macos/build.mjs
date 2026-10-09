@@ -157,7 +157,8 @@ function parseDatabaseSchema(root) {
 }
 
 // The internal registry mirror serves no npm signature metadata, so corepack cannot
-// verify the pnpm download. Applied only to the corepack/pnpm steps, never to other children.
+// verify the pnpm download. Applied only to the one step that downloads pnpm; later steps
+// (and the electron-vite child) run with the cached pnpm and without it.
 const corepackEnv = { COREPACK_INTEGRITY_KEYS: "0" };
 
 async function internalRegistryEnv(registry) {
@@ -252,7 +253,7 @@ export async function buildNoetaxis(options) {
 		});
 		run(pnpmCommand, ["pnpm@10.28.2", "--filter", "@multica/desktop", "exec", "electron-vite", "build"], {
 			cwd: multicaDir,
-			env: { ...npmEnv, ...corepackEnv },
+			env: npmEnv,
 		});
 		const multicaRevision = capture("git", ["-C", multicaDir, "rev-parse", "HEAD"]);
 		if (!multicaRevision.startsWith(multicaPin.shortRevision)) throw new Error("Multica checkout does not match backend/go.mod pin");

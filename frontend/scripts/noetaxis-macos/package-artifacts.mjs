@@ -112,8 +112,10 @@ export async function buildPackages({ appPath, outputDir, version, revision, cre
 		}
 		const componentPlist = path.join(workDir, "component.plist");
 		run("/usr/bin/pkgbuild", ["--analyze", "--root", pkgRoot, componentPlist]);
-		run("/usr/bin/plutil", ["-replace", "0.BundleIsRelocatable", "-bool", "false", componentPlist]);
-		run("/usr/bin/plutil", ["-replace", "0.BundleOverwriteAction", "-string", "upgrade", componentPlist]);
+		// pkgbuild already marks the bundle non-relocatable with an upgrade overwrite action.
+		// Installer skips a bundle whose CFBundleVersion it considers not newer, before any
+		// script runs; builds are '<version>-noetaxis.<sha>', so turn the version check off.
+		run("/usr/bin/plutil", ["-replace", "0.BundleIsVersionChecked", "-bool", "false", componentPlist]);
 		run("/usr/bin/pkgbuild", [
 			"--component-plist", componentPlist,
 			"--root", pkgRoot,

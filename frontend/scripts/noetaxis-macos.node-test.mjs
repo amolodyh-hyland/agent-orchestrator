@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -91,7 +91,17 @@ case "$*" in *ShipIt*) exit 1;; *) exit 0;; esac
 `
 		: "#!/bin/sh\nexit 1\n";
 	await writeFile(path.join(bin, "pgrep"), pgrep, { mode: 0o755 });
-	const ps = psMode === "wrapped-ancestor"
+	const ps = psMode === "chain" || psMode === "cycle"
+		? `#!/bin/bash
+echo call >> "$(dirname "$0")/ps-calls"
+last="\${@: -1}"
+case "$*" in
+  *command=*) echo zsh ;;
+  *ppid=*) ${psMode === "chain" ? 'echo $((last + 1))' : 'if [ "$last" = 5000 ]; then echo 6000; else echo 5000; fi'} ;;
+  *) exit 1 ;;
+esac
+`
+		: psMode === "wrapped-ancestor"
 		? `#!/bin/sh
 case "$*" in *command=*"-p 4000000"*|*"-p 4000000"*command=*) printf '%s\\n' '/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao daemon';; *command=*) printf '%s\\n' 'zsh';; *ppid=*"-p 4000000"*) printf '1\\n';; *ppid=*) printf '4000000\\n';; *) exit 1;; esac
 `
@@ -183,6 +193,13 @@ test("install guard blocks inherited AO environment and daemon ancestry", async 
 	assert.equal(wrapped.status, 20, wrapped.stderr);
 	assert.match(wrapped.stderr, /running inside Agent Orchestrator/);
 	assert.equal(await readdir(appsDir).then((entries) => entries.length), 0);
+	for (const [mode, limit] of [["chain", 140], ["cycle", 12]]) {
+		const bin = await makeFakeBin(root, "idle", mode);
+		const bounded = dryRun(guardEnv(bin));
+		assert.equal(bounded.status, 0, bounded.stderr);
+		const calls = (await readFile(path.join(bin, "ps-calls"), "utf8")).trim().split("\n").length;
+		assert.ok(calls > 2 && calls <= limit, `${mode} walk made ${calls} ps calls`);
+	}
 });
 
 test("isolated install is dry-runnable, backed up, idempotent, and reversible", { skip: process.platform !== "darwin" }, async (t) => {
@@ -406,6 +423,106 @@ test("PKG preinstall backs up state before moving the app, and postinstall verif
 	assert.notEqual(broken.status, 0);
 });
 
+async function makeBuild(root, name, buildVersion, buildRevision) {
+	const artifactDir = path.join(root, name);
+	const appPath = path.join(artifactDir, "Applications/Agent Orchestrator.app");
+	await mkdir(path.dirname(appPath), { recursive: true });
+	await makeApp(appPath, buildVersion, buildRevision);
+	await writeManifest(appPath, path.join(artifactDir, "MANIFEST.sha256"));
+	return appPath;
+}
+
+// Starts install.sh paused at `point`, runs `atPause`, delivers `signal` and resolves with the exit code.
+async function interruptInstall(f, sourceApp, point, signal, atPause) {
+	const marker = path.join(f.root, `pause-${point}-${signal}`);
+	const child = spawn("/bin/bash", [installScript, "--allow-ao-session", sourceApp], {
+		cwd: repoRoot,
+		env: { ...f.env, NOETAXIS_TEST_PAUSE_AT: point, NOETAXIS_TEST_PAUSE_MARKER: marker },
+		stdio: "ignore",
+	});
+	const exited = new Promise((resolve) => child.on("exit", (code, sig) => resolve(code ?? sig)));
+	for (let waited = 0; waited < 300; waited += 1) {
+		if (await lstat(marker).catch(() => undefined)) break;
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	assert.ok(await lstat(marker).catch(() => undefined), `install never reached ${point}`);
+	await atPause();
+	child.kill(signal);
+	return exited;
+}
+
+const backupEntries = async (f) => {
+	const root = path.join(f.home, "ao-backups");
+	const dirs = await readdir(root).catch(() => []);
+	return Promise.all(dirs.map(async (name) => ({ dir: path.join(root, name), files: await readdir(path.join(root, name)) })));
+};
+
+for (const [point, signal, code] of [["after-staged", "SIGTERM", 143], ["after-record", "SIGTERM", 143], ["after-old-moved", "SIGTERM", 143], ["after-old-moved", "SIGINT", 130], ["after-old-moved", "SIGHUP", 129]]) {
+	test(`${signal} at ${point} leaves the previous app installed and the backup marked aborted`, { skip: process.platform !== "darwin" }, async (t) => {
+		const f = await installFixture(t, "noetaxis-signal-test");
+		await makeApp(f.targetApp, "0.13.4");
+		const atPause = async () => {
+			if (point === "after-staged") {
+				assert.equal((await backupEntries(f)).length, 0);
+				assert.ok((await readdir(f.appsDir)).some((name) => name.startsWith(".Agent-Orchestrator-installing-")));
+			}
+			if (point === "after-record") {
+				const [backup] = await backupEntries(f);
+				assert.ok(backup.files.includes("BACKUP_COMPLETE"), "the record must exist before the old app moves");
+				assert.equal(await installedVersion(f.targetApp), "old");
+			}
+			if (point === "after-old-moved") {
+				assert.equal(await lstat(f.targetApp).catch(() => undefined), undefined);
+				const [backup] = await backupEntries(f);
+				assert.ok(backup.files.includes("BACKUP_COMPLETE") && backup.files.some((name) => name.endsWith(".app.bak")));
+			}
+		};
+		assert.equal(await interruptInstall(f, f.sourceApp, point, signal, atPause), code);
+		assert.equal(await installedVersion(f.targetApp), "old");
+		assert.deepEqual((await readdir(f.appsDir)).sort(), ["Agent Orchestrator.app"]);
+		for (const backup of await backupEntries(f)) {
+			assert.ok(!backup.files.includes("BACKUP_COMPLETE"));
+			assert.ok(backup.files.includes("BACKUP_ABORTED") || point === "after-staged");
+		}
+	});
+}
+
+test("SIGTERM after the new app is in place keeps it and its completed backup", { skip: process.platform !== "darwin" }, async (t) => {
+	const f = await installFixture(t, "noetaxis-signal-installed-test");
+	await makeApp(f.targetApp, "0.13.4");
+	assert.equal(await interruptInstall(f, f.sourceApp, "after-installed", "SIGTERM", async () => {}), 143);
+	assert.equal(await installedVersion(f.targetApp), "new");
+	assert.deepEqual((await readdir(f.appsDir)).sort(), ["Agent Orchestrator.app"]);
+	const [backup] = await backupEntries(f);
+	assert.ok(backup.files.includes("BACKUP_COMPLETE") && !backup.files.includes("BACKUP_ABORTED"));
+});
+
+test("good install, interrupted install, then rollback still restores the original app", { skip: process.platform !== "darwin" }, async (t) => {
+	const f = await installFixture(t, "noetaxis-aborted-rollback-test");
+	await makeApp(f.targetApp, "0.13.4");
+	const first = execute("/bin/bash", [installScript, "--allow-ao-session", f.sourceApp], { cwd: repoRoot, env: f.env });
+	assert.equal(first.status, 0, first.stderr);
+	const secondApp = await makeBuild(f.root, "build-two", "0.13.4-noetaxis.1234567", `1234567${"0".repeat(33)}`);
+	assert.equal(await interruptInstall(f, secondApp, "after-old-moved", "SIGTERM", async () => {}), 143);
+	assert.equal(await installedVersion(f.targetApp), "new");
+	const rollback = execute("/bin/bash", [rollbackScript, "--allow-ao-session"], { cwd: repoRoot, env: f.env });
+	assert.equal(rollback.status, 0, rollback.stderr);
+	assert.match(rollback.stdout, /Restored app version: 0\.13\.4/);
+	assert.doesNotMatch(rollback.stdout, /already restored/i);
+	assert.equal(await installedVersion(f.targetApp), "old");
+});
+
+test("install removes stale staging directories of dead processes only", { skip: process.platform !== "darwin" }, async (t) => {
+	const f = await installFixture(t, "noetaxis-stale-staging-test");
+	const stale = path.join(f.appsDir, ".Agent-Orchestrator-installing-20200101-000000-99999999.app");
+	const live = path.join(f.appsDir, `.Agent-Orchestrator-installing-20200101-000000-${process.pid}.app`);
+	const unrelated = path.join(f.appsDir, "Other.app");
+	for (const dir of [stale, live, unrelated]) await mkdir(dir, { recursive: true });
+	const install = execute("/bin/bash", [installScript, "--allow-ao-session", f.sourceApp], { cwd: repoRoot, env: f.env });
+	assert.equal(install.status, 0, install.stderr);
+	assert.deepEqual((await readdir(f.appsDir)).sort(), [path.basename(live), "Agent Orchestrator.app", "Other.app"].sort());
+});
+
 test("native PKG structure is verifiable without running Installer", { skip: process.platform !== "darwin" }, async (t) => {
 	const root = await testRoot(t, "noetaxis-packaging-test", true);
 	const sourceApp = path.join(root, "source/Applications/Agent Orchestrator.app");
@@ -428,7 +545,7 @@ test("native PKG structure is verifiable without running Installer", { skip: pro
 	assert.ok(expandedFiles.some((file) => path.basename(file) === "preinstall"));
 	assert.ok(expandedFiles.some((file) => path.basename(file) === "postinstall"));
 	const packageInfo = await Promise.all(expandedFiles.filter((file) => path.basename(file) === "PackageInfo").map((file) => readFile(file, "utf8")));
-	assert.ok(packageInfo.some((text) => /relocatable="false"/.test(text) && /<upgrade-bundle>/.test(text)), packageInfo.join("\n"));
+	assert.ok(packageInfo.some((text) => /relocatable="false"/.test(text) && /<upgrade-bundle>/.test(text) && /<bundle-version\/>/.test(text)), packageInfo.join("\n"));
 	assert.equal(artifacts.dmgPath, "");
 });
 

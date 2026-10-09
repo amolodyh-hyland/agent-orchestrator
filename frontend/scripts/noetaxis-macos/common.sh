@@ -80,8 +80,9 @@ noetaxis_check_safe_origin() {
 	pid="$$"
 	# No ordering assumption between pid and ppid (pids wrap); stop at launchd, an
 	# unreadable parent, a self-parent, or a depth cap so a cycle cannot loop forever.
-	local depth=0
-	while [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 && "$depth" -lt 64 ]]; do
+	local depth=0 visited=" "
+	while [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 && "$depth" -lt 64 && "$visited" != *" $pid "* ]]; do
+		visited="$visited$pid "
 		command_line="$(ps -ww -o command= -p "$pid" 2>/dev/null || true)"
 		case "$command_line" in
 			*"Agent Orchestrator.app/Contents/"*|*"/Contents/Resources/daemon/ao daemon"*)
@@ -90,7 +91,7 @@ noetaxis_check_safe_origin() {
 				;;
 		esac
 		parent="$(ps -o ppid= -p "$pid" 2>/dev/null | /usr/bin/tr -d '[:space:]' || true)"
-		if [[ ! "$parent" =~ ^[0-9]+$ || "$parent" -eq "$pid" ]]; then
+		if [[ ! "$parent" =~ ^[0-9]+$ ]]; then
 			break
 		fi
 		pid="$parent"
@@ -164,6 +165,30 @@ noetaxis_verify_signature() {
 		noetaxis_error "Code signature verification failed for $app_path (expected a valid ad-hoc signature)."
 		return 26
 	fi
+}
+
+# Inert unless NOETAXIS_TEST_PAUSE_AT names this point: lets tests deliver a signal
+# at an exact step of the swap (marker file, then a wait that a signal interrupts).
+noetaxis_test_pause() {
+	[[ -n "${NOETAXIS_TEST_PAUSE_AT:-}" && "$NOETAXIS_TEST_PAUSE_AT" == "$1" ]] || return 0
+	/usr/bin/touch "${NOETAXIS_TEST_PAUSE_MARKER:?}"
+	/bin/sleep 20 &
+	wait $! || true
+}
+
+# A SIGKILL or power loss skips the install trap and leaves the staged copy behind.
+# Remove only this script's own staging directories whose owning pid is gone.
+noetaxis_remove_stale_staging() {
+	local apps_dir="$1" candidate name owner
+	for candidate in "$apps_dir"/.Agent-Orchestrator-installing-*.app; do
+		[[ -d "$candidate" && ! -L "$candidate" ]] || continue
+		name="${candidate##*/}"
+		owner="${name%.app}"
+		owner="${owner##*-}"
+		if [[ "$owner" =~ ^[0-9]+$ ]] && ! kill -0 "$owner" 2>/dev/null; then
+			noetaxis_run_privileged /bin/rm -rf "$candidate" || true
+		fi
+	done
 }
 
 # Put the previous app back when an interrupted install left /Applications without one.

@@ -29,7 +29,7 @@ The output contains:
 - `Agent-Orchestrator-<version>-arm64.dmg`
 - `BUILD-INFO.txt`
 
-The app is signed with an ad-hoc signature (`codesign --sign -`). It has no Apple Developer ID, certificate chain, or notarization ticket. The PKG and DMG are unsigned. The app contains `Resources/ao-updates-disabled`; rebuild and reinstall from a reviewed source ref to update it.
+The app is signed with an ad-hoc signature (`codesign --sign -`). It has no Apple Developer ID, certificate chain, or notarization ticket. The PKG and DMG are unsigned. `MANIFEST.sha256` detects corruption and unlisted files; it sits next to the app, so it is not tamper protection. The PKG has not been run through Installer.app (Installer compares `CFBundleVersion` before the scripts run, so it may skip an upgrade between `-noetaxis` builds); the script install from the build output is the verified path. The app contains `Resources/ao-updates-disabled`; rebuild and reinstall from a reviewed source ref to update it.
 
 ## Install from your own Terminal
 
