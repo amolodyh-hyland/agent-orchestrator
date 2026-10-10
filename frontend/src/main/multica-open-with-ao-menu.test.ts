@@ -62,6 +62,7 @@ function payload(overrides: Partial<OpenWithAoPagePayload> & { style?: MenuStyle
 		label: "Multica",
 		nonce: NONCE,
 		issue: { identifier: "APP-12", title: "Ticket" },
+		executor: null,
 		daemon: "ready",
 		stale: false,
 		deducedProjectId: null,
@@ -1780,6 +1781,80 @@ describe("multica Open in AO menu", () => {
 			mockGeometry();
 			const { shadow } = openMenu(payload({ deducedProjectId: "alpha", projects: [syncProject(null)] }));
 			expect(shadow?.querySelector('[data-key^="sync:"]')).toBeNull();
+		});
+	});
+
+	describe("executor line", () => {
+		it("renders one disabled info row above the projects and no action", () => {
+			mockGeometry();
+			const onAction = vi.fn();
+			const { shadow } = openMenu(
+				payload({ executor: { display: "multica-agent", text: "Run by: Multica agent Builder, running" } }),
+				onAction,
+			);
+			const rows = menuRows(shadow, "0");
+			expect(rows[0]?.textContent).toBe("Run by: Multica agent Builder, running");
+			expect(rows[0]?.getAttribute("data-key")).toBe("executor:multica-agent");
+			expect(rows[0]?.getAttribute("data-kind")).toBe("info");
+			expect(rows[0]?.getAttribute("aria-disabled")).toBe("true");
+			expect(shadow?.querySelector('.panel[data-level="0"] .sep')).not.toBeNull();
+			rows[0]?.click();
+			expect(onAction).not.toHaveBeenCalled();
+			// The project rows follow unchanged.
+			expect(rows.slice(1).some((row) => row.getAttribute("data-key") === "project:alpha")).toBe(true);
+		});
+
+		it.each(["ao", "human", "contested"] as const)("shows the %s line", (display) => {
+			mockGeometry();
+			const { shadow } = openMenu(payload({ executor: { display, text: `line ${display}` } }));
+			expect(menuRows(shadow, "0")[0]?.textContent).toBe(`line ${display}`);
+		});
+
+		it("coexists with the status-sync row under a linked session", () => {
+			mockGeometry();
+			const sync = { tone: "ready", label: "Stop updating this ticket", stateLabel: "Synced", action: "disable" } as const;
+			const onAction = vi.fn();
+			const { shadow } = openMenu(
+				payload({
+					deducedProjectId: "alpha",
+					executor: { display: "contested", text: "Contested: a Multica agent and an AO session both hold this issue" },
+					projects: [project("alpha", { sessions: [session("task-alpha", "alpha", { linked: true, sync })] })],
+				}),
+				onAction,
+				undefined,
+				allowTestActionEvents(),
+			);
+			const rows = menuRows(shadow, "0");
+			const keys = rows.map((row) => row.getAttribute("data-key"));
+			expect(keys[0]).toBe("executor:contested");
+			expect(keys).toContain("task:task-alpha");
+			expect(keys).toContain("sync:task-alpha");
+			expect(keys.indexOf("executor:contested")).toBeLessThan(keys.indexOf("task:task-alpha"));
+			expect(keys.indexOf("task:task-alpha")).toBeLessThan(keys.indexOf("sync:task-alpha"));
+			// The executor row stays inert; the sync row still sends its action.
+			rows[0]?.click();
+			expect(onAction).not.toHaveBeenCalled();
+			shadow?.querySelector<HTMLElement>('[data-key="sync:task-alpha"]')?.click();
+			expect(onAction).toHaveBeenCalledTimes(1);
+		});
+
+		it("adds no row without an executor", () => {
+			mockGeometry();
+			const { shadow } = openMenu(payload({ executor: null }));
+			expect(shadow?.querySelector('[data-key^="executor:"]')).toBeNull();
+		});
+
+		it("is shown above the offline message too", () => {
+			mockGeometry();
+			const { shadow } = openMenu(payload({ daemon: "stopped", executor: { display: "contested", text: "Contested" } }));
+			expect(menuRows(shadow, "0").map((row) => row.textContent)).toEqual(["Contested", "AO is offline. Start AO and try again."]);
+		});
+
+		it("updates the line in place", () => {
+			mockGeometry();
+			const { menu, shadow } = openMenu(payload({ executor: { display: "ao", text: "first" } }));
+			menu.update(payload({ executor: { display: "human", text: "second" } }));
+			expect(menuRows(shadow, "0")[0]?.textContent).toBe("second");
 		});
 	});
 });

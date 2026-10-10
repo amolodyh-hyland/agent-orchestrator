@@ -22,6 +22,7 @@ function payload(overrides: Partial<OpenWithAoPagePayload> = {}): OpenWithAoPage
 		style: OPEN_WITH_AO_STYLE,
 		nonce: NONCE,
 		issue: { identifier: "SPIK-7", title: "Fix issue" },
+		executor: null,
 		daemon: "ready",
 		stale: false,
 		deducedProjectId: "project-1",
