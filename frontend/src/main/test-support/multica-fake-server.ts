@@ -49,6 +49,8 @@ export type FakeMulticaServer = {
 	dropSockets: (workspaceId?: string) => void;
 	/** Stops answering auth on new sockets (they stay unauthenticated) to test the liveness timer. */
 	holdAuth: (hold: boolean) => void;
+	/** Refuses WebSocket upgrades with this HTTP status (null restores normal behaviour). */
+	rejectUpgrades: (status: number | null) => void;
 	requests: FakeRequest[];
 	requestsTo: (pathPrefix: string) => FakeRequest[];
 	/** Requests that were not GETs. Always refused with 405. */
@@ -84,6 +86,7 @@ export async function createFakeMulticaServer(): Promise<FakeMulticaServer> {
 	const received: string[] = [];
 	let attempts = 0;
 	let authHeld = false;
+	let upgradeStatus: number | null = null;
 
 	const userFor = (token: string | undefined): FakeUser | null => {
 		if (!token || revoked.has(token)) return null;
@@ -189,6 +192,11 @@ export async function createFakeMulticaServer(): Promise<FakeMulticaServer> {
 			origin: typeof request.headers.origin === "string" ? request.headers.origin : undefined,
 		});
 		const workspaceId = url.searchParams.get("workspace_id") ?? "";
+		if (upgradeStatus !== null) {
+			socket.write(`HTTP/1.1 ${upgradeStatus} Refused\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+			socket.destroy();
+			return;
+		}
 		if (url.pathname !== "/ws" || !workspaceId) {
 			socket.write("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
 			socket.destroy();
@@ -269,6 +277,9 @@ export async function createFakeMulticaServer(): Promise<FakeMulticaServer> {
 		},
 		holdAuth: (hold) => {
 			authHeld = hold;
+		},
+		rejectUpgrades: (status) => {
+			upgradeStatus = status;
 		},
 		requests,
 		requestsTo: (prefix) => requests.filter((request) => request.path.startsWith(prefix)),
