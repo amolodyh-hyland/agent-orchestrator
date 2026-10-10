@@ -16,7 +16,9 @@ export type ReadFailureKind =
 	| "unreachable"
 	| "timeout"
 	| "redirect"
-	| "bad_response";
+	| "bad_response"
+	/** The connection was stopped while the read was queued. */
+	| "cancelled";
 
 export type ReadResult = { ok: true; data: unknown } | { ok: false; kind: ReadFailureKind; status?: number; retryAfterMs?: number };
 
@@ -327,7 +329,7 @@ export function createMulticaReadClient(options: { transport: ReadTransport; bud
 
 	const get = (request: ReadRequest): Promise<ReadResult> => {
 		if (!isAllowedReadRequest(request)) return Promise.resolve({ ok: false, kind: "bad_response" });
-		return budget.schedule(async (): Promise<ReadResult> => {
+		const scheduled = budget.schedule(async (): Promise<ReadResult> => {
 			let response: RawResponse;
 			try {
 				response = await options.transport(request);
@@ -350,6 +352,8 @@ export function createMulticaReadClient(options: { transport: ReadTransport; bud
 			if (!failure.ok && (failure.kind === "server_error" || failure.kind === "bad_response")) backOff();
 			return failure;
 		});
+		// A read still queued when the client is disposed resolves as cancelled rather than rejecting.
+		return scheduled.catch((): ReadResult => ({ ok: false, kind: "cancelled" }));
 	};
 
 	const issueRequest = (workspace: WorkspaceRef, issue: string, suffix: string, query = ""): ReadRequest | null =>

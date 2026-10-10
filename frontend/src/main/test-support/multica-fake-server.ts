@@ -39,6 +39,8 @@ export type FakeMulticaServer = {
 	setRuntimes: (workspaceId: string, runtimes: Array<Record<string, unknown>>) => void;
 	/** Answers the next requests whose path starts with `pathPrefix` with `failure` instead of the fixture. */
 	failNext: (pathPrefix: string, failure: FakeFailure) => void;
+	/** Holds the next request whose path starts with `pathPrefix` until `release()` is called. */
+	hold: (pathPrefix: string) => { release: () => void; reached: () => boolean };
 	/** Makes the token invalid: HTTP 401, a WebSocket `invalid token` frame, and a close for open sockets. */
 	revokeToken: (token: string) => void;
 	/** Sends one frame to every authenticated socket of the workspace; keys sorted as Go marshals a map. */
@@ -81,6 +83,7 @@ export async function createFakeMulticaServer(): Promise<FakeMulticaServer> {
 	const agents = new Map<string, Array<Record<string, unknown>>>();
 	const runtimes = new Map<string, Array<Record<string, unknown>>>();
 	const failures: Array<{ prefix: string; failure: FakeFailure; remaining: number }> = [];
+	const holds: Array<{ prefix: string; gate: Promise<void>; open: () => void; reached: boolean; used: boolean }> = [];
 	const sockets = new Set<Socket>();
 	const requests: FakeRequest[] = [];
 	const received: string[] = [];
@@ -109,6 +112,17 @@ export async function createFakeMulticaServer(): Promise<FakeMulticaServer> {
 
 	const http: Server = createServer((request, response) => {
 		const url = new URL(request.url ?? "/", "http://fake.invalid");
+		const hold = holds.find((entry) => !entry.used && url.pathname.startsWith(entry.prefix));
+		if (hold) {
+			hold.used = true;
+			hold.reached = true;
+			void hold.gate.then(() => answer(request, response, url));
+			return;
+		}
+		answer(request, response, url);
+	});
+
+	function answer(request: IncomingMessage, response: ServerResponse, url: URL): void {
 		const record: FakeRequest = {
 			method: request.method ?? "GET",
 			path: url.pathname,
@@ -176,7 +190,7 @@ export async function createFakeMulticaServer(): Promise<FakeMulticaServer> {
 			return json(response, 200, active ? runs.filter((task) => ["queued", "dispatched", "running", "waiting_local_directory"].includes(task.status as string)) : runs);
 		}
 		json(response, 404, { error: "not found" });
-	});
+	}
 
 	const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
 	http.on("upgrade", (request, socket, head) => {
@@ -252,6 +266,15 @@ export async function createFakeMulticaServer(): Promise<FakeMulticaServer> {
 		setAgents: (workspaceId, rows) => agents.set(workspaceId, rows),
 		setRuntimes: (workspaceId, rows) => runtimes.set(workspaceId, rows),
 		failNext: (prefix, failure) => failures.push({ prefix, failure, remaining: failure.count ?? 1 }),
+		hold: (prefix) => {
+			let open = () => undefined as void;
+			const gate = new Promise<void>((resolve) => {
+				open = resolve;
+			});
+			const entry = { prefix, gate, open, reached: false, used: false };
+			holds.push(entry);
+			return { release: () => entry.open(), reached: () => entry.reached };
+		},
 		revokeToken: (token) => {
 			revoked.add(token);
 			for (const entry of sockets) {

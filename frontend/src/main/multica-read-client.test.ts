@@ -387,11 +387,11 @@ describe("failures, back-off and the read budget", () => {
 	it("rejects queued reads when disposed", async () => {
 		const scheduler = createFakeScheduler();
 		const client = createMulticaReadClient({ transport: async () => ({ status: 200, body: "{}" }), scheduler });
-		const jobs = Array.from({ length: 14 }, () => client.me().catch((error: Error) => error));
+		const jobs = Array.from({ length: 14 }, () => client.me());
 		await scheduler.advance(0);
 		client.dispose();
 		const results = await Promise.all(jobs);
-		expect(results.filter((result) => result instanceof Error).length).toBeGreaterThan(0);
-		await expect(client.me()).rejects.toThrow("cancelled");
+		expect(results.filter((result) => !result.ok && result.kind === "cancelled").length).toBeGreaterThan(0);
+		expect(await client.me()).toEqual({ ok: false, kind: "cancelled" });
 	});
 });

@@ -137,22 +137,28 @@ export type AwarenessState = {
 	killSwitch: boolean;
 	masterEnabled: boolean;
 	maxSockets: number;
+	/** A pasted token survives a restart. False when the OS store is missing or unprotected: it then lives in memory for this run only. */
+	tokenStoragePersistent: boolean;
 	servers: AwarenessServerState[];
 	issues: Array<AwarenessIssue & { serverKey: string }>;
 	runs: Array<AwarenessRun & { serverKey: string }>;
 	agents: Array<AwarenessAgent & { serverKey: string }>;
 	runtimes: Array<AwarenessRuntime & { serverKey: string }>;
+	/** Issues that were deleted while watched: a link to one of them is orphaned. */
+	deleted: Array<{ serverKey: string; workspaceId: string; identifier: string }>;
 };
 
 export const EMPTY_AWARENESS_STATE: AwarenessState = {
 	killSwitch: false,
 	masterEnabled: false,
 	maxSockets: MULTICA_MAX_SOCKETS,
+	tokenStoragePersistent: false,
 	servers: [],
 	issues: [],
 	runs: [],
 	agents: [],
 	runtimes: [],
+	deleted: [],
 };
 
 export type AwarenessCommand =
@@ -174,8 +180,6 @@ export type AwarenessCommandFailure =
 	| "kill_switch"
 	| "unknown_server"
 	| "invalid_server"
-	| "consent_required"
-	| "token_storage_unavailable"
 	| "socket_cap"
 	| "save_failed";
 
