@@ -258,9 +258,12 @@ export function multicaIssueJoinKey(serverKey: string, workspaceSlug: string, id
 	return `${serverKey}|${workspaceSlug.toLowerCase()}|${identifier.toUpperCase()}`;
 }
 
-const ISSUE_ID_PATTERN = /^[A-Za-z0-9-]{1,64}$/;
+/** A UUID, or a display identifier such as `MUL-12`. Words like `query` or `preview-trigger` are neither. */
+export const MULTICA_ISSUE_REF_SOURCE =
+	"(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[A-Za-z0-9]{1,10}-[1-9][0-9]{0,8})";
+const ISSUE_REF_PATTERN = new RegExp(`^${MULTICA_ISSUE_REF_SOURCE}$`);
 export function isMulticaIssueId(value: unknown): value is string {
-	return typeof value === "string" && ISSUE_ID_PATTERN.test(value);
+	return typeof value === "string" && ISSUE_REF_PATTERN.test(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
