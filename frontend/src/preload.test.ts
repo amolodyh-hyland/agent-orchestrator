@@ -483,3 +483,36 @@ describe("preload multica bridge", () => {
 		expect(electronMocks.off).toHaveBeenCalledWith(TOGGLE_MULTICA_SHORTCUT_CHANNEL, wrapped);
 	});
 });
+
+describe("preload multica awareness bridge", () => {
+	it("exposes four typed methods and no generic request channel", () => {
+		const bridge = exposedBridge().multicaAwareness as unknown as Record<string, unknown>;
+		expect(Object.keys(bridge).sort()).toEqual(["command", "getState", "onState", "openIssue"]);
+		expect(Object.keys(exposedBridge().multicaActionLog as unknown as Record<string, unknown>)).toEqual(["read"]);
+	});
+
+	it("invokes the awareness channels with the given payloads", async () => {
+		const bridge = exposedBridge().multicaAwareness;
+		electronMocks.invoke.mockResolvedValue({});
+		await bridge.getState();
+		await bridge.command({ type: "setMaster", enabled: true });
+		await bridge.openIssue({ serverKey: "cloud", workspaceSlug: "acme", identifier: "MUL-1" });
+		await exposedBridge().multicaActionLog.read({ kind: "connect" });
+		expect(electronMocks.invoke.mock.calls).toEqual([
+			["multicaAwareness:getState"],
+			["multicaAwareness:command", { type: "setMaster", enabled: true }],
+			["multicaAwareness:openIssue", { serverKey: "cloud", workspaceSlug: "acme", identifier: "MUL-1" }],
+			["multicaActionLog:read", { kind: "connect" }],
+		]);
+	});
+
+	it("delivers pushed state without the IPC event and disposes the listener", () => {
+		const listener = vi.fn();
+		const dispose = exposedBridge().multicaAwareness.onState(listener);
+		const wrapped = electronMocks.listeners.get("multicaAwareness:state");
+		wrapped?.({}, { masterEnabled: true });
+		expect(listener).toHaveBeenCalledExactlyOnceWith({ masterEnabled: true });
+		dispose();
+		expect(electronMocks.off).toHaveBeenCalledWith("multicaAwareness:state", wrapped);
+	});
+});

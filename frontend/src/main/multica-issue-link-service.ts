@@ -15,7 +15,11 @@ import {
 	type MulticaIssueLink,
 	type MulticaIssueRef,
 } from "../shared/multica-issue-links";
-import { MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL, OPEN_WITH_AO_ACTION_PREFIX } from "../shared/multica-open-with-ao";
+import {
+	MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL,
+	OPEN_WITH_AO_ACTION_PREFIX,
+	type OpenWithAoExecutorLine,
+} from "../shared/multica-open-with-ao";
 import { AO_SEND_ISSUE_URL, parseMulticaIssueTitleParts } from "../shared/multica-send-to-ao";
 import type { MulticaIssueLinkStore, MulticaIssueStableIds, MulticaIssueTarget } from "./multica-issue-links";
 import { createMulticaOpenWithAo } from "./multica-open-with-ao";
@@ -32,6 +36,14 @@ export type MulticaIssueLinkServiceOptions = {
 	readSettings: () => Promise<MulticaSettings>;
 	/** Status sync: told which links are visible and which server is selected, and drives the sync rows of the Open in AO menu. */
 	sync?: Pick<MulticaStatusSync, "setLinks" | "handleServerChange" | "getSnapshot" | "onChanged" | "setLink" | "resume">;
+	/** Awareness hooks. The executor line for an issue on the selected server, from the read model; null when it has nothing to say. */
+	getExecutor?: (input: {
+		serverKey: string;
+		issueIdentifier: string;
+		liveSessions: ReadonlyArray<{ id: string; label: string; stateLabel: string }>;
+	}) => OpenWithAoExecutorLine | null;
+	/** Called after the stored links changed, so awareness can refresh the issues it follows. */
+	onLinksChanged?: () => void;
 };
 
 export type MulticaIssueLinkService = {
@@ -43,6 +55,8 @@ export type MulticaIssueLinkService = {
 	handlePageTitle: (title: string) => void;
 	/** Offered every external-open target of the Multica view. True when it was an ao://sessions URL (handled or swallowed). */
 	handleAoSessionLink: (url: string) => boolean;
+	/** The awareness read model changed: rebuild the executor line in the open page's menu, only if it differs from what the page shows. */
+	refreshExecutor: () => void;
 	dispose: () => void;
 };
 
@@ -78,6 +92,7 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 
 	const pushChanged = (next: MulticaIssueLink[]): void => {
 		if (!disposed && !options.shellWebContents.isDestroyed()) options.shellWebContents.send(MULTICA_LINKS_CHANGED_CHANNEL, next);
+		if (!disposed) options.onLinksChanged?.();
 	};
 
 	const openSession = (target: { projectId: string; sessionId: string }): void => {
@@ -131,6 +146,7 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 					},
 				}
 			: {}),
+		getExecutorLine: (input) => (serverKey ? (options.getExecutor?.({ serverKey, ...input }) ?? null) : null),
 	});
 	const unsubscribeSync = options.sync?.onChanged(() => refreshOpenWithAo());
 	function refreshOpenWithAo(): void {
@@ -257,6 +273,9 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 	for (const [channel, handler] of handlers) options.ipcMain.handle(channel, handler);
 
 	return {
+		refreshExecutor: () => {
+			if (!disposed) openWithAo.refreshIfChanged();
+		},
 		handleServerChange: (key) => {
 			if (disposed) return;
 			// Synchronously, so an add or open arriving before the reload already sees the new server.
