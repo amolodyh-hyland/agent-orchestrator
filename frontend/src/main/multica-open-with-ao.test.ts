@@ -537,6 +537,41 @@ describe("workspace slug page script", () => {
 		expect(JSON.parse(evaluateStoredTabs(storedValue as string) as string)).toEqual({ slug: null, title: "MUL-1: Fix login" });
 	});
 
+	describe("refreshIfChanged", () => {
+		it("sends the page script once for an unchanged payload and again when the payload or the issue changes", () => {
+			let line = { display: "ao" as const, text: "one" };
+			const { service, host, setIssue } = setup({ getExecutorLine: () => line });
+			service.setSnapshot(snapshot());
+			host.runInAoWorld.mockClear();
+			service.refreshIfChanged();
+			expect(host.runInAoWorld).not.toHaveBeenCalled();
+			service.refreshIfChanged();
+			expect(host.runInAoWorld).not.toHaveBeenCalled();
+			line = { display: "ao", text: "two" };
+			service.refreshIfChanged();
+			expect(host.runInAoWorld).toHaveBeenCalledTimes(1);
+			service.refreshIfChanged();
+			expect(host.runInAoWorld).toHaveBeenCalledTimes(1);
+			// A full refresh always re-sends, so a reloaded page gets its controller back.
+			service.refresh();
+			expect(host.runInAoWorld).toHaveBeenCalledTimes(2);
+			setIssue({ identifier: "MUL-2", title: "Other" });
+			service.refreshIfChanged();
+			expect(host.runInAoWorld).toHaveBeenCalledTimes(3);
+		});
+
+		it("removes the control once and does not repeat it", () => {
+			const { service, host, setIssue } = setup();
+			service.setSnapshot(snapshot());
+			setIssue(null);
+			host.runInAoWorld.mockClear();
+			service.refreshIfChanged();
+			service.refreshIfChanged();
+			expect(host.runInAoWorld).toHaveBeenCalledTimes(1);
+			expect(host.runInAoWorld).toHaveBeenCalledWith("window.__aoOpenWithAoRemove()");
+		});
+	});
+
 	describe("executor line", () => {
 		const lastPayload = (): OpenWithAoPagePayload => {
 			const calls = vi.mocked(buildOpenWithAoScript).mock.calls;

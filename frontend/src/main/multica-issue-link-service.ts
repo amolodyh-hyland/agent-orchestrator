@@ -55,7 +55,7 @@ export type MulticaIssueLinkService = {
 	handlePageTitle: (title: string) => void;
 	/** Offered every external-open target of the Multica view. True when it was an ao://sessions URL (handled or swallowed). */
 	handleAoSessionLink: (url: string) => boolean;
-	/** The awareness read model changed: rebuild the executor line in the open page's menu. */
+	/** The awareness read model changed: rebuild the executor line in the open page's menu, only if it differs from what the page shows. */
 	refreshExecutor: () => void;
 	dispose: () => void;
 };
@@ -273,7 +273,9 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 	for (const [channel, handler] of handlers) options.ipcMain.handle(channel, handler);
 
 	return {
-		refreshExecutor: () => refreshOpenWithAo(),
+		refreshExecutor: () => {
+			if (!disposed) openWithAo.refreshIfChanged();
+		},
 		handleServerChange: (key) => {
 			if (disposed) return;
 			// Synchronously, so an add or open arriving before the reload already sees the new server.

@@ -39,6 +39,8 @@ export type MulticaOpenWithAoOptions = {
 export type MulticaOpenWithAo = {
 	setSnapshot: (value: unknown) => { ok: boolean };
 	refresh: () => void;
+	/** Like refresh, but sends nothing when the page already shows exactly this payload (used for awareness pushes, which arrive often). */
+	refreshIfChanged: () => void;
 	handleActionUrl: (url: string) => boolean;
 	dispose: () => void;
 };
@@ -179,13 +181,19 @@ export function createMulticaOpenWithAo(options: MulticaOpenWithAoOptions): Mult
 		}
 	};
 
-	const refresh = (): void => {
+	// What the page was last given, so an unchanged payload is not sent again by `refreshIfChanged`.
+	const REMOVED_PAGE_KEY = "removed";
+	let lastPageKey: string | null = null;
+
+	const sendToPage = (onlyIfChanged: boolean): void => {
 		if (disposed) return;
 		try {
 			const host = options.getHost();
 			if (!host) return;
 			const issue = options.getCurrentIssue();
 			if (issue === null) {
+				if (onlyIfChanged && lastPageKey === REMOVED_PAGE_KEY) return;
+				lastPageKey = REMOVED_PAGE_KEY;
 				host.runInAoWorld(buildOpenWithAoRemoveScript());
 				return;
 			}
@@ -197,11 +205,16 @@ export function createMulticaOpenWithAo(options: MulticaOpenWithAoOptions): Mult
 				sync: options.getSync?.(),
 				executor: executorLine(issue.identifier),
 			});
+			const key = JSON.stringify(payload);
+			if (onlyIfChanged && key === lastPageKey) return;
+			lastPageKey = key;
 			host.runInAoWorld(buildOpenWithAoScript(payload));
 		} catch {
 			// Page refreshes are best effort; a subsequent snapshot or issue change retries.
 		}
 	};
+	// A full refresh always re-sends: a title change or a snapshot may follow a page reload that lost the controller.
+	const refresh = (): void => sendToPage(false);
 
 	return {
 		setSnapshot: (value) => {
@@ -214,6 +227,7 @@ export function createMulticaOpenWithAo(options: MulticaOpenWithAoOptions): Mult
 			return { ok: true };
 		},
 		refresh,
+		refreshIfChanged: () => sendToPage(true),
 		handleActionUrl: (url) => {
 			if (typeof url !== "string" || !url.startsWith(OPEN_WITH_AO_ACTION_PREFIX)) return false;
 			const action = parseOpenWithAoActionUrl(url);
