@@ -327,6 +327,13 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					publishFacts: async () => ({ ok: true }),
 					onChanged: () => () => undefined,
 				},
+				multicaAwareness: {
+					getState: async () => ({ killSwitch: false, masterEnabled: false, maxSockets: 8, tokenStoragePersistent: false, servers: [], issues: [], runs: [], agents: [], runtimes: [], deleted: [], links: [] }),
+					command: async () => ({ ok: false, reason: "invalid_request" }),
+					openIssue: async () => false,
+					onState: () => unsubscribe,
+				},
+				multicaActionLog: { read: async () => [] },
 				keybindings: {
 					get: async () => ({}),
 					set: async (overrides) => overrides,
@@ -966,6 +973,13 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					publishFacts: async () => ({ ok: true }),
 					onChanged: () => () => undefined,
 				},
+				multicaAwareness: {
+					getState: async () => ({ killSwitch: false, masterEnabled: false, maxSockets: 8, tokenStoragePersistent: false, servers: [], issues: [], runs: [], agents: [], runtimes: [], deleted: [], links: [] }),
+					command: async () => ({ ok: false, reason: "invalid_request" }),
+					openIssue: async () => false,
+					onState: () => unsubscribe,
+				},
+				multicaActionLog: { read: async () => [] },
 				keybindings: {
 					get: async () => ({}),
 					set: async (overrides) => overrides,
