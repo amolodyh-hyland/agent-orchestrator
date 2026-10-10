@@ -238,3 +238,17 @@ export function buildStripCards(input: { state: AwarenessState; links: readonly 
 export function isAwarenessActive(state: AwarenessState): boolean {
 	return !state.killSwitch && state.masterEnabled && state.servers.some((server) => server.enabled && server.workspaces.some((workspace) => workspace.watch));
 }
+
+/**
+ * True when what the strip shows may be out of date: a switched-on server is not
+ * live, or a watched workspace is still connecting, reconnecting or only partly
+ * read. The strip says so instead of presenting partial data as current.
+ */
+export function isAwarenessStale(state: AwarenessState): boolean {
+	return state.servers.some(
+		(server) =>
+			server.enabled &&
+			(["connecting", "degraded", "unreachable", "signed_out", "paused", "no_credential"].includes(server.status) ||
+				server.workspaces.some((workspace) => workspace.watch && ["connecting", "authenticating", "backoff"].includes(workspace.state))),
+	);
+}

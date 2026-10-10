@@ -983,6 +983,7 @@
 	"multica.awareness.status.unreachable": "Nicht erreichbar",
 	"multica.awareness.strip.aria": "Multica-Läufe",
 	"multica.awareness.strip.empty": "Derzeit keine Multica-Läufe.",
+	"multica.awareness.strip.stale": "Nicht ganz aktuell: Verbindung wird wiederhergestellt oder erneut versucht",
 	"multica.awareness.strip.title": "Von Multica ausgeführt",
 	"multica.awareness.strip.who": "Wer woran arbeitet",
 	"multica.awareness.title": "Multica-Awareness (nur lesend)",

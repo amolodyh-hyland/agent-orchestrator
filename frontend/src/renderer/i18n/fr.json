@@ -990,6 +990,7 @@
 	"multica.awareness.status.unreachable": "Injoignable",
 	"multica.awareness.strip.aria": "Exécutions Multica",
 	"multica.awareness.strip.empty": "Aucune exécution Multica pour le moment.",
+	"multica.awareness.strip.stale": "Pas tout à fait à jour : reconnexion ou nouvelle tentative en cours",
 	"multica.awareness.strip.title": "Exécuté par Multica",
 	"multica.awareness.strip.who": "Qui travaille sur quoi",
 	"multica.awareness.title": "Surveillance de Multica (lecture seule)",

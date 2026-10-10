@@ -980,6 +980,7 @@
 	"multica.awareness.status.unreachable": "Unreachable",
 	"multica.awareness.strip.aria": "Multica runs",
 	"multica.awareness.strip.empty": "No Multica runs right now.",
+	"multica.awareness.strip.stale": "Not fully up to date: reconnecting or retrying",
 	"multica.awareness.strip.title": "Run by Multica",
 	"multica.awareness.strip.who": "Who is working on what",
 	"multica.awareness.title": "Multica awareness (read-only)",

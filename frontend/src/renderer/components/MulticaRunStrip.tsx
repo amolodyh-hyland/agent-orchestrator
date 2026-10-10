@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
 import type { MessageKey } from "../i18n/messages";
-import { buildStripCards, isAwarenessActive, type StripCard } from "../lib/multica-who";
+import { buildStripCards, isAwarenessActive, isAwarenessStale, type StripCard } from "../lib/multica-who";
 import { formatSince, toneDotClass } from "../lib/multica-awareness-format";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
@@ -72,6 +72,11 @@ export function MulticaRunStrip() {
 			<div className="flex items-center gap-2">
 				<h2 className="text-xs font-medium text-muted-foreground">{t("multica.awareness.strip.title")}</h2>
 				<span className="text-caption text-muted-foreground">{cards.length}</span>
+				{isAwarenessStale(state) ? (
+					<span role="status" className="text-caption text-warning" data-testid="multica-strip-stale">
+						{t("multica.awareness.strip.stale")}
+					</span>
+				) : null}
 				<div className="min-w-0 flex-1" />
 				<Button size="sm" type="button" variant="ghost" onClick={() => setWhoOpen(true)}>
 					<Users className="size-3.5" aria-hidden="true" />

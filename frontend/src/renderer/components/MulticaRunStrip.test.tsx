@@ -117,6 +117,27 @@ describe("MulticaRunStrip", () => {
 		await vi.waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
 	});
 
+	it("says the data may be out of date while a watched workspace is not fully read, and not when everything is live", () => {
+		useMulticaAwarenessStore.setState({ state: awarenessState() });
+		const live = render(<MulticaRunStrip />);
+		expect(screen.queryByTestId("multica-strip-stale")).toBeNull();
+		live.unmount();
+
+		for (const change of [
+			(state: ReturnType<typeof awarenessState>) => void (state.servers[0].workspaces[0].state = "connecting"),
+			(state: ReturnType<typeof awarenessState>) => void (state.servers[0].workspaces[0].state = "backoff"),
+			(state: ReturnType<typeof awarenessState>) => void (state.servers[0].status = "degraded"),
+			(state: ReturnType<typeof awarenessState>) => void (state.servers[0].status = "signed_out"),
+		]) {
+			const state = awarenessState();
+			change(state);
+			useMulticaAwarenessStore.setState({ state });
+			const view = render(<MulticaRunStrip />);
+			expect(screen.getByTestId("multica-strip-stale")).toHaveTextContent("Not fully up to date: reconnecting or retrying");
+			view.unmount();
+		}
+	});
+
 	it("explains an empty strip and offers no badge, banner or notification", () => {
 		useMulticaAwarenessStore.setState({ state: awarenessState({ runs: [] }) });
 		render(<MulticaRunStrip />);

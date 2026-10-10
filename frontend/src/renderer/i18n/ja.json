@@ -983,6 +983,7 @@
 	"multica.awareness.status.unreachable": "接続できません",
 	"multica.awareness.strip.aria": "Multica の実行",
 	"multica.awareness.strip.empty": "現在 Multica の実行はありません。",
+	"multica.awareness.strip.stale": "最新ではない可能性があります: 再接続または再試行中",
 	"multica.awareness.strip.title": "Multica が実行中",
 	"multica.awareness.strip.who": "誰が何に取り組んでいるか",
 	"multica.awareness.title": "Multica の監視(読み取り専用)",

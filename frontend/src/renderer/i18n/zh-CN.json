@@ -983,6 +983,7 @@
 	"multica.awareness.status.unreachable": "无法连接",
 	"multica.awareness.strip.aria": "Multica 运行",
 	"multica.awareness.strip.empty": "目前没有 Multica 运行。",
+	"multica.awareness.strip.stale": "可能不是最新:正在重连或重试",
 	"multica.awareness.strip.title": "由 Multica 运行",
 	"multica.awareness.strip.who": "谁在做什么",
 	"multica.awareness.title": "Multica 监视(只读)",

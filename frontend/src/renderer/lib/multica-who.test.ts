@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { EMPTY_AWARENESS_STATE, type AwarenessRun, type AwarenessState } from "../../shared/multica-awareness";
 import type { MulticaIssueLink } from "../../shared/multica-issue-links";
 import type { WorkspaceSession } from "../types/workspace";
-import { buildStripCards, buildWhoView, isAwarenessActive, isLiveSession, pickRun } from "./multica-who";
+import { buildStripCards, buildWhoView, isAwarenessActive, isAwarenessStale, isLiveSession, pickRun } from "./multica-who";
 
 const NOW = Date.parse("2026-10-10T12:00:00Z");
 const SK = "cloud";
@@ -181,5 +181,32 @@ describe("buildStripCards", () => {
 	it("picks the attention run over a running one", () => {
 		const picked = pickRun([run({ id: "a" }), run({ id: "b", status: "failed", endedAt: "2026-10-10T11:59:00Z" })], NOW);
 		expect(picked?.run.id).toBe("b");
+	});
+});
+
+describe("isAwarenessStale", () => {
+	it("is false for a live server with live workspaces and for servers that are off", () => {
+		expect(isAwarenessStale(state())).toBe(false);
+		const off = state();
+		off.servers[0].enabled = false;
+		off.servers[0].status = "off";
+		expect(isAwarenessStale(off)).toBe(false);
+	});
+
+	it("is true for a server that is not live or a watched workspace that is not fully read", () => {
+		for (const status of ["connecting", "degraded", "unreachable", "signed_out", "paused", "no_credential"] as const) {
+			const s = state();
+			s.servers[0].status = status;
+			expect(isAwarenessStale(s), status).toBe(true);
+		}
+		for (const workspaceState of ["connecting", "authenticating", "backoff"] as const) {
+			const s = state();
+			s.servers[0].workspaces[0].state = workspaceState;
+			expect(isAwarenessStale(s), workspaceState).toBe(true);
+		}
+		const idle = state();
+		idle.servers[0].workspaces[0].watch = false;
+		idle.servers[0].workspaces[0].state = "idle";
+		expect(isAwarenessStale(idle)).toBe(false);
 	});
 });

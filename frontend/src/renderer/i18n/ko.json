@@ -983,6 +983,7 @@
 	"multica.awareness.status.unreachable": "연결할 수 없음",
 	"multica.awareness.strip.aria": "Multica 실행",
 	"multica.awareness.strip.empty": "현재 Multica 실행이 없습니다.",
+	"multica.awareness.strip.stale": "최신 상태가 아닐 수 있음: 다시 연결하거나 재시도 중",
 	"multica.awareness.strip.title": "Multica가 실행",
 	"multica.awareness.strip.who": "누가 무엇을 하고 있는지",
 	"multica.awareness.title": "Multica 감시(읽기 전용)",
