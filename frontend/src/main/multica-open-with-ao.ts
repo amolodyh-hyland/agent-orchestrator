@@ -7,6 +7,8 @@ import {
 	isOpenWithAoSnapshot,
 	parseOpenWithAoActionUrl,
 	type OpenWithAoSnapshot,
+	type OpenWithAoSyncAction,
+	type OpenWithAoSyncInput,
 } from "../shared/multica-open-with-ao";
 import { buildOpenWithAoRemoveScript, buildOpenWithAoScript } from "./multica-open-with-ao-script";
 import type { MulticaViewHost } from "./multica-view-host";
@@ -17,7 +19,11 @@ const WORKSPACE_SLUG_PATTERN = /^[a-z0-9][a-z0-9_-]*$/i;
 export type MulticaOpenWithAoOptions = {
 	getHost: () => Pick<MulticaViewHost, "runInAoWorld" | "evaluateInPage"> | undefined;
 	getCurrentIssue: () => { identifier: string; title: string } | null;
-	getLinks: () => ReadonlyArray<{ sessionId: string; issueIdentifier: string; projectId: string }>;
+	getLinks: () => ReadonlyArray<{ sessionId: string; issueIdentifier: string; projectId: string; workspaceSlug?: string }>;
+	/** The status-sync state of the links, shown as a row under each linked session. Absent: no sync rows. */
+	getSync?: () => OpenWithAoSyncInput | undefined;
+	/** The user clicked a sync row (turn on, turn off, resume) for a link of the current issue. */
+	onSyncAction?: (action: { syncAction: OpenWithAoSyncAction; sessionId: string; workspaceSlug: string; issueIdentifier: string }) => void;
 	addLink: (link: { sessionId: string; projectId: string; workspaceSlug: string; issueIdentifier: string }) => Promise<boolean>;
 	openSession: (target: { projectId: string; sessionId: string }) => void;
 	requestNewTask: (projectId: string) => void;
@@ -160,7 +166,7 @@ export function createMulticaOpenWithAo(options: MulticaOpenWithAoOptions): Mult
 				host.runInAoWorld(buildOpenWithAoRemoveScript());
 				return;
 			}
-			const payload = buildOpenWithAoPagePayload({ snapshot, links: options.getLinks(), issue, nonce });
+			const payload = buildOpenWithAoPagePayload({ snapshot, links: options.getLinks(), issue, nonce, sync: options.getSync?.() });
 			host.runInAoWorld(buildOpenWithAoScript(payload));
 		} catch {
 			// Page refreshes are best effort; a subsequent snapshot or issue change retries.
@@ -189,6 +195,28 @@ export function createMulticaOpenWithAo(options: MulticaOpenWithAoOptions): Mult
 
 				if (action.kind === "new-task") {
 					if (options.getCurrentIssue() !== null) options.requestNewTask(action.projectId);
+					return true;
+				}
+
+				if (action.kind === "sync") {
+					// Only for a worker of this project that is linked to the issue on screen.
+					const issue = options.getCurrentIssue();
+					if (issue === null || !project.sessions.some((candidate) => candidate.id === action.sessionId)) return true;
+					const link = options
+						.getLinks()
+						.find(
+							(candidate) =>
+								candidate.sessionId === action.sessionId &&
+								candidate.projectId === action.projectId &&
+								candidate.issueIdentifier === issue.identifier,
+						);
+					if (link?.workspaceSlug === undefined) return true;
+					options.onSyncAction?.({
+						syncAction: action.syncAction,
+						sessionId: link.sessionId,
+						workspaceSlug: link.workspaceSlug,
+						issueIdentifier: link.issueIdentifier,
+					});
 					return true;
 				}
 

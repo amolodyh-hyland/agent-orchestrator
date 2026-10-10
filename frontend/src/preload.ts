@@ -93,6 +93,21 @@ import {
 	type OpenWithAoPublishResult,
 	type OpenWithAoSnapshot,
 } from "./shared/multica-open-with-ao";
+import {
+	MULTICA_SYNC_CHANGED_CHANNEL,
+	MULTICA_SYNC_GET_STATE_CHANNEL,
+	MULTICA_SYNC_PUBLISH_FACTS_CHANNEL,
+	MULTICA_SYNC_REOPEN_CHANNEL,
+	MULTICA_SYNC_RESUME_CHANNEL,
+	MULTICA_SYNC_SET_LINK_CHANNEL,
+	MULTICA_SYNC_SET_SETTINGS_CHANNEL,
+	MULTICA_SYNC_SYNC_NOW_CHANNEL,
+	type MulticaStatusSyncBridge,
+	type MulticaSyncFacts,
+	type MulticaSyncLinkRef,
+	type MulticaSyncSettingsPatch,
+	type MulticaSyncSnapshot,
+} from "./shared/multica-status-sync";
 import type { UpdateCheckOptions } from "./main/auto-updater";
 import type { FeatureBuild } from "./main/feature-builds";
 import {
@@ -750,6 +765,22 @@ const api = {
 		publish: (snapshot: OpenWithAoSnapshot) =>
 			ipcRenderer.invoke(MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL, snapshot) as Promise<OpenWithAoPublishResult>,
 	} satisfies AoMulticaOpenWithAoBridge,
+	multicaSync: {
+		getState: () => ipcRenderer.invoke(MULTICA_SYNC_GET_STATE_CHANNEL) as Promise<MulticaSyncSnapshot>,
+		setSettings: (patch: MulticaSyncSettingsPatch) => ipcRenderer.invoke(MULTICA_SYNC_SET_SETTINGS_CHANNEL, patch) as Promise<MulticaSyncSnapshot>,
+		setLink: (request: MulticaSyncLinkRef & { enabled: boolean }) => ipcRenderer.invoke(MULTICA_SYNC_SET_LINK_CHANNEL, request) as Promise<MulticaSyncSnapshot>,
+		resume: (request: MulticaSyncLinkRef) => ipcRenderer.invoke(MULTICA_SYNC_RESUME_CHANNEL, request) as Promise<MulticaSyncSnapshot>,
+		reopen: (request: MulticaSyncLinkRef & { confirmed: true }) => ipcRenderer.invoke(MULTICA_SYNC_REOPEN_CHANNEL, request) as Promise<MulticaSyncSnapshot>,
+		syncNow: (request: MulticaSyncLinkRef) => ipcRenderer.invoke(MULTICA_SYNC_SYNC_NOW_CHANNEL, request) as Promise<MulticaSyncSnapshot>,
+		publishFacts: (facts: MulticaSyncFacts) => ipcRenderer.invoke(MULTICA_SYNC_PUBLISH_FACTS_CHANNEL, facts) as Promise<{ ok: boolean }>,
+		onChanged: (listener: (snapshot: MulticaSyncSnapshot) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, snapshot: MulticaSyncSnapshot) => listener(snapshot);
+			ipcRenderer.on(MULTICA_SYNC_CHANGED_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(MULTICA_SYNC_CHANGED_CHANNEL, wrapped);
+			};
+		},
+	} satisfies MulticaStatusSyncBridge,
 	keybindings: {
 		get: () => ipcRenderer.invoke("keybindings:get") as Promise<KeybindingOverrides>,
 		set: (overrides: KeybindingOverrides) =>

@@ -1,4 +1,6 @@
 import type { AppShortcutId, ShortcutCategory } from "../../shared/shortcuts";
+import type { MulticaSyncReason, MulticaSyncState } from "../../shared/multica-status-sync";
+import type { MulticaStatusCategory } from "../../shared/multica-status-writer";
 import type { components } from "../../api/schema";
 import type { MessageKey } from "./messages";
 
@@ -50,4 +52,45 @@ export const agentSwitchErrorLabelKeys: Record<AgentSwitchErrorCode, MessageKey>
 	switch_failed: "switchAgent.error.switchFailed",
 	target_start_unconfirmed: "switchAgent.error.targetStartUnconfirmed",
 	source_restore_unconfirmed: "switchAgent.sourceRecovery.description",
+};
+
+export const multicaSyncStateKeys: Record<MulticaSyncState, MessageKey> = {
+	off: "multica.sync.state.off",
+	synced: "multica.sync.state.synced",
+	pending: "multica.sync.state.pending",
+	paused: "multica.sync.state.paused",
+	refused: "multica.sync.state.refused",
+	error: "multica.sync.state.error",
+};
+
+export const multicaSyncReasonKeys: Record<MulticaSyncReason, MessageKey> = {
+	master_off: "multica.sync.reason.master_off",
+	kill_switch: "multica.sync.reason.kill_switch",
+	changed_in_multica: "multica.sync.reason.changed_in_multica",
+	closed_in_multica: "multica.sync.reason.closed_in_multica",
+	blocked_in_multica: "multica.sync.reason.blocked_in_multica",
+	driven_by_multica: "multica.sync.reason.driven_by_multica",
+	triage: "multica.sync.reason.triage",
+	identity_changed: "multica.sync.reason.identity_changed",
+	would_start_run: "multica.sync.reason.would_start_run",
+	secondary_link: "multica.sync.reason.secondary_link",
+	sub_issue_parent: "multica.sync.reason.sub_issue_parent",
+	signed_out: "multica.sync.reason.signed_out",
+	unavailable: "multica.sync.reason.unavailable",
+	unreachable: "multica.sync.reason.unreachable",
+	no_access: "multica.sync.reason.no_access",
+	orphaned: "multica.sync.reason.orphaned",
+	rate_limited: "multica.sync.reason.rate_limited",
+	ao_offline: "multica.sync.reason.ao_offline",
+};
+
+/** The seven built-in Multica statuses; a custom status has no entry and is shown by its own name. */
+export const multicaSyncStatusKeys: Record<MulticaStatusCategory, MessageKey> = {
+	backlog: "multica.sync.status.backlog",
+	todo: "multica.sync.status.todo",
+	in_progress: "multica.sync.status.in_progress",
+	in_review: "multica.sync.status.in_review",
+	done: "multica.sync.status.done",
+	blocked: "multica.sync.status.blocked",
+	cancelled: "multica.sync.status.cancelled",
 };

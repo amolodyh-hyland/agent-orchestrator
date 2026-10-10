@@ -1,6 +1,7 @@
 import type { AoBridge } from "../../preload";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
 import { DEFAULT_MULTICA_SETTINGS } from "../../shared/multica";
+import { EMPTY_MULTICA_SYNC_SNAPSHOT } from "../../shared/multica-status-sync";
 export type { FeatureBuild } from "../../main/feature-builds";
 
 
@@ -291,6 +292,16 @@ export const aoBridge: AoBridge =
 		},
 		multicaSend: { onRequest: () => () => undefined },
 		multicaOpenWithAo: { publish: async () => ({ ok: false }) },
+		multicaSync: {
+			getState: async () => EMPTY_MULTICA_SYNC_SNAPSHOT,
+			setSettings: async () => EMPTY_MULTICA_SYNC_SNAPSHOT,
+			setLink: async () => EMPTY_MULTICA_SYNC_SNAPSHOT,
+			resume: async () => EMPTY_MULTICA_SYNC_SNAPSHOT,
+			reopen: async () => EMPTY_MULTICA_SYNC_SNAPSHOT,
+			syncNow: async () => EMPTY_MULTICA_SYNC_SNAPSHOT,
+			publishFacts: async () => ({ ok: false }),
+			onChanged: () => () => undefined,
+		},
 		keybindings: {
 			get: async () => ({}),
 			set: async (overrides) => overrides,

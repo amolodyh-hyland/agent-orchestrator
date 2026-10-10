@@ -362,6 +362,16 @@ if (typeof window !== "undefined") {
 		},
 		multicaSend: { onRequest: vi.fn(() => () => undefined) },
 		multicaOpenWithAo: { publish: vi.fn(async () => ({ ok: true })) },
+		multicaSync: {
+			getState: vi.fn(async () => ({ settings: { enabled: false, moveOutOfBacklog: false }, killSwitch: false, links: [] })),
+			setSettings: vi.fn(async () => ({ settings: { enabled: false, moveOutOfBacklog: false }, killSwitch: false, links: [] })),
+			setLink: vi.fn(async () => ({ settings: { enabled: false, moveOutOfBacklog: false }, killSwitch: false, links: [] })),
+			resume: vi.fn(async () => ({ settings: { enabled: false, moveOutOfBacklog: false }, killSwitch: false, links: [] })),
+			reopen: vi.fn(async () => ({ settings: { enabled: false, moveOutOfBacklog: false }, killSwitch: false, links: [] })),
+			syncNow: vi.fn(async () => ({ settings: { enabled: false, moveOutOfBacklog: false }, killSwitch: false, links: [] })),
+			publishFacts: vi.fn(async () => ({ ok: true })),
+			onChanged: vi.fn(() => () => undefined),
+		},
 		keybindings: {
 			get: async () => ({}),
 			set: async (overrides) => overrides,
