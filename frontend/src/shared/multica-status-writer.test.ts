@@ -179,7 +179,7 @@ describe("decideStatusWrite", () => {
 		expect(decide({ current: issue({ status: "todo", category: "todo" }) })).toEqual({ action: "write", status: "in_progress", fromBacklog: false });
 	});
 
-	it("row 14 and decision Q1: moves an issue out of backlog, and says so", () => {
+	it("decision Q1: moves an issue out of backlog, and says so", () => {
 		expect(decide({ current: issue({ status: "backlog", category: "backlog" }) })).toEqual({ action: "write", status: "in_progress", fromBacklog: true });
 	});
 

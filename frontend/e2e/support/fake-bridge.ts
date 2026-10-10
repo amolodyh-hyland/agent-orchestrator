@@ -317,6 +317,16 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				},
 				multicaSend: { onRequest: () => unsubscribe },
 				multicaOpenWithAo: { publish: async () => ({ ok: true }) },
+				multicaSync: {
+					getState: async () => ({ settings: { enabled: false, moveOutOfBacklog: true }, killSwitch: false, links: [] }),
+					setSettings: async () => ({ settings: { enabled: false, moveOutOfBacklog: true }, killSwitch: false, links: [] }),
+					setLink: async () => ({ settings: { enabled: false, moveOutOfBacklog: true }, killSwitch: false, links: [] }),
+					resume: async () => ({ settings: { enabled: false, moveOutOfBacklog: true }, killSwitch: false, links: [] }),
+					reopen: async () => ({ settings: { enabled: false, moveOutOfBacklog: true }, killSwitch: false, links: [] }),
+					syncNow: async () => ({ settings: { enabled: false, moveOutOfBacklog: true }, killSwitch: false, links: [] }),
+					publishFacts: async () => ({ ok: true }),
+					onChanged: () => () => undefined,
+				},
 				keybindings: {
 					get: async () => ({}),
 					set: async (overrides) => overrides,
@@ -946,6 +956,16 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				},
 				multicaSend: { onRequest: () => unsubscribe },
 				multicaOpenWithAo: { publish: async () => ({ ok: true }) },
+				multicaSync: {
+					getState: async () => ({ settings: { enabled: false, moveOutOfBacklog: true }, killSwitch: false, links: [] }),
+					setSettings: async () => ({ settings: { enabled: false, moveOutOfBacklog: true }, killSwitch: false, links: [] }),
+					setLink: async () => ({ settings: { enabled: false, moveOutOfBacklog: true }, killSwitch: false, links: [] }),
+					resume: async () => ({ settings: { enabled: false, moveOutOfBacklog: true }, killSwitch: false, links: [] }),
+					reopen: async () => ({ settings: { enabled: false, moveOutOfBacklog: true }, killSwitch: false, links: [] }),
+					syncNow: async () => ({ settings: { enabled: false, moveOutOfBacklog: true }, killSwitch: false, links: [] }),
+					publishFacts: async () => ({ ok: true }),
+					onChanged: () => () => undefined,
+				},
 				keybindings: {
 					get: async () => ({}),
 					set: async (overrides) => overrides,

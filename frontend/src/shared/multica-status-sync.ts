@@ -30,7 +30,7 @@ export function isMulticaSyncKilled(env: Record<string, string | undefined>): bo
 export type MulticaSyncSettings = {
 	/** Master switch. With it off no code path writes to Multica. */
 	enabled: boolean;
-	/** Decision Q1: starting a session on a Backlog issue moves it to In Progress. */
+	/** Starting a session on a Backlog issue moves it to In Progress (answer Q1 in the docs). */
 	moveOutOfBacklog: boolean;
 };
 

@@ -3,7 +3,7 @@
 // acts on the answer, so every rule here is unit-testable.
 //
 // Two steps. `mapSessionToTarget` / `aggregateTargets` turn AO's delivery facts
-// into the status AO would like the issue to show (BASE design table 1.2).
+// into the status AO would like the issue to show (the mapping table in docs/multica-desktop-embed.md).
 // `decideStatusWrite` compares that with what Multica currently shows and says
 // whether to write, stay quiet, pause for this issue, or refuse.
 
@@ -56,7 +56,7 @@ function activityTarget(facts: SyncSessionFacts): SessionTarget {
 			return { target: null, row: 4 };
 		case "waiting_input":
 		case "blocked":
-			// Multica's `blocked` means an external dependency; AO never writes it (decision D11).
+			// Multica's `blocked` means an external dependency; AO never writes it.
 			return { target: null, row: 5 };
 		default:
 			return { target: null, row: 6 };
@@ -180,9 +180,9 @@ export type DecideStatusWriteInput = {
 	target: MulticaWritableStatus | null;
 	current: MulticaIssueObservation;
 	lastKnown: LastKnownStatus | null;
-	/** Decision Q1: starting a session on a Backlog issue moves it forward. */
+	/** Starting a session on a Backlog issue moves it forward (answer Q1 in the docs). */
 	moveOutOfBacklog: boolean;
-	/** The user confirmed reopening a closed or blocked issue (decision D12); consumed by one write. */
+	/** The user confirmed reopening a closed or blocked issue; consumed by one write. */
 	reopenConfirmed: boolean;
 };
 

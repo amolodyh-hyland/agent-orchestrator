@@ -249,7 +249,7 @@ describe("multica status sync", () => {
 			expect(fake.requests).toHaveLength(0);
 		});
 
-		it("row 14 and Q1: starting a session on a Backlog issue moves it forward, after previewing the run trigger", async () => {
+		it("Q1: starting a session on a Backlog issue moves it forward, after previewing the run trigger", async () => {
 			const issue = fake.addIssue({ identifier: "MUL-1", status: "backlog" });
 			const sync = start();
 			sync.setFacts({ stale: false, sessions: [working()] });
