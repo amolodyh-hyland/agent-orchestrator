@@ -326,7 +326,7 @@ holds the rules and `multica-status-writer.test.ts` has a test per row.
 | 13 | session terminated, every PR merged | `done` |
 | 14 | issue is `done` or `cancelled` (or `blocked`) and AO would write something | paused "closed in Multica"; **Reopen** writes once, only after the user confirms (D12) |
 | 15 | several enabled links to one issue | the most actionable live session decides, by AO's own board ranking; ended sessions only count when nothing is live, and then only to carry a merge to `done` |
-| 16 | issue assigned to a Multica agent or squad | nothing: refused, shown as "Driven by Multica". **Triage is not covered today**, see below |
+| 16 | issue assigned to a Multica agent or squad | nothing: refused, shown as "Driven by Multica". **Triage is not covered today**, see below. A sub-issue whose parent is owned by an agent or squad (or cannot be read) is refused too, see "Sub-issues" |
 | 17 | Multica shows a status AO did not write or agree with | paused "changed in Multica" |
 
 "Forward only" is a rule on top of the rows: a status behind the one Multica shows is never written (after AO
@@ -354,14 +354,27 @@ wrote `in_review`, a later round of CI fixes does not move the issue back to `in
 ### Safety rules
 
 - **Allow-list.** `src/main/multica-issue-api.ts` builds every request from validated fields and refuses
-  anything else: `GET /api/issues/{identifier}`, `PUT /api/issues/{id}` with exactly `status`,
-  `expected_revision` and `suppress_run`, and `POST /api/issues/preview-trigger`. The status must be one of
+  anything else: `GET /api/issues/{identifier}`, `GET /api/issues/{id}` (only to read the parent of a
+  sub-issue), `PUT /api/issues/{id}` with exactly `status`, `expected_revision` and `suppress_run`, and
+  `POST /api/issues/preview-trigger`. The status must be one of
   the three writable ones. A test fails if any other method, path or body field can be produced, or if
   `assignee_*`, `backlog`, `todo`, `blocked` or `cancelled` can appear in a write.
-- **`suppress_run: true` on every status write.** Multica's `PUT /api/issues/{id}` starts an agent run for
-  some writes (the only status write that can is `backlog` to an active status on an agent-assigned issue);
-  `suppress_run` applies the change without starting one, whatever the assignee. A fake Multica server in
-  the tests counts any write that would have started a run: it stays at zero.
+- **`suppress_run: true` on every status write.** Multica's `PUT /api/issues/{id}` can start an agent run for
+  the written issue itself (the only status write that can is `backlog` to an active status on an
+  agent-assigned issue); `suppress_run` applies the change without starting that run, whatever the assignee.
+  **It does not make a write inert.** After any status change Multica always runs the parent's sub-issue rules
+  (`processChildEvents`: the child-done rule and people's sub-issue conditions), see the next rule. Other
+  status-triggered automations in Multica (issue conditions and rules) are not modelled either. The fake
+  Multica server counts runs for the written issue (`runsStarted`, stays at zero) and parent wake-ups
+  (`parentWakes`).
+- **Sub-issues.** Finishing a sub-issue (or any status change on it) runs the parent's rules, which wake the
+  parent's assignee: an agent gets a run, a squad its leader, a member an inbox notification, and `suppress_run`
+  does not cover it. Writing a status is what a person clicking Done does too, but AO does it automatically. So
+  when the issue has a `parent_issue_id`, and AO is about to write, it reads the parent first (the one extra
+  allow-listed `GET`). If the parent is owned by a Multica agent or squad, or cannot be read, AO does not write
+  and the link shows "Sub-issue: could wake the parent's agent" (refused, `sub_issue_parent`). A parent
+  owned by a member, or by nobody, is written as for a person (the member gets the usual notification). A
+  transient read failure is retried with backoff. Nothing is read when there is nothing to write.
 - **Row 16, and why.** AO refuses to write when the assignee is a Multica agent or squad because **an agent
   owns that status**, and Multica itself resets `in_progress` to `todo` after a failed run, not because the
   write would start a run (`suppress_run` covers that).
@@ -421,7 +434,7 @@ wrote `in_review`, a later round of CI fixes does not move the issue back to `in
 |---|---|
 | off | link off; master switch off; `AO_MULTICA_SYNC=0` |
 | paused | changed in Multica; closed in Multica; blocked in Multica |
-| refused | driven by Multica (agent or squad); in Triage (only if Multica ever exposes the field); identifier now names another issue; would start a Multica run; secondary link |
+| refused | driven by Multica (agent or squad); sub-issue whose parent an agent or squad owns, or that AO cannot read; in Triage (only if Multica ever exposes the field); identifier now names another issue; would start a Multica run; secondary link |
 | error | signed out; Multica view not available; unreachable; no access (403); issue not found (404); rate limited; AO offline (the daemon feed is down, nothing is written) |
 
 ### Storage
@@ -437,7 +450,9 @@ Issue links move to version 2 (see [Issue links](#issue-links)).
 - After a write whose answer is lost (timeout, app quit), AO has recorded its intent (`intent` in `multica-sync-state.json`) and recognises its own write at the next read instead of reading it as a change made in Multica.
 - Not verified live: that the embedded Multica view stays loaded and signed in while hidden (the engine waits and
   retries with "Open Multica to sync" when it is not); real PR, CI and review transitions; Multica Cloud;
-  Windows and Linux; a packaged build; a Multica older than the one with `suppress_run`.
+  Windows and Linux; a packaged build; a Multica older than the one with `suppress_run`. Not modelled, so not
+  covered: any other automation Multica runs after a status change (issue conditions and rules, parent
+  rules beyond the parent's own assignee, notifications to subscribers).
 - Not built: inbound changes (Multica to AO), comments, the PR link carrier beyond the title hint, a custom-status
   prompt (Q10), an action log (only the hook), a drift check for the API routes (the existing
   `check:multica-bridge` covers Multica's preload channels only; the routes and field names used here are

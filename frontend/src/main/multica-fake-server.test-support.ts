@@ -42,8 +42,12 @@ export type FakeMulticaServer = {
 	/** Requests that were neither an issue read, a status write nor a trigger preview. Must stay empty. */
 	unexpected: FakeRequest[];
 	issues: Map<string, FakeIssue>;
-	/** Writes that would have started a Multica agent run. */
+	/** Writes that would have started a Multica agent run for the written issue itself. */
 	runsStarted: number;
+	/** Status writes on a sub-issue whose parent is owned by an agent or squad: Multica's child rules wake that parent whatever `suppress_run` says. */
+	parentWakes: number;
+	/** Status writes on a sub-issue whose parent belongs to a member (an inbox notification, as for a human). */
+	parentNotifications: number;
 	addIssue: (issue: Partial<FakeIssue> & { identifier: string }) => FakeIssue;
 	/** Runs once, just before the next status write is processed (to stage a concurrent change by a person). */
 	beforeNextPut: (action: (issue: FakeIssue) => void) => void;
@@ -82,7 +86,7 @@ export async function startFakeMulticaServer(options: { token?: string } = {}): 
 	const forbidden = new Set<string>();
 	const failures: Array<{ method?: string; pathPrefix?: string; failure: ForcedFailure; times: number }> = [];
 	const beforePut: Array<(issue: FakeIssue) => void> = [];
-	const state = { runsStarted: 0 };
+	const state = { runsStarted: 0, parentWakes: 0, parentNotifications: 0 };
 
 	const wouldStartRun = (issue: FakeIssue, nextStatus: string): boolean =>
 		(issue.assignee_type === "agent" || issue.assignee_type === "squad") &&
@@ -170,6 +174,10 @@ export async function startFakeMulticaServer(options: { token?: string } = {}): 
 					? body.status
 					: found.status_category;
 				found.revision += 1;
+				// Multica runs the parent's sub-issue rules after any status change; suppress_run does not cover them.
+				const parent = found.parent_issue_id ? issues.get(found.parent_issue_id) : undefined;
+				if (parent?.assignee_type === "agent" || parent?.assignee_type === "squad") state.parentWakes += 1;
+				else if (parent) state.parentNotifications += 1;
 			}
 			const { hiddenTriage: _hiddenAfter, ...written } = found;
 			send(response, 200, written);
@@ -206,6 +214,12 @@ export async function startFakeMulticaServer(options: { token?: string } = {}): 
 		issues,
 		get runsStarted() {
 			return state.runsStarted;
+		},
+		get parentWakes() {
+			return state.parentWakes;
+		},
+		get parentNotifications() {
+			return state.parentNotifications;
 		},
 		addIssue: (partial) => {
 			issueCounter += 1;

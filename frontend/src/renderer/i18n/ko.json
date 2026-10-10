@@ -876,6 +876,7 @@
 	"multica.sync.reason.identity_changed": "이 식별자가 이제 다른 이슈를 가리킵니다.",
 	"multica.sync.reason.would_start_run": "옮기면 Multica 에이전트 실행이 시작됩니다.",
 	"multica.sync.reason.secondary_link": "이 세션은 처음 연결한 이슈만 업데이트합니다.",
+	"multica.sync.reason.sub_issue_parent": "하위 이슈입니다. 상태를 바꾸면 상위 이슈를 맡은 에이전트가 깨어날 수 있거나, AO가 상위 이슈를 확인하지 못했습니다.",
 	"multica.sync.reason.signed_out": "계속하려면 Multica에 로그인하세요.",
 	"multica.sync.reason.unavailable": "AO가 연결할 수 있도록 Multica를 여세요.",
 	"multica.sync.reason.unreachable": "Multica에 연결할 수 없습니다. 다시 시도합니다.",

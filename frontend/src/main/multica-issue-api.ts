@@ -18,6 +18,7 @@ const MIN_RETRY_AFTER_MS = 1000;
 
 export type MulticaApiRequest =
 	| { kind: "get_issue"; workspaceSlug: string; identifier: string }
+	| { kind: "get_parent"; workspaceSlug: string; issueId: string }
 	| { kind: "put_status"; workspaceSlug: string; issueId: string; status: MulticaWritableStatus; expectedRevision: number }
 	| { kind: "preview_trigger"; workspaceSlug: string; issueId: string; status: MulticaWritableStatus };
 
@@ -26,6 +27,8 @@ export type MulticaApiAllowEntry = { method: "GET" | "PUT" | "POST"; pathTemplat
 /** Exactly what status sync may send. A property test asserts nothing outside it can be built. */
 export const MULTICA_ISSUE_API_ALLOW_LIST: Record<MulticaApiRequest["kind"], MulticaApiAllowEntry> = {
 	get_issue: { method: "GET", pathTemplate: "/api/issues/{identifier}", bodyFields: [] },
+	// Read only, to see who owns the parent of a sub-issue before writing the sub-issue's status.
+	get_parent: { method: "GET", pathTemplate: "/api/issues/{id}", bodyFields: [] },
 	// `suppress_run` is always true: the change applies but never starts a Multica agent run.
 	put_status: { method: "PUT", pathTemplate: "/api/issues/{id}", bodyFields: ["status", "expected_revision", "suppress_run"] },
 	preview_trigger: { method: "POST", pathTemplate: "/api/issues/preview-trigger", bodyFields: ["issue_ids", "status"] },
@@ -61,6 +64,16 @@ export function prepareMulticaRequest(request: MulticaApiRequest): PreparedMulti
 		};
 	}
 	if (typeof request.issueId !== "string" || !UUID.test(request.issueId)) throw new Error("invalid issue id");
+	if (request.kind === "get_parent") {
+		return {
+			kind: request.kind,
+			method: allowed.method,
+			pathTemplate: allowed.pathTemplate,
+			path: `/api/issues/${request.issueId}`,
+			workspaceSlug: request.workspaceSlug,
+			body: null,
+		};
+	}
 	if (!isMulticaWritableStatus(request.status)) throw new Error("status not allowed");
 	if (request.kind === "put_status") {
 		if (!Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 1) throw new Error("invalid revision");
@@ -112,6 +125,7 @@ export function buildMulticaRequestScript(input: { apiUrl: string; request: Prep
 				status_category: text(data.status_category),
 				revision: typeof data.revision === "number" ? data.revision : null,
 				assignee_type: text(data.assignee_type),
+				parent_issue_id: text(data.parent_issue_id),
 				triage_state: data.triage_state === undefined || data.triage_state === null || data.triage_state === false || data.triage_state === "" ? null : true,
 			};
 		};
@@ -202,6 +216,7 @@ function projectIssue(value: unknown): MulticaIssueObservation | null {
 		revision,
 		assigneeType: typeof value.assignee_type === "string" ? value.assignee_type : null,
 		inTriage: value.triage_state === true,
+		parentIssueId: typeof value.parent_issue_id === "string" && UUID.test(value.parent_issue_id) ? value.parent_issue_id : null,
 	};
 }
 
@@ -264,6 +279,8 @@ export function parseMulticaPreviewResponse(raw: unknown): MulticaPreviewResult 
 
 export type MulticaIssueApi = {
 	getIssue: (serverKey: string, input: { workspaceSlug: string; identifier: string }) => Promise<MulticaIssueResult>;
+	/** Reads the parent of a sub-issue by its UUID. */
+	getParent: (serverKey: string, input: { workspaceSlug: string; issueId: string }) => Promise<MulticaIssueResult>;
 	putStatus: (
 		serverKey: string,
 		input: { workspaceSlug: string; issueId: string; status: MulticaWritableStatus; expectedRevision: number },
@@ -310,6 +327,7 @@ export function createMulticaIssueApi(options: MulticaIssueApiOptions): MulticaI
 
 	return {
 		getIssue: async (serverKey, input) => parseMulticaIssueResponse(await run(serverKey, { kind: "get_issue", ...input })),
+		getParent: async (serverKey, input) => parseMulticaIssueResponse(await run(serverKey, { kind: "get_parent", ...input })),
 		putStatus: async (serverKey, input) => parseMulticaIssueResponse(await run(serverKey, { kind: "put_status", ...input })),
 		previewTrigger: async (serverKey, input) => parseMulticaPreviewResponse(await run(serverKey, { kind: "preview_trigger", ...input })),
 	};

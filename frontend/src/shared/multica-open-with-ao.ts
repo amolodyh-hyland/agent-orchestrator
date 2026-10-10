@@ -343,6 +343,7 @@ const SYNC_REASON_LABELS: Record<MulticaSyncReason, string> = {
 	identity_changed: "Issue changed",
 	would_start_run: "Would start a Multica run",
 	secondary_link: "Updates go to the first linked ticket",
+	sub_issue_parent: "Sub-issue: could wake the parent’s agent",
 	signed_out: "Sign in to Multica",
 	unavailable: "Open Multica to sync",
 	unreachable: "Not synced, retrying",

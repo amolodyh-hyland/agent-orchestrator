@@ -461,6 +461,92 @@ describe("multica status sync", () => {
 		});
 	});
 
+	describe("sub-issues: Multica runs the parent's rules after any status change", () => {
+		// suppress_run only skips the run for the written issue; the parent's sub-issue rules (child done, conditions)
+		// run regardless and can wake the parent's agent or squad leader, or notify a member parent.
+		it.each(["agent", "squad"] as const)("refuses to write a sub-issue whose parent is owned by a Multica %s", async (assigneeType) => {
+			const parent = fake.addIssue({ identifier: "MUL-5", status: "in_progress", assignee_type: assigneeType });
+			const child = fake.addIssue({ identifier: "MUL-6", status: "todo", parent_issue_id: parent.id });
+			const sync = start();
+			sync.setFacts({ stale: false, sessions: [working()] });
+			await turnOn(sync, [link({ issueIdentifier: "MUL-6" })]);
+			await settled(engine, "s-1", "MUL-6");
+
+			expect(view(engine, "s-1", "MUL-6")).toMatchObject({ state: "refused", reason: "sub_issue_parent" });
+			expect(put()).toHaveLength(0);
+			expect(fake.issues.get(child.id)?.status).toBe("todo");
+			expect(fake.parentWakes).toBe(0);
+			expect(fake.requests.map((request) => `${request.method} ${request.path.replace(/[0-9a-f-]{36}/, "{id}")}`)).toEqual([
+				"GET /api/issues/MUL-6",
+				"GET /api/issues/{id}",
+			]);
+		});
+
+		it("writes a sub-issue whose parent belongs to a member or to nobody (a notification, as for a human), never waking an agent", async () => {
+			const memberParent = fake.addIssue({ identifier: "MUL-5", status: "in_progress", assignee_type: "member" });
+			const freeParent = fake.addIssue({ identifier: "MUL-7", status: "in_progress", assignee_type: null });
+			const first = fake.addIssue({ identifier: "MUL-6", status: "todo", parent_issue_id: memberParent.id });
+			const second = fake.addIssue({ identifier: "MUL-8", status: "todo", parent_issue_id: freeParent.id });
+			const sync = start();
+			sync.setFacts({ stale: false, sessions: [working("s-1"), working("s-2")] });
+			await turnOn(sync, [link({ sessionId: "s-1", issueIdentifier: "MUL-6" }), link({ sessionId: "s-2", issueIdentifier: "MUL-8" })]);
+			await settled(engine, "s-1", "MUL-6");
+			await settled(engine, "s-2", "MUL-8");
+
+			expect(fake.issues.get(first.id)?.status).toBe("in_progress");
+			expect(fake.issues.get(second.id)?.status).toBe("in_progress");
+			expect(fake.parentWakes).toBe(0);
+			expect(fake.parentNotifications).toBe(2);
+		});
+
+		it("does not write when the parent cannot be read, and does not mistake that for the child being gone", async () => {
+			const parent = fake.addIssue({ identifier: "MUL-5", status: "in_progress", assignee_type: "member" });
+			const child = fake.addIssue({ identifier: "MUL-6", status: "todo", parent_issue_id: parent.id });
+			fake.forbid("MUL-5");
+			const sync = start();
+			sync.setFacts({ stale: false, sessions: [working()] });
+			await turnOn(sync, [link({ issueIdentifier: "MUL-6" })]);
+			await settled(engine, "s-1", "MUL-6");
+
+			expect(view(engine, "s-1", "MUL-6")).toMatchObject({ state: "refused", reason: "sub_issue_parent" });
+			expect(put()).toHaveLength(0);
+			expect(fake.issues.get(child.id)?.status).toBe("todo");
+			expect(store.saved().issues[0].orphaned).toBe(false);
+		});
+
+		it("retries a parent read that failed for a transient reason, then writes", async () => {
+			const parent = fake.addIssue({ identifier: "MUL-5", status: "in_progress", assignee_type: "member" });
+			const child = fake.addIssue({ identifier: "MUL-6", status: "todo", parent_issue_id: parent.id });
+			fake.failNext({ method: "GET", pathPrefix: `/api/issues/${parent.id}` }, { status: 503 });
+			const sync = start();
+			sync.setFacts({ stale: false, sessions: [working()] });
+			await turnOn(sync, [link({ issueIdentifier: "MUL-6" })]);
+			await until(() => expect(view(engine, "s-1", "MUL-6")).toMatchObject({ state: "error", reason: "unreachable" }));
+			await until(() => expect(fake.issues.get(child.id)?.status).toBe("in_progress"));
+		});
+
+		it("does not read the parent when there is nothing to write", async () => {
+			const parent = fake.addIssue({ identifier: "MUL-5", status: "in_progress", assignee_type: "agent" });
+			fake.addIssue({ identifier: "MUL-6", status: "in_review", parent_issue_id: parent.id });
+			const sync = start();
+			sync.setFacts({ stale: false, sessions: [working()] });
+			await turnOn(sync, [link({ issueIdentifier: "MUL-6" })]);
+			await settled(engine, "s-1", "MUL-6");
+
+			expect(view(engine, "s-1", "MUL-6").state).toBe("synced");
+			expect(fake.requests.map((request) => request.method)).toEqual(["GET"]);
+		});
+
+		it("an issue with no parent is written without reading anything else", async () => {
+			fake.addIssue({ identifier: "MUL-1", status: "todo" });
+			const sync = start();
+			sync.setFacts({ stale: false, sessions: [working()] });
+			await turnOn(sync);
+			await settled();
+			expect(fake.requests.map((request) => request.method)).toEqual(["GET", "PUT"]);
+		});
+	});
+
 	describe("compare and set", () => {
 		it("on a revision conflict reads once more and writes again with the new revision", async () => {
 			const issue = fake.addIssue({ identifier: "MUL-1", status: "todo" });
@@ -855,6 +941,7 @@ describe("multica status sync", () => {
 				) as MulticaIssueApi["getIssue"],
 				putStatus: vi.fn(),
 				previewTrigger: vi.fn(),
+				getParent: vi.fn(),
 			};
 			api = stub;
 			const sync = start();
@@ -1378,6 +1465,7 @@ describe("multica status sync", () => {
 
 			expect(fake.unexpected).toEqual([]);
 			expect(fake.runsStarted).toBe(0);
+			expect(fake.parentWakes).toBe(0);
 			expect(fake.issues.get(agent.id)?.status).toBe("backlog");
 			expect(fake.issues.get(done.id)?.status).toBe("done");
 			expect(fake.issues.get(backlog.id)?.status).toBe("done");

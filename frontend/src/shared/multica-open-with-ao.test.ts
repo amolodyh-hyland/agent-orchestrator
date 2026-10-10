@@ -463,7 +463,7 @@ describe("buildOpenWithAoSyncView", () => {
 	});
 
 	it("names every refusal and every error in words", () => {
-		const refusals = ["driven_by_multica", "triage", "identity_changed", "would_start_run", "secondary_link"] as const;
+		const refusals = ["driven_by_multica", "triage", "identity_changed", "would_start_run", "secondary_link", "sub_issue_parent"] as const;
 		for (const reason of refusals) {
 			const row = buildOpenWithAoSyncView(syncView({ state: "refused", reason }), on);
 			expect(row.tone).toBe("pending");

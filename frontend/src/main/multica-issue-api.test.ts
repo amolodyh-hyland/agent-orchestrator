@@ -30,6 +30,17 @@ describe("prepareMulticaRequest allow-list", () => {
 		}
 	});
 
+	it("builds the parent read as a plain GET by UUID, and refuses a bad id", () => {
+		expect(prepareMulticaRequest({ kind: "get_parent", workspaceSlug: "acme", issueId: ISSUE_ID })).toMatchObject({
+			method: "GET",
+			pathTemplate: "/api/issues/{id}",
+			path: `/api/issues/${ISSUE_ID}`,
+			body: null,
+		});
+		expect(() => prepareMulticaRequest({ kind: "get_parent", workspaceSlug: "acme", issueId: "MUL-1" })).toThrow("invalid issue id");
+		expect(() => prepareMulticaRequest({ kind: "get_parent", workspaceSlug: "acme", issueId: "../me" })).toThrow();
+	});
+
 	it("builds the issue read and the trigger preview", () => {
 		expect(prepareMulticaRequest({ kind: "get_issue", workspaceSlug: "acme", identifier: "MUL-12" })).toMatchObject({
 			method: "GET",
@@ -61,6 +72,7 @@ describe("prepareMulticaRequest allow-list", () => {
 			requests.push({ kind: "preview_trigger", workspaceSlug: "acme", issueId: ISSUE_ID, status });
 		}
 		requests.push({ kind: "get_issue", workspaceSlug: "acme", identifier: "MUL-1" });
+		requests.push({ kind: "get_parent", workspaceSlug: "acme", issueId: ISSUE_ID });
 		const allowed = Object.values(MULTICA_ISSUE_API_ALLOW_LIST);
 		for (const request of requests) {
 			const prepared = prepareMulticaRequest(request);
@@ -148,6 +160,7 @@ describe("issue API against a fake Multica server", () => {
 				revision: 4,
 				assigneeType: "member",
 				inTriage: false,
+				parentIssueId: null,
 			},
 		});
 		expect(JSON.stringify(result)).not.toContain("secret");
@@ -182,6 +195,7 @@ describe("issue API against a fake Multica server", () => {
 			status_category: "todo",
 			revision: 4,
 			assignee_type: "member",
+			parent_issue_id: null,
 			triage_state: null,
 		});
 		expect(JSON.parse(rawConflict).body).toEqual({ code: "revision_conflict", actual_revision: 4 });
@@ -203,7 +217,7 @@ describe("issue API against a fake Multica server", () => {
 		expect(Object.keys(fake.requests[0].body ?? {}).sort()).toEqual(["expected_revision", "status", "suppress_run"]);
 	});
 
-	it("starts no Multica run even when the write leaves backlog on an issue an agent owns", async () => {
+	it("starts no Multica run for the written issue itself, even when the write leaves backlog on an issue an agent owns (the parent's sub-issue rules are a separate matter, see the engine tests)", async () => {
 		const issue = fake.addIssue({ identifier: "MUL-2", status: "backlog", assignee_type: "agent" });
 
 		const result = await api.putStatus(SERVER_KEY, { workspaceSlug: "acme", issueId: issue.id, status: "in_progress", expectedRevision: 4 });
@@ -227,6 +241,17 @@ describe("issue API against a fake Multica server", () => {
 
 		expect(await api.previewTrigger(SERVER_KEY, { workspaceSlug: "acme", issueId: agentIssue.id, status: "in_progress" })).toEqual({ ok: true, triggers: 1 });
 		expect(await api.previewTrigger(SERVER_KEY, { workspaceSlug: "acme", issueId: memberIssue.id, status: "in_progress" })).toEqual({ ok: true, triggers: 0 });
+	});
+
+	it("reads the parent of a sub-issue, and projects its parent id", async () => {
+		const parent = fake.addIssue({ identifier: "MUL-5", status: "in_progress", assignee_type: "agent" });
+		fake.addIssue({ identifier: "MUL-6", status: "todo", parent_issue_id: parent.id });
+
+		const child = await api.getIssue(SERVER_KEY, { workspaceSlug: "acme", identifier: "MUL-6" });
+		expect(child).toMatchObject({ ok: true, issue: { parentIssueId: parent.id } });
+		const read = await api.getParent(SERVER_KEY, { workspaceSlug: "acme", issueId: parent.id });
+		expect(read).toMatchObject({ ok: true, issue: { identifier: "MUL-5", assigneeType: "agent", parentIssueId: null } });
+		expect(fake.requests.map((request) => `${request.method} ${request.path}`)).toEqual(["GET /api/issues/MUL-6", `GET /api/issues/${parent.id}`]);
 	});
 
 	it("maps 404, 403, 429, 5xx, triage and other rejections to distinct failures", async () => {

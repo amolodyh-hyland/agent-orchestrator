@@ -876,6 +876,7 @@
 	"multica.sync.reason.identity_changed": "この識別子は別の課題を指すようになりました。",
 	"multica.sync.reason.would_start_run": "移すと Multica のエージェント実行が始まってしまいます。",
 	"multica.sync.reason.secondary_link": "このセッションは、最初にリンクした課題だけを更新します。",
+	"multica.sync.reason.sub_issue_parent": "これはサブ課題です。ステータスを変更すると親課題を担当するエージェントが起動する可能性があるか、AO が親課題を確認できませんでした。",
 	"multica.sync.reason.signed_out": "再開するには Multica にサインインしてください。",
 	"multica.sync.reason.unavailable": "AO が接続できるよう Multica を開いてください。",
 	"multica.sync.reason.unreachable": "Multica に接続できません。再試行します。",

@@ -74,6 +74,7 @@ export const multicaSyncReasonKeys: Record<MulticaSyncReason, MessageKey> = {
 	identity_changed: "multica.sync.reason.identity_changed",
 	would_start_run: "multica.sync.reason.would_start_run",
 	secondary_link: "multica.sync.reason.secondary_link",
+	sub_issue_parent: "multica.sync.reason.sub_issue_parent",
 	signed_out: "multica.sync.reason.signed_out",
 	unavailable: "multica.sync.reason.unavailable",
 	unreachable: "multica.sync.reason.unreachable",

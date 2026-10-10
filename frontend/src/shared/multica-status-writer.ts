@@ -144,6 +144,8 @@ export type MulticaIssueObservation = {
 	assigneeType: string | null;
 	/** True when the issue JSON carries a non-null `triage_state`. Multica's issue JSON has no such field today. */
 	inTriage: boolean;
+	/** The parent issue's UUID when this is a sub-issue. Completing a sub-issue runs the parent's sub-issue rules in Multica. */
+	parentIssueId?: string | null;
 };
 
 /** The status AO last wrote, or last saw and agreed with. Anything else seen later is someone else's change. */

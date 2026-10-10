@@ -883,6 +883,7 @@
 	"multica.sync.reason.identity_changed": "Este identificador ahora corresponde a otra incidencia.",
 	"multica.sync.reason.would_start_run": "Moverla iniciaría una ejecución de un agente de Multica.",
 	"multica.sync.reason.secondary_link": "Esta sesión actualiza la primera incidencia a la que se vinculó.",
+	"multica.sync.reason.sub_issue_parent": "Es una subincidencia: cambiar su estado puede activar al agente responsable de la incidencia principal, o AO no pudo comprobarla.",
 	"multica.sync.reason.signed_out": "Inicia sesión en Multica para continuar.",
 	"multica.sync.reason.unavailable": "Abre Multica para que AO pueda conectarse.",
 	"multica.sync.reason.unreachable": "No se pudo conectar con Multica. Se reintentará.",

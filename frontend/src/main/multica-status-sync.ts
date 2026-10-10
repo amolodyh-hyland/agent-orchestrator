@@ -609,6 +609,24 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 				return;
 			}
 
+			// A sub-issue: Multica runs its parent's sub-issue rules after any status change, and `suppress_run`
+			// does not cover them, so finishing a sub-issue can wake the parent's agent or squad leader.
+			// AO does not write unless it has read the parent and a member (or nobody) owns it.
+			if (issue.parentIssueId) {
+				const parent = await options.api.getParent(group.serverKey, { workspaceSlug: group.workspaceSlug, issueId: issue.parentIssueId });
+				if (!stillValid()) return;
+				if (!parent.ok && (parent.kind === "signed_out" || parent.kind === "rate_limited" || parent.kind === "unavailable" || parent.kind === "timeout" || parent.kind === "server_error")) {
+					failWith(group, runtime, parent);
+					return;
+				}
+				if (!parent.ok || parent.issue.assigneeType === "agent" || parent.issue.assigneeType === "squad") {
+					runtime.refused = "sub_issue_parent";
+					runtime.evaluatedSig = signature;
+					scheduleReconcile(runtime);
+					return;
+				}
+			}
+
 			// A write. Moving out of Backlog first asks Multica whether it would start a run.
 			if (decision.fromBacklog) {
 				const preview = await options.api.previewTrigger(group.serverKey, {

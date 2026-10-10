@@ -883,6 +883,7 @@
 	"multica.sync.reason.identity_changed": "Este identificador agora aponta para outra issue.",
 	"multica.sync.reason.would_start_run": "Movê-la iniciaria uma execução de um agente do Multica.",
 	"multica.sync.reason.secondary_link": "Esta sessão atualiza a primeira issue à qual foi vinculada.",
+	"multica.sync.reason.sub_issue_parent": "Esta é uma subissue: mudar o status dela pode acionar o agente dono da issue pai, ou o AO não conseguiu verificar a issue pai.",
 	"multica.sync.reason.signed_out": "Entre no Multica para continuar.",
 	"multica.sync.reason.unavailable": "Abra o Multica para que o AO consiga acessá-lo.",
 	"multica.sync.reason.unreachable": "Não foi possível acessar o Multica. Tentando novamente.",

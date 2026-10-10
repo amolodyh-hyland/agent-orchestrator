@@ -876,6 +876,7 @@
 	"multica.sync.reason.identity_changed": "此编号现在指向另一个事项。",
 	"multica.sync.reason.would_start_run": "移动它会启动一次 Multica 代理运行。",
 	"multica.sync.reason.secondary_link": "此会话只更新它最先关联的事项。",
+	"multica.sync.reason.sub_issue_parent": "这是一个子事项：更改其状态可能会唤醒父事项的负责代理，或 AO 无法检查父事项。",
 	"multica.sync.reason.signed_out": "请登录 Multica 以继续。",
 	"multica.sync.reason.unavailable": "请打开 Multica，以便 AO 能够连接。",
 	"multica.sync.reason.unreachable": "无法连接 Multica，将重试。",

@@ -121,6 +121,11 @@ describe("MulticaLinkSyncControls", () => {
 		expect(screen.getByText("Sign in to Multica to resume.")).toBeInTheDocument();
 	});
 
+	it("explains a sub-issue refusal", () => {
+		show(snapshot([view({ state: "refused", reason: "sub_issue_parent" })]));
+		expect(screen.getByText(/This is a sub-issue: changing its status can wake the agent that owns the parent/)).toBeInTheDocument();
+	});
+
 	it("resumes a link paused because someone changed the status", async () => {
 		show(snapshot([view({ state: "paused", reason: "changed_in_multica", canResume: true })]));
 

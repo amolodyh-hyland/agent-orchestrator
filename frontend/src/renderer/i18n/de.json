@@ -876,6 +876,7 @@
 	"multica.sync.reason.identity_changed": "Diese Kennung bezeichnet jetzt eine andere Issue.",
 	"multica.sync.reason.would_start_run": "Das Verschieben würde einen Multica-Agentenlauf starten.",
 	"multica.sync.reason.secondary_link": "Diese Sitzung aktualisiert die erste Issue, mit der sie verknüpft wurde.",
+	"multica.sync.reason.sub_issue_parent": "Das ist eine Sub-Issue: Eine Statusänderung kann den Agenten wecken, dem die übergeordnete Issue gehört, oder AO konnte die übergeordnete Issue nicht prüfen.",
 	"multica.sync.reason.signed_out": "Melden Sie sich bei Multica an, um fortzufahren.",
 	"multica.sync.reason.unavailable": "Öffnen Sie Multica, damit AO es erreichen kann.",
 	"multica.sync.reason.unreachable": "Multica ist nicht erreichbar. Neuer Versuch folgt.",

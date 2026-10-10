@@ -55,6 +55,7 @@ export type MulticaSyncReason =
 	| "identity_changed"
 	| "would_start_run"
 	| "secondary_link"
+	| "sub_issue_parent"
 	// error
 	| "signed_out"
 	| "unavailable"

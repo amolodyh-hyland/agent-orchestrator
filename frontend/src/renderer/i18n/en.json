@@ -873,6 +873,7 @@
 	"multica.sync.reason.identity_changed": "This identifier now names a different ticket.",
 	"multica.sync.reason.would_start_run": "Moving it would start a Multica agent run.",
 	"multica.sync.reason.secondary_link": "This session updates the first ticket it was linked to.",
+	"multica.sync.reason.sub_issue_parent": "This is a sub-issue: changing its status can wake the agent that owns the parent, or AO could not check the parent.",
 	"multica.sync.reason.signed_out": "Sign in to Multica to resume.",
 	"multica.sync.reason.unavailable": "Open Multica so AO can reach it.",
 	"multica.sync.reason.unreachable": "Couldn't reach Multica. Retrying.",
