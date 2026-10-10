@@ -137,6 +137,7 @@ async function setup(initial: MulticaIssueLink[] = [], withHost = true) {
 			current = current.map((entry) => (entry.serverKey === undefined ? { ...entry, serverKey } : entry));
 			return [...current];
 		}),
+		recordIssueIds: vi.fn(async () => [...current]),
 	} satisfies MulticaIssueLinkStore;
 	let currentHost: typeof host | undefined = withHost ? host : undefined;
 	const service = createMulticaIssueLinkService({

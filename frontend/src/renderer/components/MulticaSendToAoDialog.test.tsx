@@ -7,6 +7,8 @@ import type { MulticaSendRequest } from "../../shared/multica-send-to-ao";
 import type { AgentInfo } from "../lib/agent-select-options";
 import { CLOUD_PROJECT_KIND, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import { useMulticaLinksStore } from "../stores/multica-links-store";
+import { EMPTY_MULTICA_SYNC_SNAPSHOT } from "../../shared/multica-status-sync";
+import { resetMulticaSyncStoreSubscription, useMulticaSyncStore } from "../stores/multica-sync-store";
 import { MulticaSendToAoDialog } from "./MulticaSendToAoDialog";
 
 const mocks = vi.hoisted(() => ({
@@ -104,6 +106,8 @@ describe("MulticaSendToAoDialog", () => {
 		mocks.navigate.mockReset();
 		mocks.create.mockReset().mockResolvedValue({ ok: true, projectId: "project-two", sessionId: "new-session", linked: true });
 		useMulticaLinksStore.setState({ links: [] });
+		resetMulticaSyncStoreSubscription();
+		useMulticaSyncStore.setState({ snapshot: EMPTY_MULTICA_SYNC_SNAPSHOT });
 		window.localStorage.removeItem("ao.project-history");
 	});
 
@@ -458,5 +462,94 @@ describe("MulticaSendToAoDialog", () => {
 
 		expect(screen.getByText("MUL-456")).toBeInTheDocument();
 		expect(screen.queryByText("Open a Multica issue, then try again.")).not.toBeInTheDocument();
+	});
+
+	describe("Keep this ticket updated", () => {
+		const syncOn = () => {
+			const snapshot = { settings: { enabled: true, moveOutOfBacklog: true }, killSwitch: false, links: [] };
+			window.ao!.multicaSync.getState = vi.fn(async () => snapshot);
+			useMulticaSyncStore.setState({ snapshot });
+		};
+
+		afterEach(() => {
+			vi.mocked(window.ao!.multicaSync.setLink).mockClear();
+		});
+
+		it("is unchecked by default and does not turn the sync on", async () => {
+			syncOn();
+			renderDialog();
+			sendRequest();
+
+			const box = screen.getByRole("checkbox", { name: "Keep this ticket updated" });
+			expect(box).not.toBeChecked();
+			expect(box).toBeEnabled();
+			await userEvent.click(screen.getByRole("button", { name: "Create session" }));
+			await waitFor(() => expect(mocks.navigate).toHaveBeenCalled());
+
+			expect(window.ao!.multicaSync.setLink).not.toHaveBeenCalled();
+		});
+
+		it("turns the sync on for the new link when ticked, once the link exists", async () => {
+			syncOn();
+			renderDialog();
+			sendRequest();
+
+			await userEvent.click(screen.getByRole("checkbox", { name: "Keep this ticket updated" }));
+			await userEvent.click(screen.getByRole("button", { name: "Create session" }));
+			await waitFor(() => expect(mocks.navigate).toHaveBeenCalled());
+
+			expect(window.ao!.multicaSync.setLink).toHaveBeenCalledExactlyOnceWith({
+				sessionId: "new-session",
+				workspaceSlug: "acme",
+				issueIdentifier: "MUL-123",
+				enabled: true,
+			});
+			expect(mocks.create.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(window.ao!.multicaSync.setLink).mock.invocationCallOrder[0]);
+		});
+
+		it("does not turn the sync on when the link could not be saved", async () => {
+			syncOn();
+			mocks.create.mockResolvedValue({ ok: true, projectId: "project-one", sessionId: "unlinked-session", linked: false });
+			renderDialog();
+			sendRequest();
+
+			await userEvent.click(screen.getByRole("checkbox", { name: "Keep this ticket updated" }));
+			await userEvent.click(screen.getByRole("button", { name: "Create session" }));
+			await screen.findByRole("alert");
+
+			expect(window.ao!.multicaSync.setLink).not.toHaveBeenCalled();
+		});
+
+		it("is unchecked again for the next request", async () => {
+			syncOn();
+			renderDialog();
+			sendRequest();
+			await userEvent.click(screen.getByRole("checkbox", { name: "Keep this ticket updated" }));
+			expect(screen.getByRole("checkbox", { name: "Keep this ticket updated" })).toBeChecked();
+
+			sendRequest({ ok: true, issue: { ...issue, issueIdentifier: "MUL-456" } });
+			expect(screen.getByRole("checkbox", { name: "Keep this ticket updated" })).not.toBeChecked();
+		});
+
+		it("is disabled while the master switch is off, with the way to turn it on", async () => {
+			renderDialog();
+			sendRequest();
+
+			const box = screen.getByRole("checkbox", { name: "Keep this ticket updated" });
+			expect(box).toBeDisabled();
+			expect(screen.getByText("Turn on “Update Multica ticket status” in Settings first.")).toBeInTheDocument();
+			await userEvent.click(screen.getByRole("button", { name: "Create session" }));
+			await waitFor(() => expect(mocks.navigate).toHaveBeenCalled());
+			expect(window.ao!.multicaSync.setLink).not.toHaveBeenCalled();
+		});
+
+		it("is disabled while the kill switch is set", () => {
+			const snapshot = { settings: { enabled: true, moveOutOfBacklog: true }, killSwitch: true, links: [] };
+			window.ao!.multicaSync.getState = vi.fn(async () => snapshot);
+			useMulticaSyncStore.setState({ snapshot });
+			renderDialog();
+			sendRequest();
+			expect(screen.getByRole("checkbox", { name: "Keep this ticket updated" })).toBeDisabled();
+		});
 	});
 });
