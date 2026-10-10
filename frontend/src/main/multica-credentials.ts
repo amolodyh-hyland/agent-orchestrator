@@ -9,8 +9,9 @@ import type { MulticaServer } from "../shared/multica";
 // - profile: the token of the server's Multica CLI profile, read at use time
 //   and only after the user consented for that server. Kept in memory only.
 // - pasted: a personal token the user pasted once, encrypted with the OS
-//   keychain-backed store when it is protected, otherwise held in memory for
-//   this run only. Never written as plaintext.
+//   keychain-backed store when it is protected (decrypted only when a
+//   connection resolves it, and never cached), otherwise held in memory for this
+//   run only, because that is then its only home. Never written as plaintext.
 // - page: no token. The page's own sign-in is used through the view host.
 //
 // A token lives only in the main process. It is never returned from an IPC
@@ -101,7 +102,7 @@ type StoredFile = { version: 1; tokens: Record<string, string> };
 
 export function createMulticaCredentials(options: MulticaCredentialsOptions): MulticaCredentials {
 	const file = path.join(options.stateDir, MULTICA_CREDENTIALS_FILE);
-	// Pasted tokens when protected storage is missing; also the cache of decrypted ones.
+	// Pasted tokens when protected storage is missing. Never a cache of decrypted ones.
 	const memory = new Map<string, string>();
 	let queue: Promise<void> = Promise.resolve();
 	const run = <T>(operation: () => Promise<T>): Promise<T> => {
@@ -140,19 +141,22 @@ export function createMulticaCredentials(options: MulticaCredentialsOptions): Mu
 		}
 	}
 
+	/** Decrypts on every call, so the plaintext lives only as long as the caller keeps it. */
 	async function pastedToken(serverKey: string): Promise<string | null> {
-		const cached = memory.get(serverKey);
-		if (cached !== undefined) return cached;
-		if (!options.vault.isProtected()) return null;
+		if (!options.vault.isProtected()) return memory.get(serverKey) ?? null;
 		const stored = (await readStored()).tokens[serverKey];
 		if (typeof stored !== "string") return null;
 		try {
-			const token = normalizeToken(options.vault.decrypt(Buffer.from(stored, "base64")));
-			if (token !== null) memory.set(serverKey, token);
-			return token;
+			return normalizeToken(options.vault.decrypt(Buffer.from(stored, "base64")));
 		} catch {
 			return null;
 		}
+	}
+
+	/** Whether a token is stored, without decrypting it (decrypting can prompt for the keychain). */
+	async function hasStoredToken(serverKey: string): Promise<boolean> {
+		if (!options.vault.isProtected()) return memory.has(serverKey);
+		return typeof (await readStored()).tokens[serverKey] === "string";
 	}
 
 	return {
@@ -176,14 +180,17 @@ export function createMulticaCredentials(options: MulticaCredentialsOptions): Mu
 			run(async () => {
 				const token = normalizeToken(rawToken);
 				if (token === null || serverKey.length === 0) return false;
-				memory.set(serverKey, token);
-				if (!options.vault.isProtected()) return true;
+				if (!options.vault.isProtected()) {
+					memory.set(serverKey, token);
+					return true;
+				}
 				try {
 					const stored = await readStored();
 					stored.tokens[serverKey] = options.vault.encrypt(token).toString("base64");
 					await writeStored(stored);
 				} catch {
-					// The token stays usable for this run; it just does not survive a restart.
+					// Nothing was stored, so there is no token to use: report it rather than pretend.
+					return false;
 				}
 				return true;
 			}),
@@ -200,7 +207,7 @@ export function createMulticaCredentials(options: MulticaCredentialsOptions): Mu
 					// Nothing stored, nothing to clear.
 				}
 			}),
-		hasPasted: (serverKey) => run(async () => (await pastedToken(serverKey)) !== null),
+		hasPasted: (serverKey) => run(() => hasStoredToken(serverKey)),
 		canPersist: () => options.vault.isProtected(),
 	};
 }

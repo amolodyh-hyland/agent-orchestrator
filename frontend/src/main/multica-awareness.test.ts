@@ -57,10 +57,11 @@ async function startFake(token: string, userId: string, port: number): Promise<F
 	return { server, webUrl: `http://127.0.0.1:${port}` };
 }
 
+const decryptSpy = vi.fn((blob: Buffer) => blob.toString().replace(/^enc:/, ""));
 const vault: SecretVault = {
 	isProtected: () => true,
 	encrypt: (plain) => Buffer.from(`enc:${plain}`),
-	decrypt: (blob) => blob.toString().replace(/^enc:/, ""),
+	decrypt: (blob) => decryptSpy(blob),
 };
 
 type Harness = {
@@ -392,6 +393,104 @@ describe("multica awareness service", () => {
 			hold.release();
 			await until(() => live());
 			expect(h.state().runs.find((run) => run.id === "task-1")?.status).toBe("running");
+		});
+	});
+
+	describe("a failed read leaves the workspace degraded, not live", () => {
+		const failureCases: Array<[string, string]> = [
+			["the issues by id", "/api/issues"],
+			["the agents", "/api/agents"],
+			["the runtimes", "/api/runtimes"],
+		];
+		for (const [name, prefix] of failureCases) {
+			it(`does not go live when reading ${name} fails, and recovers on the next try`, async () => {
+				a.server.failNext(prefix, { status: 500 });
+				await connect();
+				await until(() => h.serverState().status === "live");
+				await watch("ws-1");
+				await until(() => a.server.requestsTo(prefix).length >= 1);
+				await settle(120);
+				expect(live()).toBe(false);
+				expect(h.serverState().status).not.toBe("live");
+				// The retry comes after a minute at most, and the workspace then converges.
+				await vi.waitFor(
+					async () => {
+						await h.scheduler.advance(30_000);
+						expect(live()).toBe(true);
+					},
+					{ timeout: 8000, interval: 20 },
+				);
+				expect(h.state().issues.map((issue) => issue.identifier).sort()).toEqual(["MUL-1", "MUL-2"]);
+				expect(h.state().agents.map((agent) => agent.name)).toEqual(["Builder"]);
+			});
+		}
+
+		it("does not go live when the lists of my issues fail", async () => {
+			a.server.failNext("/api/issues", { status: 500, count: 1 });
+			// The first issue call is the by-id batch; fail the next ones as well.
+			a.server.failNext("/api/issues", { status: 500, count: 2 });
+			await connect();
+			await until(() => h.serverState().status === "live");
+			await watch("ws-1");
+			await until(() => a.server.requestsTo("/api/issues").length >= 1);
+			await settle(120);
+			expect(live()).toBe(false);
+			expect(h.state().issues).toEqual([]);
+		});
+	});
+
+	describe("a buffered frame that stops the workspace is not overwritten by live", () => {
+		it("keeps a workspace deleted during the reconcile as gone", async () => {
+			await connect();
+			await until(() => h.serverState().status === "live");
+			const hold = a.server.hold("/api/runtimes");
+			await watch("ws-1");
+			await until(() => hold.reached());
+			await until(() => a.server.liveSockets() === 1);
+			a.server.broadcast("ws-1", { type: "workspace:deleted", payload: { workspace_id: "ws-1" } });
+			await settle(60);
+			hold.release();
+			await until(() => h.serverState().workspaces[0].state === "gone");
+			await settle(100);
+			expect(h.serverState().workspaces[0].state).toBe("gone");
+			expect(h.state().issues).toEqual([]);
+			// No safety reconcile is armed on the stopped watch.
+			const reads = a.server.requestsTo("/api/agent-task-snapshot").length;
+			await h.scheduler.advance(30 * 60_000);
+			await settle(100);
+			expect(a.server.requestsTo("/api/agent-task-snapshot").length).toBe(reads);
+		});
+
+		it("keeps a removed membership as no access", async () => {
+			await connect();
+			await until(() => h.serverState().status === "live");
+			const hold = a.server.hold("/api/runtimes");
+			await watch("ws-1");
+			await until(() => hold.reached());
+			await until(() => a.server.liveSockets() === 1);
+			a.server.broadcast("ws-1", { type: "member:removed", payload: { user_id: "user-a", workspace_id: "ws-1" } });
+			await settle(60);
+			hold.release();
+			await until(() => h.serverState().workspaces[0].state === "no_access");
+			await settle(100);
+			expect(h.serverState().workspaces[0].state).toBe("no_access");
+		});
+	});
+
+	describe("stored tokens are not decrypted until a connection needs them", () => {
+		it("does not decrypt at startup for a server that is off, nor when the master switch is off", async () => {
+			await connect({ master: false });
+			await h.cmd({ type: "setServerEnabled", serverKey: keyA(), enabled: false });
+			decryptSpy.mockClear();
+			await h.rebuild();
+			await settle(80);
+			expect(h.serverState().hasPastedToken).toBe(true);
+			expect(decryptSpy).not.toHaveBeenCalled();
+			// Switching the server and the master on is what makes a connection resolve the token.
+			await h.cmd({ type: "setServerEnabled", serverKey: keyA(), enabled: true });
+			await h.cmd({ type: "setMaster", enabled: true });
+			await until(() => h.serverState().status === "live");
+			expect(decryptSpy).toHaveBeenCalled();
 		});
 	});
 

@@ -123,6 +123,35 @@ describe("pasted credential (T2)", () => {
 		expect(await restarted.hasPasted(local.key)).toBe(false);
 	});
 
+	it("tells whether a token is stored without decrypting it, and decrypts only when it is resolved", async () => {
+		const decrypt = vi.fn((blob: Buffer) => blob.toString().replace(/^enc:/, "").split("").reverse().join(""));
+		const spyVault: SecretVault = { ...vault(), decrypt };
+		const first = createMulticaCredentials({ stateDir: dir, vault: spyVault, readProfileConfig: async () => null });
+		await first.setPasted(local.key, PASTED_TOKEN);
+		decrypt.mockClear();
+
+		// A fresh instance, as after a restart: asking is not decrypting (decrypting can prompt for the keychain).
+		const second = createMulticaCredentials({ stateDir: dir, vault: spyVault, readProfileConfig: async () => null });
+		expect(await second.hasPasted(local.key)).toBe(true);
+		expect(await second.hasPasted(other.key)).toBe(false);
+		expect(decrypt).not.toHaveBeenCalled();
+
+		// Resolving decrypts each time; the plaintext is not kept between connections.
+		expect(await second.resolve(local, "pasted", false)).toEqual({ ok: true, token: PASTED_TOKEN });
+		expect(await second.resolve(local, "pasted", false)).toEqual({ ok: true, token: PASTED_TOKEN });
+		expect(decrypt).toHaveBeenCalledTimes(2);
+	});
+
+	it("reports a token it could not store", async () => {
+		const credentials = createMulticaCredentials({
+			stateDir: path.join(dir, "missing", "not-a-dir-parent"),
+			vault: { ...vault(), encrypt: () => { throw new Error("keychain locked"); } },
+			readProfileConfig: async () => null,
+		});
+		expect(await credentials.setPasted(local.key, PASTED_TOKEN)).toBe(false);
+		expect(await credentials.hasPasted(local.key)).toBe(false);
+	});
+
 	it("clears the token from memory and disk", async () => {
 		const credentials = createMulticaCredentials({ stateDir: dir, vault: vault(), readProfileConfig: async () => null });
 		await credentials.setPasted(local.key, PASTED_TOKEN);

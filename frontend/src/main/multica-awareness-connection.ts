@@ -601,6 +601,8 @@ export function createServerConnection(options: ServerConnectionOptions): Server
 				if (watch.stopped) return;
 				applyOne(watch, frame);
 			}
+			// A buffered frame may have stopped the workspace (deleted, membership removed): do not revive it.
+			if (watch.stopped) return;
 			if (watch.rerun) {
 				watch.rerun = false;
 				fire(runReconcile(watch));
@@ -611,7 +613,8 @@ export function createServerConnection(options: ServerConnectionOptions): Server
 			if (pageMode) schedulePoll(watch, PAGE_POLL_MS);
 		} else {
 			// A failed read leaves the watch degraded; try again no more often than once a minute.
-			setWatchState(watch, watch.transport === "socket" && watch.socket?.state() === "live" ? "live" : "connecting");
+			// Not live: the socket may be up, but the workspace has not been read in full.
+			setWatchState(watch, "connecting");
 			watch.timers.safety = scheduler.setTimeout(() => fire(runReconcile(watch)), DEGRADED_RECONCILE_MS);
 			refreshStatus();
 		}
@@ -641,14 +644,15 @@ export function createServerConnection(options: ServerConnectionOptions): Server
 
 		const agents = await c.agents(ref);
 		if (!alive()) return "failed";
-		if (agents.ok) {
-			replaceAgents(model, watch.workspaceId, listItems(agents.data, "agents").map((raw) => projectAgent(raw, watch.workspaceId)).filter((agent) => agent !== null));
-		} else if (agents.kind === "unauthorized") return "unauthorized";
+		// Every read the reconcile needs must succeed: a half-read workspace is not live, it is degraded and retried.
+		const agentsFailure = failureOutcome(agents);
+		if (agentsFailure) return agentsFailure;
+		replaceAgents(model, watch.workspaceId, listItems(agents.ok ? agents.data : null, "agents").map((raw) => projectAgent(raw, watch.workspaceId)).filter((agent) => agent !== null));
 		const runtimes = await c.runtimes(ref);
 		if (!alive()) return "failed";
-		if (runtimes.ok) {
-			replaceRuntimes(model, watch.workspaceId, listItems(runtimes.data, "runtimes").map((raw) => projectRuntime(raw, watch.workspaceId)).filter((runtime) => runtime !== null));
-		} else if (runtimes.kind === "unauthorized") return "unauthorized";
+		const runtimesFailure = failureOutcome(runtimes);
+		if (runtimesFailure) return runtimesFailure;
+		replaceRuntimes(model, watch.workspaceId, listItems(runtimes.ok ? runtimes.data : null, "runtimes").map((raw) => projectRuntime(raw, watch.workspaceId)).filter((runtime) => runtime !== null));
 
 		// Issues of interest.
 		const fetched = new Map<string, AwarenessIssue>();
@@ -672,7 +676,7 @@ export function createServerConnection(options: ServerConnectionOptions): Server
 			const result = await c.listIssues(ref, { ids: ids.slice(index, index + RECONCILE_PAGE_SIZE), limit: RECONCILE_PAGE_SIZE });
 			if (!alive()) return "failed";
 			const failure = failureOutcome(result);
-			if (failure === "unauthorized") return failure;
+			if (failure) return failure;
 			take(result, "issues");
 		}
 
@@ -684,8 +688,10 @@ export function createServerConnection(options: ServerConnectionOptions): Server
 			if (result.ok) {
 				const issue = projectIssue(result.data, watch.workspaceId);
 				if (issue) fetched.set(issue.id, issue);
-			} else if (result.kind === "unauthorized") return "unauthorized";
-			else if (result.kind === "not_found") {
+			} else if (result.kind !== "not_found") {
+				// Not found means the issue is gone; any other failure leaves the reconcile incomplete.
+				return failureOutcome(result) ?? "failed";
+			} else {
 				for (const held of model.issues.values()) {
 					if (held.workspaceId === watch.workspaceId && held.identifier.toUpperCase() === identifier) {
 						model.deleted.set(held.id, { workspaceId: held.workspaceId, identifier: held.identifier });
@@ -704,7 +710,7 @@ export function createServerConnection(options: ServerConnectionOptions): Server
 				const result = await c.listIssues(ref, { ...query, limit: RECONCILE_PAGE_SIZE, offset: page * RECONCILE_PAGE_SIZE });
 				if (!alive()) return "failed";
 				const failure = failureOutcome(result);
-				if (failure === "unauthorized") return failure;
+				if (failure) return failure;
 				if (!take(result, "issues")) break;
 				const count = listItems(result.ok ? result.data : null, "issues").length;
 				if (count < RECONCILE_PAGE_SIZE) break;
