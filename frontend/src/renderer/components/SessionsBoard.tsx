@@ -52,6 +52,7 @@ import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { useShellMaybe } from "../lib/shell-context";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { ProjectBoardActions } from "./ProjectBoardActions";
+import { MulticaRunStrip } from "./MulticaRunStrip";
 import { useDiagnosticsEnabled, usePressureState, useSessionMemory } from "../hooks/useSessionMemory";
 import { AppMemoryIndicator, toSessionFacts, useHasAppMemory } from "./SessionMemoryPanel";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
@@ -273,6 +274,9 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 					<button type="button" className="shrink-0 rounded-md px-2 py-1 font-medium text-foreground hover:bg-interactive-hover focus-visible:outline-2 focus-visible:outline-ring" onClick={() => shell?.openRemoteProjectSettings(hostId, projectId)}>{t("restoreUnavailable.configureOrchestrator")}</button>
 				</div>
 			) : null}
+
+			{/* Multica awareness hook: a separate strip, never part of the five delivery columns. */}
+			{!hostId && !showWelcome ? <MulticaRunStrip /> : null}
 
 			{/* Reserve only the collapsed archive bar. Expanded archive overlays the
 			    board so lane height (and Needs You scrollbars) stay stable. */}

@@ -270,7 +270,7 @@ export function createMulticaAwareness(options: MulticaAwarenessOptions): Multic
 	};
 
 	function buildState(): AwarenessState {
-		const state: AwarenessState = { ...EMPTY_AWARENESS_STATE, issues: [], runs: [], agents: [], runtimes: [], deleted: [], servers: [] };
+		const state: AwarenessState = { ...EMPTY_AWARENESS_STATE, issues: [], runs: [], agents: [], runtimes: [], deleted: [], servers: [], links: [...linkCache] };
 		state.killSwitch = killSwitch;
 		state.masterEnabled = config.masterEnabled;
 		state.maxSockets = config.maxSockets;

@@ -6,6 +6,7 @@
 // result or error text, work directory, trigger comment or credential field:
 // the projection happens at the parse boundary in the main process.
 
+import type { MulticaIssueLink } from "./multica-issue-links";
 import type { MulticaStatusTone } from "./multica-session-status";
 
 export const MULTICA_AWARENESS_STATE_CHANNEL = "multicaAwareness:state";
@@ -146,6 +147,8 @@ export type AwarenessState = {
 	runtimes: Array<AwarenessRuntime & { serverKey: string }>;
 	/** Issues that were deleted while watched: a link to one of them is orphaned. */
 	deleted: Array<{ serverKey: string; workspaceId: string; identifier: string }>;
+	/** Every stored issue link, all servers, so the views can join sessions to issues of servers other than the selected one. */
+	links: MulticaIssueLink[];
 };
 
 export const EMPTY_AWARENESS_STATE: AwarenessState = {
@@ -159,6 +162,7 @@ export const EMPTY_AWARENESS_STATE: AwarenessState = {
 	agents: [],
 	runtimes: [],
 	deleted: [],
+	links: [],
 };
 
 export type AwarenessCommand =
