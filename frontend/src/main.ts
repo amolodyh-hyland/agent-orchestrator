@@ -200,6 +200,7 @@ import { writeMulticaIpcJail } from "./main/multica-ipc-jail";
 import { createCombinedBadge } from "./main/combined-badge";
 import { createMulticaNotifications, type MulticaNotifications } from "./main/multica-notifications";
 import { getMulticaActionLog } from "./main/multica-action-log";
+import { createSyncAuditSink } from "./main/multica-sync-audit";
 import { createMulticaAwareness, type MulticaAwareness } from "./main/multica-awareness";
 import { createProfileConfigReader, createSafeStorageVault } from "./main/multica-awareness-env";
 import { createMulticaCredentials } from "./main/multica-credentials";
@@ -880,6 +881,8 @@ async function createWindowInternal(): Promise<void> {
 		api: createMulticaIssueApi({ getHost: () => multicaViewHost ?? undefined }),
 		store: createMulticaSyncStateStore(browserProfileStateDir()),
 		recordIssueIds: (target, ids) => multicaIssueLinkService?.backfillIssueIds(target, ids) ?? Promise.resolve(),
+		// Every write attempt, pause and resume lands in the same action log as awareness (one instance per state directory).
+		record: createSyncAuditSink(getMulticaActionLog(browserProfileStateDir())),
 	});
 	multicaStatusSyncIpc = registerMulticaStatusSyncIpc({ ipcMain, shellWebContents, engine: multicaStatusSync });
 	// Registered before the renderer loads: the shell queries its state on mount.
