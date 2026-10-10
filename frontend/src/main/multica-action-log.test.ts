@@ -175,6 +175,28 @@ describe("multica action log record()", () => {
 		expect(await log.read({ limit: 1 })).toHaveLength(1);
 	});
 
+	it("keeps every line whole when many writers append while the file rotates", async () => {
+		const log = createMulticaActionLog(dir, { maxBytes: 700, maxFiles: 5 });
+		await Promise.all(Array.from({ length: 80 }, (_, index) => log.record({ ...base, identifier: `MUL-${index}`, trigger: "y".repeat(30) })));
+		const files = (await readdir(dir)).filter((name) => name.startsWith(MULTICA_ACTION_LOG_FILE));
+		expect(files.length).toBeLessThanOrEqual(5);
+		let total = 0;
+		for (const name of files) {
+			const raw = await readFile(path.join(dir, name), "utf8");
+			for (const line of raw.split("\n").filter(Boolean)) {
+				expect(() => JSON.parse(line)).not.toThrow();
+				total += 1;
+			}
+		}
+		expect(total).toBeGreaterThan(10);
+		const read = await log.read({ limit: 500 });
+		expect(read).toHaveLength(total);
+		// Written in order: newest first, contiguous.
+		const numbers = read.map((entry) => Number(entry.identifier?.replace("MUL-", "")));
+		expect(numbers[0]).toBe(79);
+		for (let index = 1; index < numbers.length; index += 1) expect(numbers[index - 1] - numbers[index]).toBe(1);
+	});
+
 	it("hands every writer of a state directory the same instance, so rotation and appends are not raced", async () => {
 		const first = getMulticaActionLog(dir);
 		expect(getMulticaActionLog(dir)).toBe(first);

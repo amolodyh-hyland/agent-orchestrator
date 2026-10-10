@@ -258,6 +258,28 @@ describe("token binding and redirects", () => {
 	});
 });
 
+describe("response size cap", () => {
+	it("refuses a body over 8 MiB as a server error and does not parse it", async () => {
+		const transport = createFetchTransport({
+			apiOrigin: "https://api.multica.ai",
+			getToken: () => TOKEN,
+			fetch: async () => ({ status: 200, headers: { get: () => null }, text: async () => "x".repeat(8 * 1024 * 1024 + 1) }),
+		});
+		await expect(transport({ path: "/api/me", query: "", workspace: null })).resolves.toEqual({ status: 502, body: "" });
+		const client = createMulticaReadClient({ transport, scheduler: createFakeScheduler() });
+		expect(await client.me()).toMatchObject({ ok: false, kind: "server_error" });
+	});
+
+	it("accepts a body at the cap", async () => {
+		const transport = createFetchTransport({
+			apiOrigin: "https://api.multica.ai",
+			getToken: () => TOKEN,
+			fetch: async () => ({ status: 200, headers: { get: () => null }, text: async () => "x".repeat(8 * 1024 * 1024) }),
+		});
+		expect((await transport({ path: "/api/me", query: "", workspace: null })).status).toBe(200);
+	});
+});
+
 describe("failures, back-off and the read budget", () => {
 	const responses = (...items: Array<RawResponse | TransportError>): ReadTransport => {
 		const queue = [...items];

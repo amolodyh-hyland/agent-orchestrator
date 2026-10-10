@@ -16,7 +16,9 @@ import {
 	projectIssue,
 	projectRun,
 	projectRuntime,
+	isOfInterest,
 	reconcileRuns,
+	upsertIssue,
 	replaceAgents,
 	resolveUnknownOutcome,
 	type FrameContext,
@@ -408,6 +410,36 @@ describe("reconcile", () => {
 		m.agents.set("b1", { id: "b1", workspaceId: "ws-2", name: "B", runtimeId: null });
 		expect(replaceAgents(m, WS, [{ id: "a2", workspaceId: WS, name: "A2", runtimeId: null }])).toBe(true);
 		expect([...m.agents.keys()].sort()).toEqual(["a2", "b1"]);
+	});
+});
+
+describe("deferred runs", () => {
+	it("do not hold an issue: only queued, dispatched, waiting and running count as active", () => {
+		const m = createServerModel();
+		const issue = projectIssue(rawIssue({ assignee_type: null, assignee_id: null }))!;
+		const ctx = { meId: ME, isLinked: () => false };
+		const run = (status: AwarenessRun["status"]): AwarenessRun => ({
+			id: "t1", workspaceId: WS, issueId: "iss-1", agentId: "a", status, failureReason: null, retryPending: false, outcomeUnknown: false,
+			startedAt: null, endedAt: null, isLeaderTask: false, autopilotRunId: null, parentTaskId: null, runtimeId: null,
+		});
+		m.runs.set("t1", run("deferred"));
+		expect(isOfInterest(m, issue, ctx)).toBe(false);
+		for (const status of ["queued", "dispatched", "waiting_local_directory", "running"] as const) {
+			m.runs.set("t1", run(status));
+			expect(isOfInterest(m, issue, ctx)).toBe(true);
+		}
+	});
+});
+
+describe("issue revisions", () => {
+	it("upsertIssue keeps the held issue unless the new one is strictly newer", () => {
+		const m = createServerModel();
+		const base = projectIssue(rawIssue({ revision: 5 }))!;
+		expect(upsertIssue(m, base)).toBe(true);
+		expect(upsertIssue(m, { ...base, title: "same revision" })).toBe(false);
+		expect(upsertIssue(m, { ...base, revision: 4, title: "older" })).toBe(false);
+		expect(upsertIssue(m, { ...base, revision: 6, title: "newer" })).toBe(true);
+		expect(m.issues.get("iss-1")!.title).toBe("newer");
 	});
 });
 

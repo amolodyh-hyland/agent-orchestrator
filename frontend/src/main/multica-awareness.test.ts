@@ -696,6 +696,21 @@ describe("multica awareness service", () => {
 			expect(a.server.requests.length).toBe(reads);
 		});
 
+		it("keeps a newer issue revision when the reconcile after a reconnect reads an older one", async () => {
+			await connect();
+			await until(() => h.serverState().status === "live");
+			await watch("ws-1");
+			await until(() => live());
+			a.server.broadcast("ws-1", { type: "issue:updated", payload: { issue: fakeIssue({ id: "iss-2", identifier: "MUL-2", title: "Newest", assignee_type: "member", assignee_id: "user-a", revision: 9 }) } });
+			await until(() => h.state().issues.find((issue) => issue.id === "iss-2")?.title === "Newest");
+			// The server's lists are stale (revision 1): the held newer revision must survive the reconcile.
+			a.server.dropSockets();
+			await until(() => h.serverState().workspaces[0].state === "backoff");
+			await h.scheduler.advance(1500);
+			await until(() => live());
+			expect(h.state().issues.find((issue) => issue.id === "iss-2")).toMatchObject({ title: "Newest", revision: 9 });
+		});
+
 		it("re-reconciles when more than 1000 frames arrive while the snapshot is in flight", async () => {
 			await connect();
 			await until(() => h.serverState().status === "live");
