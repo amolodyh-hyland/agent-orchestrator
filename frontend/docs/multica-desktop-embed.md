@@ -491,6 +491,86 @@ real workspace.
 `src/renderer/lib/multica-sync-facts.ts`, `components/MulticaSyncFactsPublisher.tsx`,
 `components/MulticaLinkSyncControls.tsx` and `stores/multica-sync-store.ts`.
 
+## Awareness: who is working on what (read-only)
+
+AO can watch Multica and show, next to its own board, which issues Multica's agents are working, and who holds each issue overall. It is **read-only toward Multica**: AO sends GET requests and opens WebSockets, and nothing else. No status, assignee, comment, label or run is ever written, and no AO session is created or stopped because of what Multica does. Writing the status back is a separate slice (the status write); acting on what Multica does is later work.
+
+### What it shows
+
+- **Run by Multica** strip, on AO's board, above the columns. One card per issue with a run that is still worth showing: server (Cloud or the local host), workspace, identifier, title (plain text), agent, state with elapsed time, leader and autopilot chips, the assignee line, and **Open in Multica**. It is a separate component: the five columns stay derived delivery facts, and a Multica run is never forced into them. It is hidden until something is watched, and it raises no badge, banner or OS notification for a card that is not AO's.
+- **Who is working on what** view (button on the strip): AO sessions and Multica runs joined by issue, with the executor, who, state, since and flags, filtered by server, workspace and "mine only". It lists AO sessions that have no Multica link. It offers no action on an issue.
+- **Executor line** in the Open in AO menu: one disabled info row above the projects ("Run by: Multica agent Builder, running", "Run by: AO session ..., Working", "Run by: you", or "Contested: ..."). It is built in the main process from the read model and is absent when awareness knows nothing about the issue.
+- **Action log** (Settings > General > Multica awareness > Activity): a read-only table of the actions and decisions AO took, filterable by kind, exportable as JSON.
+
+Run card states, from the task status: `queued`/`deferred` Queued; `dispatched` Starting; `running` Running; `waiting_local_directory` Waiting for a folder; `failed` with a retry pending Retrying (for ten minutes, then Failed); `failed` Failed (attention lane); `completed` Finished and `cancelled` Cancelled (kept 24 hours); a run that was active when a reconcile no longer listed it reads Ended until its outcome has been read.
+
+### Executor and the contested state
+
+The executor is derived from facts on every change and never stored (`frontend/src/shared/multica-executor.ts`). First match wins:
+
+| # | Fact | Executor |
+|---|---|---|
+| 1 | issue deleted or out of reach | none (orphaned) |
+| 2 | an active run exists (queued, dispatched, waiting for a folder, running), any agent, squad leader or autopilot | `multica-agent` (running) |
+| 3 | assignee is an agent or squad, status not backlog or triage, no run | `multica-agent` (assigned, not running) |
+| 4 | assignee is an agent or squad, backlog or triage | `multica-agent` (parked) |
+| 5 | a live (non-terminated) AO session is linked | `ao` |
+| 6 | assignee is the signed-in user | `human` (you) |
+| 7 | assignee is another member | `human` (other) |
+| 8 | unassigned | none |
+
+`contested` is rows 2, 3 or 4 together with row 5: a state, not an executor. P1 only **detects** it (strip chip, view row and flag, menu line); nothing resolves it automatically and nothing is enforced. One refinement of rows 3 and 4: a closed issue (done or cancelled) is not held by its assignee, so a finished agent issue that a person still inspects in AO does not read as contested. View flags: contested, assigned-not-running (more than five minutes, todo or in progress), parked, no longer yours, orphaned.
+
+### Turning it on (nothing is watched by default)
+
+Settings > General > Multica awareness:
+
+1. Switch **Watch Multica** on (the master switch).
+2. Add a server (Multica Cloud, or a local or self-hosted address) and switch it on, and choose its credential.
+3. Switch on each workspace to watch. At most 8 sockets are open in total, one per watched workspace (`maxSockets`, default 8, never above 8).
+
+`AO_MULTICA_WATCH=0` forces everything off and refuses to switch anything on.
+
+The choices live in `multica-watch.json` in the AO state directory (mode 0600, atomic write, no secret). The server key is recomputed on load, never trusted from the file.
+
+### Credential per server
+
+| Source | How | Stored |
+|---|---|---|
+| **Multica CLI profile** (default for a new server) | AO reads the `token` of the server's CLI profile (`~/.multica/config.json` for the default profile, `~/.multica/profiles/<name>/config.json` otherwise, the profile name AO's resolver already uses) **only after you consented for that server**. A profile whose `server_url` names another origin is refused. | memory only |
+| **Pasted personal token** | pasted once into a masked field, encrypted with Electron `safeStorage` (`multica-credentials.json`, mode 0600) | encrypted; held in memory for the run only when the OS store is missing or unprotected (Linux `basic_text`), and the settings say so |
+| **Page only** | AO holds no token. Reads go through the open Multica page's own sign-in (the same `evaluateInPage(script, serverKey)` the issue reader uses), for the page's server and its active workspace only, polled every minute, only while Multica is loaded. | nothing |
+
+The token lives only in the main process. It is never returned from an IPC handler, never written to the watch file, the action log or a log line, never put in a URL or an environment, and is sent only to the origin derived from its own server key, over TLS for remote servers. Redirects are not followed. Replacing, clearing or withdrawing a credential, or switching a server off, cancels every request, socket and timer of that server and drops the token from memory; a token is never carried over to another server. The consent text says exactly what AO reads and that it never writes.
+
+### Connections and reads
+
+- `frontend/src/main/multica-read-client.ts` is the only module that builds Multica requests, and it builds GETs only, from an allow-list: `/api/me`, `/api/workspaces`, `/api/agent-task-snapshot`, `/api/agents`, `/api/runtimes`, `/api/issues` (list and by `ids`), `/api/issues/{id}`, `/api/issues/{id}/task-runs`, `/api/issues/{id}/active-task`, with an allow-list of query names. The client object has no write method and no generic request method (a test asserts both). Reads share one budget: burst 10, 60 per minute, one at a time; `Retry-After` is honoured; 5xx and timeouts back off 5 s doubling to 5 min.
+- `frontend/src/main/multica-ws-client.ts` opens one WebSocket per watched workspace, with no `Origin` header, sends the token as the first frame (never in the URL), waits for `auth_ack`, and drops `task:message`, `task:progress` and `daemon:*` frames by suffix before parsing. A dead socket (two silent minutes) is reconnected. Reconnect delay is 1 s doubling to 60 s with 50 to 150 percent jitter, reset after two minutes live. A 401 or an `invalid token` frame stops reconnecting until the credential changes; a missing membership or a disabled account stops that workspace.
+- `/ws` has no resume position, so each connect and reconnect **reconciles by GET**: the socket is subscribed first, then the task snapshot, agents, runtimes and the issues of interest are fetched, then the frames that arrived meanwhile are applied (an issue frame only if its revision is newer, a task frame only if it does not move the task backwards; a terminal state is sticky). A run the model held as active that the snapshot lacks reads "ended, outcome unknown" and its outcome is read once (at most 10 per reconcile). A safety reconcile runs every 10 minutes and a degraded workspace retries at most once a minute.
+- Issues of interest (bounds the cost): issues an AO session is linked to (at most 20 read per reconcile), issues with an active run, open issues assigned to you, open issues assigned to an agent or squad (newest first, at most 3 pages of 100; the view says "partial" instead of pretending to be complete). At most 2000 issues and 500 runs are kept per server.
+- The read model (`frontend/src/main/multica-read-model.ts`) keeps only the issue id, workspace, identifier, title (plain text, 200 characters), status and category, assignee, parent, project, revision and update time; for a run the id, agent, issue, status, failure reason, retry flag, start and end time, leader flag, autopilot run, parent task and runtime; and agent, runtime and provider names. Descriptions, comments, task results and errors, the working directory and trigger text are never read.
+- Issues are joined to AO sessions by server key, workspace slug and identifier (the link store's current key); when the status-write slice stores issue and workspace ids in the links, the join switches to them. An identifier that two workspaces of one server share is ambiguous and shows no executor line.
+
+### Action log
+
+`frontend/src/main/multica-action-log.ts`: `multica-action-log.jsonl` in the AO state directory, mode 0600, append-only, rotated at 5 MB keeping 5 files. One record per action or decision (`kind`, `direction`, `actor`, `trigger`, `request` as a path template plus changed field names with values only for status and assignee fields, `result`, `revBefore`, `revAfter`, ids); never tokens, prompts, descriptions, comments, frame bodies or `work_dir`. Records are built from an allow-list of fields and credential-shaped strings are redacted in the fields that remain. `record()` never rejects. Awareness writes the connect, disconnect, signed-out and setting-changed records (a lifecycle line once per state change); the status write calls the same `record()` after each write attempt. The optional hash chain of the design is not implemented.
+
+### Not verified
+
+Multica Cloud (rate limits, connection caps, `/ws` behaviour), a second server live (covered only by the fake server), whether the embedded view stays loaded while hidden (page-only mode pauses when it is not), the field names `completed_at` and a triage flag on issues (read defensively), Windows and Linux, a packaged build, and the "on this machine" marker from the hosted daemon's health. Tests run against a fake Multica server (`frontend/src/main/test-support/multica-fake-server.ts`) that speaks the REST routes and the `/ws` protocol and records every request; a test fails if it ever sees a non-GET. Manual check plan: see the section "Manual verification of awareness" below.
+
+### Manual verification of awareness
+
+Use a throwaway Multica account on a local server, an isolated AO (own `AO_DATA_DIR`) and never your real data:
+
+1. Settings > General > Multica awareness: master off, no servers, strip absent. Check no request leaves (watch the Multica server log).
+2. Add the local server, pick **Multica CLI profile**, confirm nothing is read before you press Review and allow, then allow; switch the server on. Expect status Live and the workspace list; no socket yet.
+3. Switch a workspace on: one socket, the strip appears. Assign an issue to a stub agent from the Multica page: the card goes Queued, Running, Finished.
+4. Link an AO session to that issue (Open in AO menu): the card shows Contested, the view shows the flag, the menu shows the contested line. Nothing is cancelled or changed in Multica.
+5. Stop the Multica server for a minute and start it again: the workspace goes Reconnecting, then converges. Revoke the token in Multica: the server shows Signed out and stays quiet (no retry storm) until you paste a new token.
+6. Switch the server off: sockets close. Open Activity: connect, signed-out and setting-changed lines, no token anywhere.
+
 ## Security model
 
 Multica's preload is attached to the Multica view only, in its own persistent partition per server (`persist:ao-multica` for the default local server), with sandbox and context isolation on, every web permission denied, and main-frame navigation pinned to the built bundle (anything else goes to the system browser).
@@ -592,3 +672,4 @@ in the report are best effort (calls made inside module-level helper functions a
 - The banner, click-through and badge path is covered by unit tests and was verified on macOS in the dev app against a signed-in local Multica server (real inbox events, OS banners, clicks that open the item, combined badge, sign-out). It has not been verified on Windows or Linux.
 - Status sync (see above) is verified against a fake Multica server in unit tests only; the live checks are listed in its manual verification plan.
 - No CLI install or update, no auto-start, and no issue windows.
+- Awareness is read-only and runs in the desktop main process, so it stops when the app closes and keeps no durable read model; the executor line, the strip and the view show what it saw while the app was open.
