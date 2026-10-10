@@ -866,7 +866,6 @@ async function createWindowInternal(): Promise<void> {
 	});
 	if (daemonStatus.state === "ready") establishBrowserRuntimeLink();
 
-	// Registered before the renderer loads: the shell queries its state on mount.
 	// Writing AO session progress to Multica issue statuses. Everything is off until the user turns it
 	// on in Settings and then per link; it runs through the Multica page's own sign-in, so it stores no secret.
 	multicaStatusSync = createMulticaStatusSync({
@@ -875,6 +874,7 @@ async function createWindowInternal(): Promise<void> {
 		recordIssueIds: (target, ids) => multicaIssueLinkService?.backfillIssueIds(target, ids) ?? Promise.resolve(),
 	});
 	multicaStatusSyncIpc = registerMulticaStatusSyncIpc({ ipcMain, shellWebContents, engine: multicaStatusSync });
+	// Registered before the renderer loads: the shell queries its state on mount.
 	multicaIssueLinkService = createMulticaIssueLinkService({
 		ipcMain,
 		shellWebContents,

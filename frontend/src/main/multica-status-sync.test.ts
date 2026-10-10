@@ -1073,6 +1073,29 @@ describe("multica status sync", () => {
 			}
 		});
 
+		it("logs nothing at all: no console output in a scenario with a write, a conflict, a pause and a failure", async () => {
+			const spies = (["log", "info", "warn", "error", "debug"] as const).map((method) => vi.spyOn(console, method).mockImplementation(() => undefined));
+			const issue = fake.addIssue({ identifier: "MUL-1", status: "todo" });
+			fake.beforeNextPut((found) => {
+				found.revision += 1;
+			});
+			fake.failNext({ method: "GET" }, { status: 503 });
+			const sync = start();
+			sync.setFacts({ stale: false, sessions: [working()] });
+			await turnOn(sync);
+			await until(() => expect(fake.issues.get(issue.id)?.status).toBe("in_progress"));
+			await settled();
+			const found = fake.issues.get(issue.id)!;
+			found.status = "todo";
+			found.status_category = "todo";
+			found.revision += 1;
+			sync.setFacts({ stale: false, sessions: [inReview()] });
+			await until(() => expect(view().state).toBe("paused"));
+
+			for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+			spies.forEach((spy) => spy.mockRestore());
+		});
+
 		it("a failing sink does not stop sync, and the default sink is a no-op", async () => {
 			const issue = fake.addIssue({ identifier: "MUL-1", status: "todo" });
 			const sync = start({

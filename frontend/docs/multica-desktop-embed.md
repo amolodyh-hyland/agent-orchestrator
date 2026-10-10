@@ -301,6 +301,9 @@ shows where the work is. It is **off by default** at two levels and writes **sta
   `cancelled`, never changes the assignee, never posts a comment, never deletes anything, and never ends or
   stops a session.
 
+Decision ids (D1 to D13) and question ids (Q1 to Q14) in this section come from the board-link design review; the
+answers to every question are written down below.
+
 ### The mapping (AO to Multica)
 
 The key is the session's board column (derived by the daemon) plus its facts. `src/shared/multica-status-writer.ts`
