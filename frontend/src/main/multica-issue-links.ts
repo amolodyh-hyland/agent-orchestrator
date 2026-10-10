@@ -4,19 +4,29 @@ import { randomUUID } from "node:crypto";
 import {
 	coerceMulticaIssueLinks,
 	isMulticaIssueLink,
+	isMulticaUuid,
 	MAX_MULTICA_ISSUE_LINKS,
+	MULTICA_ISSUE_LINKS_FILE_VERSION,
 	type MulticaIssueLink,
 } from "../shared/multica-issue-links";
 
 export const MULTICA_ISSUE_LINKS_FILE = "multica-issue-links.json";
 
 export type MulticaIssueLinkKey = { sessionId: string; workspaceSlug: string; issueIdentifier: string; serverKey?: string };
+export type MulticaIssueTarget = { serverKey: string; workspaceSlug: string; issueIdentifier: string };
+export type MulticaIssueStableIds = { workspaceId: string; issueId: string };
+
 export type MulticaIssueLinkStore = {
 	list: () => Promise<MulticaIssueLink[]>;
 	add: (link: Omit<MulticaIssueLink, "createdAt">) => Promise<MulticaIssueLink[]>;
 	remove: (key: MulticaIssueLinkKey) => Promise<MulticaIssueLink[]>;
 	/** Gives every link made before servers could be switched to `serverKey`; returns all links. */
 	adoptLegacy: (serverKey: string) => Promise<MulticaIssueLink[]>;
+	/**
+	 * Records the issue's workspace and issue UUIDs on every link to it on that server that has none yet
+	 * (a version 1 link, or one made before the issue was first read). Ids already recorded are never replaced.
+	 */
+	recordIssueIds: (target: MulticaIssueTarget, ids: MulticaIssueStableIds) => Promise<MulticaIssueLink[]>;
 };
 
 let linkOperationQueue: Promise<void> = Promise.resolve();
@@ -35,7 +45,7 @@ async function writeUnlocked(stateDir: string, links: MulticaIssueLink[]): Promi
 	const file = path.join(stateDir, MULTICA_ISSUE_LINKS_FILE);
 	const temporary = path.join(stateDir, `.multica-issue-links-${process.pid}-${randomUUID()}.json`);
 	try {
-		await writeFile(temporary, `${JSON.stringify({ version: 1, links }, null, 2)}\n`, { mode: 0o600 });
+		await writeFile(temporary, `${JSON.stringify({ version: MULTICA_ISSUE_LINKS_FILE_VERSION, links }, null, 2)}\n`, { mode: 0o600 });
 		await rename(temporary, file);
 	} finally {
 		await unlink(temporary).catch(() => undefined);
@@ -88,6 +98,26 @@ export function createMulticaIssueLinkStore(stateDir: string, now: () => Date = 
 				if (links.every((link) => link.serverKey !== undefined)) return links;
 				const next = links.map((link) => (link.serverKey === undefined ? { ...link, serverKey } : link));
 				await writeUnlocked(stateDir, next);
+				return next;
+			}),
+		recordIssueIds: (target, ids) =>
+			runLinkOperation(async () => {
+				if (!isMulticaUuid(ids.workspaceId) || !isMulticaUuid(ids.issueId)) throw new Error("invalid ids");
+				const links = await readUnlocked(stateDir);
+				let changed = false;
+				const next = links.map((link) => {
+					if (
+						link.serverKey !== target.serverKey ||
+						link.workspaceSlug !== target.workspaceSlug ||
+						link.issueIdentifier !== target.issueIdentifier ||
+						link.workspaceId !== undefined
+					) {
+						return link;
+					}
+					changed = true;
+					return { ...link, workspaceId: ids.workspaceId, issueId: ids.issueId };
+				});
+				if (changed) await writeUnlocked(stateDir, next);
 				return next;
 			}),
 	};

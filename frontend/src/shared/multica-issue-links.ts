@@ -11,6 +11,8 @@ export const MULTICA_LINKS_OPEN_SESSION_CHANNEL = "multicaLinks:openSession";
 /** Mirrors STANDALONE_WORKSPACE_ID in renderer/types/workspace.ts. */
 export const STANDALONE_PROJECT_ID = "__standalone__";
 export const MAX_MULTICA_ISSUE_LINKS = 1000;
+/** Version 2 adds the stable ids of the issue; version 1 files are still read. */
+export const MULTICA_ISSUE_LINKS_FILE_VERSION = 2;
 
 export type MulticaIssueLink = {
 	sessionId: string;
@@ -20,6 +22,12 @@ export type MulticaIssueLink = {
 	createdAt: string;
 	/** Key of the Multica server the issue lives on (`MulticaServer.key`). Absent on links made before servers could be switched. */
 	serverKey?: string;
+	/**
+	 * UUIDs of the issue's workspace and of the issue, filled in the first time the issue is read
+	 * (version 2). The slug and identifier can change; these cannot. Both are present or neither is.
+	 */
+	workspaceId?: string;
+	issueId?: string;
 };
 
 export type MulticaIssueRef = { workspaceSlug: string; issueIdentifier: string };
@@ -45,6 +53,7 @@ const ISSUE_IDENTIFIER = new RegExp(`^${ISSUE_IDENTIFIER_PATTERN}$`);
 const UPPERCASE_ISSUE_IDENTIFIER = new RegExp(`^${UPPERCASE_ISSUE_IDENTIFIER_PATTERN}$`);
 const MULTICA_ISSUE_PATH_PATTERN = new RegExp(`^/([a-z0-9][a-z0-9_-]{0,62})/issues/${UPPERCASE_ISSUE_IDENTIFIER_PATTERN}$`);
 const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F-\u009F]/;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const AO_SESSION_PREFIX = "ao://sessions/";
 
 /** Parses a Multica issue URL, path or workspace-relative route. */
@@ -128,6 +137,8 @@ export function isMulticaIssueLink(value: unknown): value is MulticaIssueLink {
 	if (typeof link.workspaceSlug !== "string" || !/^[a-z0-9][a-z0-9_-]{0,62}$/.test(link.workspaceSlug)) return false;
 	if (typeof link.issueIdentifier !== "string" || !UPPERCASE_ISSUE_IDENTIFIER.test(link.issueIdentifier)) return false;
 	if (link.serverKey !== undefined && !isServerKey(link.serverKey)) return false;
+	if ((link.workspaceId === undefined) !== (link.issueId === undefined)) return false;
+	if (link.workspaceId !== undefined && (!isMulticaUuid(link.workspaceId) || !isMulticaUuid(link.issueId))) return false;
 	return typeof link.createdAt === "string" && !Number.isNaN(Date.parse(link.createdAt));
 }
 
@@ -139,11 +150,14 @@ export function linksForServer(links: MulticaIssueLink[], serverKey: string): Mu
 export function coerceMulticaIssueLinks(raw: unknown): MulticaIssueLink[] {
 	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
 	const file = raw as Record<string, unknown>;
-	if (file.version !== 1 || !Array.isArray(file.links)) return [];
+	// Version 1 has no issue ids; they are added in place the first time an issue is read.
+	if ((file.version !== 1 && file.version !== MULTICA_ISSUE_LINKS_FILE_VERSION) || !Array.isArray(file.links)) return [];
 
 	const links: MulticaIssueLink[] = [];
 	const seen = new Set<string>();
-	for (const value of file.links) {
+	for (const entry of file.links) {
+		// A damaged id pair must not cost the user the link: drop the ids, keep the link.
+		const value = withoutInvalidIds(entry);
 		if (!isMulticaIssueLink(value)) continue;
 		const key = JSON.stringify([value.sessionId, value.workspaceSlug, value.issueIdentifier, value.serverKey ?? null]);
 		if (seen.has(key)) continue;
@@ -155,9 +169,20 @@ export function coerceMulticaIssueLinks(raw: unknown): MulticaIssueLink[] {
 			issueIdentifier: value.issueIdentifier,
 			createdAt: value.createdAt,
 			...(value.serverKey !== undefined ? { serverKey: value.serverKey } : {}),
+			...(value.workspaceId !== undefined && value.issueId !== undefined ? { workspaceId: value.workspaceId, issueId: value.issueId } : {}),
 		});
 	}
 	return links.length > MAX_MULTICA_ISSUE_LINKS ? links.slice(-MAX_MULTICA_ISSUE_LINKS) : links;
+}
+
+function withoutInvalidIds(entry: unknown): unknown {
+	if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry;
+	const { workspaceId, issueId, ...rest } = entry as Record<string, unknown>;
+	return isMulticaUuid(workspaceId) && isMulticaUuid(issueId) ? entry : rest;
+}
+
+export function isMulticaUuid(value: unknown): value is string {
+	return typeof value === "string" && UUID_PATTERN.test(value);
 }
 
 function isServerKey(value: unknown): value is string {

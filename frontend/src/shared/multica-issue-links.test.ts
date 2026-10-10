@@ -203,13 +203,36 @@ describe("Multica issue link records", () => {
 	});
 
 	it.each([
-		["wrong version", { version: 2, links: [link()] }],
+		["wrong version", { version: 3, links: [link()] }],
+		["version 0", { version: 0, links: [link()] }],
 		["array", [link()]],
 		["null", null],
 		["missing links", { version: 1 }],
 		["non-array links", { version: 1, links: {} }],
 	])("returns no links for %s", (_name, raw) => {
 		expect(coerceMulticaIssueLinks(raw)).toEqual([]);
+	});
+
+	it("reads version 1 files (no ids) and version 2 files (ids)", () => {
+		const ids = { workspaceId: "22222222-2222-4222-8222-222222222222", issueId: "11111111-1111-4111-8111-111111111111" };
+		const withIds = link({ issueIdentifier: "MUL-2", serverKey: "cloud", ...ids });
+		expect(coerceMulticaIssueLinks({ version: 1, links: [link()] })).toEqual([link()]);
+		expect(coerceMulticaIssueLinks({ version: 2, links: [link(), withIds] })).toEqual([link(), withIds]);
+	});
+
+	it("keeps the link but drops damaged or half-present ids", () => {
+		const ids = { workspaceId: "22222222-2222-4222-8222-222222222222", issueId: "11111111-1111-4111-8111-111111111111" };
+		expect(coerceMulticaIssueLinks({ version: 2, links: [{ ...link(), workspaceId: ids.workspaceId }] })).toEqual([link()]);
+		expect(coerceMulticaIssueLinks({ version: 2, links: [{ ...link(), ...ids, issueId: "not-a-uuid" }] })).toEqual([link()]);
+		expect(coerceMulticaIssueLinks({ version: 2, links: [{ ...link(), workspaceId: 7, issueId: null }] })).toEqual([link()]);
+	});
+
+	it("accepts a link only with both ids or neither", () => {
+		const ids = { workspaceId: "22222222-2222-4222-8222-222222222222", issueId: "11111111-1111-4111-8111-111111111111" };
+		expect(isMulticaIssueLink(link(ids))).toBe(true);
+		expect(isMulticaIssueLink(link({ workspaceId: ids.workspaceId }))).toBe(false);
+		expect(isMulticaIssueLink(link({ issueId: ids.issueId }))).toBe(false);
+		expect(isMulticaIssueLink(link({ ...ids, issueId: "nope" }))).toBe(false);
 	});
 
 	it("keeps only the last maximum number of valid unique links", () => {
