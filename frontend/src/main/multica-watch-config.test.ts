@@ -76,6 +76,19 @@ describe("coerceWatchConfig", () => {
 		expect(coerceWatchConfig({ version: 1, maxSockets: 3 }).maxSockets).toBe(3);
 	});
 
+	it("applies the add-time URL rules: no plain http to a public host, no path", () => {
+		const keep = (overrides: Record<string, unknown>) => coerceWatchConfig({ version: 1, servers: [server(overrides)] }).servers.length;
+		expect(keep({ customUrl: "http://localhost:3000" })).toBe(1);
+		expect(keep({ customUrl: "http://192.168.1.20:3000" })).toBe(1);
+		expect(keep({ customUrl: "https://multica.example.com" })).toBe(1);
+		expect(keep({ customUrl: "http://multica.example.com" })).toBe(0);
+		expect(keep({ customUrl: "http://localhost:3000", apiUrl: "http://api.example.com" })).toBe(0);
+		expect(keep({ customUrl: "https://multica.example.com/app" })).toBe(0);
+		expect(keep({ customUrl: "http://169.254.169.254" })).toBe(0);
+		// Cloud ignores the address fields.
+		expect(keep({ mode: "cloud", customUrl: "http://public.example.com" })).toBe(1);
+	});
+
 	it("caps the number of servers", () => {
 		const servers = Array.from({ length: MAX_WATCHED_SERVERS + 4 }, (_, index) => server({ customUrl: `http://host${index}:3000` }));
 		expect(coerceWatchConfig({ version: 1, servers }).servers).toHaveLength(MAX_WATCHED_SERVERS);

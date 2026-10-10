@@ -127,3 +127,21 @@ export function createMulticaActionLog(stateDir: string, options: MulticaActionL
 		},
 	};
 }
+
+const sharedLogs = new Map<string, MulticaActionLog>();
+
+/**
+ * The one action log of a state directory. The size count and the write queue
+ * live in the instance, so every writer in the process (awareness, the status
+ * write) must share it: two instances on one directory would race rotation and
+ * appends. The first call fixes the options.
+ */
+export function getMulticaActionLog(stateDir: string, options: MulticaActionLogOptions = {}): MulticaActionLog {
+	const key = path.resolve(stateDir);
+	let log = sharedLogs.get(key);
+	if (!log) {
+		log = createMulticaActionLog(stateDir, options);
+		sharedLogs.set(key, log);
+	}
+	return log;
+}

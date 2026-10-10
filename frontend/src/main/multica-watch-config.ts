@@ -6,7 +6,7 @@ import {
 	MULTICA_MAX_SOCKETS,
 	type MulticaCredentialSource,
 } from "../shared/multica-awareness";
-import { parseMulticaUrl, resolveMulticaServer, type MulticaServerMode } from "../shared/multica";
+import { resolveMulticaServer, validateMulticaServerUrl, type MulticaServerMode } from "../shared/multica";
 
 export const MULTICA_WATCH_FILE = "multica-watch.json";
 export const MAX_WATCHED_SERVERS = 8;
@@ -58,7 +58,11 @@ function coerceServer(raw: unknown): WatchServer | null {
 	if (mode !== "cloud" && mode !== "local") return null;
 	const customUrl = typeof raw.customUrl === "string" ? raw.customUrl : "";
 	const apiUrl = typeof raw.apiUrl === "string" ? raw.apiUrl : "";
-	for (const url of [customUrl, apiUrl]) if (url !== "" && !parseMulticaUrl(url).ok) return null;
+	// The same rule as when a server is added (an origin, https unless local or private): a hand-edited file
+	// must not be able to point a token at a public host over plain http.
+	if (mode === "local") {
+		for (const url of [customUrl, apiUrl]) if (url !== "" && !validateMulticaServerUrl(url).ok) return null;
+	}
 	// The key is recomputed, never trusted: a hand-edited file cannot point one server's credential at another's key.
 	const resolved = resolveMulticaServer({ mode, customUrl, apiUrl });
 	if (!resolved) return null;

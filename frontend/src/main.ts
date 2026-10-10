@@ -199,7 +199,7 @@ import { isUpdatesDisabledBuild } from "./main/updates-disabled";
 import { writeMulticaIpcJail } from "./main/multica-ipc-jail";
 import { createCombinedBadge } from "./main/combined-badge";
 import { createMulticaNotifications, type MulticaNotifications } from "./main/multica-notifications";
-import { createMulticaActionLog } from "./main/multica-action-log";
+import { getMulticaActionLog } from "./main/multica-action-log";
 import { createMulticaAwareness, type MulticaAwareness } from "./main/multica-awareness";
 import { createProfileConfigReader, createSafeStorageVault } from "./main/multica-awareness-env";
 import { createMulticaCredentials } from "./main/multica-credentials";
@@ -894,7 +894,8 @@ async function createWindowInternal(): Promise<void> {
 			vault: createSafeStorageVault(safeStorage, process.platform),
 			readProfileConfig: createProfileConfigReader(() => os.homedir()),
 		}),
-		actionLog: createMulticaActionLog(browserProfileStateDir()),
+		// One shared instance per state directory: other writers of the log must use getMulticaActionLog too.
+		actionLog: getMulticaActionLog(browserProfileStateDir()),
 		fetch: (url, init) => net.fetch(url, init),
 		env: process.env,
 		listLinks: () => multicaIssueLinkStore.list(),

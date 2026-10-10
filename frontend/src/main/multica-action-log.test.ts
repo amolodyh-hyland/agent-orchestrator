@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { MulticaActionInput } from "../shared/multica-action-log";
-import { createMulticaActionLog, MULTICA_ACTION_LOG_FILE } from "./multica-action-log";
+import { createMulticaActionLog, getMulticaActionLog, MULTICA_ACTION_LOG_FILE } from "./multica-action-log";
 
 let dir: string;
 
@@ -173,5 +173,19 @@ describe("multica action log record()", () => {
 		expect((await log.read({ issueId: "a" })).map((entry) => entry.kind)).toEqual(["resume", "status_write"]);
 		expect((await log.read({ kind: "pause" })).map((entry) => entry.issueId)).toEqual(["b"]);
 		expect(await log.read({ limit: 1 })).toHaveLength(1);
+	});
+
+	it("hands every writer of a state directory the same instance, so rotation and appends are not raced", async () => {
+		const first = getMulticaActionLog(dir);
+		expect(getMulticaActionLog(dir)).toBe(first);
+		expect(getMulticaActionLog(`${dir}/`)).toBe(first);
+		const other = await mkdtemp(path.join(os.tmpdir(), "ao-action-log-other-"));
+		try {
+			expect(getMulticaActionLog(other)).not.toBe(first);
+		} finally {
+			await rm(other, { recursive: true, force: true });
+		}
+		await Promise.all(Array.from({ length: 20 }, (_, index) => getMulticaActionLog(dir).record({ ...base, identifier: `MUL-${index}` })));
+		expect((await lines()).length).toBe(20);
 	});
 });
