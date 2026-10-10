@@ -1701,4 +1701,85 @@ describe("multica Open in AO menu", () => {
 		expect(onAction).toHaveBeenCalledExactlyOnceWith(`ao://multica/open-with-ao/new-task/alpha?n=${NONCE}`);
 		expect(menu.isOpen()).toBe(false);
 	});
+
+	describe("status sync rows", () => {
+		const syncProject = (sync: OpenWithAoPageSession["sync"]) =>
+			project("alpha", { sessions: [session("task-alpha", "alpha", { linked: true, sync })] });
+
+		it("shows a row under a linked session with the state, and a click sends the sync action URL", () => {
+			mockGeometry();
+			const sync = { tone: "ready", label: "Stop updating this ticket", stateLabel: "Synced", action: "disable" } as const;
+			const { menu, shadow, onAction } = openMenu(
+				payload({ deducedProjectId: "alpha", projects: [syncProject(sync)] }),
+				vi.fn(),
+				undefined,
+				allowTestActionEvents(),
+			);
+
+			const row = shadow?.querySelector<HTMLElement>('[data-key="sync:task-alpha"]');
+			expect(row?.getAttribute("data-kind")).toBe("sync");
+			expect(row?.getAttribute("data-tone")).toBe("ready");
+			expect(row?.textContent).toContain("Stop updating this ticket");
+			expect(row?.textContent).toContain("Synced");
+			expect(row?.getAttribute("aria-disabled")).toBeNull();
+			// It sits right after the session it belongs to.
+			const keys = menuRows(shadow).map((entry) => entry.getAttribute("data-key"));
+			expect(keys.indexOf("sync:task-alpha")).toBe(keys.indexOf("task:task-alpha") + 1);
+
+			row?.click();
+			expect(onAction).toHaveBeenCalledExactlyOnceWith(`ao://multica/open-with-ao/sync/disable/alpha/task-alpha?n=${NONCE}`);
+			expect(parseOpenWithAoActionUrl(vi.mocked(onAction).mock.calls[0]?.[0])).toEqual({
+				kind: "sync",
+				syncAction: "disable",
+				projectId: "alpha",
+				sessionId: "task-alpha",
+				nonce: NONCE,
+			});
+			expect(menu.isOpen()).toBe(false);
+		});
+
+		it.each(["enable", "disable", "resume"] as const)("sends the %s action", (action) => {
+			mockGeometry();
+			const { shadow, onAction } = openMenu(
+				payload({ deducedProjectId: "alpha", projects: [syncProject({ tone: "pending", label: "Row", stateLabel: "State", action })] }),
+				vi.fn(),
+				undefined,
+				allowTestActionEvents(),
+			);
+			shadow?.querySelector<HTMLElement>('[data-key="sync:task-alpha"]')?.click();
+			expect(onAction).toHaveBeenCalledExactlyOnceWith(`ao://multica/open-with-ao/sync/${action}/alpha/task-alpha?n=${NONCE}`);
+		});
+
+		it("a row with no action only tells the user something and cannot be activated", () => {
+			mockGeometry();
+			const { shadow, onAction } = openMenu(
+				payload({
+					deducedProjectId: "alpha",
+					projects: [syncProject({ tone: "unknown", label: "Ticket updates are off in Settings", stateLabel: "", action: null })],
+				}),
+				vi.fn(),
+				undefined,
+				allowTestActionEvents(),
+			);
+			const row = shadow?.querySelector<HTMLElement>('[data-key="sync:task-alpha"]');
+			expect(row?.getAttribute("aria-disabled")).toBe("true");
+			row?.click();
+			expect(onAction).not.toHaveBeenCalled();
+		});
+
+		it("does not activate from a synthetic click by default", () => {
+			mockGeometry();
+			const { shadow, onAction } = openMenu(
+				payload({ deducedProjectId: "alpha", projects: [syncProject({ tone: "ready", label: "Keep this ticket updated", stateLabel: "Off", action: "enable" })] }),
+			);
+			shadow?.querySelector<HTMLElement>('[data-key="sync:task-alpha"]')?.click();
+			expect(onAction).not.toHaveBeenCalled();
+		});
+
+		it("adds no row for a session without sync", () => {
+			mockGeometry();
+			const { shadow } = openMenu(payload({ deducedProjectId: "alpha", projects: [syncProject(null)] }));
+			expect(shadow?.querySelector('[data-key^="sync:"]')).toBeNull();
+		});
+	});
 });

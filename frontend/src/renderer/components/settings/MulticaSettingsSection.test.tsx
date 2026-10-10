@@ -2,6 +2,8 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MulticaSetSettingsRequest, MulticaSetSettingsResult, MulticaSettings } from "../../../shared/multica";
+import { EMPTY_MULTICA_SYNC_SNAPSHOT, type MulticaSyncSnapshot } from "../../../shared/multica-status-sync";
+import { resetMulticaSyncStoreSubscription, useMulticaSyncStore } from "../../stores/multica-sync-store";
 import { MulticaSettingsSection } from "./MulticaSettingsSection";
 
 type Bridge = NonNullable<typeof window.ao>;
@@ -202,5 +204,95 @@ describe("MulticaSettingsSection", () => {
 
 		expect(screen.getByRole("button", { name: "Server" })).toHaveTextContent("Local / self-hosted");
 		expect(window.ao!.multica.setSettings).not.toHaveBeenCalled();
+	});
+
+	describe("status sync", () => {
+		let originalSync: Bridge["multicaSync"];
+		const snapshot = (settings: Partial<MulticaSyncSnapshot["settings"]> = {}, killSwitch = false): MulticaSyncSnapshot => ({
+			settings: { enabled: false, moveOutOfBacklog: false, ...settings },
+			killSwitch,
+			links: [],
+		});
+		const withSync = (next: MulticaSyncSnapshot) => {
+			window.ao!.multicaSync.getState = vi.fn(async () => next);
+			useMulticaSyncStore.setState({ snapshot: next });
+		};
+
+		beforeEach(() => {
+			originalSync = { ...window.ao!.multicaSync };
+			resetMulticaSyncStoreSubscription();
+			useMulticaSyncStore.setState({ snapshot: EMPTY_MULTICA_SYNC_SNAPSHOT });
+			window.ao!.multicaSync.setSettings = vi.fn(async () => snapshot({ enabled: true }));
+		});
+
+		afterEach(() => {
+			Object.assign(window.ao!.multicaSync, originalSync);
+		});
+
+		it("is off by default, with the Backlog move disabled until the master switch is on", async () => {
+			withSync(snapshot());
+			await open();
+
+			expect(screen.getByRole("switch", { name: "Update Multica ticket status" })).not.toBeChecked();
+			expect(screen.getByRole("switch", { name: "Move tickets out of Backlog" })).toBeDisabled();
+			expect(window.ao!.multicaSync.setSettings).not.toHaveBeenCalled();
+		});
+
+		it("shows the Backlog move off by default, and says it is off by default and why", async () => {
+			withSync({ settings: { enabled: true, moveOutOfBacklog: false }, killSwitch: false, links: [] });
+			await open();
+			expect(screen.getByRole("switch", { name: "Move tickets out of Backlog" })).not.toBeChecked();
+			expect(screen.getByText(/Off by default\. When on, starting a session on a ticket in Backlog moves it to In progress\. A ticket in Triage can look like Backlog/)).toBeInTheDocument();
+		});
+
+		it("explains what it does and never does", async () => {
+			withSync(snapshot());
+			await open();
+
+			expect(screen.getByText(/never to Backlog, Blocked or Cancelled, and never changes who it is assigned to/)).toBeInTheDocument();
+			expect(screen.getByText(/Each link is switched on separately/)).toBeInTheDocument();
+		});
+
+		it("warns that Multica's Triage cannot be seen, so sync should only be turned on for accepted tickets", async () => {
+			withSync(snapshot());
+			await open();
+			expect(screen.getByText(/cannot see whether a ticket is still in Multica’s Triage/)).toBeInTheDocument();
+			expect(screen.getByText(/only for tickets that have been accepted/)).toBeInTheDocument();
+		});
+
+		it("turns the master switch on", async () => {
+			withSync(snapshot());
+			await open();
+
+			await userEvent.click(screen.getByRole("switch", { name: "Update Multica ticket status" }));
+
+			expect(window.ao!.multicaSync.setSettings).toHaveBeenCalledExactlyOnceWith({ enabled: true });
+		});
+
+		it("turns the Backlog move on only when asked, once the master switch is on, and off again", async () => {
+			withSync(snapshot({ enabled: true }));
+			await open();
+			const toggle = screen.getByRole("switch", { name: "Move tickets out of Backlog" });
+			expect(toggle).not.toBeChecked();
+
+			await userEvent.click(toggle);
+			expect(window.ao!.multicaSync.setSettings).toHaveBeenLastCalledWith({ moveOutOfBacklog: true });
+		});
+
+		it("turns the Backlog move off again when it was on", async () => {
+			withSync(snapshot({ enabled: true, moveOutOfBacklog: true }));
+			await open();
+			await userEvent.click(screen.getByRole("switch", { name: "Move tickets out of Backlog" }));
+			expect(window.ao!.multicaSync.setSettings).toHaveBeenLastCalledWith({ moveOutOfBacklog: false });
+		});
+
+		it("disables both switches and says why while AO_MULTICA_SYNC=0 is set", async () => {
+			withSync(snapshot({ enabled: true }, true));
+			await open();
+
+			expect(screen.getByRole("switch", { name: "Update Multica ticket status" })).toBeDisabled();
+			expect(screen.getByRole("switch", { name: "Move tickets out of Backlog" })).toBeDisabled();
+			expect(screen.getByRole("status", { name: "" })).toHaveTextContent("Turned off for this run by AO_MULTICA_SYNC=0.");
+		});
 	});
 });
