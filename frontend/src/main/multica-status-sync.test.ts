@@ -1247,6 +1247,74 @@ describe("multica status sync", () => {
 			expect(store.saved().issues[0].intent ?? null).toBeNull();
 		});
 
+		it("turning sync off while the intent is being saved stops the write, and forgets the intent", async () => {
+			let releaseSave: () => void = () => undefined;
+			const originalSave = store.save;
+			let gated = false;
+			store.save = async (file) => {
+				if (!gated && file.issues.some((issue) => issue.intent)) {
+					gated = true;
+					await new Promise<void>((resolve) => {
+						releaseSave = resolve;
+					});
+				}
+				return originalSave(file);
+			};
+			const stub = {
+				getIssue: vi.fn(async () => issueAt("todo", 4)),
+				previewTrigger: vi.fn(),
+				putStatus: vi.fn(async () => issueAt("in_progress", 5)),
+				getParent: vi.fn(),
+			} as unknown as MulticaIssueApi;
+			api = stub;
+			const sync = start();
+			sync.setFacts({ stale: false, sessions: [working()] });
+			await turnOn(sync);
+			await until(() => expect(gated).toBe(true));
+
+			await sync.setSettings({ enabled: false });
+			releaseSave();
+			await sleep(80);
+
+			expect(stub.putStatus).not.toHaveBeenCalled();
+			expect(store.saved().issues.every((issue) => !issue.intent)).toBe(true);
+			expect(records.filter((entry) => entry.kind === "status_write")).toEqual([]);
+		});
+
+		it("a status that matches the intent at a revision that is not newer is not taken for AO's own write", async () => {
+			const current = { status: "todo", revision: 4 };
+			let mode: "normal" | "lost-and-stale" = "normal";
+			const stub = {
+				getIssue: vi.fn(async () => issueAt(current.status, current.revision)),
+				previewTrigger: vi.fn(),
+				getParent: vi.fn(),
+				putStatus: vi.fn(async (_key: string, input: { status: string }) => {
+					if (mode === "lost-and-stale") {
+						// The write is lost, and the next read shows the intended status at the revision before it.
+						current.status = input.status;
+						return { ok: false as const, kind: "timeout" as const };
+					}
+					current.status = input.status;
+					current.revision += 1;
+					return issueAt(current.status, current.revision);
+				}),
+			} as unknown as MulticaIssueApi;
+			api = stub;
+			const sync = start();
+			sync.setFacts({ stale: false, sessions: [working()] });
+			await turnOn(sync);
+			await settled();
+			expect(current).toEqual({ status: "in_progress", revision: 5 });
+
+			mode = "lost-and-stale";
+			sync.setFacts({ stale: false, sessions: [inReview()] });
+			await until(() => expect(view().state).toBe("error"));
+			sync.setFacts({ stale: false, sessions: [merged()] });
+			// Same category as the intent, revision 5 is not newer than the 5 AO read before writing: a person's change, not an echo.
+			await until(() => expect(view().state).toBe("paused"));
+			expect(view()).toMatchObject({ reason: "changed_in_multica" });
+		});
+
 		it("records the intent before the write goes out, and forgets it once the write is answered", async () => {
 			let release: (value: unknown) => void = () => undefined;
 			const stub = {
