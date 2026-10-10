@@ -384,8 +384,8 @@ wrote `in_review`, a later round of CI fixes does not move the issue back to `in
   its own PR auto-complete skips Triage ("not accepted yet"). So with sync on for a link, AO **writes over a
   triager's proposal** on an entry that still sits in Triage (shown by Multica as backlog or todo): the status
   changes, `triage_state` stays set, no agent run starts (Multica refuses runs for Triage and `suppress_run` is
-  on), but a Triage child can become `done`. AO refuses only if the issue JSON ever carries a triage field, or a
-  write answers `issue_in_triage`; neither happens today. Until Multica exposes the field, turn sync on only for
+  on), but a Triage child can become `done`. AO refuses only if the issue JSON ever carries a triage field, the status or status category
+  itself says `triage`, or a write answers `issue_in_triage`; none of these happens today. Until Multica exposes the field, turn sync on only for
   tickets that have been accepted (the Settings page says so). The "Move tickets out of Backlog" setting does
   not help for a Triage entry shown as `todo`. A test pins this behaviour so it is not mistaken for coverage.
 - **Compare and set.** Every write reads the issue first and sends `expected_revision`. On a revision

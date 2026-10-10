@@ -202,7 +202,8 @@ export function decideStatusWrite(input: DecideStatusWriteInput): StatusDecision
 	// An agent or squad owns the status of its issue, and Multica itself resets
 	// `in_progress` to `todo` after a failed run. AO stays out (row 16).
 	if (current.assigneeType === "agent" || current.assigneeType === "squad") return { action: "refuse", reason: "driven_by_multica" };
-	if (current.inTriage) return { action: "refuse", reason: "triage" };
+	// Triage is not a status in Multica (the key is reserved), but refuse if a status or category ever says so.
+	if (current.inTriage || current.status === "triage" || current.category === "triage") return { action: "refuse", reason: "triage" };
 	if (target === null) return { action: "none", reason: "no_target" };
 
 	const category = current.category;

@@ -293,6 +293,13 @@ describe("decideStatusWrite", () => {
 		expect(decide({ current: issue({ inTriage: true }) })).toEqual({ action: "refuse", reason: "triage" });
 	});
 
+	it("row 16: refuses when the status or the status category itself says triage", () => {
+		expect(decide({ current: issue({ status: "triage", category: "triage" }) })).toEqual({ action: "refuse", reason: "triage" });
+		expect(decide({ current: issue({ status: "triage", category: "todo" }) })).toEqual({ action: "refuse", reason: "triage" });
+		expect(decide({ current: issue({ status: "proposal", category: "triage" }) })).toEqual({ action: "refuse", reason: "triage" });
+		expect(decide({ current: issue({ status: "triage", category: "triage" }), lastKnown: known("in_progress") }).action).toBe("refuse");
+	});
+
 	it("writes only statuses from the writable set", () => {
 		for (const target of MULTICA_WRITABLE_STATUSES) {
 			for (const category of MULTICA_STATUS_CATEGORIES) {
