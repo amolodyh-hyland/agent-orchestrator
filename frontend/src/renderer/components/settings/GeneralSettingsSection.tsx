@@ -10,6 +10,7 @@ import { useTopbarTabsStore, type TabDensity, type TabOverflowMode } from "../..
 import { ConfirmDialog } from "../ConfirmDialog";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
+import { MulticaAwarenessSettings } from "./MulticaAwarenessSettings";
 import { MulticaSettingsSection } from "./MulticaSettingsSection";
 import { SettingsInputRow, SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
@@ -284,6 +285,7 @@ export function GeneralSettingsSection({
 			</SettingsSection>
 
 			<MulticaSettingsSection />
+			<MulticaAwarenessSettings />
 
 			<SettingsSection title={t("settings.privacy")} grouped>
 				<TelemetryEventsRow />

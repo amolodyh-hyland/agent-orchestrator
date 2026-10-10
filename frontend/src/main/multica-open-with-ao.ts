@@ -6,6 +6,7 @@ import {
 	isOpenWithAoNonce,
 	isOpenWithAoSnapshot,
 	parseOpenWithAoActionUrl,
+	type OpenWithAoExecutorLine,
 	type OpenWithAoSnapshot,
 	type OpenWithAoSyncAction,
 	type OpenWithAoSyncInput,
@@ -27,12 +28,19 @@ export type MulticaOpenWithAoOptions = {
 	addLink: (link: { sessionId: string; projectId: string; workspaceSlug: string; issueIdentifier: string }) => Promise<boolean>;
 	openSession: (target: { projectId: string; sessionId: string }) => void;
 	requestNewTask: (projectId: string) => void;
+	/** The executor line for the current issue, from the awareness read model; null when awareness has nothing to say. */
+	getExecutorLine?: (input: {
+		issueIdentifier: string;
+		liveSessions: ReadonlyArray<{ id: string; label: string; stateLabel: string }>;
+	}) => OpenWithAoExecutorLine | null;
 	createNonce?: () => string;
 };
 
 export type MulticaOpenWithAo = {
 	setSnapshot: (value: unknown) => { ok: boolean };
 	refresh: () => void;
+	/** Like refresh, but sends nothing when the page already shows exactly this payload (used for awareness pushes, which arrive often). */
+	refreshIfChanged: () => void;
 	handleActionUrl: (url: string) => boolean;
 	dispose: () => void;
 };
@@ -156,22 +164,57 @@ export function createMulticaOpenWithAo(options: MulticaOpenWithAoOptions): Mult
 		}
 	};
 
-	const refresh = (): void => {
+	/** Non-terminated AO sessions linked to the issue, with the label and state the menu already shows. */
+	const executorLine = (issueIdentifier: string): OpenWithAoExecutorLine | null => {
+		if (!options.getExecutorLine) return null;
+		try {
+			const linkedIds = new Set(options.getLinks().filter((link) => link.issueIdentifier === issueIdentifier).map((link) => link.sessionId));
+			const liveSessions: Array<{ id: string; label: string; stateLabel: string }> = [];
+			for (const project of snapshot?.projects ?? []) {
+				for (const session of project.sessions) {
+					if (linkedIds.has(session.id) && !session.terminated) liveSessions.push({ id: session.id, label: session.label, stateLabel: session.stateLabel });
+				}
+			}
+			return options.getExecutorLine({ issueIdentifier, liveSessions });
+		} catch {
+			return null;
+		}
+	};
+
+	// What the page was last given, so an unchanged payload is not sent again by `refreshIfChanged`.
+	const REMOVED_PAGE_KEY = "removed";
+	let lastPageKey: string | null = null;
+
+	const sendToPage = (onlyIfChanged: boolean): void => {
 		if (disposed) return;
 		try {
 			const host = options.getHost();
 			if (!host) return;
 			const issue = options.getCurrentIssue();
 			if (issue === null) {
+				if (onlyIfChanged && lastPageKey === REMOVED_PAGE_KEY) return;
+				lastPageKey = REMOVED_PAGE_KEY;
 				host.runInAoWorld(buildOpenWithAoRemoveScript());
 				return;
 			}
-			const payload = buildOpenWithAoPagePayload({ snapshot, links: options.getLinks(), issue, nonce, sync: options.getSync?.() });
+			const payload = buildOpenWithAoPagePayload({
+				snapshot,
+				links: options.getLinks(),
+				issue,
+				nonce,
+				sync: options.getSync?.(),
+				executor: executorLine(issue.identifier),
+			});
+			const key = JSON.stringify(payload);
+			if (onlyIfChanged && key === lastPageKey) return;
+			lastPageKey = key;
 			host.runInAoWorld(buildOpenWithAoScript(payload));
 		} catch {
 			// Page refreshes are best effort; a subsequent snapshot or issue change retries.
 		}
 	};
+	// A full refresh always re-sends: a title change or a snapshot may follow a page reload that lost the controller.
+	const refresh = (): void => sendToPage(false);
 
 	return {
 		setSnapshot: (value) => {
@@ -184,6 +227,7 @@ export function createMulticaOpenWithAo(options: MulticaOpenWithAoOptions): Mult
 			return { ok: true };
 		},
 		refresh,
+		refreshIfChanged: () => sendToPage(true),
 		handleActionUrl: (url) => {
 			if (typeof url !== "string" || !url.startsWith(OPEN_WITH_AO_ACTION_PREFIX)) return false;
 			const action = parseOpenWithAoActionUrl(url);

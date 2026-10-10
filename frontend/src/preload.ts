@@ -88,6 +88,22 @@ import {
 	type AoMulticaSendBridge,
 } from "./shared/multica-send-to-ao";
 import {
+	MULTICA_AWARENESS_COMMAND_CHANNEL,
+	MULTICA_AWARENESS_GET_STATE_CHANNEL,
+	MULTICA_AWARENESS_OPEN_ISSUE_CHANNEL,
+	MULTICA_AWARENESS_STATE_CHANNEL,
+	type AwarenessCommand,
+	type AwarenessCommandResult,
+	type AwarenessState,
+	type MulticaAwarenessBridge,
+} from "./shared/multica-awareness";
+import {
+	MULTICA_ACTION_LOG_READ_CHANNEL,
+	type MulticaActionLogBridge,
+	type MulticaActionLogQuery,
+	type MulticaActionRecord,
+} from "./shared/multica-action-log";
+import {
 	MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL,
 	type AoMulticaOpenWithAoBridge,
 	type OpenWithAoPublishResult,
@@ -781,6 +797,23 @@ const api = {
 			};
 		},
 	} satisfies MulticaStatusSyncBridge,
+	// Awareness is read-only toward Multica. There is no generic request channel: each method is one typed IPC call.
+	multicaAwareness: {
+		getState: () => ipcRenderer.invoke(MULTICA_AWARENESS_GET_STATE_CHANNEL) as Promise<AwarenessState>,
+		command: (command: AwarenessCommand) => ipcRenderer.invoke(MULTICA_AWARENESS_COMMAND_CHANNEL, command) as Promise<AwarenessCommandResult>,
+		openIssue: (request: { serverKey: string; workspaceSlug: string; identifier: string }) =>
+			ipcRenderer.invoke(MULTICA_AWARENESS_OPEN_ISSUE_CHANNEL, request) as Promise<boolean>,
+		onState: (listener: (state: AwarenessState) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, state: AwarenessState) => listener(state);
+			ipcRenderer.on(MULTICA_AWARENESS_STATE_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(MULTICA_AWARENESS_STATE_CHANNEL, wrapped);
+			};
+		},
+	} satisfies MulticaAwarenessBridge,
+	multicaActionLog: {
+		read: (query?: MulticaActionLogQuery) => ipcRenderer.invoke(MULTICA_ACTION_LOG_READ_CHANNEL, query) as Promise<MulticaActionRecord[]>,
+	} satisfies MulticaActionLogBridge,
 	keybindings: {
 		get: () => ipcRenderer.invoke("keybindings:get") as Promise<KeybindingOverrides>,
 		set: (overrides: KeybindingOverrides) =>
