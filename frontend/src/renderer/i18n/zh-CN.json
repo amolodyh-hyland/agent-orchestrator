@@ -957,6 +957,7 @@
 	"multica.awareness.master": "监视 Multica",
 	"multica.awareness.masterDescription": "以只读方式读取 Multica 的工单、负责人和智能体运行。在你开启服务器并开启工作区之前不会监视任何内容。",
 	"multica.awareness.noWorkspaces": "暂无工作区。开启服务器后会列出。",
+	"multica.awareness.openFailed": "请在设置中将 Multica 切换到此服务器后再打开该工单。",
 	"multica.awareness.pageNote": "仅页面:AO 不持有令牌。它通过已打开的 Multica 页面读取,仅限该页面的服务器和工作区,且仅在 Multica 已加载时。",
 	"multica.awareness.partial": "部分:仅显示最新的工单",
 	"multica.awareness.refresh": "刷新列表",

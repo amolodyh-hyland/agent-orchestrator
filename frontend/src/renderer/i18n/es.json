@@ -964,6 +964,7 @@
 	"multica.awareness.master": "Vigilar Multica",
 	"multica.awareness.masterDescription": "Lee incidencias, responsables y ejecuciones de agentes de Multica, solo lectura. No se vigila nada hasta que actives un servidor y luego un espacio de trabajo.",
 	"multica.awareness.noWorkspaces": "Aún no hay espacios de trabajo. Activa el servidor para listarlos.",
+	"multica.awareness.openFailed": "Cambia Multica a este servidor en Ajustes para abrir la incidencia.",
 	"multica.awareness.pageNote": "Solo la página: AO no guarda ningún token. Lee a través de la página de Multica abierta, solo para el servidor y el espacio de trabajo de esa página y solo mientras Multica esté cargado.",
 	"multica.awareness.partial": "parcial: solo se muestran las incidencias más recientes",
 	"multica.awareness.refresh": "Actualizar lista",

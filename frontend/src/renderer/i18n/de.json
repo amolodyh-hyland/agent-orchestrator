@@ -957,6 +957,7 @@
 	"multica.awareness.master": "Multica beobachten",
 	"multica.awareness.masterDescription": "Tickets, Zuständige und Agentenläufe aus Multica nur lesen. Nichts wird beobachtet, bis Sie einen Server und dann einen Workspace einschalten.",
 	"multica.awareness.noWorkspaces": "Noch keine Workspaces. Schalten Sie den Server ein, um sie aufzulisten.",
+	"multica.awareness.openFailed": "Stellen Sie Multica in den Einstellungen auf diesen Server um, um das Ticket zu öffnen.",
 	"multica.awareness.pageNote": "Nur Seite: AO hält kein Token. Es liest über die geöffnete Multica-Seite, nur für Server und Workspace dieser Seite und nur solange Multica geladen ist.",
 	"multica.awareness.partial": "teilweise: nur die neuesten Tickets werden angezeigt",
 	"multica.awareness.refresh": "Liste aktualisieren",

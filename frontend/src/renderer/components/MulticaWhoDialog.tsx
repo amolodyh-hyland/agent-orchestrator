@@ -54,6 +54,7 @@ export function MulticaWhoDialog({ open, onOpenChange }: { open: boolean; onOpen
 	const [serverKey, setServerKey] = useState("");
 	const [workspaceSlug, setWorkspaceSlug] = useState("");
 	const [mineOnly, setMineOnly] = useState(false);
+	const [openFailed, setOpenFailed] = useState(false);
 
 	useEffect(() => {
 		if (open) setNow(Date.now());
@@ -99,6 +100,11 @@ export function MulticaWhoDialog({ open, onOpenChange }: { open: boolean; onOpen
 						{t("multica.awareness.who.mine")}
 					</label>
 				</div>
+				{openFailed ? (
+					<p role="alert" className="pt-2 text-xs text-error">
+						{t("multica.awareness.openFailed")}
+					</p>
+				) : null}
 				{rows.length === 0 ? (
 					<p className="pt-3 text-xs text-muted-foreground">{t("multica.awareness.who.empty")}</p>
 				) : (
@@ -121,7 +127,10 @@ export function MulticaWhoDialog({ open, onOpenChange }: { open: boolean; onOpen
 											type="button"
 											className="text-left text-primary hover:underline focus-visible:outline-2 focus-visible:outline-ring"
 											aria-label={t("multica.links.open", { issue: row.identifier })}
-											onClick={() => void aoBridge.multicaAwareness.openIssue({ serverKey: row.serverKey, workspaceSlug: row.workspaceSlug, identifier: row.identifier })}
+											onClick={async () => {
+												const opened = await aoBridge.multicaAwareness.openIssue({ serverKey: row.serverKey, workspaceSlug: row.workspaceSlug, identifier: row.identifier }).catch(() => false);
+												setOpenFailed(!opened);
+											}}
 										>
 											{row.identifier}
 										</button>

@@ -105,6 +105,18 @@ describe("MulticaRunStrip", () => {
 		expect(openIssue).toHaveBeenCalledWith({ serverKey: "cloud", workspaceSlug: "acme", identifier: "MUL-1" });
 	});
 
+	it("says so when the issue cannot be opened because Multica shows another server", async () => {
+		openIssue.mockResolvedValue(false);
+		useMulticaAwarenessStore.setState({ state: awarenessState() });
+		render(<MulticaRunStrip />);
+		expect(screen.queryByRole("alert")).toBeNull();
+		await userEvent.click(screen.getByRole("button", { name: "Open MUL-1 in Multica" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("Switch Multica to this server in Settings to open the issue.");
+		openIssue.mockResolvedValue(true);
+		await userEvent.click(screen.getByRole("button", { name: "Open MUL-1 in Multica" }));
+		await vi.waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+	});
+
 	it("explains an empty strip and offers no badge, banner or notification", () => {
 		useMulticaAwarenessStore.setState({ state: awarenessState({ runs: [] }) });
 		render(<MulticaRunStrip />);

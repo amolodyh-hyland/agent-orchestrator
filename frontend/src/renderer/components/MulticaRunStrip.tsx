@@ -56,6 +56,7 @@ export function MulticaRunStrip() {
 	const workspaces = useWorkspaceQuery().data;
 	const now = useNow();
 	const [whoOpen, setWhoOpen] = useState(false);
+	const [openFailedKey, setOpenFailedKey] = useState<string | null>(null);
 
 	useEffect(() => {
 		void load();
@@ -110,7 +111,11 @@ export function MulticaRunStrip() {
 										type="button"
 										className="inline-flex items-center gap-1 text-primary hover:underline focus-visible:outline-2 focus-visible:outline-ring"
 										aria-label={t("multica.links.open", { issue: card.identifier })}
-										onClick={() => void aoBridge.multicaAwareness.openIssue({ serverKey: card.serverKey, workspaceSlug: card.workspaceSlug, identifier: card.identifier })}
+										onClick={async () => {
+											// Only the server the Multica page shows can open an issue; say so instead of doing nothing.
+											const opened = await aoBridge.multicaAwareness.openIssue({ serverKey: card.serverKey, workspaceSlug: card.workspaceSlug, identifier: card.identifier }).catch(() => false);
+											setOpenFailedKey(opened ? null : card.key);
+										}}
 									>
 										<ExternalLink className="size-3" aria-hidden="true" />
 										{t("multica.awareness.card.open")}
@@ -125,6 +130,11 @@ export function MulticaRunStrip() {
 										</button>
 									) : null}
 								</div>
+								{openFailedKey === card.key ? (
+									<p role="alert" className="text-caption leading-4 text-error">
+										{t("multica.awareness.openFailed")}
+									</p>
+								) : null}
 							</li>
 						);
 					})}

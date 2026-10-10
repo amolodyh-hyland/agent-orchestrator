@@ -964,6 +964,7 @@
 	"multica.awareness.master": "Surveiller Multica",
 	"multica.awareness.masterDescription": "Lit les tickets, les responsables et les exécutions d'agents de Multica, en lecture seule. Rien n'est surveillé tant que vous n'activez pas un serveur puis un espace de travail.",
 	"multica.awareness.noWorkspaces": "Aucun espace de travail pour le moment. Activez le serveur pour les lister.",
+	"multica.awareness.openFailed": "Passez Multica sur ce serveur dans les réglages pour ouvrir le ticket.",
 	"multica.awareness.pageNote": "Page seule : AO ne détient aucun jeton. Il lit via la page Multica ouverte, uniquement pour le serveur et l'espace de travail de cette page, et seulement tant que Multica est chargé.",
 	"multica.awareness.partial": "partiel : seuls les tickets les plus récents sont affichés",
 	"multica.awareness.refresh": "Actualiser la liste",

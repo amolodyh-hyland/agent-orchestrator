@@ -957,6 +957,7 @@
 	"multica.awareness.master": "Multica 감시",
 	"multica.awareness.masterDescription": "Multica의 이슈, 담당자, 에이전트 실행을 읽기 전용으로 가져옵니다. 서버와 워크스페이스를 켜기 전에는 아무것도 감시하지 않습니다.",
 	"multica.awareness.noWorkspaces": "아직 워크스페이스가 없습니다. 서버를 켜면 목록이 표시됩니다.",
+	"multica.awareness.openFailed": "이슈를 열려면 설정에서 Multica를 이 서버로 전환하세요.",
 	"multica.awareness.pageNote": "페이지만: AO는 토큰을 보관하지 않습니다. 열려 있는 Multica 페이지를 통해 해당 페이지의 서버와 워크스페이스만, Multica가 로드된 동안에만 읽습니다.",
 	"multica.awareness.partial": "일부만: 최신 이슈만 표시됩니다",
 	"multica.awareness.refresh": "목록 새로 고침",

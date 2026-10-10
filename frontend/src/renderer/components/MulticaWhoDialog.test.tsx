@@ -67,6 +67,19 @@ describe("MulticaWhoDialog", () => {
 		expect(names.filter((name) => /hand ?off|cancel|assign|stop|start/i.test(name ?? ""))).toEqual([]);
 	});
 
+	it("says so when the issue cannot be opened because Multica shows another server", async () => {
+		const original = window.ao!.multicaAwareness.openIssue;
+		window.ao!.multicaAwareness.openIssue = vi.fn(async () => false);
+		try {
+			useMulticaAwarenessStore.setState({ state: awarenessState() });
+			render(<MulticaWhoDialog open onOpenChange={() => undefined} />);
+			await userEvent.click(screen.getAllByRole("button", { name: "Open MUL-1 in Multica" })[0]);
+			expect(await screen.findByRole("alert")).toHaveTextContent("Switch Multica to this server");
+		} finally {
+			window.ao!.multicaAwareness.openIssue = original;
+		}
+	});
+
 	it("says so when there is nothing to show", () => {
 		useMulticaAwarenessStore.setState({ state: awarenessState({ issues: [], runs: [] }) });
 		render(<MulticaWhoDialog open onOpenChange={() => undefined} />);

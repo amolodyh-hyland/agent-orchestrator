@@ -954,6 +954,7 @@
 	"multica.awareness.master": "Watch Multica",
 	"multica.awareness.masterDescription": "Read issues, assignees and agent runs from Multica, read-only. Nothing is watched until you switch on a server and then a workspace.",
 	"multica.awareness.noWorkspaces": "No workspaces yet. Switch the server on to list them.",
+	"multica.awareness.openFailed": "Switch Multica to this server in Settings to open the issue.",
 	"multica.awareness.pageNote": "Page only: AO holds no token. It reads through the open Multica page, for that page's server and workspace only, and only while Multica is loaded.",
 	"multica.awareness.partial": "partial: only the newest issues are shown",
 	"multica.awareness.refresh": "Refresh list",

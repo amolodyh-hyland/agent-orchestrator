@@ -957,6 +957,7 @@
 	"multica.awareness.master": "Multica を監視",
 	"multica.awareness.masterDescription": "Multica の課題・担当者・エージェントの実行を読み取り専用で取得します。サーバー、続いてワークスペースをオンにするまで何も監視されません。",
 	"multica.awareness.noWorkspaces": "ワークスペースはまだありません。サーバーをオンにすると一覧が表示されます。",
+	"multica.awareness.openFailed": "課題を開くには、設定で Multica をこのサーバーに切り替えてください。",
 	"multica.awareness.pageNote": "ページのみ: AO はトークンを保持しません。開いている Multica ページ経由で、そのページのサーバーとワークスペースに限り、Multica が読み込まれている間だけ読み取ります。",
 	"multica.awareness.partial": "一部分のみ: 最新の課題だけを表示しています",
 	"multica.awareness.refresh": "一覧を更新",
