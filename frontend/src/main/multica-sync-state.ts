@@ -107,7 +107,7 @@ export function coerceMulticaSyncStateFile(raw: unknown): MulticaSyncStateFile {
 	if (isRecord(raw.settings)) {
 		result.settings = {
 			enabled: raw.settings.enabled === true,
-			moveOutOfBacklog: raw.settings.moveOutOfBacklog !== false,
+			moveOutOfBacklog: raw.settings.moveOutOfBacklog === true,
 		};
 	}
 

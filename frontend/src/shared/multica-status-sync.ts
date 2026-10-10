@@ -30,11 +30,13 @@ export function isMulticaSyncKilled(env: Record<string, string | undefined>): bo
 export type MulticaSyncSettings = {
 	/** Master switch. With it off no code path writes to Multica. */
 	enabled: boolean;
-	/** Starting a session on a Backlog issue moves it to In Progress (answer Q1 in the docs). */
+	/** Starting a session on a Backlog issue moves it to In Progress (answer Q1 in the docs). Off by default. */
 	moveOutOfBacklog: boolean;
 };
 
-export const DEFAULT_MULTICA_SYNC_SETTINGS: MulticaSyncSettings = { enabled: false, moveOutOfBacklog: true };
+// Both off: a card in Backlog is never moved unless the user turns that on explicitly. A card in Triage can look like
+// Backlog (Multica gives AO no way to tell them apart), so the safe default is to leave Backlog alone.
+export const DEFAULT_MULTICA_SYNC_SETTINGS: MulticaSyncSettings = { enabled: false, moveOutOfBacklog: false };
 
 export type MulticaSyncLinkRef = { sessionId: string; workspaceSlug: string; issueIdentifier: string };
 

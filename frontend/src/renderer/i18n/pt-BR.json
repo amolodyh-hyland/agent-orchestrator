@@ -860,7 +860,7 @@
 	"multica.sync.settings.enabled": "Atualizar o status das issues do Multica",
 	"multica.sync.settings.enabled.help": "Quando ativado, o AO move uma issue vinculada para Em andamento, Em revisão ou Concluída conforme a sessão avança. Cada vínculo é ativado separadamente. Desativado por padrão.",
 	"multica.sync.settings.moveOutOfBacklog": "Tirar issues do backlog",
-	"multica.sync.settings.moveOutOfBacklog.help": "Iniciar uma sessão em uma issue do backlog a move para Em andamento.",
+	"multica.sync.settings.moveOutOfBacklog.help": "Desativado por padrão. Quando ativado, iniciar uma sessão em uma issue do backlog a move para Em andamento. Uma issue na triagem pode parecer do backlog, então deixe desativado a menos que queira isso.",
 	"multica.sync.settings.killSwitch": "Desativado nesta execução por AO_MULTICA_SYNC=0.",
 	"multica.sync.settings.notes": "O AO só move uma issue para a frente, nunca para Backlog, Bloqueada ou Cancelada, e nunca altera a quem ela está atribuída. Ele para quando alguém muda o status no Multica ou quando um agente do Multica é o responsável. As alterações aparecem no Multica com o seu nome. Funciona apenas enquanto o AO está aberto e você está conectado ao Multica. O AO não consegue saber se uma issue ainda está na triagem do Multica e a trata como qualquer outra: ative a sincronização apenas em issues já aceitas.",
 	"multica.send.keepUpdated": "Manter esta issue atualizada",

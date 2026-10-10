@@ -209,7 +209,7 @@ describe("MulticaSettingsSection", () => {
 	describe("status sync", () => {
 		let originalSync: Bridge["multicaSync"];
 		const snapshot = (settings: Partial<MulticaSyncSnapshot["settings"]> = {}, killSwitch = false): MulticaSyncSnapshot => ({
-			settings: { enabled: false, moveOutOfBacklog: true, ...settings },
+			settings: { enabled: false, moveOutOfBacklog: false, ...settings },
 			killSwitch,
 			links: [],
 		});
@@ -238,6 +238,13 @@ describe("MulticaSettingsSection", () => {
 			expect(window.ao!.multicaSync.setSettings).not.toHaveBeenCalled();
 		});
 
+		it("shows the Backlog move off by default, and says it is off by default and why", async () => {
+			withSync({ settings: { enabled: true, moveOutOfBacklog: false }, killSwitch: false, links: [] });
+			await open();
+			expect(screen.getByRole("switch", { name: "Move tickets out of Backlog" })).not.toBeChecked();
+			expect(screen.getByText(/Off by default\. When on, starting a session on a ticket in Backlog moves it to In progress\. A ticket in Triage can look like Backlog/)).toBeInTheDocument();
+		});
+
 		it("explains what it does and never does", async () => {
 			withSync(snapshot());
 			await open();
@@ -262,15 +269,21 @@ describe("MulticaSettingsSection", () => {
 			expect(window.ao!.multicaSync.setSettings).toHaveBeenCalledExactlyOnceWith({ enabled: true });
 		});
 
-		it("turns the Backlog move off once the master switch is on", async () => {
+		it("turns the Backlog move on only when asked, once the master switch is on, and off again", async () => {
 			withSync(snapshot({ enabled: true }));
 			await open();
 			const toggle = screen.getByRole("switch", { name: "Move tickets out of Backlog" });
-			expect(toggle).toBeChecked();
+			expect(toggle).not.toBeChecked();
 
 			await userEvent.click(toggle);
+			expect(window.ao!.multicaSync.setSettings).toHaveBeenLastCalledWith({ moveOutOfBacklog: true });
+		});
 
-			expect(window.ao!.multicaSync.setSettings).toHaveBeenCalledExactlyOnceWith({ moveOutOfBacklog: false });
+		it("turns the Backlog move off again when it was on", async () => {
+			withSync(snapshot({ enabled: true, moveOutOfBacklog: true }));
+			await open();
+			await userEvent.click(screen.getByRole("switch", { name: "Move tickets out of Backlog" }));
+			expect(window.ao!.multicaSync.setSettings).toHaveBeenLastCalledWith({ moveOutOfBacklog: false });
 		});
 
 		it("disables both switches and says why while AO_MULTICA_SYNC=0 is set", async () => {

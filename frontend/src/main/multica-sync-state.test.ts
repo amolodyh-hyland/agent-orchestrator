@@ -47,7 +47,7 @@ describe("multica sync state store", () => {
 	it("starts with everything off when the file is missing or damaged", async () => {
 		const store = createMulticaSyncStateStore(stateDir);
 		expect(await store.load()).toEqual(emptyMulticaSyncStateFile());
-		expect(emptyMulticaSyncStateFile().settings).toEqual({ enabled: false, moveOutOfBacklog: true });
+		expect(emptyMulticaSyncStateFile().settings).toEqual({ enabled: false, moveOutOfBacklog: false });
 
 		await writeFile(path.join(stateDir, MULTICA_SYNC_STATE_FILE), "{");
 		expect(await store.load()).toEqual(emptyMulticaSyncStateFile());
@@ -81,6 +81,11 @@ describe("coerceMulticaSyncStateFile", () => {
 		expect(coerceMulticaSyncStateFile([])).toEqual(emptyMulticaSyncStateFile());
 	});
 
+	it("reads a saved file with no Backlog setting as off, and keeps a saved on", () => {
+		expect(coerceMulticaSyncStateFile({ version: 1, settings: { enabled: true } }).settings).toEqual({ enabled: true, moveOutOfBacklog: false });
+		expect(coerceMulticaSyncStateFile({ version: 1, settings: { enabled: true, moveOutOfBacklog: true } }).settings.moveOutOfBacklog).toBe(true);
+	});
+
 	it("keeps only well-formed links and issues, once each", () => {
 		const file = sample();
 		const coerced = coerceMulticaSyncStateFile({
@@ -103,7 +108,7 @@ describe("coerceMulticaSyncStateFile", () => {
 			],
 		});
 
-		expect(coerced.settings).toEqual({ enabled: false, moveOutOfBacklog: true });
+		expect(coerced.settings).toEqual({ enabled: false, moveOutOfBacklog: false });
 		expect(coerced.links).toEqual([file.links[0]]);
 		expect(coerced.issues).toHaveLength(2);
 		expect(coerced.issues[0]).toEqual(file.issues[0]);

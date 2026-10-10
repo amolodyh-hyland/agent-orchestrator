@@ -21,7 +21,7 @@ describe("multica sync store", () => {
 	});
 
 	it("starts with everything off", () => {
-		expect(useMulticaSyncStore.getState().snapshot.settings).toEqual({ enabled: false, moveOutOfBacklog: true });
+		expect(useMulticaSyncStore.getState().snapshot.settings).toEqual({ enabled: false, moveOutOfBacklog: false });
 	});
 
 	it("loads the state once and follows pushed changes", async () => {

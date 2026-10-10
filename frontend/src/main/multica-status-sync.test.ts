@@ -123,7 +123,7 @@ describe("multica status sync", () => {
 			sync.setFacts({ stale: false, sessions: [working()] });
 			await sleep(120);
 
-			expect(sync.getSnapshot().settings).toEqual({ enabled: false, moveOutOfBacklog: true });
+			expect(sync.getSnapshot().settings).toEqual({ enabled: false, moveOutOfBacklog: false });
 			expect(view().state).toBe("off");
 			expect(fake.requests).toHaveLength(0);
 			expect(host.scripts).toHaveLength(0);
@@ -253,7 +253,7 @@ describe("multica status sync", () => {
 			const issue = fake.addIssue({ identifier: "MUL-1", status: "backlog" });
 			const sync = start();
 			sync.setFacts({ stale: false, sessions: [working()] });
-			await turnOn(sync);
+			await turnOn(sync, [link()], { enabled: true, moveOutOfBacklog: true });
 			await settled();
 
 			expect(fake.issues.get(issue.id)?.status).toBe("in_progress");
@@ -262,6 +262,32 @@ describe("multica status sync", () => {
 				"POST /api/issues/preview-trigger",
 				"PUT /api/issues/{id}",
 			]);
+		});
+
+		it("pinned: with the default settings a Backlog card is never moved, and nothing else is asked of Multica for it", async () => {
+			const issue = fake.addIssue({ identifier: "MUL-1", status: "backlog" });
+			const sync = start();
+			sync.setFacts({ stale: false, sessions: [working()] });
+			await turnOn(sync);
+			await settled();
+			await sleep(60);
+
+			expect(sync.getSnapshot().settings.moveOutOfBacklog).toBe(false);
+			expect(fake.issues.get(issue.id)?.status).toBe("backlog");
+			expect(fake.requests.map((request) => request.method)).toEqual(["GET"]);
+			expect(view().state).toBe("synced");
+		});
+
+		it("moves a Backlog card only after the user turns the option on, and turning it off again stops it", async () => {
+			const issue = fake.addIssue({ identifier: "MUL-1", status: "backlog" });
+			const sync = start();
+			sync.setFacts({ stale: false, sessions: [working()] });
+			await turnOn(sync);
+			await settled();
+			expect(fake.issues.get(issue.id)?.status).toBe("backlog");
+
+			await sync.setSettings({ moveOutOfBacklog: true });
+			await until(() => expect(fake.issues.get(issue.id)?.status).toBe("in_progress"));
 		});
 
 		it("leaves a Backlog issue alone when the user turned the move off", async () => {
@@ -279,7 +305,7 @@ describe("multica status sync", () => {
 			fake.failNext({ method: "POST" }, { status: 200, body: { triggers: [{ issue_id: issue.id, agent_id: "a", source: "status" }], total_count: 1 } });
 			const sync = start();
 			sync.setFacts({ stale: false, sessions: [working()] });
-			await turnOn(sync);
+			await turnOn(sync, [link()], { enabled: true, moveOutOfBacklog: true });
 			await settled();
 			expect(view()).toMatchObject({ state: "refused", reason: "would_start_run" });
 			expect(put()).toHaveLength(0);
@@ -897,7 +923,9 @@ describe("multica status sync", () => {
 			await settled();
 			await settled(engine, "s-2", "MUL-2");
 
-			expect(fake.issues.get(backlog.id)?.status).toBe("in_progress");
+			// The Backlog-looking one is left alone by the default settings (the user has to opt in to moving Backlog);
+			// the one shown as todo is overwritten whatever the setting says.
+			expect(fake.issues.get(backlog.id)?.status).toBe("backlog");
 			expect(fake.issues.get(todo.id)?.status).toBe("in_progress");
 			expect(view().state).toBe("synced");
 		});
@@ -1094,12 +1122,12 @@ describe("multica status sync", () => {
 			return { held, stub };
 		}
 
-		async function startHeld(status = "todo") {
+		async function startHeld(status = "todo", moveOutOfBacklog = false) {
 			const { held, stub } = heldApi();
 			api = stub;
 			const sync = start();
 			sync.setFacts({ stale: false, sessions: [working()] });
-			await turnOn(sync);
+			await turnOn(sync, [link()], { enabled: true, moveOutOfBacklog });
 			await until(() => expect(stub.getIssue).toHaveBeenCalledTimes(1));
 			return { held, stub, sync, status };
 		}
@@ -1132,7 +1160,7 @@ describe("multica status sync", () => {
 		});
 
 		it("does not write when the master switch is turned off while the Backlog preview is pending", async () => {
-			const { held, stub, sync } = await startHeld();
+			const { held, stub, sync } = await startHeld("todo", true);
 			held.resolveRead(observation("backlog"));
 			await until(() => expect(stub.previewTrigger).toHaveBeenCalledTimes(1));
 			await sync.setSettings({ enabled: false });
@@ -1142,7 +1170,7 @@ describe("multica status sync", () => {
 		});
 
 		it("does not write when the only enabled link is turned off while the Backlog preview is pending", async () => {
-			const { held, stub, sync } = await startHeld();
+			const { held, stub, sync } = await startHeld("todo", true);
 			held.resolveRead(observation("backlog"));
 			await until(() => expect(stub.previewTrigger).toHaveBeenCalledTimes(1));
 			await sync.setLink({ sessionId: "s-1", workspaceSlug: "acme", issueIdentifier: "MUL-1", enabled: false });
@@ -1537,7 +1565,7 @@ describe("multica status sync", () => {
 				link({ sessionId: "s-1", issueIdentifier: "MUL-1" }),
 				link({ sessionId: "s-2", issueIdentifier: "MUL-2" }),
 				link({ sessionId: "s-3", issueIdentifier: "MUL-3" }),
-			]);
+			], { enabled: true, moveOutOfBacklog: true });
 			for (const [session, identifier] of [["s-1", "MUL-1"], ["s-2", "MUL-2"], ["s-3", "MUL-3"]]) await settled(engine, session, identifier);
 			sync.setFacts({ stale: false, sessions: [inReview("s-1"), inReview("s-2"), inReview("s-3")] });
 			await sleep(DEBOUNCE_MS * 4);

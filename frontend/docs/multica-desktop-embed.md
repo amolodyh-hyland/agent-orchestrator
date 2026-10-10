@@ -336,7 +336,7 @@ wrote `in_review`, a later round of CI fixes does not move the issue back to `in
 
 | Q | Answer in this slice |
 |---|---|
-| Q1 | A session started on a Backlog issue moves it to `in_progress`; the setting "Move tickets out of Backlog" (on) turns it off. The write is previewed first (`POST /api/issues/preview-trigger`): if Multica says it would start a run, AO refuses; if it cannot ask, AO does not write (fails closed for this move only). |
+| Q1 | **Off by default** (changed from the design's recommended "yes", because a Triage entry can look like Backlog and AO cannot tell them apart). A card in Backlog is never moved unless the user turns on "Move tickets out of Backlog" in Settings. When on, a session started on a Backlog issue moves it to `in_progress`; the write is previewed first (`POST /api/issues/preview-trigger`): if Multica says it would start a run, AO refuses; if it cannot ask, AO does not write (fails closed for this move only). |
 | Q2 | Idle worker, no PR: no write. |
 | Q3 | `needs_input`, `exited`, `no_signal`: no write, never `blocked` (D11). |
 | Q4 | `in_progress` until the board column is `needs_review`. |
@@ -386,8 +386,9 @@ wrote `in_review`, a later round of CI fixes does not move the issue back to `in
   changes, `triage_state` stays set, no agent run starts (Multica refuses runs for Triage and `suppress_run` is
   on), but a Triage child can become `done`. AO refuses only if the issue JSON ever carries a triage field, the status or status category
   itself says `triage`, or a write answers `issue_in_triage`; none of these happens today. Until Multica exposes the field, turn sync on only for
-  tickets that have been accepted (the Settings page says so). The "Move tickets out of Backlog" setting does
-  not help for a Triage entry shown as `todo`. A test pins this behaviour so it is not mistaken for coverage.
+  tickets that have been accepted (the Settings page says so). The "Move tickets out of Backlog" setting is **off by
+  default**, so a Triage entry shown as Backlog is left alone unless the user opts in; it does not help for a
+  Triage entry shown as `todo`. A test pins this behaviour so it is not mistaken for coverage.
 - **Compare and set.** Every write reads the issue first and sends `expected_revision`. On a revision
   conflict AO reads again once, decides again, and writes once more; a second conflict stops until the next
   pass. A person's change between the read and the write wins.
