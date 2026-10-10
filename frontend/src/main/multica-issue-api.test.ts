@@ -157,6 +157,36 @@ describe("issue API against a fake Multica server", () => {
 		]);
 	});
 
+	it("what the page script hands back never contains the token, the description or an error sentence", async () => {
+		const issue = fake.addIssue({ identifier: "MUL-1", status: "todo", description: "A long secret description" });
+		const read = buildMulticaRequestScript({
+			apiUrl: fake.url,
+			request: prepareMulticaRequest({ kind: "get_issue", workspaceSlug: "acme", identifier: "MUL-1" }),
+		});
+		const rawRead = String(await host.evaluateInPage(read, SERVER_KEY));
+		const write = buildMulticaRequestScript({
+			apiUrl: fake.url,
+			request: prepareMulticaRequest({ kind: "put_status", workspaceSlug: "acme", issueId: issue.id, status: "in_progress", expectedRevision: 1 }),
+		});
+		const rawConflict = String(await host.evaluateInPage(write, SERVER_KEY));
+
+		for (const raw of [rawRead, rawConflict]) {
+			expect(raw).not.toContain(fake.token);
+			expect(raw).not.toMatch(/secret|Bearer|resource changed since it was loaded/);
+		}
+		expect(JSON.parse(rawRead).body).toEqual({
+			id: issue.id,
+			workspace_id: issue.workspace_id,
+			identifier: "MUL-1",
+			status: "todo",
+			status_category: "todo",
+			revision: 4,
+			assignee_type: "member",
+			triage_state: null,
+		});
+		expect(JSON.parse(rawConflict).body).toEqual({ code: "revision_conflict", actual_revision: 4 });
+	});
+
 	it("writes a status with expected_revision and suppress_run, and returns the new revision", async () => {
 		const issue = fake.addIssue({ identifier: "MUL-1", status: "todo" });
 
