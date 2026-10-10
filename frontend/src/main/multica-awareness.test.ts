@@ -404,6 +404,8 @@ describe("multica awareness service", () => {
 		];
 		for (const [name, prefix] of failureCases) {
 			it(`does not go live when reading ${name} fails, and recovers on the next try`, async () => {
+				// The run is on an issue only the by-id read can find (MUL-3 is unassigned), so losing that read shows.
+				a.server.setTasks("ws-1", [fakeTask({ id: "task-1", issue_id: "iss-3", agent_id: "agent-1", status: "running" })]);
 				a.server.failNext(prefix, { status: 500 });
 				await connect();
 				await until(() => h.serverState().status === "live");
@@ -420,14 +422,45 @@ describe("multica awareness service", () => {
 					},
 					{ timeout: 8000, interval: 20 },
 				);
-				expect(h.state().issues.map((issue) => issue.identifier).sort()).toEqual(["MUL-1", "MUL-2"]);
+				expect(h.state().issues.map((issue) => issue.identifier).sort()).toEqual(["MUL-1", "MUL-2", "MUL-3"]);
 				expect(h.state().agents.map((agent) => agent.name)).toEqual(["Builder"]);
+				expect(h.state().runtimes.map((runtime) => runtime.id)).toEqual(["rt-1"]);
 			});
 		}
 
+		it("does not go live when reading a linked issue fails (other than not found)", async () => {
+			// MUL-3 is unassigned, so only the linked-issue read can find it.
+			h.links.push({ sessionId: "s-3", projectId: "p", workspaceSlug: "acme", issueIdentifier: "MUL-3", createdAt: "2026-10-10T10:00:00Z", serverKey: keyA() });
+			await h.rebuild();
+			a.server.failNext("/api/issues/MUL-3", { status: 500 });
+			await connect();
+			await until(() => h.serverState().status === "live");
+			await watch("ws-1");
+			await until(() => a.server.requestsTo("/api/issues/MUL-3").length >= 1);
+			await settle(120);
+			expect(live()).toBe(false);
+			await vi.waitFor(
+				async () => {
+					await h.scheduler.advance(30_000);
+					expect(live()).toBe(true);
+				},
+				{ timeout: 8000, interval: 20 },
+			);
+			expect(h.state().issues.map((issue) => issue.identifier)).toContain("MUL-3");
+		});
+
+		it("treats a linked issue that is not found as deleted, not as a failed read", async () => {
+			h.links.push({ sessionId: "s-9", projectId: "p", workspaceSlug: "acme", issueIdentifier: "MUL-99", createdAt: "2026-10-10T10:00:00Z", serverKey: keyA() });
+			await h.rebuild();
+			await connect();
+			await until(() => h.serverState().status === "live");
+			await watch("ws-1");
+			await until(() => live());
+		});
+
 		it("does not go live when the lists of my issues fail", async () => {
-			a.server.failNext("/api/issues", { status: 500, count: 1 });
-			// The first issue call is the by-id batch; fail the next ones as well.
+			// No active run, so the issue calls are the two lists (mine, then agent and squad); fail both.
+			a.server.setTasks("ws-1", []);
 			a.server.failNext("/api/issues", { status: 500, count: 2 });
 			await connect();
 			await until(() => h.serverState().status === "live");
@@ -436,6 +469,14 @@ describe("multica awareness service", () => {
 			await settle(120);
 			expect(live()).toBe(false);
 			expect(h.state().issues).toEqual([]);
+			await vi.waitFor(
+				async () => {
+					await h.scheduler.advance(30_000);
+					expect(live()).toBe(true);
+				},
+				{ timeout: 8000, interval: 20 },
+			);
+			expect(h.state().issues.map((issue) => issue.identifier).sort()).toEqual(["MUL-1", "MUL-2"]);
 		});
 	});
 
