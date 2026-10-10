@@ -166,6 +166,18 @@ describe("multica status sync", () => {
 			expect(fake.requests).toHaveLength(0);
 		});
 
+		it("writes nothing when AO goes offline between scheduling a write and making it", async () => {
+			fake.addIssue({ identifier: "MUL-1", status: "todo" });
+			const sync = start({ engine: { debounceMs: 100 } });
+			sync.setFacts({ stale: false, sessions: [working()] });
+			await turnOn(sync);
+			sync.setFacts({ stale: true, sessions: [working()] });
+			await sleep(250);
+
+			expect(fake.requests).toHaveLength(0);
+			expect(view()).toMatchObject({ state: "error", reason: "ao_offline" });
+		});
+
 		it("does not touch the network when the facts are not there yet or are stale (AO offline)", async () => {
 			fake.addIssue({ identifier: "MUL-1", status: "todo" });
 			const sync = start();
@@ -451,7 +463,7 @@ describe("multica status sync", () => {
 			expect(records[0].result).toMatchObject({ httpStatus: 409, code: "revision_conflict", reason: "conflict" });
 		});
 
-		it("gives up after the second conflict and tries again on the next pass", async () => {
+		it("gives up after the second conflict and tries again only on the next pass", async () => {
 			const issue = fake.addIssue({ identifier: "MUL-1", status: "todo" });
 			fake.beforeNextPut((found) => {
 				found.revision += 1;
@@ -459,11 +471,15 @@ describe("multica status sync", () => {
 			fake.beforeNextPut((found) => {
 				found.revision += 1;
 			});
-			const sync = start();
+			const sync = start({ engine: { debounceMs: 200 } });
 			sync.setFacts({ stale: false, sessions: [working()] });
 			await turnOn(sync);
-			await until(() => expect(fake.requests.length).toBeGreaterThanOrEqual(4));
-			expect(put().slice(0, 2).map((request) => request.body?.expected_revision)).toEqual([4, 5]);
+			await until(() => expect(fake.requests).toHaveLength(4));
+			// One read-again only: nothing more is sent until the next scheduled pass.
+			await sleep(80);
+			expect(fake.requests).toHaveLength(4);
+			expect(put().map((request) => request.body?.expected_revision)).toEqual([4, 5]);
+
 			await settled();
 			// The next pass succeeds with the revision then current.
 			expect(fake.issues.get(issue.id)?.status).toBe("in_progress");
