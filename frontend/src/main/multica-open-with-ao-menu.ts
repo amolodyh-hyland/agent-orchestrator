@@ -248,6 +248,14 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 	}
 
 	function buildModel(currentPayload: OpenWithAoPagePayload): Entry[] {
+		// One info row above everything else: who is working this issue now (no action, no badge).
+		const executorRows: Entry[] = currentPayload.executor
+			? [infoEntry(`executor:${currentPayload.executor.display}`, currentPayload.executor.text), separator("separator:executor")]
+			: [];
+		return [...executorRows, ...buildProjectModel(currentPayload)];
+	}
+
+	function buildProjectModel(currentPayload: OpenWithAoPagePayload): Entry[] {
 		if (currentPayload.daemon !== "ready") {
 			let message = "AO is offline. Start AO and try again.";
 			if (currentPayload.daemon === "unknown") message = "AO is not connected.";
