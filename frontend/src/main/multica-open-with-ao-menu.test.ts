@@ -1810,6 +1810,34 @@ describe("multica Open in AO menu", () => {
 			expect(menuRows(shadow, "0")[0]?.textContent).toBe(`line ${display}`);
 		});
 
+		it("coexists with the status-sync row under a linked session", () => {
+			mockGeometry();
+			const sync = { tone: "ready", label: "Stop updating this ticket", stateLabel: "Synced", action: "disable" } as const;
+			const onAction = vi.fn();
+			const { shadow } = openMenu(
+				payload({
+					deducedProjectId: "alpha",
+					executor: { display: "contested", text: "Contested: a Multica agent and an AO session both hold this issue" },
+					projects: [project("alpha", { sessions: [session("task-alpha", "alpha", { linked: true, sync })] })],
+				}),
+				onAction,
+				undefined,
+				allowTestActionEvents(),
+			);
+			const rows = menuRows(shadow, "0");
+			const keys = rows.map((row) => row.getAttribute("data-key"));
+			expect(keys[0]).toBe("executor:contested");
+			expect(keys).toContain("task:task-alpha");
+			expect(keys).toContain("sync:task-alpha");
+			expect(keys.indexOf("executor:contested")).toBeLessThan(keys.indexOf("task:task-alpha"));
+			expect(keys.indexOf("task:task-alpha")).toBeLessThan(keys.indexOf("sync:task-alpha"));
+			// The executor row stays inert; the sync row still sends its action.
+			rows[0]?.click();
+			expect(onAction).not.toHaveBeenCalled();
+			shadow?.querySelector<HTMLElement>('[data-key="sync:task-alpha"]')?.click();
+			expect(onAction).toHaveBeenCalledTimes(1);
+		});
+
 		it("adds no row without an executor", () => {
 			mockGeometry();
 			const { shadow } = openMenu(payload({ executor: null }));
