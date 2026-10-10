@@ -106,6 +106,8 @@ type Runtime = {
 	writeTimes: number[];
 	forceGet: boolean;
 	reopenOnce: boolean;
+	/** Bumped when the work in flight for this issue must not go on: the master switch or a link was turned off, or the link is gone. */
+	epoch: number;
 };
 
 type Group = {
@@ -220,6 +222,7 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 		writeTimes: [],
 		forceGet: false,
 		reopenOnce: false,
+		epoch: 0,
 	});
 
 	const runtimeFor = (group: Pick<Group, "issueKey" | "serverKey" | "workspaceSlug" | "issueIdentifier">): Runtime => {
@@ -494,11 +497,23 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 		const writerSession = aggregate.sessionId ?? group.writers[0]?.sessionId ?? null;
 		const lookup = { workspaceSlug: group.workspaceSlug, identifier: group.issueIdentifier };
 
+		// Turning sync or this link off, or removing the link, while a request is in flight must stop the
+		// evaluation before it writes: checked after every await and right before the write.
+		const epoch = runtime.epoch;
+		const writerSessions = group.writers.map((link) => link.sessionId);
+		const stillValid = (): boolean => {
+			if (disposed || startedGeneration !== generation || runtime.epoch !== epoch || !active()) return false;
+			const current = buildGroups().get(group.issueKey);
+			if (!current) return false;
+			const present = new Set(current.writers.map((link) => link.sessionId));
+			return writerSessions.every((sessionId) => present.has(sessionId));
+		};
+
 		// Read, decide, write with expected_revision. A stale revision means someone changed the
 		// issue in between: read once more and decide again, then give up until the next pass.
 		for (let pass = 0; pass < 2; pass += 1) {
 			const read = await options.api.getIssue(group.serverKey, lookup);
-			if (startedGeneration !== generation) return;
+			if (!stillValid()) return;
 			if (!read.ok) {
 				failWith(group, runtime, read);
 				return;
@@ -506,7 +521,9 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 			const issue = read.issue;
 			runtime.error = null;
 			runtime.observedStatus = issue.status;
-			if (!(await confirmIdentity(group, runtime, issue))) {
+			const identityOk = await confirmIdentity(group, runtime, issue);
+			if (!stillValid()) return;
+			if (!identityOk) {
 				runtime.evaluatedSig = signature;
 				scheduleReconcile(runtime);
 				return;
@@ -574,7 +591,7 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 					issueId: issue.id,
 					status: decision.status,
 				});
-				if (startedGeneration !== generation) return;
+				if (!stillValid()) return;
 				if (!preview.ok) {
 					failWith(group, runtime, preview);
 					return;
@@ -614,6 +631,7 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 				schedule(group, budget);
 				return;
 			}
+			if (!stillValid()) return;
 			countWrite(runtime, group.serverKey);
 			const put = await options.api.putStatus(group.serverKey, {
 				workspaceSlug: group.workspaceSlug,
@@ -737,6 +755,7 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 			);
 			if (runtime.state.serverKey === serverKey && (!issues.has(issueKey) || !stillEnabled)) {
 				clearTimers(runtime);
+				runtime.epoch += 1;
 				runtimes.delete(issueKey);
 				changed = true;
 			}
@@ -824,7 +843,12 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 			if (disposed) return snapshot();
 			settings = { ...settings, ...patch };
 			for (const runtime of runtimes.values()) runtime.evaluatedSig = null;
-			if (!active()) for (const runtime of runtimes.values()) clearTimers(runtime);
+			if (!active()) {
+				for (const runtime of runtimes.values()) {
+					clearTimers(runtime);
+					runtime.epoch += 1;
+				}
+			}
 			persist();
 			recompute();
 			return snapshot();
@@ -846,6 +870,8 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 				signedOutServers.delete(serverKey);
 			} else {
 				enabledLinks.delete(key);
+				const turnedOff = runtimes.get(issueKeyOf(serverKey, link.workspaceSlug, link.issueIdentifier));
+				if (turnedOff) turnedOff.epoch += 1;
 				applyLinkPruning();
 			}
 			persist();

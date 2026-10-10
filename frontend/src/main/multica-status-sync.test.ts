@@ -880,6 +880,109 @@ describe("multica status sync", () => {
 		});
 	});
 
+	describe("turning sync off while a request is in flight", () => {
+		const observation = (status = "todo") => ({
+			ok: true as const,
+			issue: {
+				id: "11111111-1111-4111-8111-111111111111",
+				workspaceId: "22222222-2222-4222-8222-222222222222",
+				identifier: "MUL-1",
+				status,
+				category: status,
+				revision: 4,
+				assigneeType: "member",
+				inTriage: false,
+			},
+		});
+
+		function heldApi() {
+			const held: { resolveRead: (value: unknown) => void; resolvePreview: (value: unknown) => void } = {
+				resolveRead: () => undefined,
+				resolvePreview: () => undefined,
+			};
+			const stub = {
+				getIssue: vi.fn(() => new Promise((resolve) => (held.resolveRead = resolve))),
+				previewTrigger: vi.fn(() => new Promise((resolve) => (held.resolvePreview = resolve))),
+				putStatus: vi.fn(async () => observation("in_progress")),
+			} as unknown as MulticaIssueApi;
+			return { held, stub };
+		}
+
+		async function startHeld(status = "todo") {
+			const { held, stub } = heldApi();
+			api = stub;
+			const sync = start();
+			sync.setFacts({ stale: false, sessions: [working()] });
+			await turnOn(sync);
+			await until(() => expect(stub.getIssue).toHaveBeenCalledTimes(1));
+			return { held, stub, sync, status };
+		}
+
+		it("does not write when the master switch is turned off before the read comes back", async () => {
+			const { held, stub, sync } = await startHeld();
+			await sync.setSettings({ enabled: false });
+			held.resolveRead(observation());
+			await sleep(60);
+			expect(stub.putStatus).not.toHaveBeenCalled();
+			expect(view()).toMatchObject({ state: "off", reason: "master_off" });
+		});
+
+		it("does not write when the link is turned off before the read comes back", async () => {
+			const { held, stub, sync } = await startHeld();
+			await sync.setLink({ sessionId: "s-1", workspaceSlug: "acme", issueIdentifier: "MUL-1", enabled: false });
+			held.resolveRead(observation());
+			await sleep(60);
+			expect(stub.putStatus).not.toHaveBeenCalled();
+			expect(view().state).toBe("off");
+		});
+
+		it("does not write when the link is removed before the read comes back", async () => {
+			const { held, stub, sync } = await startHeld();
+			sync.setLinks(SERVER, []);
+			held.resolveRead(observation());
+			await sleep(60);
+			expect(stub.putStatus).not.toHaveBeenCalled();
+			expect(store.saved().links).toEqual([]);
+		});
+
+		it("does not write when the master switch is turned off while the Backlog preview is pending", async () => {
+			const { held, stub, sync } = await startHeld();
+			held.resolveRead(observation("backlog"));
+			await until(() => expect(stub.previewTrigger).toHaveBeenCalledTimes(1));
+			await sync.setSettings({ enabled: false });
+			held.resolvePreview({ ok: true, triggers: 0 });
+			await sleep(60);
+			expect(stub.putStatus).not.toHaveBeenCalled();
+		});
+
+		it("does not write when the only enabled link is turned off while the Backlog preview is pending", async () => {
+			const { held, stub, sync } = await startHeld();
+			held.resolveRead(observation("backlog"));
+			await until(() => expect(stub.previewTrigger).toHaveBeenCalledTimes(1));
+			await sync.setLink({ sessionId: "s-1", workspaceSlug: "acme", issueIdentifier: "MUL-1", enabled: false });
+			held.resolvePreview({ ok: true, triggers: 0 });
+			await sleep(60);
+			expect(stub.putStatus).not.toHaveBeenCalled();
+		});
+
+		it("still writes when nothing was turned off (the guard does not block the normal path)", async () => {
+			const { held, stub } = await startHeld();
+			held.resolveRead(observation());
+			await until(() => expect(stub.putStatus).toHaveBeenCalledTimes(1));
+		});
+
+		it("looks again, and does not write the old target, when a writer link is removed mid-flight", async () => {
+			const { held, stub, sync } = await startHeld();
+			sync.setFacts({ stale: false, sessions: [working("s-1"), inReview("s-2")] });
+			sync.setLinks(SERVER, [link(), link({ sessionId: "s-2" })]);
+			await sync.setLink({ sessionId: "s-2", workspaceSlug: "acme", issueIdentifier: "MUL-1", enabled: true });
+			await sync.setLink({ sessionId: "s-1", workspaceSlug: "acme", issueIdentifier: "MUL-1", enabled: false });
+			held.resolveRead(observation());
+			await sleep(60);
+			expect(stub.putStatus).not.toHaveBeenCalledWith(SERVER, expect.objectContaining({ status: "in_progress" }));
+		});
+	});
+
 	describe("failures", () => {
 		it("signed out: stops for the whole server without a retry storm, and resumes when the user signs in", async () => {
 			fake.addIssue({ identifier: "MUL-1", status: "todo" });
