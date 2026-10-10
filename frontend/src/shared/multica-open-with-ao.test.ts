@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	buildOpenWithAoActionUrl,
 	buildOpenWithAoPagePayload,
+	buildOpenWithAoSyncView,
 	deduceOpenWithAoProject,
 	isOpenWithAoNonce,
 	isOpenWithAoSnapshot,
@@ -29,6 +30,7 @@ import {
 	type OpenWithAoSession,
 	type OpenWithAoSnapshot,
 } from "./multica-open-with-ao";
+import type { MulticaSyncLinkView } from "./multica-status-sync";
 
 const NONCE = "nonce-1234567890";
 
@@ -403,5 +405,148 @@ describe("buildOpenWithAoPagePayload", () => {
 		});
 		expect(result.projects[0].sessions.map(({ id }) => id)).toEqual(["linked", "ready", "later"]);
 		expect(original).toEqual(before);
+	});
+});
+
+const syncView = (overrides: Partial<MulticaSyncLinkView> = {}): MulticaSyncLinkView => ({
+	sessionId: "session-1",
+	workspaceSlug: "acme",
+	issueIdentifier: "ABC-1",
+	enabled: true,
+	state: "synced",
+	reason: null,
+	multicaStatus: "in_progress",
+	aoStatus: "in_progress",
+	lastSyncAt: null,
+	canResume: false,
+	canReopen: false,
+	...overrides,
+});
+
+describe("buildOpenWithAoSyncView", () => {
+	const on = { enabled: true, killSwitch: false };
+
+	it("offers to turn the sync on for a link that is off, only when the master switch is on", () => {
+		expect(buildOpenWithAoSyncView(syncView({ enabled: false, state: "off" }), on)).toEqual({
+			tone: "unknown",
+			label: "Keep this ticket updated",
+			stateLabel: "Off",
+			action: "enable",
+		});
+		expect(buildOpenWithAoSyncView(undefined, on).action).toBe("enable");
+		expect(buildOpenWithAoSyncView(undefined, { enabled: false, killSwitch: false })).toEqual({
+			tone: "unknown",
+			label: "Ticket updates are off in Settings",
+			stateLabel: "",
+			action: null,
+		});
+	});
+
+	it("shows an enabled link as stoppable with its state", () => {
+		expect(buildOpenWithAoSyncView(syncView(), on)).toEqual({ tone: "ready", label: "Stop updating this ticket", stateLabel: "Synced", action: "disable" });
+		expect(buildOpenWithAoSyncView(syncView({ state: "pending" }), on)).toMatchObject({ stateLabel: "Syncing…", action: "disable" });
+	});
+
+	it("shows a paused link as resumable when someone changed it in Multica, and as informational when it is closed", () => {
+		expect(buildOpenWithAoSyncView(syncView({ state: "paused", reason: "changed_in_multica", canResume: true }), on)).toEqual({
+			tone: "pending",
+			label: "Resume updating this ticket",
+			stateLabel: "Paused: changed in Multica",
+			action: "resume",
+		});
+		expect(buildOpenWithAoSyncView(syncView({ state: "paused", reason: "closed_in_multica", canReopen: true }), on)).toEqual({
+			tone: "pending",
+			label: "Stop updating this ticket",
+			stateLabel: "Paused: closed in Multica",
+			action: "disable",
+		});
+	});
+
+	it("names every refusal and every error in words", () => {
+		const refusals = ["driven_by_multica", "triage", "identity_changed", "would_start_run", "secondary_link", "sub_issue_parent"] as const;
+		for (const reason of refusals) {
+			const row = buildOpenWithAoSyncView(syncView({ state: "refused", reason }), on);
+			expect(row.tone).toBe("pending");
+			expect(row.stateLabel.length).toBeGreaterThan(3);
+		}
+		expect(buildOpenWithAoSyncView(syncView({ state: "refused", reason: "driven_by_multica" }), on).stateLabel).toBe("Driven by Multica");
+		const errors = ["signed_out", "unavailable", "unreachable", "no_access", "orphaned", "rate_limited", "ao_offline"] as const;
+		for (const reason of errors) {
+			const row = buildOpenWithAoSyncView(syncView({ state: "error", reason }), on);
+			expect(row.stateLabel.length).toBeGreaterThan(3);
+			expect(row.action).toBe("disable");
+		}
+		expect(buildOpenWithAoSyncView(syncView({ state: "error", reason: "signed_out" }), on).tone).toBe("attention");
+	});
+
+	it("says the sync is off while the master switch is off or the kill switch is set", () => {
+		expect(buildOpenWithAoSyncView(syncView({ state: "off", reason: "master_off" }), { enabled: false, killSwitch: false })).toEqual({
+			tone: "unknown",
+			label: "Stop updating this ticket",
+			stateLabel: "Off in Settings",
+			action: "disable",
+		});
+		expect(buildOpenWithAoSyncView(syncView(), { enabled: true, killSwitch: true })).toMatchObject({ label: "Ticket updates are disabled", action: "disable" });
+		expect(buildOpenWithAoSyncView(syncView({ enabled: false, state: "off" }), { enabled: true, killSwitch: true }).action).toBeNull();
+	});
+});
+
+describe("sync actions in the page payload and in action URLs", () => {
+	it("round-trips a sync action URL", () => {
+		for (const syncAction of ["enable", "disable", "resume"] as const) {
+			const url = buildOpenWithAoActionUrl({ kind: "sync", syncAction, projectId: "project 1", sessionId: "session/1".replace("/", "-"), nonce: NONCE });
+			expect(url).toBe(`${OPEN_WITH_AO_ACTION_PREFIX}sync/${syncAction}/project%201/session-1?n=${NONCE}`);
+			expect(parseOpenWithAoActionUrl(url)).toEqual({ kind: "sync", syncAction, projectId: "project 1", sessionId: "session-1", nonce: NONCE });
+		}
+	});
+
+	it("refuses a malformed sync action URL", () => {
+		const base = `${OPEN_WITH_AO_ACTION_PREFIX}sync`;
+		for (const url of [
+			`${base}/delete/p/s?n=${NONCE}`,
+			`${base}/enable/p?n=${NONCE}`,
+			`${base}/enable/p/s/extra?n=${NONCE}`,
+			`${base}/enable//s?n=${NONCE}`,
+			`${base}/enable/p/s?n=${NONCE}&w=acme`,
+			`${base}/enable/p/s`,
+			`${base}/enable/p/s?n=short`,
+		]) {
+			expect(parseOpenWithAoActionUrl(url)).toBeNull();
+		}
+		expect(() => buildOpenWithAoActionUrl({ kind: "sync", syncAction: "destroy" as never, projectId: "p", sessionId: "s", nonce: NONCE })).toThrow();
+	});
+
+	it("adds a sync row only to workers linked to the issue on screen", () => {
+		const result = buildOpenWithAoPagePayload({
+			snapshot: snapshot([project({ orchestrator: session({ id: "orchestrator" }), sessions: [session(), session({ id: "session-2" })] })]),
+			links: [{ sessionId: "session-1", issueIdentifier: "ABC-1", projectId: "project-1" }],
+			issue: { identifier: "ABC-1", title: "A task" },
+			nonce: NONCE,
+			sync: { enabled: true, killSwitch: false, views: [syncView(), syncView({ sessionId: "session-1", issueIdentifier: "ABC-2", state: "error", reason: "orphaned" })] },
+		});
+
+		const [linked, other] = result.projects[0].sessions;
+		expect(linked.sync).toMatchObject({ label: "Stop updating this ticket", stateLabel: "Synced" });
+		expect(other.sync).toBeNull();
+		expect(result.projects[0].orchestrator?.sync).toBeNull();
+	});
+
+	it("adds no sync row when sync is not provided or no issue is on screen", () => {
+		const base = { snapshot: snapshot([project({ sessions: [session()] })]), links: [{ sessionId: "session-1", issueIdentifier: "ABC-1", projectId: "project-1" }], nonce: NONCE };
+		expect(buildOpenWithAoPagePayload({ ...base, issue: { identifier: "ABC-1", title: "A task" } }).projects[0].sessions[0].sync).toBeNull();
+		expect(
+			buildOpenWithAoPagePayload({ ...base, issue: null, sync: { enabled: true, killSwitch: false, views: [syncView()] } }).projects[0].sessions[0].sync,
+		).toBeNull();
+	});
+
+	it("offers to turn the sync on for a linked worker that has no state yet", () => {
+		const result = buildOpenWithAoPagePayload({
+			snapshot: snapshot([project({ sessions: [session()] })]),
+			links: [{ sessionId: "session-1", issueIdentifier: "ABC-1", projectId: "project-1" }],
+			issue: { identifier: "ABC-1", title: "A task" },
+			nonce: NONCE,
+			sync: { enabled: true, killSwitch: false, views: [] },
+		});
+		expect(result.projects[0].sessions[0].sync).toMatchObject({ label: "Keep this ticket updated", action: "enable" });
 	});
 });

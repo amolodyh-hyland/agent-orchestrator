@@ -17,9 +17,10 @@ import {
 } from "../shared/multica-issue-links";
 import { MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL, OPEN_WITH_AO_ACTION_PREFIX } from "../shared/multica-open-with-ao";
 import { AO_SEND_ISSUE_URL, parseMulticaIssueTitleParts } from "../shared/multica-send-to-ao";
-import type { MulticaIssueLinkStore } from "./multica-issue-links";
+import type { MulticaIssueLinkStore, MulticaIssueStableIds, MulticaIssueTarget } from "./multica-issue-links";
 import { createMulticaOpenWithAo } from "./multica-open-with-ao";
 import { createMulticaSendToAo } from "./multica-send-to-ao";
+import type { MulticaStatusSync } from "./multica-status-sync";
 import type { MulticaViewHost } from "./multica-view-host";
 
 export type MulticaIssueLinkServiceOptions = {
@@ -29,11 +30,15 @@ export type MulticaIssueLinkServiceOptions = {
 	/** The Multica view host is created after this service, so it is looked up lazily. */
 	getHost: () => Pick<MulticaViewHost, "navigatePath" | "runInPage" | "runInAoWorld" | "setActive" | "evaluateInPage" | "getServer"> | undefined;
 	readSettings: () => Promise<MulticaSettings>;
+	/** Status sync: told which links are visible and which server is selected, and drives the sync rows of the Open in AO menu. */
+	sync?: Pick<MulticaStatusSync, "setLinks" | "handleServerChange" | "getSnapshot" | "onChanged" | "setLink" | "resume">;
 };
 
 export type MulticaIssueLinkService = {
 	/** The selected Multica server changed (`serverKey` is "" when none): show the links of the new one. */
 	handleServerChange: (serverKey: string) => void;
+	/** Records the issue's UUIDs on its links (called by status sync the first time it reads the issue). */
+	backfillIssueIds: (target: MulticaIssueTarget, ids: MulticaIssueStableIds) => Promise<void>;
 	/** Feed every page title of the Multica view here. */
 	handlePageTitle: (title: string) => void;
 	/** Offered every external-open target of the Multica view. True when it was an ao://sessions URL (handled or swallowed). */
@@ -66,6 +71,11 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 		links = next;
 	};
 
+	// Status sync only ever sees links that were really loaded or saved, never the interim empty list of a server switch.
+	const syncLinks = (): void => {
+		if (!disposed && serverKey) options.sync?.setLinks(serverKey, links);
+	};
+
 	const pushChanged = (next: MulticaIssueLink[]): void => {
 		if (!disposed && !options.shellWebContents.isDestroyed()) options.shellWebContents.send(MULTICA_LINKS_CHANGED_CHANNEL, next);
 	};
@@ -86,6 +96,7 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 			if (result) result.links = next;
 			if (!disposed) {
 				replaceLinks(next);
+				syncLinks();
 				pushChanged(next);
 				refreshOpenWithAo();
 			}
@@ -108,7 +119,20 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 		addLink,
 		openSession,
 		requestNewTask: (projectId) => sendToAo.request({ projectId }),
+		...(options.sync
+			? {
+					getSync: () => {
+						const snapshot = options.sync?.getSnapshot();
+						return snapshot ? { enabled: snapshot.settings.enabled, killSwitch: snapshot.killSwitch, views: snapshot.links } : undefined;
+					},
+					onSyncAction: ({ syncAction, ...ref }: { syncAction: "enable" | "disable" | "resume"; sessionId: string; workspaceSlug: string; issueIdentifier: string }) => {
+						if (syncAction === "resume") void options.sync?.resume(ref);
+						else void options.sync?.setLink({ ...ref, enabled: syncAction === "enable" });
+					},
+				}
+			: {}),
 	});
+	const unsubscribeSync = options.sync?.onChanged(() => refreshOpenWithAo());
 	function refreshOpenWithAo(): void {
 		if (disposed) return;
 		openWithAo.refresh();
@@ -125,6 +149,7 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 		const all = key ? await options.store.adoptLegacy(key) : await options.store.list();
 		if (disposed || key !== serverKey) return;
 		replaceLinks(visible(all));
+		syncLinks();
 		if (announce) pushChanged(links);
 		refreshOpenWithAo();
 	};
@@ -148,6 +173,7 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 				if (disposed) return undefined;
 				const listed = visible(await options.store.list());
 				replaceLinks(listed);
+				syncLinks();
 				refreshOpenWithAo();
 				return listed;
 			},
@@ -196,6 +222,7 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 					);
 					if (!disposed) {
 						replaceLinks(next);
+						syncLinks();
 						pushChanged(next);
 						refreshOpenWithAo();
 					}
@@ -235,11 +262,22 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 			// Synchronously, so an add or open arriving before the reload already sees the new server.
 			serverAnnounced = true;
 			serverKey = key;
+			options.sync?.handleServerChange(key);
 			// The issue on the old server's page is not on the new one until its page reports a title.
 			currentIssue = null;
 			currentTitle = null;
 			replaceLinks([]);
 			void reload(true);
+		},
+		backfillIssueIds: async (target, ids) => {
+			if (disposed || target.serverKey !== serverKey) return;
+			const all = await options.store.recordIssueIds(target, ids);
+			if (disposed || target.serverKey !== serverKey) return;
+			replaceLinks(visible(all));
+			pushChanged(links);
+			refreshOpenWithAo();
+			// Status sync keeps using the links it already has: the ids only matter to the next read.
+			syncLinks();
 		},
 		handlePageTitle: (title) => {
 			if (disposed) return;
@@ -265,6 +303,7 @@ export function createMulticaIssueLinkService(options: MulticaIssueLinkServiceOp
 		dispose: () => {
 			if (disposed) return;
 			disposed = true;
+			unsubscribeSync?.();
 			sendToAo.dispose();
 			openWithAo.dispose();
 			for (const [channel] of handlers) options.ipcMain.removeHandler(channel);

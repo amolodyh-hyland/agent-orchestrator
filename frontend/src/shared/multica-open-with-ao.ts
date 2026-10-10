@@ -1,4 +1,5 @@
 import { MULTICA_STATUS_TONES, MULTICA_STATUS_TONE_ORDER, type MulticaStatusTone } from "./multica-session-status";
+import type { MulticaSyncLinkView, MulticaSyncReason } from "./multica-status-sync";
 
 export const MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL = "multicaOpenWithAo:publish";
 export const OPEN_WITH_AO_ACTION_PREFIX = "ao://multica/open-with-ao/";
@@ -174,9 +175,13 @@ function isDenseArray(value: unknown[]): boolean {
 	return true;
 }
 
+export const OPEN_WITH_AO_SYNC_ACTIONS = ["enable", "disable", "resume"] as const;
+export type OpenWithAoSyncAction = (typeof OPEN_WITH_AO_SYNC_ACTIONS)[number];
+
 export type OpenWithAoAction =
 	| { kind: "open"; projectId: string; sessionId: string; nonce: string; workspaceSlug?: string }
-	| { kind: "new-task"; projectId: string; nonce: string };
+	| { kind: "new-task"; projectId: string; nonce: string }
+	| { kind: "sync"; syncAction: OpenWithAoSyncAction; projectId: string; sessionId: string; nonce: string };
 
 const OPEN_WITH_AO_WORKSPACE_SLUG_PATTERN = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 
@@ -196,6 +201,9 @@ export function buildOpenWithAoActionUrl(action: OpenWithAoAction): string {
 		}
 		if (action.kind === "new-task") {
 			return `${OPEN_WITH_AO_ACTION_PREFIX}new-task/${encodeURIComponent(action.projectId)}?n=${action.nonce}`;
+		}
+		if (action.kind === "sync" && isValidActionId(action.sessionId) && (OPEN_WITH_AO_SYNC_ACTIONS as readonly string[]).includes(action.syncAction)) {
+			return `${OPEN_WITH_AO_ACTION_PREFIX}sync/${action.syncAction}/${encodeURIComponent(action.projectId)}/${encodeURIComponent(action.sessionId)}?n=${action.nonce}`;
 		}
 	} catch {
 		throw new Error("invalid open-with-ao action");
@@ -226,6 +234,15 @@ export function parseOpenWithAoActionUrl(url: unknown): OpenWithAoAction | null 
 			nonce: queryMatch[1],
 			...(workspaceSlug === undefined ? {} : { workspaceSlug }),
 		};
+	}
+	if (segments[0] === "sync" && segments.length === 4) {
+		if (workspaceSlug !== undefined) return null;
+		const syncAction = segments[1];
+		if (!(OPEN_WITH_AO_SYNC_ACTIONS as readonly string[]).includes(syncAction)) return null;
+		const projectId = decodeActionId(segments[2]);
+		const sessionId = decodeActionId(segments[3]);
+		if (projectId === null || sessionId === null) return null;
+		return { kind: "sync", syncAction: syncAction as OpenWithAoSyncAction, projectId, sessionId, nonce: queryMatch[1] };
 	}
 	if (segments[0] === "new-task" && segments.length === 2) {
 		if (workspaceSlug !== undefined) return null;
@@ -297,7 +314,16 @@ function compareStrings(left: string, right: string): number {
 	return left < right ? -1 : left > right ? 1 : 0;
 }
 
-export type OpenWithAoPageSession = OpenWithAoSession & { linked: boolean };
+/** The status-sync row shown under a linked session: what it says and what a click does. English, like the rest of the page menu. */
+export type OpenWithAoSyncView = {
+	tone: MulticaStatusTone;
+	label: string;
+	stateLabel: string;
+	action: OpenWithAoSyncAction | null;
+};
+export type OpenWithAoSyncInput = { enabled: boolean; killSwitch: boolean; views: readonly MulticaSyncLinkView[] };
+
+export type OpenWithAoPageSession = OpenWithAoSession & { linked: boolean; sync?: OpenWithAoSyncView | null };
 export type OpenWithAoPageProject = {
 	id: string;
 	name: string;
@@ -306,6 +332,64 @@ export type OpenWithAoPageProject = {
 	sessions: OpenWithAoPageSession[];
 	moreCount: number;
 };
+const SYNC_REASON_LABELS: Record<MulticaSyncReason, string> = {
+	master_off: "Off in Settings",
+	kill_switch: "Disabled",
+	changed_in_multica: "Paused: changed in Multica",
+	closed_in_multica: "Paused: closed in Multica",
+	blocked_in_multica: "Paused: blocked in Multica",
+	driven_by_multica: "Driven by Multica",
+	triage: "In Triage",
+	identity_changed: "Issue changed",
+	would_start_run: "Would start a Multica run",
+	secondary_link: "Updates go to the first linked ticket",
+	sub_issue_parent: "Sub-issue: could wake the parent’s agent",
+	signed_out: "Sign in to Multica",
+	unavailable: "Open Multica to sync",
+	unreachable: "Not synced, retrying",
+	no_access: "No access",
+	orphaned: "Issue not found",
+	rate_limited: "Waiting (rate limit)",
+	ao_offline: "AO offline",
+};
+
+/** One row of the page menu for the sync of a link; `view` is undefined for a link nothing is known about. */
+export function buildOpenWithAoSyncView(view: MulticaSyncLinkView | undefined, input: Pick<OpenWithAoSyncInput, "enabled" | "killSwitch">): OpenWithAoSyncView {
+	const on = view?.enabled === true;
+	if (input.killSwitch) {
+		return { tone: "unknown", label: "Ticket updates are disabled", stateLabel: "", action: on ? "disable" : null };
+	}
+	if (!on) {
+		return input.enabled
+			? { tone: "unknown", label: "Keep this ticket updated", stateLabel: "Off", action: "enable" }
+			: { tone: "unknown", label: "Ticket updates are off in Settings", stateLabel: "", action: null };
+	}
+	const stopLabel = "Stop updating this ticket";
+	if (!input.enabled) return { tone: "unknown", label: stopLabel, stateLabel: SYNC_REASON_LABELS.master_off, action: "disable" };
+	const reasonLabel = view.reason === null ? "" : SYNC_REASON_LABELS[view.reason];
+	switch (view.state) {
+		case "synced":
+			return { tone: "ready", label: stopLabel, stateLabel: "Synced", action: "disable" };
+		case "pending":
+			return { tone: "unknown", label: stopLabel, stateLabel: "Syncing…", action: "disable" };
+		case "paused":
+			return view.canResume
+				? { tone: "pending", label: "Resume updating this ticket", stateLabel: reasonLabel, action: "resume" }
+				: { tone: "pending", label: stopLabel, stateLabel: reasonLabel, action: "disable" };
+		case "refused":
+			return { tone: "pending", label: stopLabel, stateLabel: reasonLabel, action: "disable" };
+		case "error":
+			return {
+				tone: view.reason === "rate_limited" || view.reason === "ao_offline" || view.reason === "unavailable" ? "pending" : "attention",
+				label: stopLabel,
+				stateLabel: reasonLabel,
+				action: "disable",
+			};
+		default:
+			return { tone: "unknown", label: stopLabel, stateLabel: "Off", action: "disable" };
+	}
+}
+
 export type OpenWithAoPagePayload = {
 	label: string;
 	style: OpenWithAoStyleTokens;
@@ -323,6 +407,7 @@ export function buildOpenWithAoPagePayload(input: {
 	links: ReadonlyArray<{ sessionId: string; issueIdentifier: string; projectId: string }>;
 	issue: { identifier: string; title: string } | null;
 	nonce: string;
+	sync?: OpenWithAoSyncInput;
 }): OpenWithAoPagePayload {
 	if (input.snapshot === null) {
 		return {
@@ -349,12 +434,19 @@ export function buildOpenWithAoPagePayload(input: {
 		const sessions = sortOpenWithAoSessions(project.sessions, linkedSessionIds).map((session) => ({
 			...session,
 			linked: linkedWorkerIds.has(session.id),
+			sync:
+				input.sync !== undefined && input.issue !== null && linkedWorkerIds.has(session.id)
+					? buildOpenWithAoSyncView(
+							input.sync.views.find((view) => view.sessionId === session.id && view.issueIdentifier === input.issue?.identifier),
+							input.sync,
+						)
+					: null,
 		}));
 		return {
 			id: project.id,
 			name: project.name,
 			linked: linkedProjectIds.has(project.id),
-			orchestrator: project.orchestrator === null ? null : { ...project.orchestrator, linked: false },
+			orchestrator: project.orchestrator === null ? null : { ...project.orchestrator, linked: false, sync: null },
 			sessions,
 			moreCount: project.moreCount,
 		};

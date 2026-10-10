@@ -190,10 +190,14 @@ import { multicaBridgeChannels } from "./main/multica-desktop-bridge";
 import { resolveMulticaDesktopBundle } from "./main/multica-desktop-bundle";
 import { createMulticaIssueLinkService, type MulticaIssueLinkService } from "./main/multica-issue-link-service";
 import { createMulticaIssueLinkStore } from "./main/multica-issue-links";
+import { createMulticaIssueApi } from "./main/multica-issue-api";
+import { createMulticaStatusSync, type MulticaStatusSync } from "./main/multica-status-sync";
+import { registerMulticaStatusSyncIpc } from "./main/multica-status-sync-ipc";
+import { createMulticaSyncStateStore } from "./main/multica-sync-state";
 import { isUpdatesDisabledBuild } from "./main/updates-disabled";
 import { writeMulticaIpcJail } from "./main/multica-ipc-jail";
 import { createCombinedBadge } from "./main/combined-badge";
-import { createMulticaNotifications } from "./main/multica-notifications";
+import { createMulticaNotifications, type MulticaNotifications } from "./main/multica-notifications";
 import { createMulticaViewHost, type MulticaViewHost } from "./main/multica-view-host";
 import { ancestorRepositorySetupWarning, resolveCheckedOutBranch, scanImportFolder } from "./main/import-folder-scan";
 import { parseOpenFolderPathArg } from "./main/open-folder-arg";
@@ -336,6 +340,8 @@ let daemonOutput = "";
 let browserViewHost: BrowserViewHost | null = null;
 let multicaViewHost: MulticaViewHost | null = null;
 let multicaIssueLinkService: MulticaIssueLinkService | null = null;
+let multicaStatusSync: MulticaStatusSync | null = null;
+let multicaStatusSyncIpc: { dispose: () => void } | null = null;
 const combinedBadge = createCombinedBadge();
 let browserProfileIpc: BrowserProfileIpc | null = null;
 let browserProfileImporter: BrowserProfileImportService | null = null;
@@ -401,6 +407,18 @@ const RENDERER_HOST = "renderer";
 const RENDERER_ORIGIN = `${RENDERER_SCHEME}://${RENDERER_HOST}`;
 const NATIVE_WINDOW_BACKGROUND_DARK = "#0c0c0e";
 const NATIVE_WINDOW_BACKGROUND_LIGHT = "#fbfbfb";
+
+// A sign-in reported by the Multica page lifts the sign-in pause of status sync.
+function withSignInHook(notifications: MulticaNotifications): MulticaNotifications {
+	return {
+		...notifications,
+		reportAuthSession: (value) => {
+			const invalidated = notifications.reportAuthSession(value);
+			if (typeof value === "string" && value.trim() !== "") multicaStatusSync?.notifySignedIn();
+			return invalidated;
+		},
+	};
+}
 
 function getShellWebContents(): WebContents | null {
 	return windowComposition?.shellWebContents ?? null;
@@ -848,6 +866,14 @@ async function createWindowInternal(): Promise<void> {
 	});
 	if (daemonStatus.state === "ready") establishBrowserRuntimeLink();
 
+	// Writing AO session progress to Multica issue statuses. Everything is off until the user turns it
+	// on in Settings and then per link; it runs through the Multica page's own sign-in, so it stores no secret.
+	multicaStatusSync = createMulticaStatusSync({
+		api: createMulticaIssueApi({ getHost: () => multicaViewHost ?? undefined }),
+		store: createMulticaSyncStateStore(browserProfileStateDir()),
+		recordIssueIds: (target, ids) => multicaIssueLinkService?.backfillIssueIds(target, ids) ?? Promise.resolve(),
+	});
+	multicaStatusSyncIpc = registerMulticaStatusSyncIpc({ ipcMain, shellWebContents, engine: multicaStatusSync });
 	// Registered before the renderer loads: the shell queries its state on mount.
 	multicaIssueLinkService = createMulticaIssueLinkService({
 		ipcMain,
@@ -855,6 +881,7 @@ async function createWindowInternal(): Promise<void> {
 		store: createMulticaIssueLinkStore(browserProfileStateDir()),
 		getHost: () => multicaViewHost ?? undefined,
 		readSettings: () => readMulticaSettings(browserProfileStateDir()),
+		sync: multicaStatusSync,
 	});
 	multicaViewHost = await createMulticaViewHost({
 		mainWindow,
@@ -956,7 +983,7 @@ async function createWindowInternal(): Promise<void> {
 		},
 		onPageTitleChange: (title) => multicaIssueLinkService?.handlePageTitle(title),
 		onAoSessionLink: (url) => multicaIssueLinkService?.handleAoSessionLink(url) ?? false,
-		notifications: createMulticaNotifications({
+		notifications: withSignInHook(createMulticaNotifications({
 			isSupported: () => ElectronNotification.isSupported(),
 			createNotification: ({ title, body }) =>
 				new ElectronNotification({ title, body, icon: process.platform === "darwin" ? undefined : windowIconPath() }),
@@ -969,7 +996,7 @@ async function createWindowInternal(): Promise<void> {
 				// macOS drives the Dock badge through the app, so the view host's teardown can still drop Multica's share while the window closes; the Windows overlay needs a live window.
 				if (process.platform === "darwin" || (mainWindow && !mainWindow.isDestroyed())) applyBadgeCount(total);
 			},
-		}),
+		})),
 		// Multica's header is laid out around its own traffic-light position.
 		onTakeover: (takenOver) => {
 			multicaTakenOver = takenOver;
@@ -1039,6 +1066,10 @@ async function createWindowInternal(): Promise<void> {
 		multicaViewHost = null;
 		multicaIssueLinkService?.dispose();
 		multicaIssueLinkService = null;
+		multicaStatusSyncIpc?.dispose();
+		multicaStatusSyncIpc = null;
+		multicaStatusSync?.dispose();
+		multicaStatusSync = null;
 		void disposeBrowserViewHost()
 			.finally(() => {
 				composition.dispose();
