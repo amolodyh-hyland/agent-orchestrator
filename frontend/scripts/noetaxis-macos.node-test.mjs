@@ -85,12 +85,27 @@ async function makeHandlerFixture(home) {
 async function makeFakeBin(root, pgrepMode = "idle", psMode = "plain") {
 	const bin = path.join(root, `bin-${pgrepMode}-${psMode}`);
 	await mkdir(bin, { recursive: true });
+	// Kind modes match only the pgrep pattern for that part of a running AO.
+	const kindPatterns = { desktop: "*/Contents/MacOS/*", daemon: '*"ao daemon"*', "chat-host": '*"ao chat-host"*', other: "*/Contents/" };
 	const pgrep = pgrepMode === "busy"
 		? `#!/bin/sh
 case "$*" in *ShipIt*) exit 1;; *) exit 0;; esac
 `
+		: pgrepMode === "shipit"
+		? `#!/bin/sh
+case "$*" in *ShipIt*) exit 0;; *) exit 1;; esac
+`
+		: kindPatterns[pgrepMode]
+		? `#!/bin/sh
+echo "$*" >> "$(dirname "$0")/pgrep-calls"
+case "$*" in ${kindPatterns[pgrepMode]}) echo 4242; exit 0;; *) exit 1;; esac
+`
 		: "#!/bin/sh\nexit 1\n";
 	await writeFile(path.join(bin, "pgrep"), pgrep, { mode: 0o755 });
+	// Nothing in the install tooling may stop a process; any such call is recorded and asserted absent.
+	for (const name of ["kill", "pkill", "killall"]) {
+		await writeFile(path.join(bin, name), `#!/bin/sh\necho "${name} $*" >> "$(dirname "$0")/kill-calls"\nexit 0\n`, { mode: 0o755 });
+	}
 	const ps = psMode === "chain" || psMode === "cycle"
 		? `#!/bin/bash
 echo call >> "$(dirname "$0")/ps-calls"
@@ -274,6 +289,82 @@ test("isolated install is dry-runnable, backed up, idempotent, and reversible", 
 	assert.equal(allSaved.length, 2);
 	assert.equal(savedVersion(firstSaved[0]), "888");
 	assert.deepEqual(allSaved.filter((name) => name !== firstSaved[0]).map(savedVersion), ["777"]);
+});
+
+test("install explains which part of AO is still running and never stops a process", { skip: process.platform !== "darwin" }, async (t) => {
+	const f = await installFixture(t, "noetaxis-background-test");
+	await makeApp(f.targetApp, "0.13.4");
+	const cli = `${f.targetApp}/Contents/Resources/daemon/ao`;
+	const attempt = async (mode, args) => {
+		const bin = await makeFakeBin(f.root, mode);
+		const env = { ...f.env, PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin` };
+		const result = execute("/bin/bash", [installScript, "--allow-ao-session", ...args, f.sourceApp], { cwd: repoRoot, env });
+		const killed = await readFile(path.join(bin, "kill-calls"), "utf8").catch(() => "");
+		assert.equal(killed, "", `${mode} must not stop any process`);
+		return result;
+	};
+	const desktop = await attempt("desktop", ["--dry-run"]);
+	assert.equal(desktop.status, 21, desktop.stderr);
+	assert.match(desktop.stderr, /desktop app is still running/);
+	assert.match(desktop.stderr, /Cmd\+Q only close its window/);
+	assert.match(desktop.stderr, /"Quit AO Completely"/);
+	assert.match(desktop.stderr, /pid 4242/);
+	const daemon = await attempt("daemon", ["--dry-run"]);
+	assert.equal(daemon.status, 21, daemon.stderr);
+	assert.match(daemon.stderr, /AO daemon is still running/);
+	assert.ok(daemon.stderr.includes(`"${cli}" stop`), daemon.stderr);
+	assert.match(daemon.stderr, /--allow-background-processes/);
+	const chatHost = await attempt("chat-host", ["--dry-run"]);
+	assert.equal(chatHost.status, 21, chatHost.stderr);
+	assert.match(chatHost.stderr, /chat host processes are still running/);
+	const other = await attempt("other", ["--dry-run"]);
+	assert.equal(other.status, 21, other.stderr);
+	assert.match(other.stderr, /helper processes are still running/);
+	for (const mode of ["daemon", "chat-host", "other"]) {
+		const allowed = await attempt(mode, ["--dry-run", "--allow-background-processes"]);
+		assert.equal(allowed.status, 0, `${mode}: ${allowed.stderr}`);
+		assert.match(allowed.stderr, /continuing with .* still running .* --allow-background-processes/i);
+	}
+	// The flag never reaches the desktop app or ShipIt.
+	assert.equal((await attempt("desktop", ["--dry-run", "--allow-background-processes"])).status, 21);
+	assert.equal((await attempt("shipit", ["--dry-run", "--allow-background-processes"])).status, 22);
+	assert.equal(await installedVersion(f.targetApp), "old");
+	// A real install with only the daemon left refuses without the flag and swaps with it.
+	assert.equal((await attempt("daemon", [])).status, 21);
+	assert.equal(await installedVersion(f.targetApp), "old");
+	const installed = await attempt("daemon", ["--allow-background-processes"]);
+	assert.equal(installed.status, 0, installed.stderr);
+	assert.equal(await installedVersion(f.targetApp), "new");
+});
+
+test("rollback and the PKG preinstall apply the same background-process preflight", { skip: process.platform !== "darwin" }, async (t) => {
+	const f = await installFixture(t, "noetaxis-background-rollback-test");
+	await makeApp(f.targetApp, "0.13.4");
+	const installed = execute("/bin/bash", [installScript, "--allow-ao-session", f.sourceApp], { cwd: repoRoot, env: f.env });
+	assert.equal(installed.status, 0, installed.stderr);
+	const daemonBin = await makeFakeBin(f.root, "daemon");
+	const env = { ...f.env, PATH: `${daemonBin}:/usr/bin:/bin:/usr/sbin:/sbin` };
+	const refused = execute("/bin/bash", [rollbackScript, "--allow-ao-session"], { cwd: repoRoot, env });
+	assert.equal(refused.status, 21, refused.stderr);
+	assert.match(refused.stderr, /AO daemon is still running/);
+	assert.equal(await installedVersion(f.targetApp), "new");
+	const allowed = execute("/bin/bash", [rollbackScript, "--allow-ao-session", "--allow-background-processes"], { cwd: repoRoot, env });
+	assert.equal(allowed.status, 0, allowed.stderr);
+	assert.equal(await installedVersion(f.targetApp), "old");
+	const desktopBin = await makeFakeBin(f.root, "desktop");
+	const desktop = execute("/bin/bash", [rollbackScript, "--allow-ao-session", "--allow-background-processes"], { cwd: repoRoot, env: { ...f.env, PATH: `${desktopBin}:/usr/bin:/bin:/usr/sbin:/sbin` } });
+	assert.equal(desktop.status, 21, desktop.stderr);
+	// The PKG preinstall has no flag: a surviving daemon always stops it before anything is backed up.
+	const preinstall = path.join(scriptDir, "noetaxis-macos/pkg-scripts/preinstall");
+	const packaged = path.join(f.root, "pkg-scripts");
+	await mkdir(packaged, { recursive: true });
+	await cp(preinstall, path.join(packaged, "preinstall"));
+	await cp(path.join(scriptDir, "noetaxis-macos/common.sh"), path.join(packaged, "common.sh"));
+	delete env.AO_HOME;
+	const pkg = execute("/bin/bash", [path.join(packaged, "preinstall")], { cwd: repoRoot, env });
+	assert.equal(pkg.status, 21, pkg.stderr);
+	assert.match(pkg.stderr, /Resources\/daemon\/ao" stop/);
+	assert.equal(await installedVersion(f.targetApp), "old");
 });
 
 test("schema check reads a WAL database that has no -wal/-shm files and never fails", { skip: process.platform !== "darwin" }, async (t) => {

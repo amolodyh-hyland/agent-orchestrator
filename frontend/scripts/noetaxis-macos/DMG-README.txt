@@ -3,8 +3,13 @@ Agent Orchestrator — custom internal build
 Drag Agent Orchestrator.app onto the Applications shortcut.
 
 Start installation from your own Finder or Terminal, outside Agent Orchestrator.
-Quit AO yourself first; quitting ends its active sessions. Use the PKG or the
-install script when you want AO's database, settings, and prior app backed up.
+Quit AO completely first: on macOS Quit and Cmd+Q only close the window, so
+click the Agent Orchestrator icon in the menu bar and choose "Quit AO
+Completely", then wait about 10 seconds for its daemon to stop. Check your
+active sessions first; a full quit interrupts work that depends on the app.
+Use the PKG or the install script when you want AO's database, settings, and
+prior app backed up; they check for a surviving daemon and tell you how to stop
+it with the full path to the bundled ao CLI.
 
 This app uses an ad-hoc signature and has no Apple certificate or notarization.
 If Gatekeeper blocks the first open, use Finder's Open action on the app, then

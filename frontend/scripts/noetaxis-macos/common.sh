@@ -114,15 +114,78 @@ noetaxis_shipit_running() {
 	return 1
 }
 
-noetaxis_assert_idle() {
+noetaxis_pattern_running() {
+	pgrep -f "$1" >/dev/null 2>&1
+}
+
+# Process ids (space separated, possibly empty) of the processes matching a pgrep pattern.
+noetaxis_pattern_pids() {
+	local pids
+	pids="$(pgrep -f "$1" 2>/dev/null | /usr/bin/tr '\n' ' ')" || true
+	printf '%s' "${pids% }"
+}
+
+noetaxis_desktop_running() {
 	local app_path="$1"
-	if noetaxis_app_process_running "$app_path"; then
-		noetaxis_error "Agent Orchestrator or its bundled daemon is still running from $app_path. Quit the app yourself and verify its processes have exited before installing."
+	noetaxis_pattern_running "$app_path/Contents/MacOS/" || noetaxis_pattern_running "$app_path/Contents/Frameworks/"
+}
+
+noetaxis_desktop_pids() {
+	local app_path="$1"
+	printf '%s %s' "$(noetaxis_pattern_pids "$app_path/Contents/MacOS/")" "$(noetaxis_pattern_pids "$app_path/Contents/Frameworks/")" | /usr/bin/xargs
+}
+
+# Since the macOS tray ships in every build, Quit / Cmd+Q only closes AO's window: the
+# Dock icon, the menu-bar tray and the app-owned daemon keep running, and so do the chat
+# host processes that hold agent conversations. Only "Quit AO Completely" in the tray
+# menu exits the app, after which the daemon stops itself about 5 seconds later. A
+# "still running" result is therefore not always a mistake, and the right next step
+# depends on which part is left. Nothing here ever quits or kills a process.
+#
+# Usage: noetaxis_assert_idle <app path> [allow background processes: 0|1]
+# The desktop app and ShipIt always refuse. The daemon, chat hosts and other helper
+# processes under the bundle refuse unless the caller passes 1 (the
+# --allow-background-processes flag).
+noetaxis_assert_idle() {
+	local app_path="$1" allow_background="${2:-0}" cli pids found=""
+	cli="$app_path/Contents/Resources/daemon/ao"
+	if noetaxis_desktop_running "$app_path"; then
+		pids="$(noetaxis_desktop_pids "$app_path")"
+		noetaxis_error "The Agent Orchestrator desktop app is still running from $app_path${pids:+ (pid $pids)}. On macOS, Quit and Cmd+Q only close its window: the Dock icon, menu-bar tray and daemon stay up. Quit it completely yourself: click the Agent Orchestrator icon in the menu bar and choose \"Quit AO Completely\", then wait about 10 seconds for the daemon to stop and rerun this command. (Builds without the menu-bar tray exit on Cmd+Q.) This command never quits AO or kills processes for you."
 		return 21
+	fi
+	if noetaxis_pattern_running "$cli daemon"; then
+		pids="$(noetaxis_pattern_pids "$cli daemon")"
+		found="$found the AO daemon${pids:+ (pid $pids)}"
+		if [[ "$allow_background" -ne 1 ]]; then
+			noetaxis_error "The AO daemon is still running from $app_path${pids:+ (pid $pids)} although the desktop app is not. After \"Quit AO Completely\" it stops on its own within about 10 seconds; if it is still there (a crashed app, or a daemon started from a terminal) and you do not need its active sessions, stop it yourself with: \"$cli\" stop    This command never stops it for you. To install anyway, rerun with --allow-background-processes; stop the old daemon before opening the new app."
+			return 21
+		fi
+	fi
+	if noetaxis_pattern_running "$cli chat-host"; then
+		pids="$(noetaxis_pattern_pids "$cli chat-host")"
+		found="$found chat host processes${pids:+ (pid $pids)}"
+		if [[ "$allow_background" -ne 1 ]]; then
+			noetaxis_error "Agent chat host processes are still running from $app_path${pids:+ (pid $pids)}. They keep agent conversations alive while the daemon is replaced, so they outlive \"Quit AO Completely\" until their sessions end. Let the running turns finish or end those sessions in AO first. They are not stopped for you. To install anyway, rerun with --allow-background-processes; the new daemon reattaches to hosts that are still compatible."
+			return 21
+		fi
+	fi
+	if noetaxis_app_process_running "$app_path"; then
+		if ! noetaxis_pattern_running "$cli daemon" && ! noetaxis_pattern_running "$cli chat-host"; then
+			pids="$(noetaxis_pattern_pids "$app_path/Contents/")"
+			found="$found other helper processes${pids:+ (pid $pids)}"
+			if [[ "$allow_background" -ne 1 ]]; then
+				noetaxis_error "Agent Orchestrator helper processes are still running from $app_path${pids:+ (pid $pids)}. Quit the app completely (menu-bar icon, \"Quit AO Completely\"), verify with: pgrep -fl \"$app_path/Contents/\"    and rerun. This command never kills processes for you. To install anyway, rerun with --allow-background-processes."
+				return 21
+			fi
+		fi
 	fi
 	if noetaxis_shipit_running; then
 		noetaxis_error "ShipIt is running. Wait for the updater to finish, then rerun this command."
 		return 22
+	fi
+	if [[ -n "$found" ]]; then
+		printf 'Warning: continuing with%s still running from %s because --allow-background-processes was given. They keep running from the previous app; stop the daemon with "%s" stop before opening the new app.\n' "$found" "$app_path" "$cli" >&2
 	fi
 }
 

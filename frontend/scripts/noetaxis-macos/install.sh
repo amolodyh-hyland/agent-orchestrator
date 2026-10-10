@@ -6,14 +6,22 @@ script_dir="$(cd "$(/usr/bin/dirname "$0")" && pwd)"
 
 dry_run=0
 allow_ao_session=0
+allow_background=0
 source_app=""
 
 usage() {
 	cat <<'EOF'
-Usage: install.sh [--dry-run] [--allow-ao-session] <Agent Orchestrator.app>
+Usage: install.sh [--dry-run] [--allow-ao-session] [--allow-background-processes] <Agent Orchestrator.app>
 
 Install a verified build into APPS_DIR (default /Applications) and back up the
 current app and selected AO state under ~/ao-backups/<stamp>.
+
+The desktop app must be fully quit first: on macOS Quit / Cmd+Q only close its
+window, so use "Quit AO Completely" in the menu-bar tray. By default the install
+also refuses while the bundled daemon or agent chat hosts are still running.
+--allow-background-processes lets it proceed past those (never past the desktop
+app or ShipIt); stop the old daemon with "<app>/Contents/Resources/daemon/ao stop"
+before opening the new app. Nothing here stops a process for you.
 EOF
 }
 
@@ -24,6 +32,9 @@ while [[ $# -gt 0 ]]; do
 			;;
 		--allow-ao-session)
 			allow_ao_session=1
+			;;
+		--allow-background-processes)
+			allow_background=1
 			;;
 		-h|--help)
 			usage
@@ -59,7 +70,7 @@ user_home="$(noetaxis_user_home)"
 ao_home="$(noetaxis_ao_home)"
 
 noetaxis_check_safe_origin "$allow_ao_session"
-noetaxis_assert_idle "$target_app"
+noetaxis_assert_idle "$target_app" "$allow_background"
 noetaxis_verify_manifest "$source_app" "$manifest"
 noetaxis_verify_build_metadata "$source_app"
 [[ -d "$apps_dir" ]] || { noetaxis_error "Applications directory does not exist: $apps_dir"; exit 29; }
@@ -122,7 +133,7 @@ fi
 noetaxis_test_pause after-staged
 
 idle_status=0
-noetaxis_assert_idle "$target_app" || idle_status=$?
+noetaxis_assert_idle "$target_app" "$allow_background" || idle_status=$?
 if [[ "$idle_status" -ne 0 ]]; then
 	noetaxis_run_privileged /bin/rm -rf "$staged_app"
 	exit "$idle_status"

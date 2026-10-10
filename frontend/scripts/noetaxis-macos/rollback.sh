@@ -5,15 +5,23 @@ script_dir="$(cd "$(/usr/bin/dirname "$0")" && pwd)"
 . "$script_dir/common.sh"
 
 allow_ao_session=0
+allow_background=0
 restore_db=0
 backup_dir=""
 
 usage() {
 	cat <<'EOF'
-Usage: rollback.sh [--backup-dir <directory>] [--restore-db] [--allow-ao-session]
+Usage: rollback.sh [--backup-dir <directory>] [--restore-db] [--allow-ao-session] [--allow-background-processes]
 
 Restore the app from the newest complete backup by default. Database files are
 restored only when --restore-db is supplied.
+
+The desktop app must be fully quit first ("Quit AO Completely" in the menu-bar
+tray; Quit / Cmd+Q only close its window on macOS). The rollback refuses while the
+bundled daemon or agent chat hosts run unless --allow-background-processes is
+given; it never stops a process for you. Do not combine that flag with
+--restore-db unless the daemon is stopped, because a running daemon holds the
+database.
 EOF
 }
 
@@ -29,6 +37,9 @@ while [[ $# -gt 0 ]]; do
 			;;
 		--allow-ao-session)
 			allow_ao_session=1
+			;;
+		--allow-background-processes)
+			allow_background=1
 			;;
 		-h|--help)
 			usage
@@ -67,7 +78,7 @@ if [[ -z "$backup_dir" || ! -f "$backup_dir/BACKUP_COMPLETE" ]]; then
 fi
 
 noetaxis_check_safe_origin "$allow_ao_session"
-noetaxis_assert_idle "$target_app"
+noetaxis_assert_idle "$target_app" "$allow_background"
 
 app_backup_name="$(/usr/bin/sed -n 's/^app_backup=//p' "$backup_dir/BACKUP_COMPLETE")"
 expected_version="$(/usr/bin/sed -n 's/^app_version=//p' "$backup_dir/BACKUP_COMPLETE")"
