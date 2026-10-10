@@ -535,6 +535,184 @@ describe("multica awareness service", () => {
 		});
 	});
 
+	describe("timers and cadences", () => {
+		const goLive = async () => {
+			await connect();
+			await until(() => h.serverState().status === "live");
+			await watch("ws-1");
+			await until(() => live());
+		};
+		/** The real server pings every 54 s; the fake does not, so stand in with a harmless frame per step. */
+		const advanceAlive = async (totalMs: number) => {
+			for (let elapsed = 0; elapsed < totalMs; elapsed += 30_000) {
+				await h.scheduler.advance(Math.min(30_000, totalMs - elapsed));
+				a.server.broadcast("ws-1", { type: "comment:created", payload: {} });
+				await settle(5);
+			}
+		};
+		const snapshots = () => a.server.requestsTo("/api/agent-task-snapshot").length;
+		const meReads = () => a.server.requestsTo("/api/me").length;
+
+		it("re-verifies the token with /api/me every 15 minutes", async () => {
+			await goLive();
+			expect(meReads()).toBe(1);
+			await advanceAlive(14 * 60_000);
+			expect(meReads()).toBe(1);
+			await advanceAlive(61_000);
+			await until(() => meReads() === 2);
+			await advanceAlive(15 * 60_000);
+			await until(() => meReads() === 3);
+			expect(h.serverState().status).toBe("live");
+		});
+
+		it("moves the server to signed_out when the periodic /api/me is refused, and stops everything", async () => {
+			await goLive();
+			a.server.failNext("/api/me", { status: 401 });
+			await h.scheduler.advance(15 * 60_000 + 1000);
+			await until(() => h.serverState().status === "signed_out");
+			await until(() => a.server.liveSockets() === 0);
+			const reads = a.server.requests.length;
+			await h.scheduler.advance(60 * 60_000);
+			await settle(60);
+			expect(a.server.requests.length).toBe(reads);
+		});
+
+		it("runs a safety reconcile every 10 minutes and not before", async () => {
+			await goLive();
+			const before = snapshots();
+			await advanceAlive(9 * 60_000);
+			await settle(40);
+			expect(snapshots()).toBe(before);
+			await advanceAlive(61_000);
+			await until(() => snapshots() === before + 1);
+			await advanceAlive(10 * 60_000 + 1000);
+			await until(() => snapshots() === before + 2);
+		});
+
+		it("retries a failed reconcile after a minute, not sooner", async () => {
+			a.server.failNext("/api/agent-task-snapshot", { status: 500 });
+			await connect();
+			await until(() => h.serverState().status === "live");
+			await watch("ws-1");
+			await until(() => snapshots() === 1);
+			await settle(60);
+			expect(live()).toBe(false);
+			await h.scheduler.advance(30_000);
+			await settle(40);
+			expect(snapshots()).toBe(1);
+			await h.scheduler.advance(31_000);
+			await until(() => live());
+			expect(snapshots()).toBe(2);
+		});
+
+		it("does not go live when the snapshot read fails, and recovers", async () => {
+			a.server.failNext("/api/agent-task-snapshot", { status: 503 });
+			await connect();
+			await until(() => h.serverState().status === "live");
+			await watch("ws-1");
+			await until(() => snapshots() === 1);
+			await settle(60);
+			expect(live()).toBe(false);
+			expect(h.state().runs).toEqual([]);
+			await vi.waitFor(
+				async () => {
+					await h.scheduler.advance(30_000);
+					expect(live()).toBe(true);
+				},
+				{ timeout: 8000, interval: 20 },
+			);
+			expect(h.state().runs.map((run) => run.id)).toEqual(["task-1"]);
+		});
+
+		for (const prefix of ["/api/agent-task-snapshot", "/api/agents", "/api/runtimes", "/api/issues"]) {
+			it(`treats a 401 from ${prefix} in the middle of a reconcile as signed out`, async () => {
+				a.server.failNext(prefix, { status: 401 });
+				await connect();
+				await until(() => h.serverState().status === "live");
+				await watch("ws-1");
+				await until(() => h.serverState().status === "signed_out");
+				expect(live()).toBe(false);
+				await h.scheduler.advance(60 * 60_000);
+				await settle(60);
+				expect(h.serverState().status).toBe("signed_out");
+				expect(a.server.liveSockets()).toBe(0);
+			});
+		}
+
+		it("leaves no timer behind when everything is switched off", async () => {
+			await goLive();
+			a.server.dropSockets();
+			await until(() => h.serverState().workspaces[0].state === "backoff");
+			await h.cmd({ type: "setMaster", enabled: false });
+			await h.scheduler.advance(400);
+			expect(h.scheduler.pending()).toBe(0);
+		});
+
+		it("leaves no timer behind when the service is disposed, whatever the state of the sockets", async () => {
+			await goLive();
+			await watch("ws-2");
+			await until(() => live("ws-2"));
+			a.server.dropSockets("ws-2");
+			await until(() => h.serverState().workspaces.find((workspace) => workspace.workspaceId === "ws-2")?.state === "backoff");
+			h.awareness.dispose();
+			expect(h.scheduler.pending()).toBe(0);
+			await until(() => a.server.liveSockets() === 0);
+		});
+
+		it("leaves no workspace timer behind when a workspace is switched off", async () => {
+			await goLive();
+			const withWatch = h.scheduler.pending();
+			await watch("ws-1", false);
+			await until(() => a.server.liveSockets() === 0);
+			await h.scheduler.advance(400);
+			// Only the server's own 15-minute /api/me check is left.
+			expect(h.scheduler.pending()).toBeLessThan(withWatch);
+			expect(h.scheduler.pending()).toBe(1);
+		});
+
+		it("leaves no timer behind when the server is removed, and forgets its pasted token", async () => {
+			await goLive();
+			await h.cmd({ type: "removeServer", serverKey: keyA() });
+			await h.scheduler.advance(400);
+			expect(h.scheduler.pending()).toBe(0);
+			await until(() => a.server.liveSockets() === 0);
+			const credentialsFile = await readFile(path.join(h.dir, "multica-credentials.json"), "utf8").catch(() => "");
+			expect(credentialsFile).not.toContain(Buffer.from(`enc:${TOKEN_A}`).toString("base64"));
+			// Adding the same server again finds no token.
+			await h.cmd({ type: "addServer", mode: "local", customUrl: a.webUrl, apiUrl: a.server.origin });
+			expect(h.serverState().hasPastedToken).toBe(false);
+		});
+
+		it("stops every connection and removes every IPC handler on dispose", async () => {
+			await goLive();
+			h.awareness.dispose();
+			await until(() => a.server.liveSockets() === 0);
+			for (const channel of [MULTICA_AWARENESS_GET_STATE_CHANNEL, MULTICA_AWARENESS_COMMAND_CHANNEL, MULTICA_AWARENESS_OPEN_ISSUE_CHANNEL, MULTICA_ACTION_LOG_READ_CHANNEL]) {
+				await expect(h.invoke(channel, {})).rejects.toThrow("no handler");
+			}
+			const reads = a.server.requests.length;
+			await h.scheduler.advance(60 * 60_000);
+			await settle(60);
+			expect(a.server.requests.length).toBe(reads);
+		});
+
+		it("re-reconciles when more than 1000 frames arrive while the snapshot is in flight", async () => {
+			await connect();
+			await until(() => h.serverState().status === "live");
+			const hold = a.server.hold("/api/agent-task-snapshot");
+			await watch("ws-1");
+			await until(() => hold.reached());
+			await until(() => a.server.liveSockets() === 1);
+			for (let index = 0; index < 1005; index += 1) {
+				a.server.broadcast("ws-1", { type: "agent:status", payload: { n: index } });
+			}
+			await settle(300);
+			hold.release();
+			await until(() => live());
+			await until(() => snapshots() >= 2);
+		});
+	});
+
 	describe("read budget and bounds", () => {
 		it("reads at most 20 linked issues per reconcile", async () => {
 			const identifiers = Array.from({ length: 30 }, (_, index) => `MUL-${100 + index}`);
