@@ -94,6 +94,23 @@ describe("workspace socket", () => {
 		expect(states.map(([state]) => state)).toEqual(["connecting", "authenticating", "live"]);
 	});
 
+	it("goes live on an acknowledgement with spacing or extra fields", async () => {
+		for (const ack of ['{ "type": "auth_ack" }', '{"type":"auth_ack","protocol":2}', '{"type" : "auth_ack"}\n']) {
+			lives = 0;
+			server.setControlFrameStyle({ ack });
+			const socket = open();
+			await until(() => lives === 1);
+			socket.stop();
+		}
+	});
+
+	it("stops on an error frame with spacing or extra fields", async () => {
+		server.setControlFrameStyle({ error: (message) => `{ "error" : "${message}", "code": 401 }` });
+		open({ token: "mul_WRONG000000000000" });
+		await until(() => stops.length === 1);
+		expect(stops).toEqual(["unauthorized"]);
+	});
+
 	it("delivers frames and drops the noisy ones before they reach the caller", async () => {
 		open();
 		await until(() => lives === 1);

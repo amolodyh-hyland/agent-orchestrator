@@ -58,6 +58,19 @@ export function reconnectDelayMs(attempt: number, random: number): number {
 	return Math.round(base * (0.5 + random));
 }
 
+const ERROR_FRAME = /^\s*\{\s*"error"\s*:/;
+
+/** The `type` of a small control frame, or null when the text is not a JSON object with a string type. */
+function controlFrameType(text: string): string | null {
+	try {
+		const parsed: unknown = JSON.parse(text);
+		if (parsed && typeof parsed === "object" && typeof (parsed as { type?: unknown }).type === "string") return (parsed as { type: string }).type;
+	} catch {
+		// Not a control frame.
+	}
+	return null;
+}
+
 function stopReasonForError(message: string): WorkspaceSocketStop | null {
 	const text = message.toLowerCase();
 	if (text.includes("invalid token")) return "unauthorized";
@@ -189,7 +202,7 @@ export function createWorkspaceSocket(options: WorkspaceSocketOptions): Workspac
 			const text = toText(data, isBinary);
 			if (text === null) return;
 			armDead(id);
-			if (text.startsWith('{"error":')) {
+			if (ERROR_FRAME.test(text)) {
 				// The server answers a bad token, a disabled account or a missing membership with an error frame, then closes.
 				let message = "";
 				try {
@@ -203,7 +216,8 @@ export function createWorkspaceSocket(options: WorkspaceSocketOptions): Workspac
 				return;
 			}
 			if (current !== "live") {
-				if (text === '{"type":"auth_ack"}') {
+				// Tolerate spacing and extra fields in the acknowledgement: only the type matters.
+				if (controlFrameType(text) === "auth_ack") {
 					liveSince = scheduler.now();
 					setState("live");
 					options.onLive();

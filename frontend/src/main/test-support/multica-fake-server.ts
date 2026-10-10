@@ -51,6 +51,8 @@ export type FakeMulticaServer = {
 	dropSockets: (workspaceId?: string) => void;
 	/** Stops answering auth on new sockets (they stay unauthenticated) to test the liveness timer. */
 	holdAuth: (hold: boolean) => void;
+	/** Replaces the exact text of the auth acknowledgement and of error frames, to test tolerant parsing. */
+	setControlFrameStyle: (style: { ack?: string; error?: (message: string) => string } | null) => void;
 	/** Refuses WebSocket upgrades with this HTTP status (null restores normal behaviour). */
 	rejectUpgrades: (status: number | null) => void;
 	requests: FakeRequest[];
@@ -90,6 +92,8 @@ export async function createFakeMulticaServer(): Promise<FakeMulticaServer> {
 	let attempts = 0;
 	let authHeld = false;
 	let upgradeStatus: number | null = null;
+	let frameStyle: { ack?: string; error?: (message: string) => string } | null = null;
+	const errorFrame = (message: string) => (frameStyle?.error ? frameStyle.error(message) : JSON.stringify({ error: message }));
 
 	const userFor = (token: string | undefined): FakeUser | null => {
 		if (!token || revoked.has(token)) return null;
@@ -233,18 +237,18 @@ export async function createFakeMulticaServer(): Promise<FakeMulticaServer> {
 				received.push(token);
 				const user = userFor(token);
 				if (!user) {
-					ws.send(JSON.stringify({ error: "invalid token" }));
+					ws.send(errorFrame("invalid token"));
 					ws.close();
 					return;
 				}
 				if (!user.workspaceIds.includes(workspaceId)) {
-					ws.send(JSON.stringify({ error: "not a member of this workspace" }));
+					ws.send(errorFrame("not a member of this workspace"));
 					ws.close();
 					return;
 				}
 				entry.token = token;
 				entry.authenticated = true;
-				ws.send(JSON.stringify({ type: "auth_ack" }));
+				ws.send(frameStyle?.ack ?? JSON.stringify({ type: "auth_ack" }));
 			});
 		});
 	});
@@ -279,7 +283,7 @@ export async function createFakeMulticaServer(): Promise<FakeMulticaServer> {
 			revoked.add(token);
 			for (const entry of sockets) {
 				if (entry.token !== token) continue;
-				entry.ws.send(JSON.stringify({ error: "invalid token" }));
+				entry.ws.send(errorFrame("invalid token"));
 				entry.ws.close();
 			}
 		},
@@ -300,6 +304,9 @@ export async function createFakeMulticaServer(): Promise<FakeMulticaServer> {
 		},
 		holdAuth: (hold) => {
 			authHeld = hold;
+		},
+		setControlFrameStyle: (style) => {
+			frameStyle = style;
 		},
 		rejectUpgrades: (status) => {
 			upgradeStatus = status;
