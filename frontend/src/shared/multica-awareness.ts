@@ -146,7 +146,7 @@ export type AwarenessState = {
 	agents: Array<AwarenessAgent & { serverKey: string }>;
 	runtimes: Array<AwarenessRuntime & { serverKey: string }>;
 	/** Issues that were deleted while watched: a link to one of them is orphaned. */
-	deleted: Array<{ serverKey: string; workspaceId: string; identifier: string }>;
+	deleted: Array<{ serverKey: string; workspaceId: string; issueId: string; identifier: string }>;
 	/** Every stored issue link, all servers, so the views can join sessions to issues of servers other than the selected one. */
 	links: MulticaIssueLink[];
 };

@@ -148,6 +148,10 @@ export function createMulticaAwareness(options: MulticaAwarenessOptions): Multic
 	const fingerprint = (server: WatchServer): string =>
 		JSON.stringify([server.mode, server.customUrl, server.apiUrl, server.credentialSource, server.consentGranted, server.credentialSource === "pasted" && pasted.has(server.serverKey), credentialVersion.get(server.serverKey) ?? 0]);
 
+	/** Ids (version 2 links) of the issues sessions are linked to on this server; they survive an identifier change. */
+	const linkedIssueIds = (serverKey: string): ReadonlySet<string> =>
+		new Set(linkCache.filter((link) => link.serverKey === serverKey && link.issueId !== undefined).map((link) => link.issueId as string));
+
 	const linkedIdentifiers = (serverKey: string, workspaceSlug: string): string[] => {
 		const slug = workspaceSlug.toLowerCase();
 		return linkCache.filter((link) => link.serverKey === serverKey && link.workspaceSlug === slug).map((link) => link.issueIdentifier.toUpperCase());
@@ -209,6 +213,7 @@ export function createMulticaAwareness(options: MulticaAwarenessOptions): Multic
 			fetch: options.fetch,
 			pageHost: () => pageHost()(resolved.key),
 			linkedIdentifiers: (slug) => linkedIdentifiers(resolved.key, slug),
+			linkedIssueIds: () => linkedIssueIds(resolved.key),
 			onChange: emit,
 			record,
 			onWorkspaces: (list) => mergeWorkspaces(resolved.key, list),
@@ -314,7 +319,7 @@ export function createMulticaAwareness(options: MulticaAwarenessOptions): Multic
 			for (const run of view.model.runs.values()) state.runs.push({ ...run, serverKey: server.serverKey });
 			for (const agent of view.model.agents.values()) state.agents.push({ ...agent, serverKey: server.serverKey });
 			for (const runtime of view.model.runtimes.values()) state.runtimes.push({ ...runtime, serverKey: server.serverKey });
-			for (const deleted of view.model.deleted.values()) state.deleted.push({ ...deleted, serverKey: server.serverKey });
+			for (const [issueId, deleted] of view.model.deleted) state.deleted.push({ ...deleted, issueId, serverKey: server.serverKey });
 		}
 		return state;
 	}
@@ -479,8 +484,13 @@ export function createMulticaAwareness(options: MulticaAwarenessOptions): Multic
 		lookup: (serverKey, identifier) => {
 			const entry = connections.get(serverKey);
 			if (!entry) return null;
-			const matches = entry.connection.lookupAll(identifier);
-			// Two workspaces may share a prefix; with no way to tell them apart, say nothing.
+			let matches = entry.connection.lookupAll(identifier);
+			if (matches.length > 1) {
+				// Two workspaces may share a prefix. A version 2 link names the issue by id: use it to tell them apart.
+				const ids = linkedIssueIds(serverKey);
+				matches = matches.filter((match) => ids.has(match.issue.id));
+			}
+			// Still ambiguous (or unknown): say nothing.
 			if (matches.length !== 1) return null;
 			const { issue, activeRuns } = matches[0];
 			const view = entry.connection.view();

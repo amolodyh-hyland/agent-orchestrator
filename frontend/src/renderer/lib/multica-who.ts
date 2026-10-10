@@ -69,7 +69,14 @@ export function buildWhoView(input: {
 	const { state, links, sessions, nowMs } = input;
 	const liveById = new Map(sessions.filter(isLiveSession).map((session) => [session.id, session]));
 	const linkedKeysBySession = new Map<string, Set<string>>();
+	// A version 2 link names its issue by id, which survives an identifier change; an older one joins by slug and identifier.
 	const sessionsByIssue = new Map<string, AoSessionRef[]>();
+	const sessionsByIssueId = new Map<string, AoSessionRef[]>();
+	const addSession = (map: Map<string, AoSessionRef[]>, key: string, ref: AoSessionRef) => {
+		const list = map.get(key) ?? [];
+		if (!list.some((entry) => entry.id === ref.id)) list.push(ref);
+		map.set(key, list);
+	};
 	for (const link of links) {
 		if (!link.serverKey) continue;
 		const live = liveById.get(link.sessionId);
@@ -78,10 +85,15 @@ export function buildWhoView(input: {
 		keys.add(key);
 		linkedKeysBySession.set(link.sessionId, keys);
 		if (!live) continue;
-		const list = sessionsByIssue.get(key) ?? [];
-		list.push({ id: live.id, projectId: link.projectId, title: live.title });
-		sessionsByIssue.set(key, list);
+		const ref = { id: live.id, projectId: link.projectId, title: live.title };
+		if (link.issueId) addSession(sessionsByIssueId, `${link.serverKey}|${link.issueId}`, ref);
+		else addSession(sessionsByIssue, key, ref);
 	}
+	const sessionsFor = (serverKey: string, issueId: string, joinKey: string): AoSessionRef[] => {
+		const merged = new Map<string, AoSessionRef>();
+		for (const ref of [...(sessionsByIssueId.get(`${serverKey}|${issueId}`) ?? []), ...(sessionsByIssue.get(joinKey) ?? [])]) merged.set(ref.id, ref);
+		return [...merged.values()];
+	};
 
 	const serverByKey = new Map(state.servers.map((server) => [server.serverKey, server]));
 	const slugOf = (serverKey: string, workspaceId: string) => serverByKey.get(serverKey)?.workspaces.find((workspace) => workspace.workspaceId === workspaceId)?.slug ?? "";
@@ -95,7 +107,7 @@ export function buildWhoView(input: {
 		const joinKey = multicaIssueJoinKey(issue.serverKey, slug, issue.identifier);
 		const runs = state.runs.filter((run) => run.serverKey === issue.serverKey && run.issueId === issue.id);
 		const activeRuns = runs.filter((run) => MULTICA_ACTIVE_TASK_STATUSES.includes(run.status) && !run.outcomeUnknown);
-		const aoSessions = sessionsByIssue.get(joinKey) ?? [];
+		const aoSessions = sessionsFor(issue.serverKey, issue.id, joinKey);
 		const meId = server?.meId ?? null;
 		const base = { issue, activeRunCount: activeRuns.length, hasLiveAoSession: aoSessions.length > 0, meId };
 		const derivation = deriveMulticaExecutor(base);
@@ -134,7 +146,7 @@ export function buildWhoView(input: {
 	for (const deleted of state.deleted) {
 		const slug = slugOf(deleted.serverKey, deleted.workspaceId);
 		const joinKey = multicaIssueJoinKey(deleted.serverKey, slug, deleted.identifier);
-		const aoSessions = sessionsByIssue.get(joinKey) ?? [];
+		const aoSessions = sessionsFor(deleted.serverKey, deleted.issueId, joinKey);
 		if (aoSessions.length === 0 || seenKeys.has(joinKey)) continue;
 		rows.push({
 			key: `${deleted.serverKey}|deleted|${deleted.identifier}`,

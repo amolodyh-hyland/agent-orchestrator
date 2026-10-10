@@ -306,7 +306,7 @@ describe("multica awareness service", () => {
 			expect(JSON.stringify(h.state())).not.toContain("PRIVATE");
 			a.server.broadcast("ws-1", { type: "issue:deleted", payload: { issue_id: "iss-2" } });
 			await until(() => !h.state().issues.some((issue) => issue.id === "iss-2"));
-			expect(h.state().deleted).toEqual([{ serverKey: keyA(), workspaceId: "ws-1", identifier: "MUL-2" }]);
+			expect(h.state().deleted).toEqual([{ serverKey: keyA(), workspaceId: "ws-1", issueId: "iss-2", identifier: "MUL-2" }]);
 		});
 
 		it("keeps no issue outside the interest set", async () => {
@@ -1060,6 +1060,43 @@ describe("multica awareness service", () => {
 			expect(await open({ serverKey: "cloud", workspaceSlug: "acme", identifier: "MUL-1" })).toBe(false);
 			expect(await open({ serverKey: keyA(), workspaceSlug: "../x", identifier: "MUL-1" })).toBe(false);
 			expect(await open({ serverKey: keyA(), workspaceSlug: "acme" })).toBe(false);
+		});
+	});
+
+	describe("version 2 links (issue ids)", () => {
+		it("keeps an issue that a session is linked to by id, whatever its identifier says", async () => {
+			// The link remembers the id; its identifier is out of date (the issue was renamed or moved).
+			h.links.push({ sessionId: "s-3", projectId: "p", workspaceSlug: "acme", issueIdentifier: "OLD-3", createdAt: "2026-10-10T10:00:00Z", serverKey: keyA(), workspaceId: "ws-1", issueId: "iss-3" });
+			await h.rebuild();
+			await connect();
+			await until(() => h.serverState().status === "live");
+			await watch("ws-1");
+			await until(() => live());
+			expect(h.state().issues.some((issue) => issue.id === "iss-3")).toBe(false);
+			a.server.broadcast("ws-1", { type: "issue:updated", payload: { issue: fakeIssue({ id: "iss-3", identifier: "MUL-3", revision: 5 }) } });
+			await until(() => h.state().issues.some((issue) => issue.id === "iss-3"));
+		});
+
+		it("tells two workspaces apart by the linked issue id when they share an identifier", async () => {
+			a.server.setIssues("ws-2", [fakeIssue({ id: "iss-dup", workspace_id: "ws-2", identifier: "MUL-1", assignee_type: "agent", assignee_id: "agent-2" })]);
+			h.links.push({ sessionId: "s-d", projectId: "p", workspaceSlug: "beta", issueIdentifier: "MUL-1", createdAt: "2026-10-10T10:00:00Z", serverKey: keyA(), workspaceId: "ws-2", issueId: "iss-dup" });
+			await h.rebuild();
+			await connect();
+			await until(() => h.serverState().status === "live");
+			await watch("ws-1");
+			await watch("ws-2");
+			await until(() => live("ws-1") && live("ws-2"));
+			expect(h.awareness.lookup(keyA(), "MUL-1")).toMatchObject({ issue: { id: "iss-dup" } });
+		});
+
+		it("reports a deleted issue with its id", async () => {
+			await connect();
+			await until(() => h.serverState().status === "live");
+			await watch("ws-1");
+			await until(() => live());
+			a.server.broadcast("ws-1", { type: "issue:deleted", payload: { issue_id: "iss-2" } });
+			await until(() => h.state().deleted.length === 1);
+			expect(h.state().deleted[0]).toEqual({ serverKey: keyA(), workspaceId: "ws-1", issueId: "iss-2", identifier: "MUL-2" });
 		});
 	});
 

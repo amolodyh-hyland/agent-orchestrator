@@ -76,6 +76,8 @@ export type ServerConnectionOptions = {
 	pageHost: () => (PageHost & { activeServerKey: () => string | null; readActiveSlug: () => Promise<string | null> }) | undefined;
 	/** Identifiers (upper case) of the issues an AO session is linked to, per workspace slug. */
 	linkedIdentifiers: (workspaceSlug: string) => string[];
+	/** Issue ids (version 2 links) an AO session is linked to on this server. */
+	linkedIssueIds: () => ReadonlySet<string>;
 	/** Called whenever the model or a state changed. The caller throttles. */
 	onChange: () => void;
 	/** Writes one action-log record; lifecycle lines only. */
@@ -182,7 +184,8 @@ export function createServerConnection(options: ServerConnectionOptions): Server
 		workspaceId,
 		nowIso: nowIso(),
 		meId,
-		isLinked: (issue) => options.linkedIdentifiers(slugOf(issue.workspaceId)).includes(issue.identifier.toUpperCase()),
+		isLinked: (issue) =>
+			options.linkedIssueIds().has(issue.id) || options.linkedIdentifiers(slugOf(issue.workspaceId)).includes(issue.identifier.toUpperCase()),
 	});
 
 	// Credentials and client

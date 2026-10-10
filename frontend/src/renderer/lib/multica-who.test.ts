@@ -112,9 +112,28 @@ describe("buildWhoView", () => {
 	});
 
 	it("adds an orphaned row for a live session whose issue was deleted", () => {
-		const s = state({ deleted: [{ serverKey: SK, workspaceId: "w1", identifier: "MUL-9" }] });
+		const s = state({ deleted: [{ serverKey: SK, workspaceId: "w1", issueId: "i9", identifier: "MUL-9" }] });
 		const { rows } = buildWhoView({ state: s, links: [link("s7", "MUL-9")], sessions: [session("s7")], nowMs: NOW });
 		expect(rows.find((row) => row.identifier === "MUL-9")).toMatchObject({ flags: ["orphaned"], derivation: { detail: "orphaned" } });
+	});
+
+	it("joins a version 2 link by issue id, so a renamed identifier still matches", () => {
+		const renamed: MulticaIssueLink = { ...link("s1", "OLD-1"), workspaceId: "w1", issueId: "i1" };
+		const { rows } = buildWhoView({ state: state(), links: [renamed], sessions: [session("s1")], nowMs: NOW });
+		expect(rows[0]).toMatchObject({ identifier: "MUL-1", flags: ["contested"], sessions: [{ id: "s1" }] });
+	});
+
+	it("does not join a link by identifier when it carries an id for another issue", () => {
+		const other: MulticaIssueLink = { ...link("s1", "MUL-1"), workspaceId: "w1", issueId: "some-other-issue" };
+		const { rows } = buildWhoView({ state: state(), links: [other], sessions: [session("s1")], nowMs: NOW });
+		expect(rows.find((row) => row.identifier === "MUL-1")?.derivation.contested).toBe(false);
+	});
+
+	it("joins an orphaned link by the deleted issue's id", () => {
+		const s = state({ deleted: [{ serverKey: SK, workspaceId: "w1", issueId: "i9", identifier: "MUL-9" }] });
+		const byId: MulticaIssueLink = { ...link("s7", "RENAMED-9"), workspaceId: "w1", issueId: "i9" };
+		const { rows } = buildWhoView({ state: s, links: [byId], sessions: [session("s7")], nowMs: NOW });
+		expect(rows.find((row) => row.identifier === "MUL-9")?.flags).toEqual(["orphaned"]);
 	});
 
 	it("lists live worker sessions with no Multica link", () => {

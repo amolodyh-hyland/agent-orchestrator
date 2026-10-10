@@ -3,7 +3,6 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MulticaActionRecord } from "../shared/multica-action-log";
 import type { MulticaIssueLink } from "../shared/multica-issue-links";
 import type { SyncSessionFacts } from "../shared/multica-status-writer";
 import { getMulticaActionLog, MULTICA_ACTION_LOG_FILE } from "./multica-action-log";
@@ -116,8 +115,8 @@ describe("status-sync audit goes to the shared action log", () => {
 		await engine.setLink({ sessionId: "s-1", workspaceSlug: "acme", issueIdentifier: "MUL-1", enabled: true });
 		await until(async () => expect((await log.read({ kind: "status_write" })).length).toBeGreaterThanOrEqual(1));
 		const [attempt] = await log.read({ kind: "status_write" });
-		expect(attempt.result.ok).toBe(false);
-		expect(attempt.result.code).toBeTruthy();
+		expect(attempt.result?.ok).toBe(false);
+		expect(attempt.result?.code).toBeTruthy();
 	});
 });
 
