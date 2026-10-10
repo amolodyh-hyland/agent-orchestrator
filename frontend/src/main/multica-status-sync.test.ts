@@ -392,6 +392,25 @@ describe("multica status sync", () => {
 			]);
 		});
 
+		it("a reopen or resume while sync is off does nothing, and does not wait around for the day it is turned on", async () => {
+			const issue = fake.addIssue({ identifier: "MUL-1", status: "done" });
+			const sync = start();
+			sync.setFacts({ stale: false, sessions: [working()] });
+			await turnOn(sync);
+			await settled();
+			expect(view().canReopen).toBe(true);
+
+			await sync.setSettings({ enabled: false });
+			await sync.reopen({ sessionId: "s-1", workspaceSlug: "acme", issueIdentifier: "MUL-1" });
+			await sync.resume({ sessionId: "s-1", workspaceSlug: "acme", issueIdentifier: "MUL-1" });
+			await sync.setSettings({ enabled: true });
+			await settled();
+
+			expect(fake.issues.get(issue.id)?.status).toBe("done");
+			expect(put()).toHaveLength(0);
+			expect(view()).toMatchObject({ state: "paused", reason: "closed_in_multica" });
+		});
+
 		it("a reopen on a link that is not paused for a closed issue does nothing", async () => {
 			const issue = fake.addIssue({ identifier: "MUL-1", status: "todo" });
 			const sync = start();
@@ -1161,6 +1180,48 @@ describe("multica status sync", () => {
 			await sleep(20);
 			expect(store.saved().links).toEqual([]);
 			expect(store.saved().issues).toEqual([]);
+		});
+
+		it("does not forget the enabled links when the server is announced before the links are known (startup race)", async () => {
+			const saved: MulticaSyncStateFile = {
+				settings: { enabled: true, moveOutOfBacklog: true },
+				links: [{ serverKey: SERVER, sessionId: "s-1", workspaceSlug: "acme", issueIdentifier: "MUL-1" }],
+				issues: [],
+			};
+			store = memoryStore(saved);
+			const slowLoad = store.load;
+			let release: () => void = () => undefined;
+			store.load = async () => {
+				await new Promise<void>((resolve) => {
+					release = resolve;
+				});
+				return slowLoad();
+			};
+			const sync = start();
+			// The view host announces the server while the saved state is still being read.
+			sync.handleServerChange(SERVER);
+			release();
+			await sync.ready;
+			await sleep(20);
+			expect(store.saved().links).toEqual(saved.links);
+
+			sync.setLinks(SERVER, [link()]);
+			expect(view(sync).enabled).toBe(true);
+			expect(store.saved().links).toEqual(saved.links);
+
+			// Once the links are known, a link that is really gone is pruned.
+			sync.setLinks(SERVER, []);
+			await sleep(20);
+			expect(store.saved().links).toEqual([]);
+		});
+
+		it("does not prune the links of a server whose list has not arrived after a switch", async () => {
+			const sync = start();
+			await turnOn(sync);
+			sync.handleServerChange(OTHER_SERVER);
+			sync.handleServerChange(SERVER);
+			await sleep(20);
+			expect(store.saved().links).toEqual([{ serverKey: SERVER, sessionId: "s-1", workspaceSlug: "acme", issueIdentifier: "MUL-1" }]);
 		});
 
 		it("ignores an action for a link it does not have", async () => {

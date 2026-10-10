@@ -145,6 +145,8 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 	let facts: MulticaSyncFacts | null = null;
 	let factsBySession = new Map<string, SyncSessionFacts>();
 	let loaded = false;
+	// True once the links of the selected server have been reported; until then an empty list means "not known yet".
+	let linksKnown = false;
 	let disposed = false;
 	let generation = 0;
 	let lastEmitted = "";
@@ -718,7 +720,8 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 		});
 
 	function applyLinkPruning(): void {
-		if (!loaded || serverKey === "") return;
+		// Never prune from a list that was only emptied by a server switch: the links of the new server are not here yet.
+		if (!loaded || serverKey === "" || !linksKnown) return;
 		let changed = false;
 		const current = new Set(links.map((link) => linkKeyOf(serverKey, link.sessionId, link.workspaceSlug, link.issueIdentifier)));
 		for (const [key, entry] of enabledLinks) {
@@ -746,6 +749,7 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 		generation += 1;
 		serverKey = key;
 		links = [];
+		linksKnown = false;
 		for (const runtime of runtimes.values()) {
 			clearTimers(runtime);
 			runtime.running = false;
@@ -801,6 +805,7 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 			// The link service learns the selected server before the view host announces it.
 			if (key !== serverKey) adoptServer(key);
 			links = next.filter((link) => link.serverKey === key);
+			linksKnown = true;
 			applyLinkPruning();
 			recompute();
 		},
@@ -851,7 +856,7 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 			actOnLink(ref, (group, runtime) => {
 				const pause = runtime.state.pause;
 				// A closed or blocked issue needs the explicit, confirmed reopen instead.
-				if (!pause || pause.reason !== "changed_in_multica") return;
+				if (!active() || !pause || pause.reason !== "changed_in_multica") return;
 				runtime.state.pause = null;
 				// AO takes over again: the person's status is no longer a baseline to defend.
 				runtime.state.lastKnown = null;
@@ -872,7 +877,8 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 		reopen: (ref) =>
 			actOnLink(ref, (group, runtime) => {
 				const pause = runtime.state.pause;
-				if (!pause || pause.reason === "changed_in_multica") return;
+				// A confirmation given while sync is off must not wait around for the day it is turned on.
+				if (!active() || !pause || pause.reason === "changed_in_multica") return;
 				runtime.state.pause = null;
 				runtime.reopenOnce = true;
 				audit({
