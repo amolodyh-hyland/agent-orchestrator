@@ -9,7 +9,9 @@ import {
 } from "../../../shared/multica";
 import { aoBridge } from "../../lib/bridge";
 import type { MessageKey } from "../../i18n/messages";
+import { useMulticaSyncStore } from "../../stores/multica-sync-store";
 import { Button } from "../ui/button";
+import { Switch } from "../ui/switch";
 import { SettingsInputRow, SettingsRow } from "./SettingsRow";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
 import { SettingsSection } from "./SettingsSection";
@@ -37,6 +39,13 @@ export function MulticaSettingsSection() {
 	const [draft, setDraft] = useState<MulticaSettings | null>(null);
 	const [failure, setFailure] = useState<Failure | null>(null);
 	const [busy, setBusy] = useState(false);
+	const syncSnapshot = useMulticaSyncStore((state) => state.snapshot);
+	const loadSync = useMulticaSyncStore((state) => state.load);
+	const setSyncSettings = useMulticaSyncStore((state) => state.setSettings);
+
+	useEffect(() => {
+		void loadSync();
+	}, [loadSync]);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -180,6 +189,28 @@ export function MulticaSettingsSection() {
 				</p>
 			) : null}
 			{draft.mode === "local" ? <p className="px-3 pb-2 text-caption leading-4 text-muted-foreground">{t("multica.settings.selfHostNote")}</p> : null}
+			<SettingsRow label={t("multica.sync.settings.enabled")} description={t("multica.sync.settings.enabled.help")}>
+				<Switch
+					aria-label={t("multica.sync.settings.enabled")}
+					checked={syncSnapshot.settings.enabled}
+					disabled={syncSnapshot.killSwitch}
+					onCheckedChange={(enabled) => void setSyncSettings({ enabled })}
+				/>
+			</SettingsRow>
+			<SettingsRow label={t("multica.sync.settings.moveOutOfBacklog")} description={t("multica.sync.settings.moveOutOfBacklog.help")}>
+				<Switch
+					aria-label={t("multica.sync.settings.moveOutOfBacklog")}
+					checked={syncSnapshot.settings.moveOutOfBacklog}
+					disabled={syncSnapshot.killSwitch || !syncSnapshot.settings.enabled}
+					onCheckedChange={(moveOutOfBacklog) => void setSyncSettings({ moveOutOfBacklog })}
+				/>
+			</SettingsRow>
+			{syncSnapshot.killSwitch ? (
+				<p role="status" className="px-3 pb-2 text-caption leading-4 text-muted-foreground">
+					{t("multica.sync.settings.killSwitch")}
+				</p>
+			) : null}
+			<p className="px-3 pb-2 text-caption leading-4 text-muted-foreground">{t("multica.sync.settings.notes")}</p>
 		</SettingsSection>
 	);
 }
