@@ -717,6 +717,22 @@ describe("multica status sync", () => {
 			expect(put()).toHaveLength(1);
 		});
 
+		it("KNOWN GAP, pinned: an entry in Triage that the issue JSON does not mark is NOT protected, and AO writes over the triager's proposal", async () => {
+			// Multica's issue JSON has no triage field and its PUT guard only locks parent_issue_id, so today a
+			// Triage entry looks like any other backlog/todo issue. This test documents that; it is not coverage of row 16 for Triage.
+			const backlog = fake.addIssue({ identifier: "MUL-1", status: "backlog", hiddenTriage: true });
+			const todo = fake.addIssue({ identifier: "MUL-2", status: "todo", hiddenTriage: true });
+			const sync = start();
+			sync.setFacts({ stale: false, sessions: [working("s-1"), working("s-2")] });
+			await turnOn(sync, [link({ sessionId: "s-1" }), link({ sessionId: "s-2", issueIdentifier: "MUL-2" })]);
+			await settled();
+			await settled(engine, "s-2", "MUL-2");
+
+			expect(fake.issues.get(backlog.id)?.status).toBe("in_progress");
+			expect(fake.issues.get(todo.id)?.status).toBe("in_progress");
+			expect(view().state).toBe("synced");
+		});
+
 		it("the issue leaving Multica's agent: the refusal lifts when AO reads again", async () => {
 			const issue = fake.addIssue({ identifier: "MUL-1", status: "todo", assignee_type: "agent" });
 			const sync = start();

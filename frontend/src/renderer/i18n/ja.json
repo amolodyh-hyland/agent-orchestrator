@@ -855,7 +855,7 @@
 	"multica.sync.settings.moveOutOfBacklog": "課題をバックログから移す",
 	"multica.sync.settings.moveOutOfBacklog.help": "バックログの課題でセッションを開始すると、「進行中」に移します。",
 	"multica.sync.settings.killSwitch": "今回の実行では AO_MULTICA_SYNC=0 によりオフになっています。",
-	"multica.sync.settings.notes": "AO は課題を先に進める方向にしか移さず、「バックログ」「ブロック中」「キャンセル」には移さず、担当者も変更しません。Multica で誰かがステータスを変更した場合や、Multica のエージェントが担当している場合は停止します。変更は Multica 上であなたの名前で表示されます。AO を開いていて Multica にサインインしている間だけ動作します。",
+	"multica.sync.settings.notes": "AO は課題を先に進める方向にしか移さず、「バックログ」「ブロック中」「キャンセル」には移さず、担当者も変更しません。Multica で誰かがステータスを変更した場合や、Multica のエージェントが担当している場合は停止します。変更は Multica 上であなたの名前で表示されます。AO を開いていて Multica にサインインしている間だけ動作します。AO は課題が Multica のトリアージ中かどうかを判別できず、他の課題と同じように扱います。受理済みの課題にだけ同期をオンにしてください。",
 	"multica.send.keepUpdated": "この課題を最新に保つ",
 	"multica.send.keepUpdated.help": "このセッションの進行に合わせて、課題を「進行中」「レビュー中」「完了」に移します。",
 	"multica.sync.needsSettings": "先に設定で「Multica 課題のステータスを更新」をオンにしてください。",

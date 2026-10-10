@@ -326,7 +326,7 @@ holds the rules and `multica-status-writer.test.ts` has a test per row.
 | 13 | session terminated, every PR merged | `done` |
 | 14 | issue is `done` or `cancelled` (or `blocked`) and AO would write something | paused "closed in Multica"; **Reopen** writes once, only after the user confirms (D12) |
 | 15 | several enabled links to one issue | the most actionable live session decides, by AO's own board ranking; ended sessions only count when nothing is live, and then only to carry a merge to `done` |
-| 16 | issue assigned to a Multica agent or squad, or in Triage | nothing: refused, shown as "Driven by Multica" or "In Triage" |
+| 16 | issue assigned to a Multica agent or squad | nothing: refused, shown as "Driven by Multica". **Triage is not covered today**, see below |
 | 17 | Multica shows a status AO did not write or agree with | paused "changed in Multica" |
 
 "Forward only" is a rule on top of the rows: a status behind the one Multica shows is never written (after AO
@@ -364,11 +364,17 @@ wrote `in_review`, a later round of CI fixes does not move the issue back to `in
   the tests counts any write that would have started a run: it stays at zero.
 - **Row 16, and why.** AO refuses to write when the assignee is a Multica agent or squad because **an agent
   owns that status**, and Multica itself resets `in_progress` to `todo` after a failed run, not because the
-  write would start a run (`suppress_run` covers that). Triage: Multica's issue JSON has **no `triage_state`
-  field today**, and its `PUT` guard only locks `parent_issue_id` for an issue in Triage, so AO cannot see
-  Triage from a read. It refuses when the JSON carries such a field, and when a status write answers
-  `issue_in_triage`. A status write on a Triage issue therefore goes through today; this gap is Multica's and
-  is not closed here.
+  write would start a run (`suppress_run` covers that).
+- **Triage is NOT protected today.** Multica's issue JSON has no `triage_state` field and no other read path
+  exposes it, and its `PUT` guard only locks `parent_issue_id` for an issue in Triage. Multica treats the status
+  of a Triage entry as the triager's *proposal* (accepting confirms it) and lets ordinary status writes through;
+  its own PR auto-complete skips Triage ("not accepted yet"). So with sync on for a link, AO **writes over a
+  triager's proposal** on an entry that still sits in Triage (shown by Multica as backlog or todo): the status
+  changes, `triage_state` stays set, no agent run starts (Multica refuses runs for Triage and `suppress_run` is
+  on), but a Triage child can become `done`. AO refuses only if the issue JSON ever carries a triage field, or a
+  write answers `issue_in_triage`; neither happens today. Until Multica exposes the field, turn sync on only for
+  tickets that have been accepted (the Settings page says so). The "Move tickets out of Backlog" setting does
+  not help for a Triage entry shown as `todo`. A test pins this behaviour so it is not mistaken for coverage.
 - **Compare and set.** Every write reads the issue first and sends `expected_revision`. On a revision
   conflict AO reads again once, decides again, and writes once more; a second conflict stops until the next
   pass. A person's change between the read and the write wins.
@@ -415,7 +421,7 @@ wrote `in_review`, a later round of CI fixes does not move the issue back to `in
 |---|---|
 | off | link off; master switch off; `AO_MULTICA_SYNC=0` |
 | paused | changed in Multica; closed in Multica; blocked in Multica |
-| refused | driven by Multica (agent or squad); in Triage; identifier now names another issue; would start a Multica run; secondary link |
+| refused | driven by Multica (agent or squad); in Triage (only if Multica ever exposes the field); identifier now names another issue; would start a Multica run; secondary link |
 | error | signed out; Multica view not available; unreachable; no access (403); issue not found (404); rate limited; AO offline (the daemon feed is down, nothing is written) |
 
 ### Storage

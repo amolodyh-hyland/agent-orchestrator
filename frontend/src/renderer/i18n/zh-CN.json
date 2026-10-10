@@ -855,7 +855,7 @@
 	"multica.sync.settings.moveOutOfBacklog": "将事项移出积压",
 	"multica.sync.settings.moveOutOfBacklog.help": "在处于“积压”的事项上启动会话时，会把它移到“进行中”。",
 	"multica.sync.settings.killSwitch": "本次运行已被 AO_MULTICA_SYNC=0 关闭。",
-	"multica.sync.settings.notes": "AO 只会向前移动事项，从不移到“积压”“已阻塞”或“已取消”，也从不更改负责人。有人在 Multica 中更改状态，或事项由 Multica 代理负责时，它会停止。更改在 Multica 中会显示为你本人所做。仅在 AO 打开且你已登录 Multica 时运行。",
+	"multica.sync.settings.notes": "AO 只会向前移动事项，从不移到“积压”“已阻塞”或“已取消”，也从不更改负责人。有人在 Multica 中更改状态，或事项由 Multica 代理负责时，它会停止。更改在 Multica 中会显示为你本人所做。仅在 AO 打开且你已登录 Multica 时运行。AO 无法得知某个事项是否仍在 Multica 的分流中，会像对待其他事项一样处理它：请只对已被接受的事项开启同步。",
 	"multica.send.keepUpdated": "保持此事项更新",
 	"multica.send.keepUpdated.help": "随着此会话推进，把事项移到“进行中”“审核中”和“已完成”。",
 	"multica.sync.needsSettings": "请先在设置中开启“更新 Multica 事项状态”。",

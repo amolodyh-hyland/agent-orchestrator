@@ -862,7 +862,7 @@
 	"multica.sync.settings.moveOutOfBacklog": "Sacar incidencias del backlog",
 	"multica.sync.settings.moveOutOfBacklog.help": "Al iniciar una sesión sobre una incidencia en el backlog, pasa a En curso.",
 	"multica.sync.settings.killSwitch": "Desactivado en esta ejecución por AO_MULTICA_SYNC=0.",
-	"multica.sync.settings.notes": "AO solo mueve una incidencia hacia delante, nunca a Backlog, Bloqueada o Cancelada, y nunca cambia a quién está asignada. Se detiene si alguien cambia el estado en Multica o si un agente de Multica es su responsable. Los cambios aparecen en Multica a tu nombre. Funciona solo mientras AO está abierto y has iniciado sesión en Multica.",
+	"multica.sync.settings.notes": "AO solo mueve una incidencia hacia delante, nunca a Backlog, Bloqueada o Cancelada, y nunca cambia a quién está asignada. Se detiene si alguien cambia el estado en Multica o si un agente de Multica es su responsable. Los cambios aparecen en Multica a tu nombre. Funciona solo mientras AO está abierto y has iniciado sesión en Multica. AO no puede saber si una incidencia sigue en el Triaje de Multica y la trata como cualquier otra: activa la sincronización solo en incidencias ya aceptadas.",
 	"multica.send.keepUpdated": "Mantener esta incidencia actualizada",
 	"multica.send.keepUpdated.help": "Mueve la incidencia a En curso, En revisión y Hecha a medida que avanza esta sesión.",
 	"multica.sync.needsSettings": "Activa primero «Actualizar el estado de las incidencias de Multica» en Ajustes.",

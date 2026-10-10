@@ -852,7 +852,7 @@
 	"multica.sync.settings.moveOutOfBacklog": "Move tickets out of Backlog",
 	"multica.sync.settings.moveOutOfBacklog.help": "Starting a session on a ticket in Backlog moves it to In progress.",
 	"multica.sync.settings.killSwitch": "Turned off for this run by AO_MULTICA_SYNC=0.",
-	"multica.sync.settings.notes": "AO only moves a ticket forward, never to Backlog, Blocked or Cancelled, and never changes who it is assigned to. It stops when someone changes the status in Multica or a Multica agent owns the ticket. Changes appear in Multica under your name. It runs only while AO is open and you are signed in to Multica.",
+	"multica.sync.settings.notes": "AO only moves a ticket forward, never to Backlog, Blocked or Cancelled, and never changes who it is assigned to. It stops when someone changes the status in Multica or a Multica agent owns the ticket. Changes appear in Multica under your name. It runs only while AO is open and you are signed in to Multica. AO cannot see whether a ticket is still in Multica’s Triage, so it treats it like any other ticket: turn sync on only for tickets that have been accepted.",
 	"multica.send.keepUpdated": "Keep this ticket updated",
 	"multica.send.keepUpdated.help": "Moves the ticket to In progress, In review and Done as this session advances.",
 	"multica.sync.needsSettings": "Turn on “Update Multica ticket status” in Settings first.",

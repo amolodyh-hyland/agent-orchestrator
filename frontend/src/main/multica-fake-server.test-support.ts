@@ -20,6 +20,8 @@ export type FakeIssue = {
 	assignee_id: string | null;
 	revision: number;
 	triage_state?: string | null;
+	/** An entry that is in Triage in Multica but whose JSON does not say so (today's real behaviour). Never serialized. */
+	hiddenTriage?: boolean;
 	parent_issue_id: string | null;
 };
 
@@ -134,7 +136,8 @@ export async function startFakeMulticaServer(options: { token?: string } = {}): 
 				send(response, 403, { error: "forbidden" });
 				return;
 			}
-			send(response, 200, found);
+			const { hiddenTriage: _hidden, ...visible } = found;
+			send(response, 200, visible);
 			return;
 		}
 		if (recorded.method === "PUT" && issueMatch) {
@@ -168,7 +171,8 @@ export async function startFakeMulticaServer(options: { token?: string } = {}): 
 					: found.status_category;
 				found.revision += 1;
 			}
-			send(response, 200, found);
+			const { hiddenTriage: _hiddenAfter, ...written } = found;
+			send(response, 200, written);
 			return;
 		}
 		if (recorded.method === "POST" && url.pathname === "/api/issues/preview-trigger") {

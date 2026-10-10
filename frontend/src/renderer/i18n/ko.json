@@ -855,7 +855,7 @@
 	"multica.sync.settings.moveOutOfBacklog": "이슈를 백로그에서 꺼내기",
 	"multica.sync.settings.moveOutOfBacklog.help": "백로그에 있는 이슈에서 세션을 시작하면 ‘진행 중’으로 옮깁니다.",
 	"multica.sync.settings.killSwitch": "AO_MULTICA_SYNC=0 때문에 이번 실행에서는 꺼져 있습니다.",
-	"multica.sync.settings.notes": "AO는 이슈를 앞으로만 옮기며, ‘백로그’, ‘차단됨’, ‘취소됨’으로는 옮기지 않고 담당자도 바꾸지 않습니다. Multica에서 누군가 상태를 바꾸거나 Multica 에이전트가 이슈를 맡고 있으면 멈춥니다. 변경 사항은 Multica에서 본인 이름으로 표시됩니다. AO가 열려 있고 Multica에 로그인된 동안에만 동작합니다.",
+	"multica.sync.settings.notes": "AO는 이슈를 앞으로만 옮기며, ‘백로그’, ‘차단됨’, ‘취소됨’으로는 옮기지 않고 담당자도 바꾸지 않습니다. Multica에서 누군가 상태를 바꾸거나 Multica 에이전트가 이슈를 맡고 있으면 멈춥니다. 변경 사항은 Multica에서 본인 이름으로 표시됩니다. AO가 열려 있고 Multica에 로그인된 동안에만 동작합니다. AO는 이슈가 아직 Multica의 분류 중인지 알 수 없어 다른 이슈와 똑같이 다룹니다. 이미 수락된 이슈에만 동기화를 켜세요.",
 	"multica.send.keepUpdated": "이 이슈를 최신 상태로 유지",
 	"multica.send.keepUpdated.help": "이 세션이 진행됨에 따라 이슈를 ‘진행 중’, ‘검토 중’, ‘완료’로 옮깁니다.",
 	"multica.sync.needsSettings": "먼저 설정에서 ‘Multica 이슈 상태 업데이트’를 켜세요.",

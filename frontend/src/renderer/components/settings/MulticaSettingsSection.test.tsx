@@ -246,6 +246,13 @@ describe("MulticaSettingsSection", () => {
 			expect(screen.getByText(/Each link is switched on separately/)).toBeInTheDocument();
 		});
 
+		it("warns that Multica's Triage cannot be seen, so sync should only be turned on for accepted tickets", async () => {
+			withSync(snapshot());
+			await open();
+			expect(screen.getByText(/cannot see whether a ticket is still in Multica’s Triage/)).toBeInTheDocument();
+			expect(screen.getByText(/only for tickets that have been accepted/)).toBeInTheDocument();
+		});
+
 		it("turns the master switch on", async () => {
 			withSync(snapshot());
 			await open();

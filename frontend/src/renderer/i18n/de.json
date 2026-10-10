@@ -855,7 +855,7 @@
 	"multica.sync.settings.moveOutOfBacklog": "Issues aus dem Backlog holen",
 	"multica.sync.settings.moveOutOfBacklog.help": "Wenn eine Sitzung für eine Issue im Backlog startet, wird sie auf „In Arbeit“ gesetzt.",
 	"multica.sync.settings.killSwitch": "Für diesen Start durch AO_MULTICA_SYNC=0 ausgeschaltet.",
-	"multica.sync.settings.notes": "AO setzt eine Issue nur vorwärts, nie auf Backlog, Blockiert oder Abgebrochen, und ändert nie die Zuweisung. Es hält an, wenn jemand den Status in Multica ändert oder ein Multica-Agent die Issue besitzt. Änderungen erscheinen in Multica unter Ihrem Namen. Es läuft nur, solange AO geöffnet und Multica angemeldet ist.",
+	"multica.sync.settings.notes": "AO setzt eine Issue nur vorwärts, nie auf Backlog, Blockiert oder Abgebrochen, und ändert nie die Zuweisung. Es hält an, wenn jemand den Status in Multica ändert oder ein Multica-Agent die Issue besitzt. Änderungen erscheinen in Multica unter Ihrem Namen. Es läuft nur, solange AO geöffnet und Multica angemeldet ist. AO kann nicht erkennen, ob eine Issue in Multicas Triage liegt, und behandelt sie wie jede andere: Aktivieren Sie die Synchronisierung nur für angenommene Issues.",
 	"multica.send.keepUpdated": "Diese Issue aktuell halten",
 	"multica.send.keepUpdated.help": "Setzt die Issue auf „In Arbeit“, „In Prüfung“ und „Erledigt“, während diese Sitzung voranschreitet.",
 	"multica.sync.needsSettings": "Aktivieren Sie zuerst „Status von Multica-Issues aktualisieren“ in den Einstellungen.",
