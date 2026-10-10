@@ -15,8 +15,10 @@ import {
 import { useAgentReadinessQuery } from "../hooks/useAgentReadinessQuery";
 import { useWorkspaceQuery, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { useMulticaLinksStore } from "../stores/multica-links-store";
+import { useMulticaSyncStore } from "../stores/multica-sync-store";
 import { CLOUD_PROJECT_KIND, sessionIsActive, STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { Button } from "./ui/button";
+import { Checkbox } from "./ui/checkbox";
 import { Label } from "./ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 
@@ -45,6 +47,9 @@ export function MulticaSendToAoDialog() {
 	const workspacesQuery = useWorkspaceQuery();
 	const readinessQuery = useAgentReadinessQuery();
 	const links = useMulticaLinksStore((state) => state.links);
+	const syncAvailable = useMulticaSyncStore((state) => state.snapshot.settings.enabled && !state.snapshot.killSwitch);
+	const loadSync = useMulticaSyncStore((state) => state.load);
+	const [keepUpdated, setKeepUpdated] = useState(false);
 	const [received, setReceived] = useState<ReceivedRequest | null>(null);
 	const [open, setOpen] = useState(false);
 	const [projectId, setProjectId] = useState("");
@@ -58,6 +63,10 @@ export function MulticaSendToAoDialog() {
 	const pendingRequest = useRef<MulticaSendRequest | null>(null);
 
 	useEffect(() => {
+		void loadSync();
+	}, [loadSync]);
+
+	useEffect(() => {
 		mounted.current = true;
 		return () => {
 			mounted.current = false;
@@ -69,6 +78,7 @@ export function MulticaSendToAoDialog() {
 		setReceived({ id: requestId.current, request });
 		setProjectId(request.ok && request.projectId ? request.projectId : "");
 		setAgent("");
+		setKeepUpdated(false);
 		setSubmitting(false);
 		setError(null);
 		setUnlinkedSession(null);
@@ -165,6 +175,15 @@ export function MulticaSendToAoDialog() {
 				} else if (!result.linked) {
 					setUnlinkedSession({ projectId: result.projectId, sessionId: result.sessionId });
 				} else {
+					if (keepUpdated && syncAvailable) {
+						// Off unless asked for: the user ticked the box, so this link starts updating the ticket.
+						await useMulticaSyncStore.getState().setLink({
+							sessionId: result.sessionId,
+							workspaceSlug: issue.workspaceSlug,
+							issueIdentifier: issue.issueIdentifier,
+							enabled: true,
+						});
+					}
 					await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 					if (mounted.current && activeRequestId === requestId.current) {
 						navigateToSession(result.projectId, result.sessionId);
@@ -225,6 +244,20 @@ export function MulticaSendToAoDialog() {
 											{agents.map((option) => <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>)}
 										</SelectContent>
 									</Select>
+								</div>
+								<div className="space-y-1">
+									<div className="flex items-center gap-2">
+										<Checkbox
+											checked={keepUpdated && syncAvailable}
+											disabled={!syncAvailable || submitting}
+											id="multica-send-keep-updated"
+											onCheckedChange={(checked) => setKeepUpdated(checked === true)}
+										/>
+										<Label htmlFor="multica-send-keep-updated">{t("multica.send.keepUpdated")}</Label>
+									</div>
+									<p className="text-xs text-muted-foreground">
+										{syncAvailable ? t("multica.send.keepUpdated.help") : t("multica.sync.needsSettings")}
+									</p>
 								</div>
 								{duplicateSessions.length > 0 ? (
 									<div className="space-y-2">

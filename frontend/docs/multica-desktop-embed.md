@@ -113,6 +113,7 @@ An AO session can be linked to Multica issues. Nothing changes in the Multica re
 - AO to Multica: choosing a linked issue switches to the Multica view and dispatches Multica's own `multica:navigate` window event with `/<slug>/issues/<IDENT>`. It waits for the `inbox:open` listener (`bridge.whenReady`), the same signed-in layout that handles the event.
 - Multica to AO: Multica's renderer uses an in-memory router, so the URL never shows the issue. The host listens to `page-title-updated`; an issue page sets `document.title` to `<IDENT>: <title>`. AO adds an "Open in AO" action to the issue header. Choosing a worker links it to the issue and opens it in AO; the AO session header's links chip shows the link. The legacy `ao://sessions/<project>/<session>` handler still accepts only linked pairs and opens the session in AO.
 - Storage: `multica-issue-links.json` next to `multica-settings.json` in the AO state directory (`~/.ao` by default), written atomically with mode `0600`. Desktop only: the daemon, CLI and mobile do not see links, and links are not removed when a session is deleted.
+- Version 2: a link also carries `workspaceId` and `issueId` (UUIDs of the issue's workspace and of the issue), filled in the first time [status sync](#status-sync-to-multica) reads the issue, and never replaced afterwards. Both are present or neither is. The slug and identifier stay as display and navigation fields; the identifier is not a stable key (the workspace prefix can change, and two workspaces can share one). A version 1 file is read as it is and becomes version 2 on the next write. A build that only knows version 1 reads a version 2 file as empty and would overwrite it on the next link, so do not run an older build against the same state directory after upgrading.
 - Loading: the links store is loaded once by `MulticaPane` at the shell level, so the Open in AO linked markers and Send to AO duplicate check work even when the session links chip is not shown.
 - Fragile dependencies on Multica internals, each in one place with a unit test: the issue page title format (`parseMulticaIssueTitle`) and the `multica:navigate` event (`navigatePath` in `multica-view-host.ts`). If either changes, the header action may not appear or opening a linked issue may only surface Multica; nothing else breaks.
 - Limits: lookups from the Multica page match on the identifier alone, so two workspaces with the same prefix share links. Links carry the key of the server they were made on and only the selected server's links are listed, opened and marked (see [Choosing the Multica server](#choosing-the-multica-server)).
@@ -175,6 +176,14 @@ issue, links it to the issue, and opens it.
   slug is required to link the issue.
 - Live linked sessions for the same issue are listed as duplicates; the user can still choose
   "Send anyway".
+- "Keep this ticket updated" (unchecked by default, disabled while the master switch of
+  [status sync](#status-sync-to-multica) is off) turns the sync on for the new link after the link has
+  been saved. If the link could not be saved nothing is turned on.
+- The first line of the prompt asks the worker to start the title of any pull request it opens with the
+  issue key (`MUL-123: `), which is how Multica's GitHub integration links a pull request to an issue.
+  Only a well-formed key is put into that instruction; it sits on the first line so the layout of the
+  prompt does not move. This applies to every Send to AO session, whether or not status sync is on, and
+  needs the Multica GitHub App on the user's Multica to have an effect.
 
 ## Open in AO header menu
 
@@ -276,6 +285,212 @@ cluster returns; both controls are never shown together.
   `frontend/src/renderer/lib/multica-open-with-ao-feed.ts`,
   `frontend/src/renderer/components/MulticaOpenWithAoPublisher.tsx`.
 
+## Status sync to Multica
+
+AO can write the progress of a linked session to the status of the Multica issue, so the Multica board
+shows where the work is. It is **off by default** at two levels and writes **status only**.
+
+- Settings → General → Multica → **Update Multica ticket status** is the master switch (off). With it off
+  no code path writes to Multica. `AO_MULTICA_SYNC=0` in AO's environment forces everything off whatever
+  the settings say; the settings page says so.
+- Each link is turned on separately, off by default: the switch in the session's links chip, a row in the
+  Open in AO menu, or the unchecked **Keep this ticket updated** box in Send to AO.
+- It runs only while AO's desktop app is open and the embedded Multica view is loaded and signed in
+  (decision D8). It writes as the signed-in user (D10): the Multica activity feed shows the change as theirs.
+- Forward only: `in_progress`, `in_review`, `done`. It never writes `backlog`, `todo`, `blocked` or
+  `cancelled`, never changes the assignee, never posts a comment, never deletes anything, and never ends or
+  stops a session.
+
+Decision ids (D1 to D13) and question ids (Q1 to Q14) in this section come from the board-link design review; the
+answers to every question are written down below.
+
+### The mapping (AO to Multica)
+
+The key is the session's board column (derived by the daemon) plus its facts. `src/shared/multica-status-writer.ts`
+holds the rules and `multica-status-writer.test.ts` has a test per row.
+
+| # | AO situation | Written |
+|---|---|---|
+| 1 | linked issue, no live session AO knows | nothing |
+| 2 | session provisioning, or provisioning failed | nothing |
+| 3 | worker active, no PR | `in_progress` |
+| 4 | worker idle, no PR | nothing |
+| 5 | needs input, or blocked | nothing (`blocked` is never written, D11) |
+| 6 | exited, no signal | nothing |
+| 7 | PR open and AO still turns the loop (column `validating`) | `in_progress` |
+| 8 | PR waits on a person (column `needs_review`) | `in_review` |
+| 9 | PR approved or mergeable, not merged (column `ready`) | `in_review` |
+| 10 | every PR merged, session alive | `done` |
+| 11 | PR closed without merging (or merged beside a closed one), session alive | nothing |
+| 12 | session terminated, no merged PR | nothing |
+| 13 | session terminated, every PR merged | `done` |
+| 14 | issue is `done` or `cancelled` (or `blocked`) and AO would write something | paused "closed in Multica"; **Reopen** writes once, only after the user confirms (D12) |
+| 15 | several enabled links to one issue | the most actionable live session decides: one with something to write ranks before one with nothing to say, then AO's own board ranking; ended sessions only count when nothing is live, and then only to carry a merge to `done` |
+| 16 | issue assigned to a Multica agent or squad | nothing: refused, shown as "Driven by Multica". **Triage is not covered today**, see below. A sub-issue whose parent is owned by an agent or squad (or cannot be read) is refused too, see "Sub-issues" |
+| 17 | Multica shows a status AO did not write or agree with | paused "changed in Multica" |
+
+"Forward only" is a rule on top of the rows: a status behind the one Multica shows is never written (after AO
+wrote `in_review`, a later round of CI fixes does not move the issue back to `in_progress`).
+
+### Answers to the open questions (D13)
+
+| Q | Answer in this slice |
+|---|---|
+| Q1 | **Off by default** (changed from the design's recommended "yes", because a Triage entry can look like Backlog and AO cannot tell them apart). A card in Backlog is never moved unless the user turns on "Move tickets out of Backlog" in Settings. When on, a session started on a Backlog issue moves it to `in_progress`; the write is previewed first (`POST /api/issues/preview-trigger`): if Multica says it would start a run, AO refuses; if it cannot ask, AO does not write (fails closed for this move only). |
+| Q2 | Idle worker, no PR: no write. |
+| Q3 | `needs_input`, `exited`, `no_signal`: no write, never `blocked` (D11). |
+| Q4 | `in_progress` until the board column is `needs_review`. |
+| Q5 | Follows the column, forward only: `in_review` while a person owns the next turn; AO does not move an issue back to `in_progress`. |
+| Q6 | PR closed without merging, session alive: no write; the person decides. |
+| Q7 | Session ended with no PR: no write. |
+| Q8 | Reopen only with an explicit confirmation in AO (D12). The "session started after the done time" test of the design is replaced by that confirmation. |
+| Q9 | Most actionable live session wins (row 15). |
+| Q10 | AO always writes the built-in key. It reads `status_category`, so a custom status inside the target category counts as agreement and is left alone. Asking when a workspace has a custom status in the target category is **not built** (AO does not read the status catalog). |
+| Q11 | Inbound (Multica to AO): **not in this slice.** |
+| Q12 | Issue `done` while a session is live: nothing; AO has no way to end a session from sync. |
+| Q13 | Forwarding comments: **not in this slice.** |
+| Q14 | A session linked to several issues writes only to the first one it was linked to; the others show "Updates go to the first linked ticket". |
+
+### Safety rules
+
+- **Allow-list.** `src/main/multica-issue-api.ts` builds every request from validated fields and refuses
+  anything else: `GET /api/issues/{identifier}`, `GET /api/issues/{id}` (only to read the parent of a
+  sub-issue), `PUT /api/issues/{id}` with exactly `status`, `expected_revision` and `suppress_run`, and
+  `POST /api/issues/preview-trigger`. The status must be one of
+  the three writable ones. A test fails if any other method, path or body field can be produced, or if
+  `assignee_*`, `backlog`, `todo`, `blocked` or `cancelled` can appear in a write.
+- **`suppress_run: true` on every status write.** Multica's `PUT /api/issues/{id}` can start an agent run for
+  the written issue itself (the only status write that can is `backlog` to an active status on an
+  agent-assigned issue); `suppress_run` applies the change without starting that run, whatever the assignee.
+  **It does not make a write inert.** After any status change Multica always runs the parent's sub-issue rules
+  (`processChildEvents`: the child-done rule and people's sub-issue conditions), see the next rule. Other
+  status-triggered automations in Multica (issue conditions and rules) are not modelled either. The fake
+  Multica server counts runs for the written issue (`runsStarted`, stays at zero) and parent wake-ups
+  (`parentWakes`).
+- **Sub-issues.** Finishing a sub-issue (or any status change on it) runs the parent's rules, which wake the
+  parent's assignee: an agent gets a run, a squad its leader, a member an inbox notification, and `suppress_run`
+  does not cover it. Writing a status is what a person clicking Done does too, but AO does it automatically. So
+  when the issue has a `parent_issue_id`, and AO is about to write, it reads the parent first (the one extra
+  allow-listed `GET`). If the parent is owned by a Multica agent or squad, or cannot be read, AO does not write
+  and the link shows "Sub-issue: could wake the parent's agent" (refused, `sub_issue_parent`). A parent
+  owned by a member, or by nobody, is written as for a person (the member gets the usual notification). A
+  transient read failure is retried with backoff. Nothing is read when there is nothing to write.
+- **Row 16, and why.** AO refuses to write when the assignee is a Multica agent or squad because **an agent
+  owns that status**, and Multica itself resets `in_progress` to `todo` after a failed run, not because the
+  write would start a run (`suppress_run` covers that).
+- **Triage is NOT protected today.** Multica's issue JSON has no `triage_state` field and no other read path
+  exposes it, and its `PUT` guard only locks `parent_issue_id` for an issue in Triage. Multica treats the status
+  of a Triage entry as the triager's *proposal* (accepting confirms it) and lets ordinary status writes through;
+  its own PR auto-complete skips Triage ("not accepted yet"). So with sync on for a link, AO **writes over a
+  triager's proposal** on an entry that still sits in Triage (shown by Multica as backlog or todo): the status
+  changes, `triage_state` stays set, no agent run starts (Multica refuses runs for Triage and `suppress_run` is
+  on), but a Triage child can become `done`. AO refuses only if the issue JSON ever carries a triage field, the status or status category
+  itself says `triage`, or a write answers `issue_in_triage`; none of these happens today. Until Multica exposes the field, turn sync on only for
+  tickets that have been accepted (the Settings page says so). The "Move tickets out of Backlog" setting is **off by
+  default**, so a Triage entry shown as Backlog is left alone unless the user opts in; it does not help for a
+  Triage entry shown as `todo`. A test pins this behaviour so it is not mistaken for coverage.
+- **Compare and set.** Every write reads the issue first and sends `expected_revision`. On a revision
+  conflict AO reads again once, decides again, and writes once more; a second conflict stops until the next
+  pass. A person's change between the read and the write wins.
+- **Pause fence.** AO remembers the status it last wrote (or last saw and agreed with) per issue. If the issue
+  later shows a different status category, a person moved the card: the link pauses ("changed in Multica"),
+  nothing is written, and the person's status becomes the new baseline. AO looks again when its own mapped
+  status changes to a new one, or when the user presses **Resume**. A status inside the same category (a custom
+  status) is not a conflict. "Sync now" on a paused link reads again and never writes.
+- **Echo suppression.** A personal token writes as the member, so the actor cannot tell AO's write from the
+  user's. The value and revision can: the same status at a revision no newer than the one AO's write returned
+  is AO's own write coming back (`isOwnEcho`), and it changes nothing and pauses nothing.
+- **Done is sticky.** A `done`, `cancelled` or `blocked` issue is never written without a confirmed reopen.
+  Resume does not reopen. The confirmation is an AO dialog; the main process refuses a reopen request that
+  does not carry `confirmed: true`.
+- **Debounce and budget.** Changes in a 5 s window collapse into one write of the latest state; at most 12
+  writes per issue per hour and 30 per server per minute; a read every 10 minutes per enabled issue to notice
+  changes made in Multica; backoff 5 s to 5 min on an unreachable server; `Retry-After` on 429.
+- **One server at a time.** Only links of the selected server are acted on, the in-page script is bound to
+  that server (`evaluateInPage(script, serverKey)`), a server switch drops everything queued or in flight for
+  the old one, and the saved state is keyed by server. A 401 stops every link of that server (no retry storm)
+  until the Multica page reports a sign-in or the user presses Sync now.
+- **No new secret.** Writes use the signed-in user's token that is already in the Multica page
+  (`localStorage.multica_token`), read inside the page with `credentials: "omit"` and no redirects. The token
+  never reaches the main process, the renderer, a file or a log, and the page hands back only a fixed set of
+  scalar fields (never the description, comments or an error sentence). The sync state file stores no token,
+  title or description.
+- **Audit hook.** `createMulticaStatusSync({ record })` calls `record()` after every status write attempt
+  (success or failure), every pause and every resume or reopen, with `kind` (`status_write`, `pause`,
+  `resume`), the server key, workspace and issue ids, the identifier, the session, the allow-listed request
+  fields, `revBefore`, `revAfter` and the result. It carries no token, title or text from Multica. The sink is a
+  no-op today so a later action log can plug in; a failing sink never stops sync.
+
+### What the user sees
+
+- Open in AO menu: under each linked worker, a row: **Keep this ticket updated** (off), **Stop updating this
+  ticket** with the state (**Synced**, **Syncing…**, **Paused: changed in Multica**, **Driven by Multica**,
+  **In Triage**, **Sign in to Multica**, **Open Multica to sync**, **Not synced, retrying**, **AO offline**, and
+  so on), or **Resume updating this ticket** after a pause. The menu is English only like the rest of that menu.
+- Session links chip: per link a switch, the state, the reason, what Multica shows against what AO would set, and
+  Resume, Reopen… (confirmation dialog) and Sync now where they apply. Localized in all eight locales.
+- UI states per link: off, on (synced or pending), paused, refused, error.
+
+| State | Reasons |
+|---|---|
+| off | link off; master switch off; `AO_MULTICA_SYNC=0` |
+| paused | changed in Multica; closed in Multica; blocked in Multica |
+| refused | driven by Multica (agent or squad); sub-issue whose parent an agent or squad owns, or that AO cannot read; in Triage (only if Multica ever exposes the field); identifier now names another issue; would start a Multica run; secondary link |
+| error | signed out; Multica view not available; unreachable; no access (403); issue not found (404); rate limited; AO offline (the daemon feed is down, nothing is written) |
+
+### Storage
+
+`multica-sync-state.json` in the AO state directory (mode `0600`, atomic writes): the settings, the links that
+are turned on, and per issue the last status AO wrote or saw, the pause, the last sync time and whether the issue
+was not found. Version 1. Removing a link, or turning off the last link of an issue, forgets that issue's state.
+Issue links move to version 2 (see [Issue links](#issue-links)).
+
+### Not verified, and not built
+
+- Known limit: the Open in AO menu matches links to the issue on screen by session and identifier only, the same limit as the rest of that menu (the page title carries no workspace), so two workspaces with the same prefix can show each other's sync row. The link chip in AO matches the workspace as well.
+- After a write whose answer is lost (timeout, app quit), AO has recorded its intent (`intent` in `multica-sync-state.json`) and recognises its own write at the next read instead of reading it as a change made in Multica.
+- Not verified live: that the embedded Multica view stays loaded and signed in while hidden (the engine waits and
+  retries with "Open Multica to sync" when it is not); real PR, CI and review transitions; Multica Cloud;
+  Windows and Linux; a packaged build; a Multica older than the one with `suppress_run`. Not modelled, so not
+  covered: any other automation Multica runs after a status change (issue conditions and rules, parent
+  rules beyond the parent's own assignee, notifications to subscribers).
+- Not built: inbound changes (Multica to AO), comments, the PR link carrier beyond the title hint, a custom-status
+  prompt (Q10), an action log (only the hook), a drift check for the API routes (the existing
+  `check:multica-bridge` covers Multica's preload channels only; the routes and field names used here are
+  `GET /api/issues/{id}`, `PUT /api/issues/{id}` with `status`, `expected_revision`, `suppress_run`, and
+  `POST /api/issues/preview-trigger`), reconciliation while the desktop app is closed.
+
+### Manual verification plan
+
+Not run by the author. Use a throwaway local Multica and an isolated AO (see "Desktop lab" in `AGENTS.md`:
+a separate worktree, its own `AO_DATA_DIR`, `npm ci`, never your real `~/.ao`); never Multica Cloud, never a
+real workspace.
+
+1. Sign in to the local Multica in the embedded view. Create issue `MUL-1` (assigned to you, status To do).
+2. Settings → General → Multica: turn on **Update Multica ticket status**. Confirm nothing changed in Multica.
+3. Open `MUL-1`, Send to AO with **Keep this ticket updated** ticked. Expect the menu row to read Synced and
+   the issue to move to In progress within about 5 s of the worker becoming active.
+4. Let the worker open a PR (title starts with `MUL-1:`). Expect In review when the PR waits on a person, then
+   Done after the merge.
+5. Move the card by hand to To do while the session is live: expect "Paused: changed in Multica", no further
+   writes, then **Resume**.
+6. Assign the issue to a Multica agent: expect "Driven by Multica" and no status writes.
+7. Close the issue (Done), start another session on it: expect "Paused: closed in Multica", and **Reopen…**
+   asks before writing.
+8. Sign out of Multica: expect "Sign in to Multica", no requests; sign in again and expect it to resume.
+9. Switch the server (Cloud or another local): links of the other server disappear and nothing is written.
+   Start AO with `AO_MULTICA_SYNC=0`: expect everything off.
+10. In every step the Multica activity feed should show only the status changes you expect, as you.
+
+### Files
+
+`src/shared/multica-status-writer.ts` (rules), `src/shared/multica-status-sync.ts` (contract and validators),
+`src/main/multica-issue-api.ts` (allow-listed requests), `src/main/multica-status-sync.ts` (engine),
+`src/main/multica-sync-state.ts` (state file), `src/main/multica-status-sync-ipc.ts` (shell bridge),
+`src/main/multica-fake-server.test-support.ts` (the fake server the tests use), and in the renderer
+`src/renderer/lib/multica-sync-facts.ts`, `components/MulticaSyncFactsPublisher.tsx`,
+`components/MulticaLinkSyncControls.tsx` and `stores/multica-sync-store.ts`.
+
 ## Security model
 
 Multica's preload is attached to the Multica view only, in its own persistent partition per server (`persist:ao-multica` for the default local server), with sandbox and context isolation on, every web permission denied, and main-frame navigation pinned to the built bundle (anything else goes to the system browser).
@@ -286,6 +501,9 @@ Multica's preload also exposes a generic `window.electron.ipcRenderer`, and seve
 - `src/main/multica-ipc-jail.ts` writes a small preload that runs before Multica's own and limits every outbound `ipcRenderer` method to the bridge's channel list.
 
 `webSecurity` stays on (`MULTICA_WEB_SECURITY` in `src/shared/multica.ts`). Multica's cloud API and a default local self-host both accept REST calls from the `file://` renderer.
+
+Status sync adds no stored secret and no new network path: its requests run inside the Multica page with the
+signed-in user's own token (see [Status sync to Multica](#status-sync-to-multica)).
 
 ## CLI binary and attribution
 
@@ -372,4 +590,5 @@ in the report are best effort (calls made inside module-level helper functions a
 - Windows: AO's frameless window has no native controls under the Multica view.
 - Not verified: macOS traffic-light placement and drag regions with real mouse input. Open in AO's platform, packaged-build, keyboard-trigger, screen-reader, and large-list verification gaps are listed above.
 - The banner, click-through and badge path is covered by unit tests and was verified on macOS in the dev app against a signed-in local Multica server (real inbox events, OS banners, clicks that open the item, combined badge, sign-out). It has not been verified on Windows or Linux.
+- Status sync (see above) is verified against a fake Multica server in unit tests only; the live checks are listed in its manual verification plan.
 - No CLI install or update, no auto-start, and no issue windows.

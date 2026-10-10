@@ -192,4 +192,76 @@ describe("multica issue link store", () => {
 		expect(links[0].sessionId).toBe("session-1");
 		expect(links.at(-1)?.sessionId).toBe("session-newest");
 	});
+
+	describe("version 2", () => {
+		const ids = { workspaceId: "22222222-2222-4222-8222-222222222222", issueId: "11111111-1111-4111-8111-111111111111" };
+		const base = { sessionId: "session-1", projectId: "project-1", workspaceSlug: "acme", issueIdentifier: "MUL-1", serverKey: "cloud" };
+
+		it("writes version 2 and keeps a version 1 file readable, migrating it on the next write", async () => {
+			const file = path.join(stateDir, MULTICA_ISSUE_LINKS_FILE);
+			const legacy = { ...base, createdAt: "2026-01-01T00:00:00.000Z" };
+			await writeFile(file, JSON.stringify({ version: 1, links: [legacy] }));
+			const store = createMulticaIssueLinkStore(stateDir);
+
+			expect(await store.list()).toEqual([legacy]);
+			expect(JSON.parse(await readFile(file, "utf8")).version).toBe(1);
+
+			await store.add({ ...base, sessionId: "session-2" });
+			const written = JSON.parse(await readFile(file, "utf8"));
+			expect(written.version).toBe(2);
+			expect(written.links.map((link: MulticaIssueLink) => link.sessionId)).toEqual(["session-1", "session-2"]);
+		});
+
+		it("records the issue ids on every link to that issue on that server, once", async () => {
+			const store = createMulticaIssueLinkStore(stateDir);
+			await store.add(base);
+			await store.add({ ...base, sessionId: "session-2" });
+			await store.add({ ...base, sessionId: "session-3", serverKey: "http://localhost:3000" });
+			await store.add({ ...base, sessionId: "session-4", issueIdentifier: "MUL-2" });
+
+			const recorded = await store.recordIssueIds({ serverKey: "cloud", workspaceSlug: "acme", issueIdentifier: "MUL-1" }, ids);
+
+			expect(recorded.map((link) => [link.sessionId, link.workspaceId, link.issueId])).toEqual([
+				["session-1", ids.workspaceId, ids.issueId],
+				["session-2", ids.workspaceId, ids.issueId],
+				["session-3", undefined, undefined],
+				["session-4", undefined, undefined],
+			]);
+			expect(await createMulticaIssueLinkStore(stateDir).list()).toEqual(recorded);
+		});
+
+		it("never replaces ids already recorded and does not rewrite the file for it", async () => {
+			const store = createMulticaIssueLinkStore(stateDir);
+			await store.add(base);
+			await store.recordIssueIds({ serverKey: "cloud", workspaceSlug: "acme", issueIdentifier: "MUL-1" }, ids);
+			const file = path.join(stateDir, MULTICA_ISSUE_LINKS_FILE);
+			const before = await readFile(file, "utf8");
+
+			const links = await store.recordIssueIds(
+				{ serverKey: "cloud", workspaceSlug: "acme", issueIdentifier: "MUL-1" },
+				{ workspaceId: "33333333-3333-4333-8333-333333333333", issueId: "44444444-4444-4444-8444-444444444444" },
+			);
+
+			expect(links[0]).toMatchObject(ids);
+			expect(await readFile(file, "utf8")).toBe(before);
+		});
+
+		it("refuses ids that are not UUIDs", async () => {
+			const store = createMulticaIssueLinkStore(stateDir);
+			await store.add(base);
+			await expect(
+				store.recordIssueIds({ serverKey: "cloud", workspaceSlug: "acme", issueIdentifier: "MUL-1" }, { workspaceId: "x", issueId: "y" }),
+			).rejects.toThrow("invalid ids");
+		});
+
+		it("keeps the ids when legacy links are adopted by a server", async () => {
+			const store = createMulticaIssueLinkStore(stateDir);
+			const { serverKey: _unused, ...untagged } = base;
+			await store.add(untagged);
+			await store.adoptLegacy("cloud");
+			await store.recordIssueIds({ serverKey: "cloud", workspaceSlug: "acme", issueIdentifier: "MUL-1" }, ids);
+
+			expect((await store.adoptLegacy("http://other")).map((link) => [link.serverKey, link.issueId])).toEqual([["cloud", ids.issueId]]);
+		});
+	});
 });
