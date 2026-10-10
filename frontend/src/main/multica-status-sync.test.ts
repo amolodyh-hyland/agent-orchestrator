@@ -547,6 +547,89 @@ describe("multica status sync", () => {
 		});
 	});
 
+	describe("review gaps: signed-out guard, tokens in the environment, conflict timing", () => {
+		it("a sibling's 401 stops an issue whose write was already scheduled: it never sends the dead token (d)", async () => {
+			fake.addIssue({ identifier: "MUL-1", status: "todo" });
+			fake.addIssue({ identifier: "MUL-2", status: "todo" });
+			host.setToken("expired");
+			const sync = start({ engine: { debounceMs: 80 } });
+			sync.setFacts({ stale: false, sessions: [working("s-1"), working("s-2")] });
+			await sync.ready;
+			sync.setLinks(SERVER, [link({ sessionId: "s-1" }), link({ sessionId: "s-2", issueIdentifier: "MUL-2" })]);
+			await sync.setSettings({ enabled: true });
+			await sync.setLink({ sessionId: "s-1", workspaceSlug: "acme", issueIdentifier: "MUL-1", enabled: true });
+			await sleep(40);
+			// Its timer fires after the first one's 401 has stopped the server.
+			await sync.setLink({ sessionId: "s-2", workspaceSlug: "acme", issueIdentifier: "MUL-2", enabled: true });
+			await until(() => expect(view()).toMatchObject({ state: "error", reason: "signed_out" }));
+			await sleep(200);
+
+			expect(fake.requests).toHaveLength(1);
+			expect(host.scripts).toHaveLength(1);
+			expect(view(engine, "s-2", "MUL-2")).toMatchObject({ state: "error", reason: "signed_out" });
+		});
+
+		it("nothing leaks a token that is in the process environment: records, snapshot, state file, scripts, requests, console (e)", async () => {
+			vi.stubEnv("MULTICA_TOKEN", "env-token-leak-check-0001");
+			vi.stubEnv("AO_MULTICA_TOKEN", "env-token-leak-check-0002");
+			vi.stubEnv("MULTICA_PAT", "mul_env-token-leak-check-0003");
+			const spies = (["log", "info", "warn", "error", "debug"] as const).map((method) => vi.spyOn(console, method).mockImplementation(() => undefined));
+			try {
+				const issue = fake.addIssue({ identifier: "MUL-1", status: "todo" });
+				fake.beforeNextPut((found) => {
+					found.revision += 1;
+				});
+				const sync = start({ engine: { env: undefined } });
+				sync.setFacts({ stale: false, sessions: [working()] });
+				await turnOn(sync);
+				await until(() => expect(fake.issues.get(issue.id)?.status).toBe("in_progress"));
+				await settled();
+				const found = fake.issues.get(issue.id)!;
+				found.status = "todo";
+				found.status_category = "todo";
+				found.revision += 1;
+				sync.setFacts({ stale: false, sessions: [inReview()] });
+				await until(() => expect(view().state).toBe("paused"));
+				await sync.resume({ sessionId: "s-1", workspaceSlug: "acme", issueIdentifier: "MUL-1" });
+				await settled();
+
+				const everything = JSON.stringify({
+					records,
+					snapshot: sync.getSnapshot(),
+					state: store.saved(),
+					scripts: host.scripts,
+					requests: fake.requests,
+					fetchCalls: host.fetchCalls.map((call) => ({ url: call.url, body: call.init.body })),
+					console: spies.map((spy) => spy.mock.calls),
+					consoleInPage: host.consoleCalls,
+				});
+				expect(everything).not.toMatch(/env-token-leak-check/);
+				expect(everything).not.toContain(fake.token);
+			} finally {
+				spies.forEach((spy) => spy.mockRestore());
+				vi.unstubAllEnvs();
+			}
+		});
+
+		it("retries a conflict at once with the fresh revision, in the same pass, not on the next scheduled one (c)", async () => {
+			const issue = fake.addIssue({ identifier: "MUL-1", status: "todo" });
+			fake.beforeNextPut((found) => {
+				found.revision += 1;
+			});
+			const sync = start({ engine: { debounceMs: 250 } });
+			sync.setFacts({ stale: false, sessions: [working()] });
+			await turnOn(sync);
+			await until(() => expect(fake.requests.length).toBeGreaterThanOrEqual(1));
+			const startedAt = Date.now();
+			await until(() => expect(fake.requests).toHaveLength(4));
+			// The next scheduled pass would come a whole debounce window later.
+			expect(Date.now() - startedAt).toBeLessThan(200);
+			expect(put().map((request) => request.body?.expected_revision)).toEqual([4, 5]);
+			await settled();
+			expect(fake.issues.get(issue.id)?.status).toBe("in_progress");
+		});
+	});
+
 	describe("compare and set", () => {
 		it("on a revision conflict reads once more and writes again with the new revision", async () => {
 			const issue = fake.addIssue({ identifier: "MUL-1", status: "todo" });

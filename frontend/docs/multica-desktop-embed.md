@@ -325,7 +325,7 @@ holds the rules and `multica-status-writer.test.ts` has a test per row.
 | 12 | session terminated, no merged PR | nothing |
 | 13 | session terminated, every PR merged | `done` |
 | 14 | issue is `done` or `cancelled` (or `blocked`) and AO would write something | paused "closed in Multica"; **Reopen** writes once, only after the user confirms (D12) |
-| 15 | several enabled links to one issue | the most actionable live session decides, by AO's own board ranking; ended sessions only count when nothing is live, and then only to carry a merge to `done` |
+| 15 | several enabled links to one issue | the most actionable live session decides: one with something to write ranks before one with nothing to say, then AO's own board ranking; ended sessions only count when nothing is live, and then only to carry a merge to `done` |
 | 16 | issue assigned to a Multica agent or squad | nothing: refused, shown as "Driven by Multica". **Triage is not covered today**, see below. A sub-issue whose parent is owned by an agent or squad (or cannot be read) is refused too, see "Sub-issues" |
 | 17 | Multica shows a status AO did not write or agree with | paused "changed in Multica" |
 

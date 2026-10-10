@@ -106,9 +106,11 @@ export function aggregateTargets(sessions: readonly SyncSessionFacts[]): Aggrega
 		const ranked = live
 			.map((session) => ({ session, mapped: mapSessionToTarget(session) }))
 			.sort((left, right) => {
+				// A live session with something to say outranks one with nothing to say (a closed PR in `ready`, say),
+				// so it cannot hide an active worker; then AO's own board ranking decides.
+				if ((left.mapped.target === null) !== (right.mapped.target === null)) return left.mapped.target === null ? 1 : -1;
 				const priority = COLUMN_PRIORITY[left.session.column] - COLUMN_PRIORITY[right.session.column];
 				if (priority !== 0) return priority;
-				if ((left.mapped.target === null) !== (right.mapped.target === null)) return left.mapped.target === null ? 1 : -1;
 				return left.session.sessionId < right.session.sessionId ? -1 : left.session.sessionId > right.session.sessionId ? 1 : 0;
 			});
 		const winner = ranked[0];

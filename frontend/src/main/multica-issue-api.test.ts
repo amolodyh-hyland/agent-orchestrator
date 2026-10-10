@@ -320,6 +320,56 @@ describe("issue API against a fake Multica server", () => {
 		expect(host.scripts).toHaveLength(0);
 	});
 
+	it("binds every script to the server it was built for: a view that switched in between never runs it (a)", async () => {
+		fake.addIssue({ identifier: "MUL-1", status: "todo" });
+		// getServer() answers with the server the script is built for, then the view moves to another server.
+		host.switchAfterGetServer("cloud");
+
+		const result = await api.getIssue(SERVER_KEY, { workspaceSlug: "acme", identifier: "MUL-1" });
+
+		expect(result).toEqual({ ok: false, kind: "unavailable" });
+		expect(host.scripts).toHaveLength(0);
+		expect(fake.requests).toHaveLength(0);
+	});
+
+	it("pins the options of the in-page fetch: the token only in the header, no cookies, no redirects, the API origin of the server (b)", async () => {
+		const issue = fake.addIssue({ identifier: "MUL-1", status: "todo" });
+
+		await api.getIssue(SERVER_KEY, { workspaceSlug: "acme", identifier: "MUL-1" });
+		await api.putStatus(SERVER_KEY, { workspaceSlug: "acme", issueId: issue.id, status: "in_progress", expectedRevision: 4 });
+		await api.previewTrigger(SERVER_KEY, { workspaceSlug: "acme", issueId: issue.id, status: "in_progress" });
+
+		expect(host.fetchCalls).toHaveLength(3);
+		for (const call of host.fetchCalls) {
+			expect(call.url.startsWith(`${fake.url}/api/issues/`)).toBe(true);
+			expect(call.init.credentials).toBe("omit");
+			expect(call.init.redirect).toBe("error");
+			expect(Object.keys(call.init.headers as Record<string, string>).sort()).toEqual(
+				call.init.method === "GET" ? ["Authorization", "X-Workspace-Slug"] : ["Authorization", "Content-Type", "X-Workspace-Slug"],
+			);
+			expect((call.init.headers as Record<string, string>).Authorization).toBe(`Bearer ${fake.token}`);
+			expect(call.url).not.toContain(fake.token);
+			expect(JSON.stringify(call.init.body ?? "")).not.toContain(fake.token);
+		}
+		expect(host.fetchCalls.map((call) => call.init.method)).toEqual(["GET", "PUT", "POST"]);
+	});
+
+	it("never writes to the page's console, whatever the outcome, so a token cannot be logged there (f)", async () => {
+		const issue = fake.addIssue({ identifier: "MUL-1", status: "todo" });
+		fake.failNext({ method: "GET" }, { status: 503 });
+		await api.getIssue(SERVER_KEY, { workspaceSlug: "acme", identifier: "MUL-1" });
+		fake.failNext({ method: "GET" }, { status: 302, headers: { Location: "http://127.0.0.1:9/x" } });
+		await api.getIssue(SERVER_KEY, { workspaceSlug: "acme", identifier: "MUL-1" });
+		await api.putStatus(SERVER_KEY, { workspaceSlug: "acme", issueId: issue.id, status: "in_progress", expectedRevision: 1 });
+		host.setToken("expired");
+		await api.getIssue(SERVER_KEY, { workspaceSlug: "acme", identifier: "MUL-1" });
+		host.setToken(null);
+		await api.getIssue(SERVER_KEY, { workspaceSlug: "acme", identifier: "MUL-1" });
+
+		expect(host.consoleCalls).toEqual([]);
+		expect(host.scripts.every((script) => !/console\./.test(script))).toBe(true);
+	});
+
 	it("is unavailable when the page does not answer in time", async () => {
 		const slow = createMulticaIssueApi({
 			getHost: () => ({ getServer: host.getServer, evaluateInPage: () => new Promise(() => undefined) }),

@@ -165,6 +165,14 @@ describe("mapping table rows 1 and 15 (several sessions)", () => {
 		expect(result.target).toBeNull();
 	});
 
+	it("row 15: a live session with nothing to say cannot hide an active worker (F6)", () => {
+		const result = aggregateTargets([
+			facts({ sessionId: "closed", column: "ready", prs: ["closed"] }),
+			facts({ sessionId: "worker", column: "building", activity: "active" }),
+		]);
+		expect(result).toEqual({ target: "in_progress", row: 3, sessionId: "worker" });
+	});
+
 	it("row 15: equal rank prefers a session that has something to say, then the lower id", () => {
 		const result = aggregateTargets([
 			facts({ sessionId: "a", column: "building", activity: "idle" }),

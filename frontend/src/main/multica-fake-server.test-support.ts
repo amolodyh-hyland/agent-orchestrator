@@ -264,6 +264,12 @@ export type FakeHost = {
 	setAvailable: (available: boolean) => void;
 	/** Scripts that were evaluated, in order. */
 	scripts: string[];
+	/** Every fetch the page scripts made, with the options they passed. */
+	fetchCalls: Array<{ url: string; init: Record<string, unknown> }>;
+	/** Everything a page script wrote to the page's console. Must stay empty. */
+	consoleCalls: unknown[][];
+	/** Pretend the live view's server is `viewKey` after `getServer()` has answered once (a switch between asking and running). */
+	switchAfterGetServer: (viewKey: string) => void;
 	setToken: (token: string | null) => void;
 };
 
@@ -273,6 +279,12 @@ export function createFakeHost(fake: Pick<FakeMulticaServer, "url" | "token">, s
 	let available = true;
 	let token: string | null = fake.token;
 	const scripts: string[] = [];
+	const fetchCalls: Array<{ url: string; init: Record<string, unknown> }> = [];
+	const consoleCalls: unknown[][] = [];
+	let switchOnGetServer: string | null = null;
+	const pageConsole = Object.fromEntries(
+		["log", "info", "warn", "error", "debug"].map((method) => [method, (...args: unknown[]) => void consoleCalls.push(args)]),
+	);
 	const serverFor = (key: string): MulticaServer =>
 		({
 			key,
@@ -283,14 +295,26 @@ export function createFakeHost(fake: Pick<FakeMulticaServer, "url" | "token">, s
 			cliProfile: null,
 		}) as MulticaServer;
 	return {
-		getServer: () => (available ? serverFor(currentKey) : null),
+		getServer: () => {
+			if (!available) return null;
+			const answer = serverFor(currentKey);
+			if (switchOnGetServer !== null) {
+				currentKey = switchOnGetServer;
+				switchOnGetServer = null;
+			}
+			return answer;
+		},
 		evaluateInPage: async (script, key) => {
 			if (!available) return undefined;
 			if (key !== undefined && key !== currentKey) return undefined;
 			scripts.push(script);
 			return await (runInNewContext(script, {
 				localStorage: { getItem: (name: string) => (name === "multica_token" ? token : null) },
-				fetch: globalThis.fetch,
+				fetch: (url: string, init: Record<string, unknown>) => {
+					fetchCalls.push({ url: String(url), init: { ...init, headers: { ...(init.headers as Record<string, string>) } } });
+					return globalThis.fetch(url, init as RequestInit);
+				},
+				console: pageConsole,
 				AbortController,
 				setTimeout,
 				clearTimeout,
@@ -307,6 +331,11 @@ export function createFakeHost(fake: Pick<FakeMulticaServer, "url" | "token">, s
 			available = next;
 		},
 		scripts,
+		fetchCalls,
+		consoleCalls,
+		switchAfterGetServer: (viewKey) => {
+			switchOnGetServer = viewKey;
+		},
 		setToken: (next) => {
 			token = next;
 		},
