@@ -622,10 +622,14 @@ describe("multica awareness service", () => {
 				expect(new Set(h.state().issues.map((issue) => issue.serverKey))).toEqual(new Set([keyA(), keyB]));
 
 				const attemptsB = b.server.connectionAttempts();
+				const requestsB = b.server.requests.length;
 				await h.cmd({ type: "setServerEnabled", serverKey: keyA(), enabled: false });
 				await until(() => a.server.liveSockets() === 0);
+				await settle(150);
+				// The other server was not touched: no new socket, no new read, same sockets.
 				expect(b.server.liveSockets()).toBe(1);
 				expect(b.server.connectionAttempts()).toBe(attemptsB);
+				expect(b.server.requests.length).toBe(requestsB);
 				expect(h.state().issues.every((issue) => issue.serverKey === keyB)).toBe(true);
 				expect(b.server.writes()).toEqual([]);
 			} finally {
@@ -673,6 +677,20 @@ describe("multica awareness service", () => {
 			expect(h.profileReads).not.toHaveBeenCalled();
 			expect(a.server.requests.every((request) => request.authorization === `Bearer ${PAGE_TOKEN}`)).toBe(true);
 			expect(await readFile(path.join(h.dir, "multica-watch.json"), "utf8")).not.toContain(PAGE_TOKEN);
+		});
+
+		it("is not live until the workspace list has been read", async () => {
+			a.server.addUser(PAGE_TOKEN, { id: "user-a", name: "A", workspaceIds: ["ws-1", "ws-2"] });
+			h.pageHost.activeServerKey = keyA();
+			h.pageHost.token = PAGE_TOKEN;
+			h.pageHost.slug = "acme";
+			const hold = a.server.hold("/api/workspaces");
+			await connect({ source: "page" });
+			await until(() => hold.reached());
+			await settle(100);
+			expect(h.serverState().status).toBe("connecting");
+			hold.release();
+			await until(() => h.serverState().status === "live");
 		});
 
 		it("pauses while the page shows another server", async () => {
