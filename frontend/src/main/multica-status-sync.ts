@@ -106,6 +106,8 @@ type Runtime = {
 	writeTimes: number[];
 	forceGet: boolean;
 	reopenOnce: boolean;
+	/** Identifies the evaluation that currently owns `running`; a pass that was superseded must not clear it. */
+	run: number;
 	/** Bumped when the work in flight for this issue must not go on: the master switch or a link was turned off, or the link is gone. */
 	epoch: number;
 };
@@ -162,13 +164,16 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 
 	// --- persistence ---------------------------------------------------------
 
-	const persist = (): void => {
+	const saveNow = (): Promise<void> => {
 		const file: MulticaSyncStateFile = {
 			settings,
 			links: [...enabledLinks.values()].slice(-MAX_MULTICA_SYNC_LINKS),
 			issues: [...runtimes.values()].map((runtime) => runtime.state).slice(-MAX_MULTICA_SYNC_ISSUES),
 		};
-		void options.store.save(file).catch(() => undefined);
+		return options.store.save(file).catch(() => undefined);
+	};
+	const persist = (): void => {
+		void saveNow();
 	};
 
 	// --- audit ---------------------------------------------------------------
@@ -223,6 +228,7 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 		forceGet: false,
 		reopenOnce: false,
 		epoch: 0,
+		run: 0,
 	});
 
 	const runtimeFor = (group: Pick<Group, "issueKey" | "serverKey" | "workspaceSlug" | "issueIdentifier">): Runtime => {
@@ -438,6 +444,7 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 			return;
 		}
 		runtime.running = true;
+		const run = (runtime.run += 1);
 		emit();
 		const startedGeneration = generation;
 		try {
@@ -447,8 +454,11 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 			runtime.attempt += 1;
 			schedule(group, retryDelay(runtime));
 		} finally {
-			runtime.running = false;
-			runtime.rerun = false;
+			// A server switch while this pass was awaiting hands `running` to a newer pass: leave it alone.
+			if (runtime.run === run) {
+				runtime.running = false;
+				runtime.rerun = false;
+			}
 			persist();
 			recompute();
 			emit();
@@ -527,6 +537,21 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 				runtime.evaluatedSig = signature;
 				scheduleReconcile(runtime);
 				return;
+			}
+
+			// A write whose answer was lost (timeout, app quit) shows up here as the intended status at a newer revision.
+			const intent = runtime.state.intent;
+			if (intent) {
+				if (issue.category === intent.category && issue.revision > intent.revBefore) {
+					runtime.state.lastKnown = {
+						status: issue.status,
+						category: issue.category,
+						revision: issue.revision,
+						source: "write",
+						at: new Date(now()).toISOString(),
+					};
+				}
+				runtime.state.intent = null;
 			}
 
 			const decision = decideStatusWrite({
@@ -633,6 +658,16 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 			}
 			if (!stillValid()) return;
 			countWrite(runtime, group.serverKey);
+			runtime.state.intent = { status: writeStatus, category: writeStatus, revBefore, at: stamp };
+			await saveNow();
+			if (!stillValid()) {
+				// Nothing was sent: no intent to remember, and the budget slot is given back.
+				runtime.state.intent = null;
+				runtime.writeTimes.pop();
+				const times = serverWrites.get(group.serverKey);
+				times?.pop();
+				return;
+			}
 			const put = await options.api.putStatus(group.serverKey, {
 				workspaceSlug: group.workspaceSlug,
 				issueId: issue.id,
@@ -640,6 +675,8 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 				expectedRevision: revBefore,
 			});
 
+			// A definite answer settles the intent; a lost or unclear one keeps it for the next read.
+			if (put.ok || !["timeout", "unavailable", "unreadable", "server_error"].includes(put.kind)) runtime.state.intent = null;
 			if (put.ok) {
 				// Applied even if the server was switched meanwhile: the state belongs to its own server.
 				runtime.state.lastKnown = {
@@ -772,6 +809,7 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 		for (const runtime of runtimes.values()) {
 			clearTimers(runtime);
 			runtime.running = false;
+			runtime.run += 1;
 			runtime.rerun = false;
 			runtime.evaluatedSig = null;
 			runtime.error = null;

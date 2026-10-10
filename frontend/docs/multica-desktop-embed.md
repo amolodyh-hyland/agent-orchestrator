@@ -433,6 +433,8 @@ Issue links move to version 2 (see [Issue links](#issue-links)).
 
 ### Not verified, and not built
 
+- Known limit: the Open in AO menu matches links to the issue on screen by session and identifier only, the same limit as the rest of that menu (the page title carries no workspace), so two workspaces with the same prefix can show each other's sync row. The link chip in AO matches the workspace as well.
+- After a write whose answer is lost (timeout, app quit), AO has recorded its intent (`intent` in `multica-sync-state.json`) and recognises its own write at the next read instead of reading it as a change made in Multica.
 - Not verified live: that the embedded Multica view stays loaded and signed in while hidden (the engine waits and
   retries with "Open Multica to sync" when it is not); real PR, CI and review transitions; Multica Cloud;
   Windows and Linux; a packaged build; a Multica older than the one with `suppress_run`.

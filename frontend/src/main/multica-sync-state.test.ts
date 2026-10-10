@@ -119,6 +119,16 @@ describe("coerceMulticaSyncStateFile", () => {
 		expect(coerced.issues[0].pause).toBeNull();
 	});
 
+	it("keeps a well-formed write intent and drops a damaged one", () => {
+		const file = sample();
+		const intent = { status: "in_review", category: "in_review", revBefore: 5, at: "2026-10-10T10:07:00.000Z" };
+		const kept = coerceMulticaSyncStateFile({ version: 1, issues: [{ ...file.issues[0], intent }] });
+		expect(kept.issues[0].intent).toEqual(intent);
+		for (const bad of [{ ...intent, revBefore: 0 }, { ...intent, status: "" }, { ...intent, at: "no" }, "x", null]) {
+			expect(coerceMulticaSyncStateFile({ version: 1, issues: [{ ...file.issues[0], intent: bad }] }).issues[0]).not.toHaveProperty("intent");
+		}
+	});
+
 	it("is bounded", () => {
 		const links = Array.from({ length: MAX_MULTICA_SYNC_LINKS + 3 }, (_, index) => ({
 			serverKey: "cloud",

@@ -30,6 +30,9 @@ export type PersistedPause = {
 	at: string;
 };
 
+/** A status write AO is about to send; kept until the answer is known, so a lost answer is still recognised as AO's own write. */
+export type PersistedWriteIntent = { status: string; category: string; revBefore: number; at: string };
+
 export type PersistedIssueState = {
 	serverKey: string;
 	workspaceSlug: string;
@@ -39,6 +42,7 @@ export type PersistedIssueState = {
 	lastSyncAt: string | null;
 	/** The issue answered 404: deleted, or moved out of reach. Writes stop until the user syncs again. */
 	orphaned: boolean;
+	intent?: PersistedWriteIntent | null;
 };
 
 export type MulticaSyncStateFile = {
@@ -80,6 +84,12 @@ function coerceLastKnown(value: unknown): LastKnownStatus | null {
 	if (typeof value.revision !== "number" || !Number.isSafeInteger(value.revision) || value.revision < 1) return null;
 	if ((value.source !== "write" && value.source !== "observed") || !isTimestamp(value.at)) return null;
 	return { status: value.status, category: value.category, revision: value.revision, source: value.source, at: value.at };
+}
+
+function coerceIntent(value: unknown): PersistedWriteIntent | null {
+	if (!isRecord(value) || !isShortText(value.status) || !isShortText(value.category)) return null;
+	if (typeof value.revBefore !== "number" || !Number.isSafeInteger(value.revBefore) || value.revBefore < 1 || !isTimestamp(value.at)) return null;
+	return { status: value.status, category: value.category, revBefore: value.revBefore, at: value.at };
 }
 
 function coercePause(value: unknown): PersistedPause | null {
@@ -135,6 +145,7 @@ export function coerceMulticaSyncStateFile(raw: unknown): MulticaSyncStateFile {
 				pause: coercePause(entry.pause),
 				lastSyncAt: isTimestamp(entry.lastSyncAt) ? entry.lastSyncAt : null,
 				orphaned: entry.orphaned === true,
+				...(coerceIntent(entry.intent) ? { intent: coerceIntent(entry.intent) } : {}),
 			});
 		}
 	}

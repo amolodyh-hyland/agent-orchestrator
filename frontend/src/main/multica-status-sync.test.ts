@@ -999,6 +999,121 @@ describe("multica status sync", () => {
 		});
 	});
 
+	describe("a write whose answer is lost, and a server switched back mid-flight", () => {
+		const issueAt = (status: string, revision: number) => ({
+			ok: true as const,
+			issue: {
+				id: "11111111-1111-4111-8111-111111111111",
+				workspaceId: "22222222-2222-4222-8222-222222222222",
+				identifier: "MUL-1",
+				status,
+				category: status,
+				revision,
+				assigneeType: "member",
+				inTriage: false,
+			},
+		});
+
+		it("recognises its own write when the answer was lost and the facts moved on, instead of pausing (F3.1)", async () => {
+			const current = { status: "todo", revision: 4 };
+			let loseNext = false;
+			const stub = {
+				getIssue: vi.fn(async () => issueAt(current.status, current.revision)),
+				previewTrigger: vi.fn(),
+				putStatus: vi.fn(async (_key: string, input: { status: string }) => {
+					current.status = input.status;
+					current.revision += 1;
+					return loseNext ? { ok: false as const, kind: "timeout" as const } : issueAt(current.status, current.revision);
+				}),
+			} as unknown as MulticaIssueApi;
+			api = stub;
+			const sync = start();
+			sync.setFacts({ stale: false, sessions: [working()] });
+			await turnOn(sync);
+			await settled();
+			expect(current.status).toBe("in_progress");
+
+			loseNext = true;
+			sync.setFacts({ stale: false, sessions: [inReview()] });
+			await until(() => expect(current.status).toBe("in_review"));
+			await until(() => expect(view().state).toBe("error"));
+			expect(store.saved().issues[0].intent).toMatchObject({ status: "in_review", revBefore: 5 });
+
+			loseNext = false;
+			sync.setFacts({ stale: false, sessions: [merged()] });
+			await until(() => expect(current.status).toBe("done"));
+			await settled();
+
+			expect(view().state).toBe("synced");
+			expect(records.some((entry) => entry.kind === "pause")).toBe(false);
+			expect(store.saved().issues[0].intent ?? null).toBeNull();
+		});
+
+		it("records the intent before the write goes out, and forgets it once the write is answered", async () => {
+			let release: (value: unknown) => void = () => undefined;
+			const stub = {
+				getIssue: vi.fn(async () => issueAt("todo", 4)),
+				previewTrigger: vi.fn(),
+				putStatus: vi.fn(() => new Promise((resolve) => (release = resolve))),
+			} as unknown as MulticaIssueApi;
+			api = stub;
+			const sync = start();
+			sync.setFacts({ stale: false, sessions: [working()] });
+			await turnOn(sync);
+			await until(() => expect(stub.putStatus).toHaveBeenCalledTimes(1));
+			expect(store.saved().issues[0].intent).toMatchObject({ status: "in_progress", category: "in_progress", revBefore: 4 });
+
+			release(issueAt("in_progress", 5));
+			await settled();
+			expect(store.saved().issues[0].intent ?? null).toBeNull();
+		});
+
+		it("a lost write that never landed leaves no false agreement", async () => {
+			const stub = {
+				getIssue: vi.fn(async () => issueAt("todo", 4)),
+				previewTrigger: vi.fn(),
+				putStatus: vi.fn(async () => ({ ok: false as const, kind: "timeout" as const })),
+			} as unknown as MulticaIssueApi;
+			api = stub;
+			const sync = start({ engine: { minRetryMs: 15, maxRetryMs: 15 } });
+			sync.setFacts({ stale: false, sessions: [working()] });
+			await turnOn(sync);
+			await until(() => expect(vi.mocked(stub.putStatus).mock.calls.length).toBeGreaterThanOrEqual(2));
+			// The write was retried (nothing landed), and nothing was paused or mistaken for AO's own write.
+			expect(records.some((entry) => entry.kind === "pause")).toBe(false);
+		});
+
+		it("a pass superseded by a server switch back to the same server does not clear the newer pass's running state (F3.2)", async () => {
+			const resolvers: Array<(value: unknown) => void> = [];
+			const stub = {
+				getIssue: vi.fn(() => new Promise((resolve) => resolvers.push(resolve))),
+				previewTrigger: vi.fn(),
+				putStatus: vi.fn(async () => issueAt("in_progress", 5)),
+			} as unknown as MulticaIssueApi;
+			api = stub;
+			const sync = start();
+			sync.setFacts({ stale: false, sessions: [working()] });
+			await turnOn(sync);
+			await until(() => expect(stub.getIssue).toHaveBeenCalledTimes(1));
+
+			sync.handleServerChange(OTHER_SERVER);
+			sync.setLinks(SERVER, [link()]);
+			await until(() => expect(stub.getIssue).toHaveBeenCalledTimes(2));
+
+			// The first, superseded read comes back.
+			resolvers[0](issueAt("todo", 4));
+			await sleep(80);
+
+			// No third concurrent pass was started, and the newer one is still pending.
+			expect(stub.getIssue).toHaveBeenCalledTimes(2);
+			expect(stub.putStatus).not.toHaveBeenCalled();
+			expect(view().state).toBe("pending");
+
+			resolvers[1](issueAt("todo", 4));
+			await until(() => expect(stub.putStatus).toHaveBeenCalledTimes(1));
+		});
+	});
+
 	describe("failures", () => {
 		it("signed out: stops for the whole server without a retry storm, and resumes when the user signs in", async () => {
 			fake.addIssue({ identifier: "MUL-1", status: "todo" });
