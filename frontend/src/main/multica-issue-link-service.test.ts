@@ -98,7 +98,7 @@ function actionNonce(script: string): string {
 	return match[1];
 }
 
-async function setup(initial: MulticaIssueLink[] = [], withHost = true) {
+async function setup(initial: MulticaIssueLink[] = [], withHost = true, extra: Partial<MulticaIssueLinkServiceOptions> = {}) {
 	const ipc = fakeIpc();
 	const shell = { id: 7, isDestroyed: vi.fn(() => false), send: vi.fn() };
 	const host = {
@@ -146,6 +146,7 @@ async function setup(initial: MulticaIssueLink[] = [], withHost = true) {
 		store,
 		getHost: () => currentHost,
 		readSettings: async () => settings,
+		...extra,
 	} as unknown as MulticaIssueLinkServiceOptions);
 	await new Promise((resolve) => setTimeout(resolve, 0));
 	host.runInAoWorld.mockClear();
@@ -777,5 +778,49 @@ describe("multica issue link service: lifecycle", () => {
 		expect(t.host.runInAoWorld).not.toHaveBeenCalled();
 		expect(t.host.navigatePath).not.toHaveBeenCalled();
 		expect(t.host.setActive).not.toHaveBeenCalled();
+	});
+
+	describe("awareness hooks", () => {
+		it("builds the executor line for the current issue on the selected server and puts it in the page payload", async () => {
+			const getExecutor = vi.fn(() => ({ display: "multica-agent" as const, text: "Run by: Multica agent Builder, running" }));
+			const t = await setup([link()], true, { getExecutor });
+			t.ipc.invoke(MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL, t.shellEvent, snapshot("project-1", ["a-1"]));
+			t.service.handlePageTitle("MUL-1: Fix login");
+			expect(getExecutor).toHaveBeenLastCalledWith({
+				serverKey: SERVER_KEY,
+				issueIdentifier: "MUL-1",
+				liveSessions: [{ id: "a-1", label: "a-1", stateLabel: "Ready" }],
+			});
+			const script = t.host.runInAoWorld.mock.calls.at(-1)?.[0] as string;
+			expect(script).toContain('"executor":{"display":"multica-agent","text":"Run by: Multica agent Builder, running"}');
+		});
+
+		it("re-renders the menu when the read model changes", async () => {
+			let line: { display: "ao"; text: string } | null = null;
+			const t = await setup([link()], true, { getExecutor: () => line });
+			t.ipc.invoke(MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL, t.shellEvent, snapshot());
+			t.service.handlePageTitle("MUL-1: Fix login");
+			t.host.runInAoWorld.mockClear();
+			line = { display: "ao", text: "Run by: AO session x, Working" };
+			t.service.refreshExecutor();
+			expect(t.host.runInAoWorld).toHaveBeenCalledOnce();
+			expect(t.host.runInAoWorld.mock.calls[0][0]).toContain("Run by: AO session x, Working");
+		});
+
+		it("adds no executor without a provider", async () => {
+			const t = await setup([link()]);
+			t.ipc.invoke(MULTICA_OPEN_WITH_AO_PUBLISH_CHANNEL, t.shellEvent, snapshot());
+			t.service.handlePageTitle("MUL-1: Fix login");
+			expect(t.host.runInAoWorld.mock.calls.at(-1)?.[0]).toContain('"executor":null');
+		});
+
+		it("reports changed links so awareness can follow them", async () => {
+			const onLinksChanged = vi.fn();
+			const t = await setup([], true, { onLinksChanged });
+			await t.ipc.invoke(MULTICA_LINKS_ADD_CHANNEL, t.shellEvent, { sessionId: "b-2", projectId: "b", issue: "/acme/issues/MUL-1" });
+			expect(onLinksChanged).toHaveBeenCalledTimes(1);
+			await t.ipc.invoke(MULTICA_LINKS_REMOVE_CHANNEL, t.shellEvent, { sessionId: "b-2", workspaceSlug: "acme", issueIdentifier: "MUL-1" });
+			expect(onLinksChanged).toHaveBeenCalledTimes(2);
+		});
 	});
 });

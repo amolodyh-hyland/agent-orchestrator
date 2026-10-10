@@ -4,6 +4,7 @@ import { expect } from "vitest";
 import "../i18n";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
 import { DEFAULT_MULTICA_SETTINGS } from "../../shared/multica";
+import { EMPTY_AWARENESS_STATE } from "../../shared/multica-awareness";
 
 // Vitest 4 can load the convenience entry against a different matcher
 // instance. Register the matchers on the active test runtime as well.
@@ -371,6 +372,13 @@ if (typeof window !== "undefined") {
 			publishFacts: vi.fn(async () => ({ ok: true })),
 			onChanged: vi.fn(() => () => undefined),
 		},
+		multicaAwareness: {
+			getState: async () => ({ ...EMPTY_AWARENESS_STATE }),
+			command: async () => ({ ok: false, reason: "invalid_request" }),
+			openIssue: async () => false,
+			onState: () => () => undefined,
+		},
+		multicaActionLog: { read: async () => [] },
 		keybindings: {
 			get: async () => ({}),
 			set: async (overrides) => overrides,

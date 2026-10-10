@@ -15,6 +15,7 @@ import {
 	nativeImage,
 	Notification as ElectronNotification,
 	protocol,
+	safeStorage,
 	shell,
 	session,
 	WebContentsView,
@@ -198,6 +199,13 @@ import { isUpdatesDisabledBuild } from "./main/updates-disabled";
 import { writeMulticaIpcJail } from "./main/multica-ipc-jail";
 import { createCombinedBadge } from "./main/combined-badge";
 import { createMulticaNotifications, type MulticaNotifications } from "./main/multica-notifications";
+import { getMulticaActionLog } from "./main/multica-action-log";
+import { createSyncAuditSink } from "./main/multica-sync-audit";
+import { createMulticaAwareness, type MulticaAwareness } from "./main/multica-awareness";
+import { createProfileConfigReader, createSafeStorageVault } from "./main/multica-awareness-env";
+import { createMulticaCredentials } from "./main/multica-credentials";
+import { buildExecutorLine } from "./main/multica-executor-line";
+import { createMulticaWatchConfigStore } from "./main/multica-watch-config";
 import { createMulticaViewHost, type MulticaViewHost } from "./main/multica-view-host";
 import { ancestorRepositorySetupWarning, resolveCheckedOutBranch, scanImportFolder } from "./main/import-folder-scan";
 import { parseOpenFolderPathArg } from "./main/open-folder-arg";
@@ -342,6 +350,7 @@ let multicaViewHost: MulticaViewHost | null = null;
 let multicaIssueLinkService: MulticaIssueLinkService | null = null;
 let multicaStatusSync: MulticaStatusSync | null = null;
 let multicaStatusSyncIpc: { dispose: () => void } | null = null;
+let multicaAwareness: MulticaAwareness | null = null;
 const combinedBadge = createCombinedBadge();
 let browserProfileIpc: BrowserProfileIpc | null = null;
 let browserProfileImporter: BrowserProfileImportService | null = null;
@@ -872,16 +881,41 @@ async function createWindowInternal(): Promise<void> {
 		api: createMulticaIssueApi({ getHost: () => multicaViewHost ?? undefined }),
 		store: createMulticaSyncStateStore(browserProfileStateDir()),
 		recordIssueIds: (target, ids) => multicaIssueLinkService?.backfillIssueIds(target, ids) ?? Promise.resolve(),
+		// Every write attempt, pause and resume lands in the same action log as awareness (one instance per state directory).
+		record: createSyncAuditSink(getMulticaActionLog(browserProfileStateDir())),
 	});
 	multicaStatusSyncIpc = registerMulticaStatusSyncIpc({ ipcMain, shellWebContents, engine: multicaStatusSync });
 	// Registered before the renderer loads: the shell queries its state on mount.
+	// Multica awareness (read-only): nothing is watched until the user switches it on in Settings.
+	const multicaIssueLinkStore = createMulticaIssueLinkStore(browserProfileStateDir());
+	multicaAwareness = createMulticaAwareness({
+		ipcMain,
+		shellWebContents,
+		watchStore: createMulticaWatchConfigStore(browserProfileStateDir()),
+		credentials: createMulticaCredentials({
+			stateDir: browserProfileStateDir(),
+			vault: createSafeStorageVault(safeStorage, process.platform),
+			readProfileConfig: createProfileConfigReader(() => os.homedir()),
+		}),
+		// One shared instance per state directory: other writers of the log must use getMulticaActionLog too.
+		actionLog: getMulticaActionLog(browserProfileStateDir()),
+		fetch: (url, init) => net.fetch(url, init),
+		env: process.env,
+		listLinks: () => multicaIssueLinkStore.list(),
+		getHost: () => multicaViewHost ?? undefined,
+	});
+	multicaAwareness.onChange(() => multicaIssueLinkService?.refreshExecutor());
+	void multicaAwareness.start();
 	multicaIssueLinkService = createMulticaIssueLinkService({
 		ipcMain,
 		shellWebContents,
-		store: createMulticaIssueLinkStore(browserProfileStateDir()),
+		store: multicaIssueLinkStore,
 		getHost: () => multicaViewHost ?? undefined,
 		readSettings: () => readMulticaSettings(browserProfileStateDir()),
 		sync: multicaStatusSync,
+		getExecutor: ({ serverKey, issueIdentifier, liveSessions }) =>
+			buildExecutorLine({ lookup: multicaAwareness?.lookup(serverKey, issueIdentifier) ?? null, liveSessions }),
+		onLinksChanged: () => multicaAwareness?.handleLinksChanged(),
 	});
 	multicaViewHost = await createMulticaViewHost({
 		mainWindow,
@@ -1070,6 +1104,8 @@ async function createWindowInternal(): Promise<void> {
 		multicaStatusSyncIpc = null;
 		multicaStatusSync?.dispose();
 		multicaStatusSync = null;
+		multicaAwareness?.dispose();
+		multicaAwareness = null;
 		void disposeBrowserViewHost()
 			.finally(() => {
 				composition.dispose();
