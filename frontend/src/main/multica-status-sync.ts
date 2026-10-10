@@ -344,7 +344,11 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 			for (const group of groups.values()) {
 				if (group.writers.length === 0) continue;
 				const runtime = runtimeFor(group);
+				// A running evaluation looks again when it ends.
+				if (runtime.running) continue;
 				if (runtime.state.orphaned && !runtime.forceGet) continue;
+				// No access stays until the user asks again (Sync now), not a retry loop.
+				if (runtime.error === "no_access" && !runtime.forceGet) continue;
 				if (runtime.evaluatedSig === signatureOf(targetFor(group)) && !runtime.forceGet) continue;
 				schedule(group, debounceMs);
 			}
@@ -439,11 +443,9 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 			schedule(group, retryDelay(runtime));
 		} finally {
 			runtime.running = false;
+			runtime.rerun = false;
 			persist();
-			if (runtime.rerun) {
-				runtime.rerun = false;
-				recompute();
-			}
+			recompute();
 			emit();
 		}
 	};
@@ -502,7 +504,11 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 			const issue = read.issue;
 			runtime.error = null;
 			runtime.observedStatus = issue.status;
-			if (!(await confirmIdentity(group, runtime, issue))) return;
+			if (!(await confirmIdentity(group, runtime, issue))) {
+				runtime.evaluatedSig = signature;
+				scheduleReconcile(runtime);
+				return;
+			}
 
 			const decision = decideStatusWrite({
 				target,
@@ -678,7 +684,6 @@ export function createMulticaStatusSync(options: MulticaStatusSyncOptions): Mult
 			if (known.workspaceId !== issue.workspaceId || known.issueId !== issue.id) {
 				// The identifier now names another issue (renumbered, moved, prefix changed): never write to it.
 				runtime.refused = "identity_changed";
-				runtime.evaluatedSig = null;
 				return false;
 			}
 			return true;

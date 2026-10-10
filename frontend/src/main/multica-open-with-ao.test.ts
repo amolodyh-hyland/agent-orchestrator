@@ -65,7 +65,7 @@ function setup(overrides: Partial<MulticaOpenWithAoOptions> = {}) {
 		}),
 	};
 	let issue: { identifier: string; title: string } | null = { identifier: "MUL-1", title: "Fix login" };
-	let links: ReadonlyArray<{ sessionId: string; issueIdentifier: string; projectId: string }> = [];
+	let links: ReadonlyArray<{ sessionId: string; issueIdentifier: string; projectId: string; workspaceSlug?: string }> = [];
 	const addLink = vi.fn(async (_link: { sessionId: string; projectId: string; workspaceSlug: string; issueIdentifier: string }) => {
 		order.push("addLink");
 		return true;
@@ -93,7 +93,7 @@ function setup(overrides: Partial<MulticaOpenWithAoOptions> = {}) {
 		setIssue: (next: { identifier: string; title: string } | null) => {
 			issue = next;
 		},
-		setLinks: (next: ReadonlyArray<{ sessionId: string; issueIdentifier: string; projectId: string }>) => {
+		setLinks: (next: ReadonlyArray<{ sessionId: string; issueIdentifier: string; projectId: string; workspaceSlug?: string }>) => {
 			links = next;
 		},
 	};
@@ -430,6 +430,65 @@ describe("Multica Open in AO actions", () => {
 
 	it("throws for a custom nonce that fails nonce validation", () => {
 		expect(() => setup({ createNonce: () => "bad" })).toThrowError("invalid open-with-ao nonce");
+	});
+});
+
+describe("Multica Open in AO sync actions", () => {
+	const syncUrl = (syncAction: "enable" | "disable" | "resume", projectId = "project-1", sessionId = "project-1-worker", nonce = NONCE) =>
+		buildOpenWithAoActionUrl({ kind: "sync", syncAction, projectId, sessionId, nonce });
+	const linked = [{ sessionId: "project-1-worker", issueIdentifier: "MUL-1", projectId: "project-1", workspaceSlug: "acme" }];
+
+	it("hands a sync action for a worker linked to the issue on screen to the sync owner, with the link's workspace", () => {
+		const onSyncAction = vi.fn();
+		const t = setup({ onSyncAction });
+		t.setLinks(linked);
+		t.service.setSnapshot(snapshot());
+
+		for (const action of ["enable", "disable", "resume"] as const) expect(t.service.handleActionUrl(syncUrl(action))).toBe(true);
+
+		expect(onSyncAction.mock.calls.map(([call]) => call)).toEqual(
+			(["enable", "disable", "resume"] as const).map((syncAction) => ({
+				syncAction,
+				sessionId: "project-1-worker",
+				workspaceSlug: "acme",
+				issueIdentifier: "MUL-1",
+			})),
+		);
+		expect(t.openSession).not.toHaveBeenCalled();
+		expect(t.addLink).not.toHaveBeenCalled();
+	});
+
+	it("ignores a sync action with a wrong nonce, for an unknown project or session, for an orchestrator, or without a link to the issue on screen", () => {
+		const onSyncAction = vi.fn();
+		const t = setup({ onSyncAction });
+		t.setLinks(linked);
+		t.service.setSnapshot(snapshot());
+
+		t.service.handleActionUrl(syncUrl("enable", "project-1", "project-1-worker", "other-nonce-12345"));
+		t.service.handleActionUrl(syncUrl("enable", "unknown", "project-1-worker"));
+		t.service.handleActionUrl(syncUrl("enable", "project-1", "unknown"));
+		t.service.handleActionUrl(syncUrl("enable", "project-1", "project-1-orchestrator"));
+		t.setIssue({ identifier: "MUL-2", title: "Another" });
+		t.service.handleActionUrl(syncUrl("enable"));
+		t.setIssue(null);
+		t.service.handleActionUrl(syncUrl("enable"));
+		t.setIssue({ identifier: "MUL-1", title: "Fix login" });
+		t.setLinks([{ sessionId: "project-1-worker", issueIdentifier: "MUL-1", projectId: "project-1" }]);
+		t.service.handleActionUrl(syncUrl("enable"));
+
+		expect(onSyncAction).not.toHaveBeenCalled();
+	});
+
+	it("swallows a sync action when nothing is listening, and builds the page payload with the sync input", () => {
+		const getSync = vi.fn(() => ({ enabled: true, killSwitch: false, views: [] }));
+		const t = setup({ getSync });
+		t.setLinks(linked);
+		t.service.setSnapshot(snapshot());
+
+		expect(t.service.handleActionUrl(syncUrl("disable"))).toBe(true);
+		expect(getSync).toHaveBeenCalled();
+		const script = vi.mocked(buildOpenWithAoScript).mock.calls.at(-1)?.[0];
+		expect(script?.projects[0].sessions[0].sync).toMatchObject({ label: "Keep this ticket updated", action: "enable" });
 	});
 });
 

@@ -25,7 +25,7 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 	type Entry = {
 		display: "item" | "label" | "separator";
 		key: string;
-		kind: "project" | "orchestrator" | "task" | "action" | "submenu" | "info";
+		kind: "project" | "orchestrator" | "task" | "action" | "submenu" | "info" | "sync";
 		label: string;
 		projectId?: string;
 		sessionId?: string;
@@ -38,6 +38,7 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 		terminated?: boolean;
 		disabled?: boolean;
 		footer?: boolean;
+		syncAction?: "enable" | "disable" | "resume";
 	};
 	type PanelRecord = {
 		level: number;
@@ -170,7 +171,10 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 		rows.push(separator("separator:tasks"));
 		if (project.sessions.length > 0) {
 			rows.push(labelEntry("label:tasks", "Tasks"));
-			for (const session of project.sessions) rows.push(sessionEntry(project, session, "task", session.label));
+			for (const session of project.sessions) {
+				rows.push(sessionEntry(project, session, "task", session.label));
+				if (session.sync) rows.push(syncEntry(project, session, session.sync));
+			}
 		} else {
 			rows.push(infoEntry("tasks:none", "No tasks in this project yet."));
 		}
@@ -208,6 +212,26 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 			linked: session.linked,
 			stale: session.stale,
 			terminated: session.terminated,
+		};
+	}
+
+	function syncEntry(
+		project: OpenWithAoPageProject,
+		session: OpenWithAoPageSession,
+		sync: NonNullable<OpenWithAoPageSession["sync"]>,
+	): Entry {
+		return {
+			display: "item",
+			key: `sync:${session.id}`,
+			kind: "sync",
+			label: sync.label,
+			projectId: project.id,
+			sessionId: session.id,
+			tone: sync.tone,
+			stateLabel: sync.stateLabel || undefined,
+			// A row with no action only tells the user something.
+			disabled: sync.action === null,
+			...(sync.action !== null ? { syncAction: sync.action } : {}),
 		};
 	}
 
@@ -360,6 +384,16 @@ export function createOpenWithAoMenu(options: OpenWithAoMenuOptions): OpenWithAo
 				workspaceQuery = "";
 			}
 			const url = `ao://multica/open-with-ao/open/${encodeURIComponent(entry.projectId)}/${encodeURIComponent(entry.sessionId)}?n=${payload.nonce}${workspaceQuery}`;
+			try {
+				onAction(url);
+			} finally {
+				close({ restoreFocus: true });
+			}
+			return;
+		}
+		if (entry.kind === "sync" && entry.projectId && entry.sessionId && entry.syncAction) {
+			if (!isTrustedEvent(activationOptions.event)) return;
+			const url = `ao://multica/open-with-ao/sync/${entry.syncAction}/${encodeURIComponent(entry.projectId)}/${encodeURIComponent(entry.sessionId)}?n=${payload.nonce}`;
 			try {
 				onAction(url);
 			} finally {
