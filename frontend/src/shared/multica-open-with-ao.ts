@@ -314,6 +314,10 @@ function compareStrings(left: string, right: string): number {
 	return left < right ? -1 : left > right ? 1 : 0;
 }
 
+/** One info row above the projects: who is working the issue now. Built in the main process from the awareness read model. */
+export type OpenWithAoExecutorLine = { display: "ao" | "multica-agent" | "human" | "contested"; text: string };
+export const MAX_OPEN_WITH_AO_EXECUTOR_TEXT = 160;
+
 /** The status-sync row shown under a linked session: what it says and what a click does. English, like the rest of the page menu. */
 export type OpenWithAoSyncView = {
 	tone: MulticaStatusTone;
@@ -395,6 +399,8 @@ export type OpenWithAoPagePayload = {
 	style: OpenWithAoStyleTokens;
 	nonce: string;
 	issue: { identifier: string; title: string } | null;
+	/** Null when awareness knows nothing about the issue (not watched, or ambiguous). */
+	executor: OpenWithAoExecutorLine | null;
 	daemon: OpenWithAoDaemonState | "unknown";
 	stale: boolean;
 	deducedProjectId: string | null;
@@ -408,13 +414,16 @@ export function buildOpenWithAoPagePayload(input: {
 	issue: { identifier: string; title: string } | null;
 	nonce: string;
 	sync?: OpenWithAoSyncInput;
+	executor?: OpenWithAoExecutorLine | null;
 }): OpenWithAoPagePayload {
+	const executor = input.executor ?? null;
 	if (input.snapshot === null) {
 		return {
 			label: OPEN_WITH_AO_LABEL,
 			style: OPEN_WITH_AO_STYLE,
 			nonce: input.nonce,
 			issue: input.issue,
+			executor,
 			daemon: "unknown",
 			stale: false,
 			deducedProjectId: null,
@@ -465,6 +474,7 @@ export function buildOpenWithAoPagePayload(input: {
 		style: OPEN_WITH_AO_STYLE,
 		nonce: input.nonce,
 		issue: input.issue,
+		executor,
 		daemon: input.snapshot.daemon,
 		stale: input.snapshot.stale,
 		deducedProjectId: deduction.projectId,

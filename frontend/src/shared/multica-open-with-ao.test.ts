@@ -252,6 +252,7 @@ describe("buildOpenWithAoPagePayload", () => {
 			style: OPEN_WITH_AO_STYLE,
 			nonce: NONCE,
 			issue: null,
+			executor: null,
 			daemon: "unknown",
 			stale: false,
 			deducedProjectId: null,
@@ -279,6 +280,14 @@ describe("buildOpenWithAoPagePayload", () => {
 			menuRowPaddingY: OPTION_PADDING_Y,
 			menuMaxHeightPx: MENU_MAX_HEIGHT_PX,
 		});
+	});
+
+	it("carries the executor line, with or without a snapshot, and defaults it to null", () => {
+		const executor = { display: "contested" as const, text: "Contested" };
+		const issue = { identifier: "ABC-1", title: "T" };
+		expect(buildOpenWithAoPagePayload({ snapshot: null, links: [], issue, nonce: NONCE, executor }).executor).toEqual(executor);
+		expect(buildOpenWithAoPagePayload({ snapshot: snapshot([project({ sessions: [session()] })]), links: [], issue, nonce: NONCE, executor }).executor).toEqual(executor);
+		expect(buildOpenWithAoPagePayload({ snapshot: snapshot([project({ sessions: [session()] })]), links: [], issue, nonce: NONCE }).executor).toBeNull();
 	});
 
 	it("does not mark sessions linked when there is no issue", () => {

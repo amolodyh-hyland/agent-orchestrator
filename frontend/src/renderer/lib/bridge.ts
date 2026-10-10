@@ -2,6 +2,7 @@ import type { AoBridge } from "../../preload";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
 import { DEFAULT_MULTICA_SETTINGS } from "../../shared/multica";
 import { EMPTY_MULTICA_SYNC_SNAPSHOT } from "../../shared/multica-status-sync";
+import { EMPTY_AWARENESS_STATE } from "../../shared/multica-awareness";
 export type { FeatureBuild } from "../../main/feature-builds";
 
 
@@ -301,6 +302,13 @@ export const aoBridge: AoBridge =
 			publishFacts: async () => ({ ok: false }),
 			onChanged: () => () => undefined,
 		},
+		multicaAwareness: {
+			getState: async () => ({ ...EMPTY_AWARENESS_STATE }),
+			command: async () => ({ ok: false, reason: "invalid_request" }),
+			openIssue: async () => false,
+			onState: () => () => undefined,
+		},
+		multicaActionLog: { read: async () => [] },
 		keybindings: {
 			get: async () => ({}),
 			set: async (overrides) => overrides,

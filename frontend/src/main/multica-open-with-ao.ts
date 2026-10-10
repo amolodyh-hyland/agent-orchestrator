@@ -6,6 +6,7 @@ import {
 	isOpenWithAoNonce,
 	isOpenWithAoSnapshot,
 	parseOpenWithAoActionUrl,
+	type OpenWithAoExecutorLine,
 	type OpenWithAoSnapshot,
 	type OpenWithAoSyncAction,
 	type OpenWithAoSyncInput,
@@ -27,6 +28,11 @@ export type MulticaOpenWithAoOptions = {
 	addLink: (link: { sessionId: string; projectId: string; workspaceSlug: string; issueIdentifier: string }) => Promise<boolean>;
 	openSession: (target: { projectId: string; sessionId: string }) => void;
 	requestNewTask: (projectId: string) => void;
+	/** The executor line for the current issue, from the awareness read model; null when awareness has nothing to say. */
+	getExecutorLine?: (input: {
+		issueIdentifier: string;
+		liveSessions: ReadonlyArray<{ id: string; label: string; stateLabel: string }>;
+	}) => OpenWithAoExecutorLine | null;
 	createNonce?: () => string;
 };
 
@@ -156,6 +162,23 @@ export function createMulticaOpenWithAo(options: MulticaOpenWithAoOptions): Mult
 		}
 	};
 
+	/** Non-terminated AO sessions linked to the issue, with the label and state the menu already shows. */
+	const executorLine = (issueIdentifier: string): OpenWithAoExecutorLine | null => {
+		if (!options.getExecutorLine) return null;
+		try {
+			const linkedIds = new Set(options.getLinks().filter((link) => link.issueIdentifier === issueIdentifier).map((link) => link.sessionId));
+			const liveSessions: Array<{ id: string; label: string; stateLabel: string }> = [];
+			for (const project of snapshot?.projects ?? []) {
+				for (const session of project.sessions) {
+					if (linkedIds.has(session.id) && !session.terminated) liveSessions.push({ id: session.id, label: session.label, stateLabel: session.stateLabel });
+				}
+			}
+			return options.getExecutorLine({ issueIdentifier, liveSessions });
+		} catch {
+			return null;
+		}
+	};
+
 	const refresh = (): void => {
 		if (disposed) return;
 		try {
@@ -166,7 +189,14 @@ export function createMulticaOpenWithAo(options: MulticaOpenWithAoOptions): Mult
 				host.runInAoWorld(buildOpenWithAoRemoveScript());
 				return;
 			}
-			const payload = buildOpenWithAoPagePayload({ snapshot, links: options.getLinks(), issue, nonce, sync: options.getSync?.() });
+			const payload = buildOpenWithAoPagePayload({
+				snapshot,
+				links: options.getLinks(),
+				issue,
+				nonce,
+				sync: options.getSync?.(),
+				executor: executorLine(issue.identifier),
+			});
 			host.runInAoWorld(buildOpenWithAoScript(payload));
 		} catch {
 			// Page refreshes are best effort; a subsequent snapshot or issue change retries.

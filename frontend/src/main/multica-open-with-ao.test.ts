@@ -536,4 +536,49 @@ describe("workspace slug page script", () => {
 	])("returns a null slug for %s", (_label, storedValue) => {
 		expect(JSON.parse(evaluateStoredTabs(storedValue as string) as string)).toEqual({ slug: null, title: "MUL-1: Fix login" });
 	});
+
+	describe("executor line", () => {
+		const lastPayload = (): OpenWithAoPagePayload => {
+			const calls = vi.mocked(buildOpenWithAoScript).mock.calls;
+			return calls[calls.length - 1][0];
+		};
+
+		it("asks for the line with the live linked sessions of the current issue and puts it in the payload", () => {
+			const getExecutorLine = vi.fn(() => ({ display: "ao" as const, text: "Run by: AO session project-1-worker, Working" }));
+			const { service, setLinks } = setup({ getExecutorLine });
+			setLinks([{ sessionId: "project-1-worker", issueIdentifier: "MUL-1", projectId: "project-1" }]);
+			service.setSnapshot(snapshot());
+			expect(getExecutorLine).toHaveBeenLastCalledWith({
+				issueIdentifier: "MUL-1",
+				liveSessions: [{ id: "project-1-worker", label: "project-1-worker", stateLabel: "Working" }],
+			});
+			expect(lastPayload().executor).toEqual({ display: "ao", text: "Run by: AO session project-1-worker, Working" });
+		});
+
+		it("leaves out terminated sessions and sessions linked to another issue", () => {
+			const getExecutorLine = vi.fn(() => null);
+			const { service, setLinks } = setup({ getExecutorLine });
+			setLinks([
+				{ sessionId: "project-1-worker", issueIdentifier: "MUL-2", projectId: "project-1" },
+				{ sessionId: "gone", issueIdentifier: "MUL-1", projectId: "project-1" },
+			]);
+			const withTerminated = snapshot();
+			withTerminated.projects[0].sessions.push({ ...session("gone", "project-1"), terminated: true });
+			service.setSnapshot(withTerminated);
+			expect(getExecutorLine).toHaveBeenLastCalledWith({ issueIdentifier: "MUL-1", liveSessions: [] });
+		});
+
+		it("has no executor when no provider is given, and survives a provider that throws", () => {
+			const plain = setup();
+			plain.service.setSnapshot(snapshot());
+			expect(lastPayload().executor).toBeNull();
+			const throwing = setup({
+				getExecutorLine: () => {
+					throw new Error("boom");
+				},
+			});
+			throwing.service.setSnapshot(snapshot(["project-2"]));
+			expect(lastPayload().executor).toBeNull();
+		});
+	});
 });
