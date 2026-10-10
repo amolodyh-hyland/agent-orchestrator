@@ -81,6 +81,8 @@ export type AwarenessRun = {
 	status: MulticaTaskStatus;
 	failureReason: string | null;
 	retryPending: boolean;
+	/** The run was active when a reconcile no longer listed it, and its outcome has not been read yet. */
+	outcomeUnknown: boolean;
 	startedAt: string | null;
 	/** When the run ended: the server's completion time when it sent one, else the time AO saw the end. */
 	endedAt: string | null;
@@ -198,6 +200,7 @@ export type MulticaRunCardState =
 	| "waiting_folder"
 	| "retrying"
 	| "finished"
+	| "ended"
 	| "failed"
 	| "cancelled";
 
@@ -205,12 +208,18 @@ export type MulticaRunCardView = { state: MulticaRunCardState; lane: MulticaRunL
 
 /** Finished and cancelled runs stay on the strip for this long. */
 export const MULTICA_RECENT_RUN_WINDOW_MS = 24 * 60 * 60 * 1000;
+/** A failed run waiting for Multica's automatic retry reads as "retrying" for this long, then as a failure. */
+export const MULTICA_RETRY_WINDOW_MS = 10 * 60 * 1000;
 
 /**
  * Maps a task to a card state, lane and tone. Returns null for a finished or
  * cancelled run older than the recent window.
  */
-export function multicaRunCardView(run: Pick<AwarenessRun, "status" | "retryPending" | "endedAt">, nowMs: number): MulticaRunCardView | null {
+export function multicaRunCardView(
+	run: Pick<AwarenessRun, "status" | "retryPending" | "endedAt"> & { outcomeUnknown?: boolean },
+	nowMs: number,
+): MulticaRunCardView | null {
+	if (run.outcomeUnknown) return isRecent(run.endedAt, nowMs) ? { state: "ended", lane: "recent", tone: "done" } : null;
 	switch (run.status) {
 		case "queued":
 		case "deferred":
@@ -223,7 +232,9 @@ export function multicaRunCardView(run: Pick<AwarenessRun, "status" | "retryPend
 			return { state: "waiting_folder", lane: "running", tone: "pending" };
 		case "failed":
 			// A failed run that Multica is about to retry is still in flight, not an alarm.
-			if (run.retryPending) return { state: "retrying", lane: "running", tone: "pending" };
+			if (run.retryPending && isWithin(run.endedAt, nowMs, MULTICA_RETRY_WINDOW_MS)) {
+				return { state: "retrying", lane: "running", tone: "pending" };
+			}
 			return isRecent(run.endedAt, nowMs) ? { state: "failed", lane: "attention", tone: "attention" } : null;
 		case "completed":
 			return isRecent(run.endedAt, nowMs) ? { state: "finished", lane: "recent", tone: "done" } : null;
@@ -233,9 +244,13 @@ export function multicaRunCardView(run: Pick<AwarenessRun, "status" | "retryPend
 }
 
 function isRecent(endedAt: string | null, nowMs: number): boolean {
+	return isWithin(endedAt, nowMs, MULTICA_RECENT_RUN_WINDOW_MS);
+}
+
+function isWithin(endedAt: string | null, nowMs: number, windowMs: number): boolean {
 	if (endedAt === null) return true;
 	const ended = Date.parse(endedAt);
-	return Number.isNaN(ended) || nowMs - ended <= MULTICA_RECENT_RUN_WINDOW_MS;
+	return Number.isNaN(ended) || nowMs - ended <= windowMs;
 }
 
 /** Key that joins a Multica issue to an AO link: `serverKey`, workspace slug, upper-case identifier. */

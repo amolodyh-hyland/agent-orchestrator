@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	MULTICA_RECENT_RUN_WINDOW_MS,
+	MULTICA_RETRY_WINDOW_MS,
 	MULTICA_TASK_STATUSES,
 	isAwarenessCommand,
 	isOpenMulticaIssueRequest,
@@ -38,7 +39,13 @@ describe("multicaRunCardView", () => {
 			expect(view(status, { endedAt: recent })).not.toBeNull();
 		}
 		expect(view("running", { endedAt: stale })).not.toBeNull();
-		expect(view("failed", { retryPending: true, endedAt: stale })).not.toBeNull();
+	});
+
+	it("shows a retry-pending failure as retrying only for ten minutes, then as a failure", () => {
+		const justNow = new Date(now - 60_000).toISOString();
+		const longAgo = new Date(now - MULTICA_RETRY_WINDOW_MS - 1000).toISOString();
+		expect(view("failed", { retryPending: true, endedAt: justNow })?.state).toBe("retrying");
+		expect(view("failed", { retryPending: true, endedAt: longAgo })?.state).toBe("failed");
 	});
 });
 
