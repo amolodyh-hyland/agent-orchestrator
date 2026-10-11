@@ -374,7 +374,10 @@ test("the install tooling never runs kill, pkill, killall or the bundled ao stop
 			if (/<<'?EOF'?$/.test(line)) inHeredoc = true;
 			else if (line === "EOF") inHeredoc = false;
 			const code = line.trim();
-			if (inHeredoc || code.startsWith("#") || /^(noetaxis_error|printf|echo)\b/.test(code) || /^\w*_?error "/.test(code)) return;
+			// Only pure messages are skipped: a message line that pipes, chains or substitutes commands is checked.
+			const outsideQuotes = code.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, "");
+			const pureMessage = /^(noetaxis_error|printf|echo)\b/.test(code) && !/[|;`]|&&|\$\(/.test(outsideQuotes);
+			if (inHeredoc || code.startsWith("#") || pureMessage) return;
 			const where = `${file}:${index + 1}: ${code}`;
 			assert.doesNotMatch(code, /(^|[\s;|&(`$]|\/)(kill|pkill|killall)(\s|$)/, where);
 			assert.doesNotMatch(code, /["']?\$(\{?cli\}?|\{?app_path\}?\/[^\s"']*ao)["']?\s+stop\b/, where);
@@ -477,6 +480,18 @@ test("rollback and the PKG preinstall apply the same background-process prefligh
 	const allowed = execute("/bin/bash", [rollbackScript, "--allow-ao-session", "--allow-background-processes"], { cwd: repoRoot, env });
 	assert.equal(allowed.status, 0, allowed.stderr);
 	assert.equal(await installedVersion(f.targetApp), "old");
+	// A daemon from an earlier flagged install is invisible to the process check; its port listener still blocks --restore-db.
+	const lsof = path.join(f.root, "fake-lsof");
+	await writeFile(lsof, "#!/bin/sh\nprintf 'p9876\\n'\n", { mode: 0o755 });
+	const idleBin = await makeFakeBin(f.root);
+	const listenerEnv = { ...f.env, PATH: `${idleBin}:/usr/bin:/bin:/usr/sbin:/sbin`, NOETAXIS_LSOF: lsof };
+	await writeFile(database, "live");
+	const portRefused = execute("/bin/bash", [rollbackScript, "--allow-ao-session", "--restore-db"], { cwd: repoRoot, env: listenerEnv });
+	assert.equal(portRefused.status, 21, portRefused.stderr);
+	assert.match(portRefused.stderr, /--restore-db cannot run while something listens on port 3001 \(pid 9876\)/);
+	assert.equal(await readFile(database, "utf8"), "live");
+	const portAppOnly = execute("/bin/bash", [rollbackScript, "--allow-ao-session"], { cwd: repoRoot, env: listenerEnv });
+	assert.equal(portAppOnly.status, 0, portAppOnly.stderr);
 	const desktopBin = await makeFakeBin(f.root, "desktop");
 	const desktop = execute("/bin/bash", [rollbackScript, "--allow-ao-session", "--allow-background-processes"], { cwd: repoRoot, env: { ...f.env, PATH: `${desktopBin}:/usr/bin:/bin:/usr/sbin:/sbin` } });
 	assert.equal(desktop.status, 21, desktop.stderr);

@@ -84,6 +84,12 @@ if [[ "$restore_db" -eq 1 ]] && noetaxis_daemon_running "$target_app"; then
 	noetaxis_error "--restore-db cannot run while the AO daemon is running: it holds the database open and replacing its files can corrupt it. Stop the daemon yourself first (after checking you do not need its active sessions; stopping it interrupts them): \"$target_app/Contents/Resources/daemon/ao\" stop    then rerun. This command never stops it for you."
 	exit 21
 fi
+# A daemon left by an earlier flagged install runs from a backup copy and is invisible to the
+# process check above; if something listens on the daemon port, treat it as that daemon.
+if [[ "$restore_db" -eq 1 ]] && [[ -n "$(noetaxis_port_listener_pids)" ]]; then
+	noetaxis_error "--restore-db cannot run while something listens on port ${NOETAXIS_AO_PORT:-3001} (pid $(noetaxis_port_listener_pids)), the default AO daemon port: it may be an AO daemon from an earlier install (running from a backup copy) that holds the database open. Stop it yourself with the stop command of that install's ao CLI (full path), after checking you do not need its active sessions, or free the port, then rerun. This command never stops it for you."
+	exit 21
+fi
 
 app_backup_name="$(/usr/bin/sed -n 's/^app_backup=//p' "$backup_dir/BACKUP_COMPLETE")"
 expected_version="$(/usr/bin/sed -n 's/^app_version=//p' "$backup_dir/BACKUP_COMPLETE")"

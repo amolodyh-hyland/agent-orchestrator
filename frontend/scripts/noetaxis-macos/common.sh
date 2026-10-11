@@ -182,7 +182,7 @@ noetaxis_assert_idle() {
 			pids="$(noetaxis_pattern_pids "$app_path/Contents/")"
 			found="$found other helper processes${pids:+ (pid $pids)}"
 			if [[ "$allow_background" -ne 1 ]]; then
-				noetaxis_error "Agent Orchestrator helper processes are still running from $app_path${pids:+ (pid $pids)}. Quit the app completely (menu-bar icon, \"Quit AO Completely\"), verify with: pgrep -fl \"$app_path/Contents/\"    and rerun. This command never kills processes for you. To install anyway, rerun with --allow-background-processes."
+				noetaxis_error "Agent Orchestrator helper processes are still running from $app_path${pids:+ (pid $pids)}. Quit the app completely (menu-bar icon, \"Quit AO Completely\"), verify with: pgrep -fl \"$app_path/Contents/\"    and rerun. Helpers that serve live sessions (agent supervisors, terminal hosts) can outlive both a full quit and \"ao stop\" like chat hosts: reopen AO, list the sessions with \"$cli\" session ls, let them finish or end them yourself, then quit completely again. This command never kills processes for you. To install anyway, rerun with --allow-background-processes."
 				return 21
 			fi
 		fi
@@ -205,11 +205,16 @@ noetaxis_assert_idle() {
 # the moved backup copy and is invisible to it, yet still holds the daemon port. A
 # listener on the default port is only a warning (the port is configurable and may
 # belong to something else); the check is read-only and never fails or stops anything.
-noetaxis_warn_port_listener() {
-	local app_path="$1" lsof_bin="${NOETAXIS_LSOF:-/usr/sbin/lsof}" port="${NOETAXIS_AO_PORT:-3001}" listener
+noetaxis_port_listener_pids() {
+	local lsof_bin="${NOETAXIS_LSOF:-/usr/sbin/lsof}" port="${NOETAXIS_AO_PORT:-3001}" listener
 	[[ -x "$lsof_bin" ]] || return 0
 	listener="$("$lsof_bin" -nP -iTCP:"$port" -sTCP:LISTEN -Fp 2>/dev/null | /usr/bin/sed -n 's/^p//p' | /usr/bin/tr '\n' ' ')" || true
-	listener="${listener% }"
+	printf '%s' "${listener% }"
+}
+
+noetaxis_warn_port_listener() {
+	local app_path="$1" port="${NOETAXIS_AO_PORT:-3001}" listener
+	listener="$(noetaxis_port_listener_pids)"
 	if [[ -n "$listener" ]]; then
 		printf 'Warning: something is listening on port %s (pid %s), the default AO daemon port, although no AO process was found under %s. If it is an AO daemon from an earlier install (for example one left running by --allow-background-processes, now running from a backup copy), stop it yourself with the "ao stop" command of the bundled CLI, after checking you do not need its active sessions; stopping it interrupts them. Nothing is stopped for you.\n' "$port" "$listener" "$app_path" >&2
 	fi
