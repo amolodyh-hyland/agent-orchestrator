@@ -100,11 +100,7 @@ noetaxis_check_safe_origin() {
 }
 
 noetaxis_app_process_running() {
-	local app_path="$1"
-	if pgrep -f "$app_path/Contents/" >/dev/null 2>&1; then
-		return 0
-	fi
-	return 1
+	noetaxis_pattern_running "$1/Contents/"
 }
 
 noetaxis_shipit_running() {
@@ -114,15 +110,26 @@ noetaxis_shipit_running() {
 	return 1
 }
 
+# pgrep -f takes an extended regular expression. App paths come from APPS_DIR and may
+# contain regex metacharacters (".", "(", "+"), so every pattern is escaped: a path
+# must match literally, neither missing a real process nor matching a lookalike.
+noetaxis_regex_escape() {
+	printf '%s' "$1" | /usr/bin/sed 's/[]\\.*^$(){}?+|[]/\\&/g'
+}
+
 noetaxis_pattern_running() {
-	pgrep -f "$1" >/dev/null 2>&1
+	pgrep -f "$(noetaxis_regex_escape "$1")" >/dev/null 2>&1
 }
 
 # Process ids (space separated, possibly empty) of the processes matching a pgrep pattern.
 noetaxis_pattern_pids() {
 	local pids
-	pids="$(pgrep -f "$1" 2>/dev/null | /usr/bin/tr '\n' ' ')" || true
+	pids="$(pgrep -f "$(noetaxis_regex_escape "$1")" 2>/dev/null | /usr/bin/tr '\n' ' ')" || true
 	printf '%s' "${pids% }"
+}
+
+noetaxis_daemon_running() {
+	noetaxis_pattern_running "$1/Contents/Resources/daemon/ao daemon"
 }
 
 noetaxis_desktop_running() {
@@ -158,7 +165,7 @@ noetaxis_assert_idle() {
 		pids="$(noetaxis_pattern_pids "$cli daemon")"
 		found="$found the AO daemon${pids:+ (pid $pids)}"
 		if [[ "$allow_background" -ne 1 ]]; then
-			noetaxis_error "The AO daemon is still running from $app_path${pids:+ (pid $pids)} although the desktop app is not. After \"Quit AO Completely\" it stops on its own within about 10 seconds; if it is still there (a crashed app, or a daemon started from a terminal) and you do not need its active sessions, stop it yourself with: \"$cli\" stop    This command never stops it for you. To install anyway, rerun with --allow-background-processes; stop the old daemon before opening the new app."
+			noetaxis_error "The AO daemon is still running from $app_path${pids:+ (pid $pids)} although the desktop app is not. After \"Quit AO Completely\" it stops on its own within about 10 seconds; if it is still there (a crashed app, or a daemon started from a terminal), stop it yourself with: \"$cli\" stop    Stopping the daemon interrupts the work of every active session it manages (running agent turns and terminals), so make sure you do not need them first. This command never stops it for you. To install anyway, rerun install.sh or rollback.sh with --allow-background-processes (the PKG installer has no override); stop the old daemon before opening the new app."
 			return 21
 		fi
 	fi
@@ -166,7 +173,7 @@ noetaxis_assert_idle() {
 		pids="$(noetaxis_pattern_pids "$cli chat-host")"
 		found="$found chat host processes${pids:+ (pid $pids)}"
 		if [[ "$allow_background" -ne 1 ]]; then
-			noetaxis_error "Agent chat host processes are still running from $app_path${pids:+ (pid $pids)}. They keep agent conversations alive while the daemon is replaced, so they outlive \"Quit AO Completely\" until their sessions end. Let the running turns finish or end those sessions in AO first. They are not stopped for you. To install anyway, rerun with --allow-background-processes; the new daemon reattaches to hosts that are still compatible."
+			noetaxis_error "Agent chat host processes are still running from $app_path${pids:+ (pid $pids)}. They keep agent conversations alive while the daemon is replaced, so they survive both \"Quit AO Completely\" and \"ao stop\" and only end when their sessions end (which needs AO reopened). They are not stopped for you. To install anyway, rerun install.sh or rollback.sh with --allow-background-processes; the new daemon reattaches to hosts that are still compatible. The PKG installer has no override and keeps refusing while they run, so use install.sh."
 			return 21
 		fi
 	fi

@@ -19,9 +19,8 @@ restored only when --restore-db is supplied.
 The desktop app must be fully quit first ("Quit AO Completely" in the menu-bar
 tray; Quit / Cmd+Q only close its window on macOS). The rollback refuses while the
 bundled daemon or agent chat hosts run unless --allow-background-processes is
-given; it never stops a process for you. Do not combine that flag with
---restore-db unless the daemon is stopped, because a running daemon holds the
-database.
+given; it never stops a process for you. --restore-db is refused while the
+daemon runs, whatever the flag, because a running daemon holds the database.
 EOF
 }
 
@@ -79,6 +78,12 @@ fi
 
 noetaxis_check_safe_origin "$allow_ao_session"
 noetaxis_assert_idle "$target_app" "$allow_background"
+# A live daemon holds ao.db and its -wal/-shm files open; replacing them underneath it
+# can corrupt the database, so --allow-background-processes never covers --restore-db.
+if [[ "$restore_db" -eq 1 ]] && noetaxis_daemon_running "$target_app"; then
+	noetaxis_error "--restore-db cannot run while the AO daemon is running: it holds the database open and replacing its files can corrupt it. Stop the daemon yourself first (after checking you do not need its active sessions; stopping it interrupts them): \"$target_app/Contents/Resources/daemon/ao\" stop    then rerun. This command never stops it for you."
+	exit 21
+fi
 
 app_backup_name="$(/usr/bin/sed -n 's/^app_backup=//p' "$backup_dir/BACKUP_COMPLETE")"
 expected_version="$(/usr/bin/sed -n 's/^app_version=//p' "$backup_dir/BACKUP_COMPLETE")"

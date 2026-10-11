@@ -9,7 +9,9 @@ Completely", then wait about 10 seconds for its daemon to stop. Check your
 active sessions first; a full quit interrupts work that depends on the app.
 Use the PKG or the install script when you want AO's database, settings, and
 prior app backed up; they check for a surviving daemon and tell you how to stop
-it with the full path to the bundled ao CLI.
+it with the full path to the bundled ao CLI. Stopping the daemon interrupts the
+work of its active sessions. Agent chat hosts can outlive it; only the install
+script (with --allow-background-processes) can proceed while they run.
 
 This app uses an ad-hoc signature and has no Apple certificate or notarization.
 If Gatekeeper blocks the first open, use Finder's Open action on the app, then

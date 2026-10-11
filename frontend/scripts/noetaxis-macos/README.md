@@ -42,12 +42,12 @@ The preflight names what is still running and always exits with status 21 (ShipI
 | Still running | What to do |
 | --- | --- |
 | The desktop app (`Contents/MacOS`, helper processes) | Use **Quit AO Completely** in the menu-bar tray. `--allow-background-processes` never bypasses this. |
-| The bundled AO daemon, with the app already gone | It normally stops within about 10 seconds of a full quit. If it is still there (a crashed app, or a daemon started from a terminal) and you do not need its sessions, stop it yourself with the full path: `"/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao" stop`. |
-| Agent chat hosts (`ao chat-host`) | They keep agent conversations alive while the daemon is replaced, so they can outlive a full quit until their sessions end. Let the running turns finish or end those sessions in AO. |
+| The bundled AO daemon, with the app already gone | It normally stops within about 10 seconds of a full quit. If it is still there (a crashed app, or a daemon started from a terminal) and you do not need its sessions, stop it yourself with the full path: `"/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao" stop`. Stopping the daemon interrupts the work of every active session it manages (running agent turns and terminals), so check first. |
+| Agent chat hosts (`ao chat-host`) | They keep agent conversations alive while the daemon is replaced, so they survive both a full quit and `ao stop` and only end when their sessions end, which needs AO reopened (ending sessions interrupts them). The usual path is `install.sh --allow-background-processes`; the new daemon reattaches to compatible hosts. The PKG has no override and keeps refusing while they run. |
 | Other helper processes under the bundle | Quit completely and verify with `pgrep -fl "/Applications/Agent Orchestrator.app/Contents/"`. |
 | ShipIt (the updater) | Wait for it to finish. Never bypassed. |
 
-`--allow-background-processes` (install.sh and rollback.sh) lets the script continue past the last four background cases except ShipIt, after printing a warning that lists them. Use it only when you have decided those processes may keep running: they continue from the previous app (moved to the backup), so stop the old daemon with the `ao stop` command above before opening the new app. The PKG preinstall has no such flag and always refuses while any of them runs.
+`--allow-background-processes` (install.sh and rollback.sh) lets the script continue past the last four background cases except ShipIt, after printing a warning that lists them. Use it only when you have decided those processes may keep running: they continue from the previous app (moved to the backup), so stop the old daemon with the `ao stop` command above before opening the new app. The PKG preinstall has no such flag and always refuses while any of them runs; use `install.sh` in that case. `rollback.sh --restore-db` is refused while the daemon runs even with the flag, because the daemon holds the database open; stop it first.
 
 ```bash
 frontend/scripts/noetaxis-macos/install.sh --dry-run \

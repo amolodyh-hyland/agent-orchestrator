@@ -314,9 +314,12 @@ test("install explains which part of AO is still running and never stops a proce
 	assert.match(daemon.stderr, /AO daemon is still running/);
 	assert.ok(daemon.stderr.includes(`"${cli}" stop`), daemon.stderr);
 	assert.match(daemon.stderr, /--allow-background-processes/);
+	assert.match(daemon.stderr, /interrupts the work of every active session/);
 	const chatHost = await attempt("chat-host", ["--dry-run"]);
 	assert.equal(chatHost.status, 21, chatHost.stderr);
 	assert.match(chatHost.stderr, /chat host processes are still running/);
+	assert.match(chatHost.stderr, /survive both .* and "ao stop"/);
+	assert.match(chatHost.stderr, /PKG installer has no override/);
 	const other = await attempt("other", ["--dry-run"]);
 	assert.equal(other.status, 21, other.stderr);
 	assert.match(other.stderr, /helper processes are still running/);
@@ -335,6 +338,42 @@ test("install explains which part of AO is still running and never stops a proce
 	const installed = await attempt("daemon", ["--allow-background-processes"]);
 	assert.equal(installed.status, 0, installed.stderr);
 	assert.equal(await installedVersion(f.targetApp), "new");
+	// The pgrep patterns are pinned: each part of AO is looked up by its exact, regex-escaped bundle path.
+	const escape = (text) => text.replace(/[\][\\.*^$(){}?+|]/g, "\\$&");
+	const pgrepArgs = async (mode) => (await readFile(path.join(f.root, `bin-${mode}-plain`, "pgrep-calls"), "utf8")).trim().split("\n");
+	const desktopCalls = await pgrepArgs("desktop");
+	assert.ok(desktopCalls.includes(`-f ${escape(`${f.targetApp}/Contents/MacOS/`)}`), desktopCalls.join("\n"));
+	assert.ok((await pgrepArgs("daemon")).includes(`-f ${escape(`${cli} daemon`)}`));
+	assert.ok((await pgrepArgs("chat-host")).includes(`-f ${escape(`${cli} chat-host`)}`));
+	assert.ok((await pgrepArgs("other")).includes(`-f ${escape(`${f.targetApp}/Contents/`)}`));
+});
+
+test("process lookup matches a bundle path literally even when it contains regex metacharacters", { skip: process.platform !== "darwin" }, async (t) => {
+	const f = await installFixture(t, "noetaxis-regex-test");
+	const weirdApps = path.join(f.root, "Apps (v1)+[x]");
+	const weirdApp = path.join(weirdApps, "Agent Orchestrator.app");
+	await mkdir(weirdApps, { recursive: true });
+	await makeApp(weirdApp, "0.13.4");
+	const lookalike = path.join(weirdApps, "Agent OrchestratorXapp");
+	const spawnRunner = async (appPath) => {
+		const runner = path.join(appPath, "Contents/Resources/daemon/runner");
+		await mkdir(path.dirname(runner), { recursive: true });
+		await writeFile(runner, "#!/bin/sh\n/bin/sleep 30\n", { mode: 0o755 });
+		const child = spawn("/bin/sh", [runner, "daemon"], { stdio: "ignore", detached: true });
+		t.after(() => { try { process.kill(-child.pid); } catch {} });
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		return runner;
+	};
+	// Real pgrep (no fake on PATH). The process's command line contains the bundle path.
+	const env = { ...f.env, APPS_DIR: weirdApps, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" };
+	const dryRun = () => execute("/bin/bash", [installScript, "--allow-ao-session", "--dry-run", f.sourceApp], { cwd: repoRoot, env });
+	await spawnRunner(lookalike);
+	assert.equal(dryRun().status, 0, "a lookalike path must not count as the installed app");
+	const runner = await spawnRunner(weirdApp);
+	const refused = dryRun();
+	assert.equal(refused.status, 21, `a real process under a path with metacharacters must be found: ${refused.stderr}`);
+	assert.match(refused.stderr, /still running/);
+	assert.ok(runner.startsWith(weirdApp));
 });
 
 test("rollback and the PKG preinstall apply the same background-process preflight", { skip: process.platform !== "darwin" }, async (t) => {
@@ -347,6 +386,14 @@ test("rollback and the PKG preinstall apply the same background-process prefligh
 	const refused = execute("/bin/bash", [rollbackScript, "--allow-ao-session"], { cwd: repoRoot, env });
 	assert.equal(refused.status, 21, refused.stderr);
 	assert.match(refused.stderr, /AO daemon is still running/);
+	assert.equal(await installedVersion(f.targetApp), "new");
+	// --restore-db is never covered by the flag while a daemon holds the database.
+	const database = path.join(f.aoHome, "data/ao.db");
+	await writeFile(database, "live");
+	const restoreRefused = execute("/bin/bash", [rollbackScript, "--allow-ao-session", "--allow-background-processes", "--restore-db"], { cwd: repoRoot, env });
+	assert.equal(restoreRefused.status, 21, restoreRefused.stderr);
+	assert.match(restoreRefused.stderr, /--restore-db cannot run while the AO daemon is running/);
+	assert.equal(await readFile(database, "utf8"), "live");
 	assert.equal(await installedVersion(f.targetApp), "new");
 	const allowed = execute("/bin/bash", [rollbackScript, "--allow-ao-session", "--allow-background-processes"], { cwd: repoRoot, env });
 	assert.equal(allowed.status, 0, allowed.stderr);
