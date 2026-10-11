@@ -104,7 +104,7 @@ case "$*" in ${kindPatterns[pgrepMode]}) echo 4242; exit 0;; *) exit 1;; esac
 		: "#!/bin/sh\nexit 1\n";
 	await writeFile(path.join(bin, "pgrep"), pgrep, { mode: 0o755 });
 	// Nothing in the install tooling may stop a process; any such call is recorded and asserted absent.
-	for (const name of ["kill", "pkill", "killall"]) {
+	for (const name of ["kill", "pkill", "killall", "osascript", "launchctl"]) {
 		await writeFile(path.join(bin, name), `#!/bin/sh\necho "${name} $*" >> "$(dirname "$0")/kill-calls"\nexit 0\n`, { mode: 0o755 });
 	}
 	const ps = psMode === "chain" || psMode === "cycle"
@@ -317,12 +317,15 @@ test("install explains which part of AO is still running and never stops a proce
 	assert.match(daemon.stderr, /AO daemon is still running/);
 	assert.ok(daemon.stderr.includes(`"${cli}" stop`), daemon.stderr);
 	assert.match(daemon.stderr, /--allow-background-processes/);
-	assert.match(daemon.stderr, /interrupts the work of every active session/);
+	assert.match(daemon.stderr, /ends the work of every active session/);
+	assert.match(daemon.stderr, /chat hosts keep running until their sessions are ended separately/);
 	const chatHost = await attempt("chat-host", ["--dry-run"]);
 	assert.equal(chatHost.status, 21, chatHost.stderr);
 	assert.match(chatHost.stderr, /chat host processes are still running/);
 	assert.match(chatHost.stderr, /survive both .* and "ao stop"/);
 	assert.match(chatHost.stderr, /PKG installer has no override/);
+	assert.ok(chatHost.stderr.includes(`"${cli}" session ls`), chatHost.stderr);
+	assert.match(chatHost.stderr, /reopen AO.*let their turns finish or end them yourself.*quit completely again/);
 	const other = await attempt("other", ["--dry-run"]);
 	assert.equal(other.status, 21, other.stderr);
 	assert.match(other.stderr, /helper processes are still running/);
@@ -376,6 +379,9 @@ test("the install tooling never runs kill, pkill, killall or the bundled ao stop
 			assert.doesNotMatch(code, /(^|[\s;|&(`$]|\/)(kill|pkill|killall)(\s|$)/, where);
 			assert.doesNotMatch(code, /["']?\$(\{?cli\}?|\{?app_path\}?\/[^\s"']*ao)["']?\s+stop\b/, where);
 			assert.doesNotMatch(code, /\bao\s+stop\b/, where);
+			// Quitting by script (AppleScript, launchctl, open -a ... quit) is also a way to stop AO.
+			assert.doesNotMatch(code, /(^|[\s;|&(`$]|\/)(osascript|launchctl)(\s|$)/, where);
+			assert.doesNotMatch(code, /tell application|\bto quit\b|\bterminate\b|SIGTERM|SIGKILL/i, where);
 		});
 	}
 });
@@ -407,6 +413,18 @@ test("a port 3001 listener with no bundle process is only a warning, and an AO d
 	const realEnv = { ...env, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" };
 	const other = execute("/bin/bash", [installScript, "--allow-ao-session", "--dry-run", f.sourceApp], { cwd: repoRoot, env: realEnv });
 	assert.equal(other.status, 0, `a daemon from another bundle path must not block: ${other.stderr}`);
+	// Neither does one running from a moved backup copy under ~/ao-backups; only the port warning can see it.
+	const backupApp = path.join(f.home, "ao-backups/20261010-000000/Agent Orchestrator-0.13.4-20261010-000000-1.app.bak");
+	const backupRunner = path.join(backupApp, "Contents/Resources/daemon/ao");
+	await mkdir(path.dirname(backupRunner), { recursive: true });
+	await writeFile(backupRunner, "#!/bin/sh\n/bin/sleep 30\n", { mode: 0o755 });
+	const backupChild = spawn("/bin/sh", [backupRunner, "daemon"], { stdio: "ignore", detached: true });
+	t.after(() => { try { process.kill(-backupChild.pid); } catch {} });
+	await new Promise((resolve) => setTimeout(resolve, 300));
+	await writeFile(lsof, "#!/bin/sh\nprintf 'p9876\\n'\n", { mode: 0o755 });
+	const fromBackup = execute("/bin/bash", [installScript, "--allow-ao-session", "--dry-run", f.sourceApp], { cwd: repoRoot, env: { ...realEnv, NOETAXIS_LSOF: lsof } });
+	assert.equal(fromBackup.status, 0, `a daemon from a backup path must not be mistaken for the target app: ${fromBackup.stderr}`);
+	assert.match(fromBackup.stderr, /listening on port 3001/);
 });
 
 test("process lookup matches a bundle path literally even when it contains regex metacharacters", { skip: process.platform !== "darwin" }, async (t) => {
