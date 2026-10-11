@@ -154,7 +154,7 @@ if [[ -d "$target_app" ]]; then
 fi
 # The record is written before the old app moves so an interruption after the move
 # still leaves a complete backup that rollback.sh can restore from.
-if ! noetaxis_write_backup_record "$backup_dir" "$old_app_backup" "$old_version"; then
+if ! noetaxis_write_backup_record "$backup_dir" "$old_app_backup" "$old_version" "$allow_background"; then
 	noetaxis_run_privileged /bin/rm -rf "$staged_app"
 	noetaxis_error "Could not write the backup record. The installed app was left in place; backup data remains at $backup_dir"
 	exit 35

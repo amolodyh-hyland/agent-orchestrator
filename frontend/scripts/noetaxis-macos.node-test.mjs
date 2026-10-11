@@ -64,6 +64,7 @@ case "$1" in
   spawn) printf '  --effort string\\n' ;;
   project) printf '  --permission-fallback\\n' ;;
   status) printf 'ready\\n' ;;
+  stop) echo "stop $*" >> "$(dirname "$0")/ao-stop-calls" ;;
 esac
 `;
 	const cliPath = path.join(resources, "daemon/ao");
@@ -138,6 +139,8 @@ function installEnv({ home, appsDir, aoHome, handlerPlist, bin, extra = {} }) {
 		AO_HOME: aoHome,
 		LS_SERVICES_PLIST: handlerPlist,
 		PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`,
+		// Hermetic: never look at the real machine's port 3001 unless a test installs a fake lsof.
+		NOETAXIS_LSOF: path.join(bin, "no-lsof"),
 		...extra,
 	};
 }
@@ -346,6 +349,64 @@ test("install explains which part of AO is still running and never stops a proce
 	assert.ok((await pgrepArgs("daemon")).includes(`-f ${escape(`${cli} daemon`)}`));
 	assert.ok((await pgrepArgs("chat-host")).includes(`-f ${escape(`${cli} chat-host`)}`));
 	assert.ok((await pgrepArgs("other")).includes(`-f ${escape(`${f.targetApp}/Contents/`)}`));
+	// The bundled ao CLI is only ever named in messages, never run with stop.
+	for (const app of [f.targetApp]) {
+		assert.equal(await readFile(path.join(app, "Contents/Resources/daemon/ao-stop-calls"), "utf8").catch(() => ""), "");
+	}
+	// The flagged install is recorded for audit; an unflagged install is not marked.
+	const backupRoot = path.join(f.home, "ao-backups");
+	const records = await Promise.all((await readdir(backupRoot)).map((name) => readFile(path.join(backupRoot, name, "BACKUP_COMPLETE"), "utf8")));
+	assert.equal(records.length, 1);
+	assert.match(records[0], /^allow_background_processes=1$/m);
+});
+
+test("the install tooling never runs kill, pkill, killall or the bundled ao stop", async () => {
+	// Builtins and absolute paths bypass a PATH shim, so check the code itself: no line outside
+	// comments, messages and help text may execute them.
+	const files = ["common.sh", "install.sh", "rollback.sh", "pkg-scripts/preinstall", "pkg-scripts/postinstall"];
+	for (const file of files) {
+		const lines = (await readFile(path.join(scriptDir, "noetaxis-macos", file), "utf8")).split("\n");
+		let inHeredoc = false;
+		lines.forEach((line, index) => {
+			if (/<<'?EOF'?$/.test(line)) inHeredoc = true;
+			else if (line === "EOF") inHeredoc = false;
+			const code = line.trim();
+			if (inHeredoc || code.startsWith("#") || /^(noetaxis_error|printf|echo)\b/.test(code) || /^\w*_?error "/.test(code)) return;
+			const where = `${file}:${index + 1}: ${code}`;
+			assert.doesNotMatch(code, /(^|[\s;|&(`$]|\/)(kill|pkill|killall)(\s|$)/, where);
+			assert.doesNotMatch(code, /["']?\$(\{?cli\}?|\{?app_path\}?\/[^\s"']*ao)["']?\s+stop\b/, where);
+			assert.doesNotMatch(code, /\bao\s+stop\b/, where);
+		});
+	}
+});
+
+test("a port 3001 listener with no bundle process is only a warning, and an AO daemon from another bundle path does not block", { skip: process.platform !== "darwin" }, async (t) => {
+	const f = await installFixture(t, "noetaxis-port-test");
+	await makeApp(f.targetApp, "0.13.4");
+	const lsof = path.join(f.root, "fake-lsof");
+	await writeFile(lsof, "#!/bin/sh\necho \"$*\" > \"$(dirname \"$0\")/lsof-calls\"\nprintf 'p9876\\n'\n", { mode: 0o755 });
+	const env = { ...f.env, NOETAXIS_LSOF: lsof };
+	const result = execute("/bin/bash", [installScript, "--allow-ao-session", "--dry-run", f.sourceApp], { cwd: repoRoot, env });
+	assert.equal(result.status, 0, result.stderr);
+	assert.match(result.stderr, /listening on port 3001 \(pid 9876\)/);
+	assert.match(result.stderr, /Nothing is stopped for you/);
+	assert.match(await readFile(path.join(f.root, "lsof-calls"), "utf8"), /-iTCP:3001 -sTCP:LISTEN/);
+	// With no listener the run is silent.
+	await writeFile(lsof, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+	const quiet = execute("/bin/bash", [installScript, "--allow-ao-session", "--dry-run", f.sourceApp], { cwd: repoRoot, env });
+	assert.equal(quiet.status, 0, quiet.stderr);
+	assert.doesNotMatch(quiet.stderr, /listening on port/);
+	// A daemon from a different bundle (a backup copy or another install) must not block this one.
+	const otherApp = path.join(f.root, "Elsewhere/Agent Orchestrator.app");
+	const runner = path.join(otherApp, "Contents/Resources/daemon/ao");
+	await mkdir(path.dirname(runner), { recursive: true });
+	await writeFile(runner, "#!/bin/sh\n/bin/sleep 30\n", { mode: 0o755 });
+	const child = spawn("/bin/sh", [runner, "daemon"], { stdio: "ignore", detached: true });
+	t.after(() => { try { process.kill(-child.pid); } catch {} });
+	await new Promise((resolve) => setTimeout(resolve, 300));
+	const realEnv = { ...env, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" };
+	const other = execute("/bin/bash", [installScript, "--allow-ao-session", "--dry-run", f.sourceApp], { cwd: repoRoot, env: realEnv });
+	assert.equal(other.status, 0, `a daemon from another bundle path must not block: ${other.stderr}`);
 });
 
 test("process lookup matches a bundle path literally even when it contains regex metacharacters", { skip: process.platform !== "darwin" }, async (t) => {

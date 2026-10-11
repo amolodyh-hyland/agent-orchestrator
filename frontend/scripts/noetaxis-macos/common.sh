@@ -158,7 +158,7 @@ noetaxis_assert_idle() {
 	cli="$app_path/Contents/Resources/daemon/ao"
 	if noetaxis_desktop_running "$app_path"; then
 		pids="$(noetaxis_desktop_pids "$app_path")"
-		noetaxis_error "The Agent Orchestrator desktop app is still running from $app_path${pids:+ (pid $pids)}. On macOS, Quit and Cmd+Q only close its window: the Dock icon, menu-bar tray and daemon stay up. Quit it completely yourself: click the Agent Orchestrator icon in the menu bar and choose \"Quit AO Completely\", then wait about 10 seconds for the daemon to stop and rerun this command. (Builds without the menu-bar tray exit on Cmd+Q.) This command never quits AO or kills processes for you."
+		noetaxis_error "The Agent Orchestrator desktop app is still running from $app_path${pids:+ (pid $pids)}. On macOS, Quit and Cmd+Q only close its window: the Dock icon, menu-bar tray and daemon stay up. Quit it completely yourself: click the Agent Orchestrator icon in the menu bar and choose \"Quit AO Completely\", then wait about 10 seconds for the daemon to stop and rerun this command. This command never quits AO or kills processes for you."
 		return 21
 	fi
 	if noetaxis_pattern_running "$cli daemon"; then
@@ -193,6 +193,25 @@ noetaxis_assert_idle() {
 	fi
 	if [[ -n "$found" ]]; then
 		printf 'Warning: continuing with%s still running from %s because --allow-background-processes was given. They keep running from the previous app; stop the daemon with "%s" stop before opening the new app.\n' "$found" "$app_path" "$cli" >&2
+	elif [[ -z "${noetaxis_port_warned:-}" ]]; then
+		# Once per run: the install checks idle again after staging.
+		noetaxis_port_warned=1
+		noetaxis_warn_port_listener "$app_path"
+	fi
+}
+
+# Process detection only sees a daemon whose command line names this app's bundle. A
+# daemon left behind by an earlier --allow-background-processes install now runs from
+# the moved backup copy and is invisible to it, yet still holds the daemon port. A
+# listener on the default port is only a warning (the port is configurable and may
+# belong to something else); the check is read-only and never fails or stops anything.
+noetaxis_warn_port_listener() {
+	local app_path="$1" lsof_bin="${NOETAXIS_LSOF:-/usr/sbin/lsof}" port="${NOETAXIS_AO_PORT:-3001}" listener
+	[[ -x "$lsof_bin" ]] || return 0
+	listener="$("$lsof_bin" -nP -iTCP:"$port" -sTCP:LISTEN -Fp 2>/dev/null | /usr/bin/sed -n 's/^p//p' | /usr/bin/tr '\n' ' ')" || true
+	listener="${listener% }"
+	if [[ -n "$listener" ]]; then
+		printf 'Warning: something is listening on port %s (pid %s), the default AO daemon port, although no AO process was found under %s. If it is an AO daemon from an earlier install (for example one left running by --allow-background-processes, now running from a backup copy), stop it yourself with the "ao stop" command of the bundled CLI, after checking you do not need its active sessions; stopping it interrupts them. Nothing is stopped for you.\n' "$port" "$listener" "$app_path" >&2
 	fi
 }
 
@@ -403,12 +422,16 @@ noetaxis_clear_quarantine() {
 }
 
 noetaxis_write_backup_record() {
-	local backup_dir="$1" app_backup="$2" app_version="$3" temporary_record
+	local backup_dir="$1" app_backup="$2" app_version="$3" allow_background="${4:-0}" temporary_record
 	temporary_record="$backup_dir/.BACKUP_COMPLETE-$$"
 	if ! {
 		printf 'created_at=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 		printf 'app_backup=%s\n' "$app_backup"
 		printf 'app_version=%s\n' "$app_version"
+		# Audit trail: this install went ahead with AO background processes still running.
+		if [[ "$allow_background" -eq 1 ]]; then
+			printf 'allow_background_processes=1\n'
+		fi
 	} > "$temporary_record"; then
 		/bin/rm -f "$temporary_record"
 		return 1
