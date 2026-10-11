@@ -64,6 +64,7 @@ case "$1" in
   spawn) printf '  --effort string\\n' ;;
   project) printf '  --permission-fallback\\n' ;;
   status) printf 'ready\\n' ;;
+  stop) echo "stop $*" >> "$(dirname "$0")/ao-stop-calls" ;;
 esac
 `;
 	const cliPath = path.join(resources, "daemon/ao");
@@ -85,12 +86,27 @@ async function makeHandlerFixture(home) {
 async function makeFakeBin(root, pgrepMode = "idle", psMode = "plain") {
 	const bin = path.join(root, `bin-${pgrepMode}-${psMode}`);
 	await mkdir(bin, { recursive: true });
+	// Kind modes match only the pgrep pattern for that part of a running AO.
+	const kindPatterns = { desktop: "*/Contents/MacOS/*", daemon: '*"ao daemon"*', "chat-host": '*"ao chat-host"*', other: "*/Contents/" };
 	const pgrep = pgrepMode === "busy"
 		? `#!/bin/sh
 case "$*" in *ShipIt*) exit 1;; *) exit 0;; esac
 `
+		: pgrepMode === "shipit"
+		? `#!/bin/sh
+case "$*" in *ShipIt*) exit 0;; *) exit 1;; esac
+`
+		: kindPatterns[pgrepMode]
+		? `#!/bin/sh
+echo "$*" >> "$(dirname "$0")/pgrep-calls"
+case "$*" in ${kindPatterns[pgrepMode]}) echo 4242; exit 0;; *) exit 1;; esac
+`
 		: "#!/bin/sh\nexit 1\n";
 	await writeFile(path.join(bin, "pgrep"), pgrep, { mode: 0o755 });
+	// Nothing in the install tooling may stop a process; any such call is recorded and asserted absent.
+	for (const name of ["kill", "pkill", "killall", "osascript", "launchctl"]) {
+		await writeFile(path.join(bin, name), `#!/bin/sh\necho "${name} $*" >> "$(dirname "$0")/kill-calls"\nexit 0\n`, { mode: 0o755 });
+	}
 	const ps = psMode === "chain" || psMode === "cycle"
 		? `#!/bin/bash
 echo call >> "$(dirname "$0")/ps-calls"
@@ -123,6 +139,8 @@ function installEnv({ home, appsDir, aoHome, handlerPlist, bin, extra = {} }) {
 		AO_HOME: aoHome,
 		LS_SERVICES_PLIST: handlerPlist,
 		PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`,
+		// Hermetic: never look at the real machine's port 3001 unless a test installs a fake lsof.
+		NOETAXIS_LSOF: path.join(bin, "no-lsof"),
 		...extra,
 	};
 }
@@ -274,6 +292,205 @@ test("isolated install is dry-runnable, backed up, idempotent, and reversible", 
 	assert.equal(allSaved.length, 2);
 	assert.equal(savedVersion(firstSaved[0]), "888");
 	assert.deepEqual(allSaved.filter((name) => name !== firstSaved[0]).map(savedVersion), ["777"]);
+});
+
+test("install explains which part of AO is still running and never stops a process", { skip: process.platform !== "darwin" }, async (t) => {
+	const f = await installFixture(t, "noetaxis-background-test");
+	await makeApp(f.targetApp, "0.13.4");
+	const cli = `${f.targetApp}/Contents/Resources/daemon/ao`;
+	const attempt = async (mode, args) => {
+		const bin = await makeFakeBin(f.root, mode);
+		const env = { ...f.env, PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin` };
+		const result = execute("/bin/bash", [installScript, "--allow-ao-session", ...args, f.sourceApp], { cwd: repoRoot, env });
+		const killed = await readFile(path.join(bin, "kill-calls"), "utf8").catch(() => "");
+		assert.equal(killed, "", `${mode} must not stop any process`);
+		return result;
+	};
+	const desktop = await attempt("desktop", ["--dry-run"]);
+	assert.equal(desktop.status, 21, desktop.stderr);
+	assert.match(desktop.stderr, /desktop app is still running/);
+	assert.match(desktop.stderr, /Cmd\+Q only close its window/);
+	assert.match(desktop.stderr, /"Quit AO Completely"/);
+	assert.match(desktop.stderr, /pid 4242/);
+	const daemon = await attempt("daemon", ["--dry-run"]);
+	assert.equal(daemon.status, 21, daemon.stderr);
+	assert.match(daemon.stderr, /AO daemon is still running/);
+	assert.ok(daemon.stderr.includes(`"${cli}" stop`), daemon.stderr);
+	assert.match(daemon.stderr, /--allow-background-processes/);
+	assert.match(daemon.stderr, /ends the work of every active session/);
+	assert.match(daemon.stderr, /chat hosts keep running until their sessions are ended separately/);
+	const chatHost = await attempt("chat-host", ["--dry-run"]);
+	assert.equal(chatHost.status, 21, chatHost.stderr);
+	assert.match(chatHost.stderr, /chat host processes are still running/);
+	assert.match(chatHost.stderr, /survive both .* and "ao stop"/);
+	assert.match(chatHost.stderr, /PKG installer has no override/);
+	assert.ok(chatHost.stderr.includes(`"${cli}" session ls`), chatHost.stderr);
+	assert.match(chatHost.stderr, /reopen AO.*let their turns finish or end them yourself.*quit completely again/);
+	const other = await attempt("other", ["--dry-run"]);
+	assert.equal(other.status, 21, other.stderr);
+	assert.match(other.stderr, /helper processes are still running/);
+	for (const mode of ["daemon", "chat-host", "other"]) {
+		const allowed = await attempt(mode, ["--dry-run", "--allow-background-processes"]);
+		assert.equal(allowed.status, 0, `${mode}: ${allowed.stderr}`);
+		assert.match(allowed.stderr, /continuing with .* still running .* --allow-background-processes/i);
+	}
+	// The flag never reaches the desktop app or ShipIt.
+	assert.equal((await attempt("desktop", ["--dry-run", "--allow-background-processes"])).status, 21);
+	assert.equal((await attempt("shipit", ["--dry-run", "--allow-background-processes"])).status, 22);
+	assert.equal(await installedVersion(f.targetApp), "old");
+	// A real install with only the daemon left refuses without the flag and swaps with it.
+	assert.equal((await attempt("daemon", [])).status, 21);
+	assert.equal(await installedVersion(f.targetApp), "old");
+	const installed = await attempt("daemon", ["--allow-background-processes"]);
+	assert.equal(installed.status, 0, installed.stderr);
+	assert.equal(await installedVersion(f.targetApp), "new");
+	// The pgrep patterns are pinned: each part of AO is looked up by its exact, regex-escaped bundle path.
+	const escape = (text) => text.replace(/[\][\\.*^$(){}?+|]/g, "\\$&");
+	const pgrepArgs = async (mode) => (await readFile(path.join(f.root, `bin-${mode}-plain`, "pgrep-calls"), "utf8")).trim().split("\n");
+	const desktopCalls = await pgrepArgs("desktop");
+	assert.ok(desktopCalls.includes(`-f ${escape(`${f.targetApp}/Contents/MacOS/`)}`), desktopCalls.join("\n"));
+	assert.ok((await pgrepArgs("daemon")).includes(`-f ${escape(`${cli} daemon`)}`));
+	assert.ok((await pgrepArgs("chat-host")).includes(`-f ${escape(`${cli} chat-host`)}`));
+	assert.ok((await pgrepArgs("other")).includes(`-f ${escape(`${f.targetApp}/Contents/`)}`));
+	// The bundled ao CLI is only ever named in messages, never run with stop.
+	for (const app of [f.targetApp]) {
+		assert.equal(await readFile(path.join(app, "Contents/Resources/daemon/ao-stop-calls"), "utf8").catch(() => ""), "");
+	}
+	// The flagged install is recorded for audit; an unflagged install is not marked.
+	const backupRoot = path.join(f.home, "ao-backups");
+	const records = await Promise.all((await readdir(backupRoot)).map((name) => readFile(path.join(backupRoot, name, "BACKUP_COMPLETE"), "utf8")));
+	assert.equal(records.length, 1);
+	assert.match(records[0], /^allow_background_processes=1$/m);
+});
+
+test("the install tooling never runs kill, pkill, killall or the bundled ao stop", async () => {
+	// Builtins and absolute paths bypass a PATH shim, so check the code itself: no line outside
+	// comments, messages and help text may execute them.
+	const files = ["common.sh", "install.sh", "rollback.sh", "pkg-scripts/preinstall", "pkg-scripts/postinstall"];
+	for (const file of files) {
+		const lines = (await readFile(path.join(scriptDir, "noetaxis-macos", file), "utf8")).split("\n");
+		let inHeredoc = false;
+		lines.forEach((line, index) => {
+			if (/<<'?EOF'?$/.test(line)) inHeredoc = true;
+			else if (line === "EOF") inHeredoc = false;
+			const code = line.trim();
+			if (inHeredoc || code.startsWith("#") || /^(noetaxis_error|printf|echo)\b/.test(code) || /^\w*_?error "/.test(code)) return;
+			const where = `${file}:${index + 1}: ${code}`;
+			assert.doesNotMatch(code, /(^|[\s;|&(`$]|\/)(kill|pkill|killall)(\s|$)/, where);
+			assert.doesNotMatch(code, /["']?\$(\{?cli\}?|\{?app_path\}?\/[^\s"']*ao)["']?\s+stop\b/, where);
+			assert.doesNotMatch(code, /\bao\s+stop\b/, where);
+			// Quitting by script (AppleScript, launchctl, open -a ... quit) is also a way to stop AO.
+			assert.doesNotMatch(code, /(^|[\s;|&(`$]|\/)(osascript|launchctl)(\s|$)/, where);
+			assert.doesNotMatch(code, /tell application|\bto quit\b|\bterminate\b|SIGTERM|SIGKILL/i, where);
+		});
+	}
+});
+
+test("a port 3001 listener with no bundle process is only a warning, and an AO daemon from another bundle path does not block", { skip: process.platform !== "darwin" }, async (t) => {
+	const f = await installFixture(t, "noetaxis-port-test");
+	await makeApp(f.targetApp, "0.13.4");
+	const lsof = path.join(f.root, "fake-lsof");
+	await writeFile(lsof, "#!/bin/sh\necho \"$*\" > \"$(dirname \"$0\")/lsof-calls\"\nprintf 'p9876\\n'\n", { mode: 0o755 });
+	const env = { ...f.env, NOETAXIS_LSOF: lsof };
+	const result = execute("/bin/bash", [installScript, "--allow-ao-session", "--dry-run", f.sourceApp], { cwd: repoRoot, env });
+	assert.equal(result.status, 0, result.stderr);
+	assert.match(result.stderr, /listening on port 3001 \(pid 9876\)/);
+	assert.match(result.stderr, /Nothing is stopped for you/);
+	assert.match(await readFile(path.join(f.root, "lsof-calls"), "utf8"), /-iTCP:3001 -sTCP:LISTEN/);
+	// With no listener the run is silent.
+	await writeFile(lsof, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+	const quiet = execute("/bin/bash", [installScript, "--allow-ao-session", "--dry-run", f.sourceApp], { cwd: repoRoot, env });
+	assert.equal(quiet.status, 0, quiet.stderr);
+	assert.doesNotMatch(quiet.stderr, /listening on port/);
+	// A daemon from a different bundle (a backup copy or another install) must not block this one.
+	const otherApp = path.join(f.root, "Elsewhere/Agent Orchestrator.app");
+	const runner = path.join(otherApp, "Contents/Resources/daemon/ao");
+	await mkdir(path.dirname(runner), { recursive: true });
+	await writeFile(runner, "#!/bin/sh\n/bin/sleep 30\n", { mode: 0o755 });
+	const child = spawn("/bin/sh", [runner, "daemon"], { stdio: "ignore", detached: true });
+	t.after(() => { try { process.kill(-child.pid); } catch {} });
+	await new Promise((resolve) => setTimeout(resolve, 300));
+	const realEnv = { ...env, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" };
+	const other = execute("/bin/bash", [installScript, "--allow-ao-session", "--dry-run", f.sourceApp], { cwd: repoRoot, env: realEnv });
+	assert.equal(other.status, 0, `a daemon from another bundle path must not block: ${other.stderr}`);
+	// Neither does one running from a moved backup copy under ~/ao-backups; only the port warning can see it.
+	const backupApp = path.join(f.home, "ao-backups/20261010-000000/Agent Orchestrator-0.13.4-20261010-000000-1.app.bak");
+	const backupRunner = path.join(backupApp, "Contents/Resources/daemon/ao");
+	await mkdir(path.dirname(backupRunner), { recursive: true });
+	await writeFile(backupRunner, "#!/bin/sh\n/bin/sleep 30\n", { mode: 0o755 });
+	const backupChild = spawn("/bin/sh", [backupRunner, "daemon"], { stdio: "ignore", detached: true });
+	t.after(() => { try { process.kill(-backupChild.pid); } catch {} });
+	await new Promise((resolve) => setTimeout(resolve, 300));
+	await writeFile(lsof, "#!/bin/sh\nprintf 'p9876\\n'\n", { mode: 0o755 });
+	const fromBackup = execute("/bin/bash", [installScript, "--allow-ao-session", "--dry-run", f.sourceApp], { cwd: repoRoot, env: { ...realEnv, NOETAXIS_LSOF: lsof } });
+	assert.equal(fromBackup.status, 0, `a daemon from a backup path must not be mistaken for the target app: ${fromBackup.stderr}`);
+	assert.match(fromBackup.stderr, /listening on port 3001/);
+});
+
+test("process lookup matches a bundle path literally even when it contains regex metacharacters", { skip: process.platform !== "darwin" }, async (t) => {
+	const f = await installFixture(t, "noetaxis-regex-test");
+	const weirdApps = path.join(f.root, "Apps (v1)+[x]");
+	const weirdApp = path.join(weirdApps, "Agent Orchestrator.app");
+	await mkdir(weirdApps, { recursive: true });
+	await makeApp(weirdApp, "0.13.4");
+	const lookalike = path.join(weirdApps, "Agent OrchestratorXapp");
+	const spawnRunner = async (appPath) => {
+		const runner = path.join(appPath, "Contents/Resources/daemon/runner");
+		await mkdir(path.dirname(runner), { recursive: true });
+		await writeFile(runner, "#!/bin/sh\n/bin/sleep 30\n", { mode: 0o755 });
+		const child = spawn("/bin/sh", [runner, "daemon"], { stdio: "ignore", detached: true });
+		t.after(() => { try { process.kill(-child.pid); } catch {} });
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		return runner;
+	};
+	// Real pgrep (no fake on PATH). The process's command line contains the bundle path.
+	const env = { ...f.env, APPS_DIR: weirdApps, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" };
+	const dryRun = () => execute("/bin/bash", [installScript, "--allow-ao-session", "--dry-run", f.sourceApp], { cwd: repoRoot, env });
+	await spawnRunner(lookalike);
+	assert.equal(dryRun().status, 0, "a lookalike path must not count as the installed app");
+	const runner = await spawnRunner(weirdApp);
+	const refused = dryRun();
+	assert.equal(refused.status, 21, `a real process under a path with metacharacters must be found: ${refused.stderr}`);
+	assert.match(refused.stderr, /still running/);
+	assert.ok(runner.startsWith(weirdApp));
+});
+
+test("rollback and the PKG preinstall apply the same background-process preflight", { skip: process.platform !== "darwin" }, async (t) => {
+	const f = await installFixture(t, "noetaxis-background-rollback-test");
+	await makeApp(f.targetApp, "0.13.4");
+	const installed = execute("/bin/bash", [installScript, "--allow-ao-session", f.sourceApp], { cwd: repoRoot, env: f.env });
+	assert.equal(installed.status, 0, installed.stderr);
+	const daemonBin = await makeFakeBin(f.root, "daemon");
+	const env = { ...f.env, PATH: `${daemonBin}:/usr/bin:/bin:/usr/sbin:/sbin` };
+	const refused = execute("/bin/bash", [rollbackScript, "--allow-ao-session"], { cwd: repoRoot, env });
+	assert.equal(refused.status, 21, refused.stderr);
+	assert.match(refused.stderr, /AO daemon is still running/);
+	assert.equal(await installedVersion(f.targetApp), "new");
+	// --restore-db is never covered by the flag while a daemon holds the database.
+	const database = path.join(f.aoHome, "data/ao.db");
+	await writeFile(database, "live");
+	const restoreRefused = execute("/bin/bash", [rollbackScript, "--allow-ao-session", "--allow-background-processes", "--restore-db"], { cwd: repoRoot, env });
+	assert.equal(restoreRefused.status, 21, restoreRefused.stderr);
+	assert.match(restoreRefused.stderr, /--restore-db cannot run while the AO daemon is running/);
+	assert.equal(await readFile(database, "utf8"), "live");
+	assert.equal(await installedVersion(f.targetApp), "new");
+	const allowed = execute("/bin/bash", [rollbackScript, "--allow-ao-session", "--allow-background-processes"], { cwd: repoRoot, env });
+	assert.equal(allowed.status, 0, allowed.stderr);
+	assert.equal(await installedVersion(f.targetApp), "old");
+	const desktopBin = await makeFakeBin(f.root, "desktop");
+	const desktop = execute("/bin/bash", [rollbackScript, "--allow-ao-session", "--allow-background-processes"], { cwd: repoRoot, env: { ...f.env, PATH: `${desktopBin}:/usr/bin:/bin:/usr/sbin:/sbin` } });
+	assert.equal(desktop.status, 21, desktop.stderr);
+	// The PKG preinstall has no flag: a surviving daemon always stops it before anything is backed up.
+	const preinstall = path.join(scriptDir, "noetaxis-macos/pkg-scripts/preinstall");
+	const packaged = path.join(f.root, "pkg-scripts");
+	await mkdir(packaged, { recursive: true });
+	await cp(preinstall, path.join(packaged, "preinstall"));
+	await cp(path.join(scriptDir, "noetaxis-macos/common.sh"), path.join(packaged, "common.sh"));
+	delete env.AO_HOME;
+	const pkg = execute("/bin/bash", [path.join(packaged, "preinstall")], { cwd: repoRoot, env });
+	assert.equal(pkg.status, 21, pkg.stderr);
+	assert.match(pkg.stderr, /Resources\/daemon\/ao" stop/);
+	assert.equal(await installedVersion(f.targetApp), "old");
 });
 
 test("schema check reads a WAL database that has no -wal/-shm files and never fails", { skip: process.platform !== "darwin" }, async (t) => {

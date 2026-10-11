@@ -100,11 +100,7 @@ noetaxis_check_safe_origin() {
 }
 
 noetaxis_app_process_running() {
-	local app_path="$1"
-	if pgrep -f "$app_path/Contents/" >/dev/null 2>&1; then
-		return 0
-	fi
-	return 1
+	noetaxis_pattern_running "$1/Contents/"
 }
 
 noetaxis_shipit_running() {
@@ -114,15 +110,108 @@ noetaxis_shipit_running() {
 	return 1
 }
 
-noetaxis_assert_idle() {
+# pgrep -f takes an extended regular expression. App paths come from APPS_DIR and may
+# contain regex metacharacters (".", "(", "+"), so every pattern is escaped: a path
+# must match literally, neither missing a real process nor matching a lookalike.
+noetaxis_regex_escape() {
+	printf '%s' "$1" | /usr/bin/sed 's/[]\\.*^$(){}?+|[]/\\&/g'
+}
+
+noetaxis_pattern_running() {
+	pgrep -f "$(noetaxis_regex_escape "$1")" >/dev/null 2>&1
+}
+
+# Process ids (space separated, possibly empty) of the processes matching a pgrep pattern.
+noetaxis_pattern_pids() {
+	local pids
+	pids="$(pgrep -f "$(noetaxis_regex_escape "$1")" 2>/dev/null | /usr/bin/tr '\n' ' ')" || true
+	printf '%s' "${pids% }"
+}
+
+noetaxis_daemon_running() {
+	noetaxis_pattern_running "$1/Contents/Resources/daemon/ao daemon"
+}
+
+noetaxis_desktop_running() {
 	local app_path="$1"
-	if noetaxis_app_process_running "$app_path"; then
-		noetaxis_error "Agent Orchestrator or its bundled daemon is still running from $app_path. Quit the app yourself and verify its processes have exited before installing."
+	noetaxis_pattern_running "$app_path/Contents/MacOS/" || noetaxis_pattern_running "$app_path/Contents/Frameworks/"
+}
+
+noetaxis_desktop_pids() {
+	local app_path="$1"
+	printf '%s %s' "$(noetaxis_pattern_pids "$app_path/Contents/MacOS/")" "$(noetaxis_pattern_pids "$app_path/Contents/Frameworks/")" | /usr/bin/xargs
+}
+
+# Since the macOS tray ships in every build, Quit / Cmd+Q only closes AO's window: the
+# Dock icon, the menu-bar tray and the app-owned daemon keep running, and so do the chat
+# host processes that hold agent conversations. Only "Quit AO Completely" in the tray
+# menu exits the app, after which the daemon stops itself about 5 seconds later. A
+# "still running" result is therefore not always a mistake, and the right next step
+# depends on which part is left. Nothing here ever quits or kills a process.
+#
+# Usage: noetaxis_assert_idle <app path> [allow background processes: 0|1]
+# The desktop app and ShipIt always refuse. The daemon, chat hosts and other helper
+# processes under the bundle refuse unless the caller passes 1 (the
+# --allow-background-processes flag).
+noetaxis_assert_idle() {
+	local app_path="$1" allow_background="${2:-0}" cli pids found=""
+	cli="$app_path/Contents/Resources/daemon/ao"
+	if noetaxis_desktop_running "$app_path"; then
+		pids="$(noetaxis_desktop_pids "$app_path")"
+		noetaxis_error "The Agent Orchestrator desktop app is still running from $app_path${pids:+ (pid $pids)}. On macOS, Quit and Cmd+Q only close its window: the Dock icon, menu-bar tray and daemon stay up. Quit it completely yourself: click the Agent Orchestrator icon in the menu bar and choose \"Quit AO Completely\", then wait about 10 seconds for the daemon to stop and rerun this command. This command never quits AO or kills processes for you."
 		return 21
+	fi
+	if noetaxis_pattern_running "$cli daemon"; then
+		pids="$(noetaxis_pattern_pids "$cli daemon")"
+		found="$found the AO daemon${pids:+ (pid $pids)}"
+		if [[ "$allow_background" -ne 1 ]]; then
+			noetaxis_error "The AO daemon is still running from $app_path${pids:+ (pid $pids)} although the desktop app is not. After \"Quit AO Completely\" it stops on its own within about 10 seconds; if it is still there (a crashed app, or a daemon started from a terminal), stop it yourself with: \"$cli\" stop    Stopping the daemon ends the work of every active session it manages (running agent turns and terminals), and agent chat hosts keep running until their sessions are ended separately, so make sure you do not need those sessions first. This command never stops it for you. To install anyway, rerun install.sh or rollback.sh with --allow-background-processes (the PKG installer has no override); stop the old daemon before opening the new app."
+			return 21
+		fi
+	fi
+	if noetaxis_pattern_running "$cli chat-host"; then
+		pids="$(noetaxis_pattern_pids "$cli chat-host")"
+		found="$found chat host processes${pids:+ (pid $pids)}"
+		if [[ "$allow_background" -ne 1 ]]; then
+			noetaxis_error "Agent chat host processes are still running from $app_path${pids:+ (pid $pids)}. They keep agent conversations alive while the daemon is replaced, so they survive both \"Quit AO Completely\" and \"ao stop\" and only end when their sessions end. Safe procedure: reopen AO, list the sessions with \"$cli\" session ls, let their turns finish or end them yourself, then quit completely again. Nothing here kills a host for you. To install anyway, rerun install.sh or rollback.sh with --allow-background-processes; the new daemon reattaches to hosts that are still compatible. The PKG installer has no override and keeps refusing while they run, so use install.sh."
+			return 21
+		fi
+	fi
+	if noetaxis_app_process_running "$app_path"; then
+		if ! noetaxis_pattern_running "$cli daemon" && ! noetaxis_pattern_running "$cli chat-host"; then
+			pids="$(noetaxis_pattern_pids "$app_path/Contents/")"
+			found="$found other helper processes${pids:+ (pid $pids)}"
+			if [[ "$allow_background" -ne 1 ]]; then
+				noetaxis_error "Agent Orchestrator helper processes are still running from $app_path${pids:+ (pid $pids)}. Quit the app completely (menu-bar icon, \"Quit AO Completely\"), verify with: pgrep -fl \"$app_path/Contents/\"    and rerun. This command never kills processes for you. To install anyway, rerun with --allow-background-processes."
+				return 21
+			fi
+		fi
 	fi
 	if noetaxis_shipit_running; then
 		noetaxis_error "ShipIt is running. Wait for the updater to finish, then rerun this command."
 		return 22
+	fi
+	if [[ -n "$found" ]]; then
+		printf 'Warning: continuing with%s still running from %s because --allow-background-processes was given. They keep running from the previous app; stop the daemon with "%s" stop before opening the new app.\n' "$found" "$app_path" "$cli" >&2
+	elif [[ -z "${noetaxis_port_warned:-}" ]]; then
+		# Once per run: the install checks idle again after staging.
+		noetaxis_port_warned=1
+		noetaxis_warn_port_listener "$app_path"
+	fi
+}
+
+# Process detection only sees a daemon whose command line names this app's bundle. A
+# daemon left behind by an earlier --allow-background-processes install now runs from
+# the moved backup copy and is invisible to it, yet still holds the daemon port. A
+# listener on the default port is only a warning (the port is configurable and may
+# belong to something else); the check is read-only and never fails or stops anything.
+noetaxis_warn_port_listener() {
+	local app_path="$1" lsof_bin="${NOETAXIS_LSOF:-/usr/sbin/lsof}" port="${NOETAXIS_AO_PORT:-3001}" listener
+	[[ -x "$lsof_bin" ]] || return 0
+	listener="$("$lsof_bin" -nP -iTCP:"$port" -sTCP:LISTEN -Fp 2>/dev/null | /usr/bin/sed -n 's/^p//p' | /usr/bin/tr '\n' ' ')" || true
+	listener="${listener% }"
+	if [[ -n "$listener" ]]; then
+		printf 'Warning: something is listening on port %s (pid %s), the default AO daemon port, although no AO process was found under %s. If it is an AO daemon from an earlier install (for example one left running by --allow-background-processes, now running from a backup copy), stop it yourself with the "ao stop" command of the bundled CLI, after checking you do not need its active sessions; stopping it interrupts them. Nothing is stopped for you.\n' "$port" "$listener" "$app_path" >&2
 	fi
 }
 
@@ -333,12 +422,16 @@ noetaxis_clear_quarantine() {
 }
 
 noetaxis_write_backup_record() {
-	local backup_dir="$1" app_backup="$2" app_version="$3" temporary_record
+	local backup_dir="$1" app_backup="$2" app_version="$3" allow_background="${4:-0}" temporary_record
 	temporary_record="$backup_dir/.BACKUP_COMPLETE-$$"
 	if ! {
 		printf 'created_at=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 		printf 'app_backup=%s\n' "$app_backup"
 		printf 'app_version=%s\n' "$app_version"
+		# Audit trail: this install went ahead with AO background processes still running.
+		if [[ "$allow_background" -eq 1 ]]; then
+			printf 'allow_background_processes=1\n'
+		fi
 	} > "$temporary_record"; then
 		/bin/rm -f "$temporary_record"
 		return 1

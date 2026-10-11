@@ -33,7 +33,21 @@ The app is signed with an ad-hoc signature (`codesign --sign -`). It has no Appl
 
 ## Install from your own Terminal
 
-Quitting Agent Orchestrator ends its active sessions. Start installation from your own Terminal or Finder, outside AO. Quit the app yourself and wait for its daemon and any ShipIt updater process to exit. The install script verifies this and refuses to quit AO for you.
+Start installation from your own Terminal or Finder, outside AO. The install script refuses to quit AO or stop any process for you; it checks and tells you what is left.
+
+On macOS, **Quit and Cmd+Q only close AO's window**. The Dock icon, the menu-bar tray, the app-owned daemon and any enabled mobile or remote access keep running, so the "app is still running" refusal is expected after a plain Quit. To exit completely, click the Agent Orchestrator icon in the menu bar and choose **Quit AO Completely**. The app-owned daemon then stops itself about 5 seconds later, so wait about 10 seconds. Check the active sessions you care about before a full quit; quitting interrupts work that depends on the app.
+
+The preflight names what is still running and always exits with status 21 (ShipIt: 22):
+
+| Still running | What to do |
+| --- | --- |
+| The desktop app (`Contents/MacOS`, helper processes) | Use **Quit AO Completely** in the menu-bar tray. `--allow-background-processes` never bypasses this. |
+| The bundled AO daemon, with the app already gone | It normally stops within about 10 seconds of a full quit. If it is still there (a crashed app, or a daemon started from a terminal) and you do not need its sessions, stop it yourself with the full path: `"/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao" stop`. Stopping the daemon ends the work of every active session it manages (running agent turns and terminals); agent chat hosts keep running until their sessions are ended separately (next row). Check first. |
+| Agent chat hosts (`ao chat-host`) | They keep agent conversations alive while the daemon is replaced, so they survive both a full quit and `ao stop` and only end when their sessions end. Safe procedure: reopen AO, list the sessions with `"/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao" session ls`, let their turns finish or end the sessions yourself (ending a session interrupts it), then **Quit AO Completely** again. Nothing kills a host for you. If you would rather keep the sessions running, use `install.sh --allow-background-processes`; the new daemon reattaches to compatible hosts. The PKG has no override and keeps refusing (the reason is in `/var/log/install.log`) until the hosts are gone, so use `install.sh` or follow the procedure first. |
+| Other helper processes under the bundle | Quit completely and verify with `pgrep -fl "/Applications/Agent Orchestrator.app/Contents/"`. |
+| ShipIt (the updater) | Wait for it to finish. Never bypassed. |
+
+`--allow-background-processes` (install.sh and rollback.sh) lets the script continue past the last four background cases except ShipIt, after printing a warning that lists them. Use it only when you have decided those processes may keep running: they continue from the previous app (moved to the backup), so stop the old daemon with the `ao stop` command above before opening the new app. The PKG preinstall has no such flag and always refuses while any of them runs; use `install.sh` in that case. `rollback.sh --restore-db` is refused while the daemon runs even with the flag, because the daemon holds the database open; stop it first. A run that used the flag records `allow_background_processes=1` in that backup's `BACKUP_COMPLETE`. Process detection only sees processes whose command line names the installed bundle, so a daemon left running by an earlier flagged install (now running from the `.app.bak` copy) is not found by it; the scripts therefore also print a warning, and never fail, when something listens on port 3001 (the default daemon port, `lsof` is read-only) while no bundle process was found. Stop such a daemon yourself with the `ao stop` of the bundled CLI, after checking its sessions.
 
 ```bash
 frontend/scripts/noetaxis-macos/install.sh --dry-run \
@@ -71,7 +85,7 @@ At source commit `8e2bc21`, the database schema result is `190`. `ao status` nee
 
 ## Install with the PKG or DMG
 
-Open the PKG in Installer from your own Finder session. Its preinstall hook refuses a running app or ShipIt and creates the same backup before package payload files are installed. Its postinstall hook clears quarantine, verifies the build stamp and updates-disabled marker, and checks the `ao-app://` handler.
+Open the PKG in Installer from your own Finder session. Its preinstall hook refuses a running app, daemon, chat host or ShipIt (with no override; Installer shows only a generic failure and the explanatory messages go to `/var/log/install.log`, so run `install.sh --dry-run` from Terminal to read them) and creates the same backup before package payload files are installed. Its postinstall hook clears quarantine, verifies the build stamp and updates-disabled marker, and checks the `ao-app://` handler.
 
 The DMG contains the app, an `Applications` shortcut, and a short readme for Finder drag-and-drop placement. Use the script or PKG when you want the automatic AO state and old-app backup.
 
