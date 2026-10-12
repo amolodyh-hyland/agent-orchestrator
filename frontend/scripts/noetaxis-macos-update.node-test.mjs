@@ -834,7 +834,7 @@ test("a second install cannot swap while the first is paused mid-swap; the first
 	const world = await makeWorld(t, "lock-swap", { running: false });
 	const marker = path.join(world.root, "paused");
 	const first = spawn(path.join(realScriptsDir, "install.sh"), [world.newApp], {
-		env: { ...world.env, NOETAXIS_TEST_PAUSE_AT: "after-old-moved", NOETAXIS_TEST_PAUSE_MARKER: marker },
+		env: { ...world.env, NOETAXIS_TEST_PAUSE_AT: "after-old-moved", NOETAXIS_TEST_PAUSE_MARKER: marker, NOETAXIS_TEST_PAUSE_SECONDS: "5" },
 		stdio: "ignore",
 	});
 	const exited = new Promise((resolve) => first.on("exit", (code) => resolve(code)));

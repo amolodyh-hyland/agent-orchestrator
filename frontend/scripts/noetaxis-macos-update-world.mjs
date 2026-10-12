@@ -135,6 +135,7 @@ export async function makeWorld(t, label, options = {}) {
 		NOETAXIS_POLL_INTERVAL: "0.05",
 		NOETAXIS_LSOF: path.join(fakesDir, "no-lsof"),
 		NOETAXIS_KILL: path.join(fakesDir, "kill"),
+		NOETAXIS_PS: path.join(fakesDir, "ps"),
 		NOETAXIS_OSASCRIPT: path.join(fakesDir, "osascript"),
 		NOETAXIS_OPEN: path.join(fakesDir, "open"),
 		NOETAXIS_CURL: path.join(fakesDir, "curl"),
