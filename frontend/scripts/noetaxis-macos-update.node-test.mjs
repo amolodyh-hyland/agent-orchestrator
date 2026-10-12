@@ -967,7 +967,8 @@ test("mutation: acting on a daemon without checking whose it is is caught", darw
 	const mutant = await mutatedScripts(t, "update-lib.sh", 'noetaxis_update_status_identity "$app_path" "$(/bin/cat "$dir/ao-status.json")" || cap_identity_detail="$noetaxis_update_identity_detail"', ":");
 	const world = await makeWorld(t, "foreign-mutant", { sessions: [liveSession("s1")], cfg: { foreign_status_versions: `${oldVersion}\n`, foreign_status_exe: "/Users/x/Other/Agent Orchestrator.app/Contents/Resources/daemon/ao", foreign_status_pid: "4242" } });
 	const text = await readFile(path.join(mutant, "update-lib.sh"), "utf8");
-	await writeFile(path.join(mutant, "update-lib.sh"), text.replace('if ! noetaxis_update_verify_daemon "$app_path"; then\n				noetaxis_error "Refusing', 'if false; then\n				noetaxis_error "Refusing'));
+	// Both checks before ending sessions: the one before the batch and the one before each session.
+	await writeFile(path.join(mutant, "update-lib.sh"), text.replace('if ! noetaxis_update_verify_daemon "$app_path"; then\n				noetaxis_error "Refusing', 'if false; then\n				noetaxis_error "Refusing').replace('if ! noetaxis_update_verify_daemon "$target_app"; then', "if false; then"));
 	world.update(["--yes", "--end-sessions"], { scriptsDir: mutant });
 	assert.ok(callIndex(await world.calls(), /session exit-agent s1/) >= 0, "the mutant ends a session through the foreign daemon");
 });
@@ -1090,6 +1091,27 @@ test("mutation: applying exit-agent to terminated or exited sessions is caught",
 	const mutant = await mutatedScripts(t, "update-lib.sh", 'if [[ "$terminated" != true && "$activity" != exited ]]; then', "if true; then");
 	const violations = await scenarioExactSessionIds(t, mutant);
 	assert.ok(violations.some((v) => /exit-agent ran for/.test(v)), violations.join("; "));
+});
+
+test("noetaxis_bounded stops a command that ignores SIGALRM, as a Go program does (exit 142, SIGTERM only)", darwin, async () => {
+	const started = Date.now();
+	const result = execute("/bin/bash", ["-c", `. "${path.join(realScriptsDir, "update-lib.sh")}"; noetaxis_bounded 2 /bin/sh -c 'trap "" ALRM; exec /bin/sleep 60'; echo "rc=$?"`], { env: { PATH: "/usr/bin:/bin" }, timeout: 120_000 });
+	assert.match(result.stdout, /rc=142/);
+	assert.ok(Date.now() - started < 30_000, `took ${Date.now() - started} ms`);
+	const quick = execute("/bin/bash", ["-c", `. "${path.join(realScriptsDir, "update-lib.sh")}"; noetaxis_bounded 5 /bin/sh -c 'echo out; exit 7'; echo "rc=$?"`], { env: { PATH: "/usr/bin:/bin" } });
+	assert.match(quick.stdout, /out\nrc=7/);
+});
+
+test("the daemon's identity is re-checked before every session is ended, not only once", darwin, async (t) => {
+	const world = await makeWorld(t, "identity-each", { sessions: [liveSession("s1"), liveSession("s2")] });
+	// After the first agent is stopped the shared run file belongs to another copy.
+	await world.setCfg("foreign_after_exit_agent", `${oldVersion}\n`);
+	await world.setCfg("foreign_status_exe", "/Users/x/Other/Agent Orchestrator.app/Contents/Resources/daemon/ao");
+	await world.setCfg("foreign_status_pid", "4242");
+	const result = world.update(["--yes", "--end-sessions"]);
+	assert.equal(result.status, 57, result.stdout + result.stderr);
+	assert.deepEqual(matching(await world.calls(), /session exit-agent/).map((l) => l.replace(/^.*exit-agent (\S+).*$/, "$1")), ["s1"]);
+	assert.equal(callIndex(await world.calls(), /^osascript/), -1);
 });
 
 test("a person's own AO_MULTICA_DAEMON / AO_KEEP_DAEMON settings are not an AO session; any other AO_ variable is, and is named", darwin, async (t) => {

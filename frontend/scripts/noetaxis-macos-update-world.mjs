@@ -3,9 +3,9 @@
 // binaries that read and write a text "process table". Nothing here can reach a real
 // process, daemon, app, port, Keychain or URL handler.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -155,8 +155,35 @@ export async function makeWorld(t, label, options = {}) {
 		env,
 		sessions,
 		database,
+		// Output goes to files, not pipes: a stray grandchild that outlives the script can then not hold
+		// the test up, and a timeout keeps everything the script printed plus the processes still alive
+		// under this world (evidence for the rare multi-minute stalls seen on a loaded host).
 		run(args, { input = "", scriptsDir = realScriptsDir, script = "install.sh", extraEnv = {}, timeout = 300_000 } = {}) {
-			return execute(path.join(scriptsDir, script), args, { input, env: { ...env, ...extraEnv }, timeout });
+			const outPath = path.join(root, `run-${Math.random().toString(36).slice(2)}.out`);
+			const errPath = `${outPath}.err`;
+			const outFd = openSync(outPath, "w");
+			const errFd = openSync(errPath, "w");
+			// A sampler that wakes after 120 s while the script is still running and records which
+			// processes of this world are alive and what they wait on (the post-timeout list is taken
+			// after they were killed and shows nothing).
+			const samplePath = `${outPath}.sample`;
+			const sampler = spawn("/bin/sh", ["-c", `/bin/sleep 120; /bin/ps -axo pid,ppid,stat,wchan,etime,command | /usr/bin/grep -F "${root}" > "${samplePath}"`], { stdio: "ignore" });
+			let result;
+			try {
+				result = spawnSync(path.join(scriptsDir, script), args, { input, env: { ...env, ...extraEnv }, timeout, encoding: "utf8", stdio: ["pipe", outFd, errFd] });
+			} finally {
+				sampler.kill();
+				closeSync(outFd);
+				closeSync(errFd);
+			}
+			const stdout = readFileSync(outPath, "utf8");
+			const stderr = readFileSync(errPath, "utf8");
+			if (result.error) {
+				const alive = execute("/bin/ps", ["-axo", "pid,ppid,stat,etime,command"]).stdout.split("\n").filter((line) => line.includes(root)).join("\n");
+				result.error.message += `\nstdout so far:\n${stdout}\nstderr so far:\n${stderr}\nprocesses still alive under this world after the kill:\n${alive}\nsample taken at 120 s (pid ppid stat wchan etime command):\n${existsSync(samplePath) ? readFileSync(samplePath, "utf8") : "(no sample: the script ended before 120 s or the sampler was starved)"}`;
+				throw result.error;
+			}
+			return { status: result.status, signal: result.signal, stdout, stderr };
 		},
 		// The update command line most tests use: short waits so failures return quickly.
 		update(extra = [], runOptions = {}) {

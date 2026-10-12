@@ -92,12 +92,29 @@ noetaxis_update_append() {
 }$line"
 }
 
-# Run a command with a hard time limit. The kernel delivers SIGALRM to the command
-# (perl exec keeps the alarm), so this never uses a kill call. Exit status 142 means timeout.
+# Run a command with a time limit. A SIGALRM alone does not bound a Go program (the Go runtime
+# catches and ignores it, and the bundled ao is one), so the command runs as a child of a small
+# perl supervisor: at the deadline it gets SIGTERM, then three seconds of grace, and the supervisor
+# exits 142 either way. The only signal is this SIGTERM, to the CLI this function itself started;
+# nothing is ever SIGKILLed.
 noetaxis_bounded() {
 	local seconds="$1"
 	shift
-	/usr/bin/perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' "$seconds" "$@"
+	/usr/bin/perl -e '
+		my $limit = shift @ARGV;
+		my $child = fork();
+		exit 127 unless defined $child;
+		if (!$child) { exec @ARGV; exit 127; }
+		$SIG{ALRM} = sub {
+			kill "TERM", $child;
+			my $until = time + 3;
+			while (time < $until) { last if waitpid($child, 1) == $child; select(undef, undef, undef, 0.1); }
+			exit 142;
+		};
+		alarm $limit;
+		waitpid($child, 0);
+		exit(($? & 127) ? 128 + ($? & 127) : ($? >> 8));
+	' "$seconds" "$@"
 }
 
 noetaxis_json_get() {
@@ -582,6 +599,11 @@ noetaxis_update_end_sessions() {
 	while IFS="$noetaxis_sep" read -r id project role status activity name; do
 		[[ -n "$id" ]] || continue
 		total=$((total + 1))
+		# The daemon behind the shared run file can change while the list is worked through.
+		if ! noetaxis_update_verify_daemon "$target_app"; then
+			noetaxis_error "Stopped before ending $id: $noetaxis_update_identity_detail. Sessions ended so far stay ended; the app and daemon were not touched."
+			return 57
+		fi
 		status_code=0
 		output="$(noetaxis_bounded 90 "$cap_cli" session exit-agent "$id" ${project:+--project "$project"} 2>&1)" || status_code=$?
 		if [[ "$status_code" -eq 0 ]]; then

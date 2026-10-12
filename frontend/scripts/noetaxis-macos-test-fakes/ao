@@ -71,6 +71,7 @@ case "$1" in
 				/usr/bin/awk -F '|' -v OFS='|' -v id="$id" '$1 == id { $5 = "exited" } { print }' "$SIM/sessions" > "$SIM/sessions.tmp"
 				/bin/mv "$SIM/sessions.tmp" "$SIM/sessions"
 				sim_remove_prefix "$APP/Contents/Resources/daemon/ao chat-host --session $id"
+				if [[ -f "$SIM/cfg/foreign_after_exit_agent" ]]; then /bin/cp "$SIM/cfg/foreign_after_exit_agent" "$SIM/cfg/foreign_status_versions"; fi
 				printf 'agent exited for session %s\n' "$id"
 				;;
 			restore)
