@@ -1,5 +1,5 @@
 import { execFile as nodeExecFile } from "node:child_process";
-import { accessSync, constants, statSync } from "node:fs";
+import { accessSync, constants, lstatSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { LOCAL_SERVER_LOG_TAIL_MAX, LOCAL_SERVER_SERVICES, type LocalServerService } from "../shared/multica-local-server";
 
@@ -106,10 +106,84 @@ export function logsCommand(docker: string, stack: StackPaths, service: LocalSer
 /** Starts Docker Desktop (macOS only; the caller checks the platform). */
 export const openDockerCommand = (): CommandSpec => issue("openDocker", OPEN_BINARY, ["-a", "Docker"], TIMEOUT_MS.open, false);
 
-/** Directories a GUI-launched app does not have on PATH. */
-function dockerFallbackDirs(home: string, platform: NodeJS.Platform): string[] {
-	if (platform === "win32") return [];
-	return ["/usr/local/bin", "/opt/homebrew/bin", "/Applications/Docker.app/Contents/Resources/bin", path.join(home, ".docker", "bin")];
+/**
+ * The only places Docker's CLI and its helpers (the compose plugin, credential helpers)
+ * are looked for: fixed install roots, never AO's inherited PATH. A PATH entry such as a
+ * world-writable /tmp/bin could otherwise let another user substitute `docker` or a helper.
+ */
+function trustedInstallDirs(home: string, platform: NodeJS.Platform): string[] {
+	if (platform === "win32") return ["C:\\Program Files\\Docker\\Docker\\resources\\bin"];
+	if (platform === "darwin") {
+		return ["/usr/local/bin", "/opt/homebrew/bin", "/Applications/Docker.app/Contents/Resources/bin", path.join(home, ".docker", "bin")];
+	}
+	return ["/usr/bin", "/usr/local/bin", "/snap/bin", path.join(home, ".docker", "bin")];
+}
+
+const SYSTEM_DIRS = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+
+/** Group ids whose members may write where an administrator would: root/wheel, macOS admin and staff. */
+const TRUSTED_GROUP_IDS = new Set([0, 20, 50, 80]);
+
+export type TrustStat = { isFile: () => boolean; isDirectory: () => boolean; mode: number; uid: number; gid: number };
+export type TrustFs = {
+	realpath: (file: string) => string;
+	stat: (file: string) => TrustStat;
+	lstat: (file: string) => TrustStat;
+};
+
+export const nodeTrustFs: TrustFs = {
+	realpath: (file) => realpathSync(file),
+	stat: (file) => statSync(file),
+	lstat: (file) => lstatSync(file),
+};
+
+export type TrustContext = {
+	/** The current user; without one (Windows) ownership and mode are not judged. */
+	uid?: number | undefined;
+	gid?: number | undefined;
+	fs?: TrustFs;
+};
+
+function ownedAndNotWritableByOthers(info: TrustStat, context: TrustContext): boolean {
+	if (context.uid === undefined) return true;
+	if (info.uid !== 0 && info.uid !== context.uid) return false;
+	if ((info.mode & 0o002) !== 0) return false;
+	return (info.mode & 0o020) === 0 || TRUSTED_GROUP_IDS.has(info.gid) || info.gid === context.gid;
+}
+
+function directoryChainTrusted(start: string, context: TrustContext): boolean {
+	const fs = context.fs ?? nodeTrustFs;
+	let dir = start;
+	for (;;) {
+		let info: TrustStat;
+		try {
+			info = fs.stat(dir);
+		} catch {
+			return false;
+		}
+		if (!info.isDirectory() || !ownedAndNotWritableByOthers(info, context)) return false;
+		const parent = path.dirname(dir);
+		if (parent === dir) return true;
+		dir = parent;
+	}
+}
+
+/**
+ * True when running `file` cannot be hijacked by another local user: the file is a
+ * regular file after symlinks are resolved, owned by root or the current user, not
+ * writable by others, and so is every directory above it, both where it was found and where
+ * it really lives (so a symlink in a writable directory, or a binary in a writable one, fails).
+ */
+export function isTrustedExecutable(file: string, context: TrustContext = {}): boolean {
+	const fs = context.fs ?? nodeTrustFs;
+	try {
+		const canonical = fs.realpath(file);
+		const info = fs.stat(canonical);
+		if (!info.isFile() || !ownedAndNotWritableByOthers(info, context)) return false;
+		return directoryChainTrusted(path.dirname(file), context) && directoryChainTrusted(path.dirname(canonical), context);
+	} catch {
+		return false;
+	}
 }
 
 function isExecutableFile(file: string): boolean {
@@ -123,24 +197,41 @@ function isExecutableFile(file: string): boolean {
 }
 
 export type FindDockerOptions = {
-	pathEnv?: string;
 	home: string;
 	platform: NodeJS.Platform;
+	uid?: number | undefined;
+	gid?: number | undefined;
 	isExecutable?: (file: string) => boolean;
+	isTrusted?: (file: string) => boolean;
 };
 
-/** Locates the docker CLI among absolute candidates only; relative PATH entries are ignored. */
+/** Locates the docker CLI in the trusted install roots only, and only if it passes the ownership and permission check. */
 export function findDockerBinary(options: FindDockerOptions): string | null {
 	const isExecutable = options.isExecutable ?? isExecutableFile;
+	const isTrusted = options.isTrusted ?? ((file: string) => isTrustedExecutable(file, { uid: options.uid, gid: options.gid }));
 	const name = options.platform === "win32" ? "docker.exe" : "docker";
-	const dirs = [...(options.pathEnv ?? "").split(path.delimiter), ...dockerFallbackDirs(options.home, options.platform)].filter(
-		(dir) => dir && path.isAbsolute(dir),
-	);
-	for (const dir of dirs) {
+	for (const dir of trustedInstallDirs(options.home, options.platform)) {
+		if (!path.isAbsolute(dir)) continue;
 		const candidate = path.join(dir, name);
-		if (isExecutable(candidate)) return candidate;
+		if (isExecutable(candidate) && isTrusted(candidate)) return candidate;
 	}
 	return null;
+}
+
+export type TrustedPathOptions = {
+	home: string;
+	platform: NodeJS.Platform;
+	uid?: number | undefined;
+	gid?: number | undefined;
+	isTrustedDirectory?: (dir: string) => boolean;
+};
+
+/** The directories that may be on the child's PATH: trusted install roots and system directories that pass the same chain check. */
+export function trustedPathDirs(options: TrustedPathOptions): string[] {
+	const context = { uid: options.uid, gid: options.gid };
+	const isTrusted = options.isTrustedDirectory ?? ((dir: string) => directoryChainTrusted(dir, context));
+	const dirs = [...trustedInstallDirs(options.home, options.platform), ...(options.platform === "win32" ? [] : SYSTEM_DIRS)];
+	return [...new Set(dirs.filter((dir) => path.isAbsolute(dir) && isTrusted(dir)))];
 }
 
 // DOCKER_CONFIG is not passed: Docker's configuration directory (and the current context
@@ -207,17 +298,23 @@ export function isLocalDockerEndpoint(value: string | undefined): boolean {
 }
 
 /**
- * The child's environment: a short allow-list, a PATH that finds Docker's helpers, and
+ * The child's environment: a short allow-list, a PATH made only of the trusted directories given (so Docker's helpers are found there and nowhere else), and
  * DOCKER_HOST pinned to the local engine endpoint when there is one. With DOCKER_HOST set
  * the Docker CLI ignores the context named in its configuration, so a remote
  * `currentContext` cannot take over. COMPOSE_*, DOCKER_CONTEXT, DOCKER_CONFIG and the TLS
  * variables from AO's own environment are not passed.
  */
-export function localServerChildEnv(env: NodeJS.ProcessEnv, home: string, platform: NodeJS.Platform, endpoint: string | null = null): NodeJS.ProcessEnv {
+export function localServerChildEnv(
+	env: NodeJS.ProcessEnv,
+	_home: string,
+	_platform: NodeJS.Platform,
+	endpoint: string | null = null,
+	pathDirs: readonly string[] = [],
+): NodeJS.ProcessEnv {
 	const next: NodeJS.ProcessEnv = {};
 	for (const key of PASS_THROUGH_ENV) if (env[key] !== undefined) next[key] = env[key];
-	const dirs = [...(env.PATH ?? "").split(path.delimiter), ...dockerFallbackDirs(home, platform), "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
-	next.PATH = [...new Set(dirs.filter((dir) => dir && path.isAbsolute(dir)))].join(path.delimiter);
+	// PATH is built only from the trusted directories passed in, never from AO's own PATH.
+	next.PATH = pathDirs.filter((dir) => dir !== "" && path.isAbsolute(dir)).join(path.delimiter);
 	if (endpoint !== null) {
 		if (!isLocalDockerEndpoint(endpoint)) throw new Error("Docker endpoint must be a local socket");
 		next.DOCKER_HOST = endpoint;

@@ -16,6 +16,7 @@ import {
 	findLocalDockerEndpoint,
 	isIssuedCommand,
 	isLocalDockerEndpoint,
+	isTrustedExecutable,
 	localServerChildEnv,
 	logsCommand,
 	nodeExec,
@@ -24,8 +25,10 @@ import {
 	restartCommand,
 	runLocalServerCommand,
 	stopCommand,
+	trustedPathDirs,
 	upCommand,
 	type CommandSpec,
+	type TrustFs,
 	type ExecFileLike,
 	type StackPaths,
 } from "./multica-local-server-commands";
@@ -171,12 +174,18 @@ describe("localServerChildEnv", () => {
 			"/Users/me",
 			"darwin",
 			SOCKET,
+			["/usr/local/bin", "/Applications/Docker.app/Contents/Resources/bin", "relative/bin"],
 		);
 
 		expect(Object.keys(env).sort()).toEqual(["DOCKER_HOST", "HOME", "LANG", "PATH"]);
 		expect(env.DOCKER_HOST).toBe(SOCKET);
-		expect(env.PATH).toContain("/Applications/Docker.app/Contents/Resources/bin");
-		expect(env.PATH?.split(":")).not.toContain("relative/bin");
+		expect(env.PATH).toBe("/usr/local/bin:/Applications/Docker.app/Contents/Resources/bin");
+	});
+
+	it("builds PATH only from the trusted directories given, never from AO's own PATH", () => {
+		const env = localServerChildEnv({ PATH: "/tmp/bin:/usr/bin:/home/evil/bin" }, "/Users/me", "darwin", null, ["/usr/bin"]);
+		expect(env.PATH).toBe("/usr/bin");
+		expect(localServerChildEnv({ PATH: "/tmp/bin" }, "/Users/me", "darwin").PATH).toBe("");
 	});
 
 	it("sets no DOCKER_HOST when there is no local endpoint, and never copies one from the environment", () => {
@@ -223,17 +232,152 @@ describe("isLocalDockerEndpoint", () => {
 
 describe("findDockerBinary", () => {
 	const only = (target: string) => (file: string) => file === target;
+	const ever = () => true;
 
-	it("finds docker in a usual install directory when PATH is minimal", () => {
-		expect(findDockerBinary({ pathEnv: "/usr/bin", home: "/Users/me", platform: "darwin", isExecutable: only("/opt/homebrew/bin/docker") })).toBe("/opt/homebrew/bin/docker");
-		expect(findDockerBinary({ pathEnv: "", home: "/Users/me", platform: "darwin", isExecutable: only("/Applications/Docker.app/Contents/Resources/bin/docker") })).toBe(
+	it("finds docker in the usual trusted install roots", () => {
+		expect(findDockerBinary({ home: "/Users/me", platform: "darwin", isExecutable: only("/opt/homebrew/bin/docker"), isTrusted: ever })).toBe("/opt/homebrew/bin/docker");
+		expect(findDockerBinary({ home: "/Users/me", platform: "darwin", isExecutable: only("/Applications/Docker.app/Contents/Resources/bin/docker"), isTrusted: ever })).toBe(
 			"/Applications/Docker.app/Contents/Resources/bin/docker",
 		);
+		expect(findDockerBinary({ home: "/home/me", platform: "linux", isExecutable: only("/usr/bin/docker"), isTrusted: ever })).toBe("/usr/bin/docker");
 	});
 
-	it("ignores relative PATH entries and returns null when nothing is executable", () => {
-		expect(findDockerBinary({ pathEnv: "bin:.", home: "/Users/me", platform: "darwin", isExecutable: only("bin/docker") })).toBeNull();
-		expect(findDockerBinary({ pathEnv: "/usr/bin", home: "/Users/me", platform: "linux", isExecutable: () => false })).toBeNull();
+	it("never looks anywhere else: a docker in a PATH directory such as /tmp/bin is not found", () => {
+		const original = process.env.PATH;
+		process.env.PATH = "/tmp/bin:/home/evil/bin:relative/bin";
+		try {
+			const looked: string[] = [];
+			const result = findDockerBinary({ home: "/Users/me", platform: "darwin", isExecutable: (file) => (looked.push(file), file.startsWith("/tmp/") || file.startsWith("/home/evil/")), isTrusted: ever });
+			expect(result).toBeNull();
+			expect(looked.some((file) => file.startsWith("/tmp/") || file.startsWith("/home/evil/") || !file.startsWith("/"))).toBe(false);
+		} finally {
+			process.env.PATH = original;
+		}
+	});
+
+	it("skips a candidate that is not trusted and takes the next one", () => {
+		const executable = (file: string) => file === "/usr/local/bin/docker" || file === "/opt/homebrew/bin/docker";
+		expect(findDockerBinary({ home: "/Users/me", platform: "darwin", isExecutable: executable, isTrusted: (file) => file !== "/usr/local/bin/docker" })).toBe("/opt/homebrew/bin/docker");
+		expect(findDockerBinary({ home: "/Users/me", platform: "darwin", isExecutable: executable, isTrusted: () => false })).toBeNull();
+	});
+
+	it("returns null when nothing is executable", () => {
+		expect(findDockerBinary({ home: "/Users/me", platform: "linux", isExecutable: () => false, isTrusted: ever })).toBeNull();
+	});
+});
+
+type FakeEntry = { type: "file" | "dir" | "link"; mode: number; uid?: number; gid?: number; target?: string };
+
+/** An in-memory file system, so ownership, modes and symlinks can be set at will. */
+function fakeTree(entries: Record<string, FakeEntry>): TrustFs {
+	const get = (file: string): FakeEntry => {
+		const entry = entries[file];
+		if (!entry) throw new Error(`ENOENT ${file}`);
+		return entry;
+	};
+	const resolve = (file: string): string => {
+		const entry = get(file);
+		return entry.type === "link" ? resolve(entry.target as string) : file;
+	};
+	const stat = (file: string) => {
+		const entry = get(resolve(file));
+		return { isFile: () => entry.type === "file", isDirectory: () => entry.type === "dir", mode: entry.mode, uid: entry.uid ?? 0, gid: entry.gid ?? 0 };
+	};
+	return { realpath: resolve, stat, lstat: stat };
+}
+
+describe("isTrustedExecutable", () => {
+	const ME = { uid: 501, gid: 20 };
+	const dir = (mode = 0o755, uid = 0, gid = 0): FakeEntry => ({ type: "dir", mode, uid, gid });
+	const file = (mode = 0o755, uid = 0, gid = 0): FakeEntry => ({ type: "file", mode, uid, gid });
+	const base: Record<string, FakeEntry> = { "/": dir(), "/usr": dir(), "/usr/local": dir(), "/usr/local/bin": dir(), "/usr/local/bin/docker": file() };
+	const trusted = (entries: Record<string, FakeEntry>, target = "/usr/local/bin/docker", context = ME) => isTrustedExecutable(target, { ...context, fs: fakeTree(entries) });
+
+	it("accepts a root-owned binary in root-owned, non-writable directories", () => {
+		expect(trusted(base)).toBe(true);
+	});
+
+	it("accepts a binary owned by the current user (Homebrew) and the Docker Desktop symlink into /Applications (admin group)", () => {
+		expect(trusted({ ...base, "/usr/local/bin/docker": file(0o755, 501, 20) })).toBe(true);
+		const entries: Record<string, FakeEntry> = {
+			...base,
+			"/usr/local/bin/docker": { type: "link", mode: 0o755, target: "/Applications/Docker.app/Contents/Resources/bin/docker" },
+			"/Applications": dir(0o775, 0, 80),
+			"/Applications/Docker.app": dir(0o755, 0, 80),
+			"/Applications/Docker.app/Contents": dir(0o755, 0, 80),
+			"/Applications/Docker.app/Contents/Resources": dir(0o755, 0, 80),
+			"/Applications/Docker.app/Contents/Resources/bin": dir(0o755, 0, 80),
+			"/Applications/Docker.app/Contents/Resources/bin/docker": file(0o755, 0, 80),
+		};
+		expect(trusted(entries)).toBe(true);
+	});
+
+	it("rejects a world-writable directory holding the binary, such as /tmp/bin", () => {
+		const entries = { "/": dir(), "/tmp": dir(0o1777), "/tmp/bin": dir(0o777, 502), "/tmp/bin/docker": file(0o755, 502) };
+		expect(trusted(entries, "/tmp/bin/docker")).toBe(false);
+	});
+
+	it("rejects a binary under a world-writable or sticky world-writable ancestor, even if the leaf directory is private", () => {
+		for (const mode of [0o777, 0o1777]) {
+			const entries = { "/": dir(), "/tmp": dir(mode), "/tmp/me": dir(0o700, 501, 20), "/tmp/me/docker": file(0o700, 501, 20) };
+			expect(trusted(entries, "/tmp/me/docker"), String(mode)).toBe(false);
+		}
+	});
+
+	it("rejects a group-writable directory unless the group is an administrator group or the user's own", () => {
+		const withGroup = (gid: number, uid = 0) => ({ ...base, "/usr/local/bin": dir(0o775, uid, gid) });
+		expect(trusted(withGroup(1234))).toBe(false);
+		expect(trusted(withGroup(80))).toBe(true);
+		expect(trusted(withGroup(20, 501))).toBe(true);
+	});
+
+	it("rejects files or directories owned by another user", () => {
+		expect(trusted({ ...base, "/usr/local/bin/docker": file(0o755, 502) })).toBe(false);
+		expect(trusted({ ...base, "/usr/local/bin": dir(0o755, 502) })).toBe(false);
+		expect(trusted({ ...base, "/usr": dir(0o755, 502) })).toBe(false);
+	});
+
+	it("rejects a binary that others can write", () => {
+		expect(trusted({ ...base, "/usr/local/bin/docker": file(0o757) })).toBe(false);
+		expect(trusted({ ...base, "/usr/local/bin/docker": file(0o775, 0, 1234) })).toBe(false);
+	});
+
+	it("rejects a symlink in a writable directory even when it points into a trusted place", () => {
+		const entries: Record<string, FakeEntry> = { ...base, "/tmp": dir(0o1777), "/tmp/bin": dir(0o777, 502), "/tmp/bin/docker": { type: "link", mode: 0o777, target: "/usr/local/bin/docker" } };
+		expect(trusted(entries, "/tmp/bin/docker")).toBe(false);
+	});
+
+	it("rejects a trusted-looking symlink whose real location is writable", () => {
+		const entries: Record<string, FakeEntry> = {
+			...base,
+			"/usr/local/bin/docker": { type: "link", mode: 0o755, target: "/tmp/real/docker" },
+			"/tmp": dir(0o1777),
+			"/tmp/real": dir(0o777, 502),
+			// The file itself looks fine (root-owned, 0755): only the writable directory it lives in gives it away.
+			"/tmp/real/docker": file(0o755),
+		};
+		expect(trusted(entries)).toBe(false);
+	});
+
+	it("rejects something that is not a regular file, a missing path and a dangling link", () => {
+		expect(trusted({ ...base, "/usr/local/bin/docker": dir() })).toBe(false);
+		expect(trusted({ "/": dir() }, "/usr/local/bin/docker")).toBe(false);
+		expect(trusted({ ...base, "/usr/local/bin/docker": { type: "link", mode: 0o755, target: "/nowhere" } })).toBe(false);
+	});
+
+	it("does not judge ownership where there is no user id (Windows)", () => {
+		expect(trusted({ ...base, "/usr/local/bin/docker": file(0o777, 999) }, "/usr/local/bin/docker", {} as typeof ME)).toBe(true);
+	});
+});
+
+describe("trustedPathDirs", () => {
+	it("keeps only install roots and system directories that pass the check, and no inherited PATH", () => {
+		const dirs = trustedPathDirs({ home: "/Users/me", platform: "darwin", isTrustedDirectory: (dir) => dir !== "/opt/homebrew/bin" && dir !== "/usr/sbin" });
+		expect(dirs).toEqual(["/usr/local/bin", "/Applications/Docker.app/Contents/Resources/bin", "/Users/me/.docker/bin", "/usr/bin", "/bin", "/sbin"]);
+	});
+
+	it("is empty when nothing is trusted", () => {
+		expect(trustedPathDirs({ home: "/home/me", platform: "linux", isTrustedDirectory: () => false })).toEqual([]);
 	});
 });
 

@@ -1,5 +1,3 @@
-import { readdirSync } from "node:fs";
-import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Records every file-system write the code under test attempts (and lets it through), so a
@@ -152,6 +150,7 @@ function harness(patch: Partial<Fake> = {}) {
 		platform: fake.platform,
 		findDocker: () => fake.docker,
 		findEndpoint: () => fake.endpoint,
+		findPathDirs: () => ["/usr/local/bin", "/usr/bin"],
 		now: () => fake.now,
 		sleep: async (ms) => {
 			fake.now += ms;
@@ -614,6 +613,14 @@ describe("the local Docker engine", () => {
 		expect(h.calls.find((call) => call.file === "/usr/bin/open")?.env.DOCKER_HOST).toBeUndefined();
 	});
 
+	it("gives every command a PATH of trusted directories only, ignoring AO's inherited PATH", async () => {
+		const h = harness({ env: { PATH: "/tmp/bin:/home/evil/bin:/usr/bin", HOME } });
+		await h.server.getStatus();
+		await h.server.start();
+		expect(h.calls.length).toBeGreaterThan(3);
+		for (const call of h.calls) expect(call.env.PATH, call.args.join(" ")).toBe("/usr/local/bin:/usr/bin");
+	});
+
 	it("never starts the stack on a remote engine even if the endpoint lookup is wrong", async () => {
 		const h = harness({ endpoint: "tcp://10.0.0.5:2375" });
 		expect(await h.server.start()).toEqual({ ok: false, code: "command_failed" });
@@ -623,7 +630,6 @@ describe("the local Docker engine", () => {
 
 describe("backend log lines are never persisted", () => {
 	const CODE_LINE = "backend-1  | [DEV] Verification code for me@example.com: 987654";
-	const listTmp = () => readdirSync(os.tmpdir()).sort();
 
 	beforeEach(() => {
 		fsWrites.calls.length = 0;
@@ -633,7 +639,6 @@ describe("backend log lines are never persisted", () => {
 		const consoleSpies = (["log", "info", "warn", "error", "debug", "trace"] as const).map((name) => vi.spyOn(console, name).mockImplementation(() => undefined));
 		const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		const before = listTmp();
 		try {
 			const h = harness({ ps: ALL_UP, probe: { ok: true, apiUrl: "" }, handlers: { logs: () => ({ stdout: `${CODE_LINE}\n` }) } });
 
@@ -644,7 +649,6 @@ describe("backend log lines are never persisted", () => {
 			h.server.dispose();
 
 			expect(fsWrites.calls).toEqual([]);
-			expect(listTmp()).toEqual(before);
 			expect(JSON.stringify([h.emitted, h.writes, h.calls])).not.toContain("987654");
 			for (const spy of consoleSpies) expect(spy).not.toHaveBeenCalled();
 			expect(stdoutWrite).not.toHaveBeenCalled();

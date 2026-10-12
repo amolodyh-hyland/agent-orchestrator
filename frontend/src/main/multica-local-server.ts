@@ -19,6 +19,7 @@ import {
 	findDockerBinary,
 	findLocalDockerEndpoint,
 	localServerChildEnv,
+	trustedPathDirs,
 	logsCommand,
 	openDockerCommand,
 	psCommand,
@@ -92,6 +93,8 @@ export type MulticaLocalServerOptions = {
 	env: NodeJS.ProcessEnv;
 	platform: NodeJS.Platform;
 	findDocker?: () => string | null;
+	/** Trusted directories for the child's PATH; defaults to the verified install roots. */
+	findPathDirs?: () => string[];
 	/** The local engine's address (`unix://…`); defaults to a search of the usual local sockets. */
 	findEndpoint?: () => string | null;
 	now?: () => number;
@@ -124,7 +127,10 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 	const canLaunchDocker = options.platform === "darwin";
 	const findEndpoint =
 		options.findEndpoint ?? (() => findLocalDockerEndpoint({ home: options.home, platform: options.platform, uid: typeof process.getuid === "function" ? process.getuid() : undefined }));
-	const findDocker = options.findDocker ?? (() => findDockerBinary({ pathEnv: options.env.PATH, home: options.home, platform: options.platform }));
+	const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+	const gid = typeof process.getgid === "function" ? process.getgid() : undefined;
+	const findDocker = options.findDocker ?? (() => findDockerBinary({ home: options.home, platform: options.platform, uid, gid }));
+	const findPathDirs = options.findPathDirs ?? (() => trustedPathDirs({ home: options.home, platform: options.platform, uid, gid }));
 
 	let disposed = false;
 	let watching = false;
@@ -147,7 +153,7 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 		if (spec.engine && endpoint === null) {
 			return { error: Object.assign(new Error("no local Docker engine endpoint"), { code: "NO_LOCAL_ENGINE" }), stdout: "", stderr: "" };
 		}
-		return runLocalServerCommand(options.exec, spec, localServerChildEnv(options.env, options.home, options.platform, endpoint), signal);
+		return runLocalServerCommand(options.exec, spec, localServerChildEnv(options.env, options.home, options.platform, endpoint, findPathDirs()), signal);
 	};
 
 	const publish = (status: LocalServerStatus): void => {
