@@ -1153,33 +1153,75 @@ test("helper commands are bounded by a watchdog on their own process group: TERM
 	assert.match(capped.stdout, /rc=142/);
 });
 
-test("a cooperative leader does not shield a TERM-ignoring descendant: the group still gets KILL and the capture pipe closes", darwin, async (t) => {
-	const root = await mkdtemp(path.join(os.tmpdir(), "noetaxis-bounded-desc-"));
+// Helper scripts for the watchdog tests: a leader that exits on TERM (or not) with descendants that
+// ignore TERM and inherit the helper's stdout/stderr, optionally in a session of their own.
+async function watchdogFixture(t, label) {
+	const root = await mkdtemp(path.join(os.tmpdir(), `noetaxis-watchdog-${label}-`));
 	t.after(async () => rm(root, { recursive: true, force: true }));
 	const marker = path.join(root, "descendant.pid");
-	const leader = `/bin/sh -c "trap '' TERM; echo \\$\\$ > ${marker}; while :; do /bin/sleep 1; done" & while :; do /bin/sleep 1; done`;
-	const started = Date.now();
-	// Command substitution: a descendant that keeps the pipe open would block it until the child exits.
-	const result = execute("/bin/bash", ["-c", `. "${path.join(realScriptsDir, "common.sh")}"; rc=0; out=$(noetaxis_bounded 1 /bin/sh -c '${leader.replaceAll("'", "'\\''")}' 2>&1) || rc=$?; echo "rc=$rc"`], { env: { PATH: "/usr/bin:/bin" }, timeout: 60_000, killSignal: "SIGKILL" });
+	const escapee = path.join(root, "escapee.pid");
+	await writeFile(path.join(root, "stubborn.sh"), `#!/bin/sh\ntrap '' TERM ALRM\necho $$ > "$1"\nwhile :; do /bin/sleep 1; done\n`, { mode: 0o755 });
+	// Cooperative leader (dies on TERM) with a stubborn descendant in the same process group.
+	await writeFile(path.join(root, "cooperative-leader.sh"), `#!/bin/sh\n"${root}/stubborn.sh" "${marker}" &\nwhile :; do /bin/sleep 1; done\n`, { mode: 0o755 });
+	// The descendant moves to a session of its own, so no group signal can reach it: it only holds the inherited pipe.
+	await writeFile(path.join(root, "escaping-leader.sh"), `#!/bin/sh\n/usr/bin/perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' "${root}/stubborn.sh" "${escapee}" &\nwhile :; do /bin/sleep 1; done\n`, { mode: 0o755 });
+	const lib = path.join(realScriptsDir, "common.sh");
+	// Command substitution, as the installer uses it: it ends only when every holder of the pipe is gone.
+	const capture = (libPath, script, limit = 1, timeout = 60_000) => {
+		const started = Date.now();
+		const result = spawnSync("/bin/bash", ["-c", `. "${libPath}"; rc=0; out=$(noetaxis_bounded ${limit} "${path.join(root, script)}" 2>&1) || rc=$?; echo "rc=$rc"`], { env: { PATH: "/usr/bin:/bin", TMPDIR: root }, encoding: "utf8", timeout, killSignal: "SIGKILL" });
+		return { result, elapsed: Date.now() - started };
+	};
+	const alive = (file) => {
+		try { process.kill(Number(readFileSync(file, "utf8").trim()), 0); return true; } catch { return false; }
+	};
+	return { root, marker, escapee, lib, capture, alive };
+}
+
+test("a cooperative leader does not shield a TERM-ignoring descendant: the group still gets KILL, the call returns 142 at the deadline, and a bystander survives", darwin, async (t) => {
+	const fixture = await watchdogFixture(t, "group");
+	const bystander = spawn("/bin/sleep", ["300"], { stdio: "ignore", detached: true });
+	t.after(() => { try { process.kill(bystander.pid, "SIGTERM"); } catch { /* gone */ } });
+	const { result, elapsed } = fixture.capture(fixture.lib, "cooperative-leader.sh");
 	assert.match(result.stdout, /rc=142/);
-	assert.ok(Date.now() - started < 15_000, `returned after ${Date.now() - started} ms`);
-	const pid = Number((await readFile(marker, "utf8")).trim());
-	assert.throws(() => process.kill(pid, 0), /ESRCH/, "the TERM-ignoring descendant was killed with the group");
+	assert.ok(elapsed < 6_000, `returned after ${elapsed} ms (bound 1 s + 1 s grace expected)`);
+	assert.equal(fixture.alive(fixture.marker), false, "the TERM-ignoring descendant did not survive");
+	assert.equal(process.kill(bystander.pid, 0), true, "an unrelated process in another group survived");
+});
+
+test("a descendant that escaped the group still cannot hold the caller's pipe: the deadline returns 142 and the output reaches the caller", darwin, async (t) => {
+	const fixture = await watchdogFixture(t, "escapee");
+	t.after(() => { try { process.kill(Number(readFileSync(fixture.escapee, "utf8").trim()), "SIGKILL"); } catch { /* gone */ } });
+	const { result, elapsed } = fixture.capture(fixture.lib, "escaping-leader.sh");
+	assert.match(result.stdout, /rc=142/);
+	assert.ok(elapsed < 6_000, `returned after ${elapsed} ms`);
+	// By design the escapee (own session) is not ours to kill; it holds only a private file, not a pipe.
+	assert.equal(fixture.alive(fixture.escapee), true);
+});
+
+test("helper output is copied out intact, stdout and stderr apart, even for a quick helper", darwin, async (t) => {
+	const root = await mkdtemp(path.join(os.tmpdir(), "noetaxis-watchdog-out-"));
+	t.after(async () => rm(root, { recursive: true, force: true }));
+	const result = execute("/bin/bash", ["-c", `. "${path.join(realScriptsDir, "common.sh")}"; rc=0; noetaxis_bounded 5 /bin/sh -c 'echo to-out; echo to-err >&2; exit 3' > ${root}/o 2> ${root}/e || rc=$?; echo "rc=$rc"; cat ${root}/o; echo ---; cat ${root}/e`], { env: { PATH: "/usr/bin:/bin", TMPDIR: root } });
+	assert.equal(result.stdout, "rc=3\nto-out\n---\nto-err\n");
+	assert.deepEqual((await readdir(root)).filter((name) => name.startsWith("noetaxis-helper")), [], "no temporary file is left behind");
+});
+
+test("mutation: letting the helper inherit the caller's pipes is caught by the escaped-descendant case", darwin, async (t) => {
+	const mutant = await mutatedScripts(t, "common.sh", 'open(STDOUT, ">&", $out) or exit 127;', "1;");
+	const fixture = await watchdogFixture(t, "pipe-mutant");
+	t.after(() => { try { process.kill(Number(readFileSync(fixture.escapee, "utf8").trim()), "SIGKILL"); } catch { /* gone */ } });
+	const { result } = fixture.capture(path.join(mutant, "common.sh"), "escaping-leader.sh", 1, 10_000);
+	assert.equal(result.error?.code, "ETIMEDOUT", "an inherited pipe is held open by the escaped descendant");
 });
 
 test("mutation: gating the group KILL on the leader not having been reaped is caught by the cooperative-leader case", darwin, async (t) => {
 	const mutant = await mutatedScripts(t, "common.sh", 'if (kill(0, -$child)) { kill "KILL", -$child; }', 'unless ($reaped) { kill "KILL", -$child; }');
-	const root = await mkdtemp(path.join(os.tmpdir(), "noetaxis-bounded-gate-"));
-	t.after(async () => rm(root, { recursive: true, force: true }));
-	const marker = path.join(root, "descendant.pid");
-	const outFile = path.join(root, "out.txt");
-	const leader = `/bin/sh -c "trap '' TERM; echo \\$\\$ > ${marker}; while :; do /bin/sleep 1; done" & while :; do /bin/sleep 1; done`;
-	execute("/bin/bash", ["-c", `{ . "${path.join(mutant, "common.sh")}"; rc=0; noetaxis_bounded 1 /bin/sh -c '${leader.replaceAll("'", "'\\''")}' || rc=$?; echo "rc=$rc"; } > ${outFile} 2>&1`], { env: { PATH: "/usr/bin:/bin" }, timeout: 60_000, killSignal: "SIGKILL" });
-	const pid = Number((await readFile(marker, "utf8")).trim());
-	let alive = true;
-	try { process.kill(pid, 0); } catch { alive = false; }
-	try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
-	assert.ok(alive, "the mutant leaves the stubborn descendant running");
+	const fixture = await watchdogFixture(t, "gate-mutant");
+	fixture.capture(path.join(mutant, "common.sh"), "cooperative-leader.sh", 1, 20_000);
+	const survived = fixture.alive(fixture.marker);
+	try { process.kill(Number(readFileSync(fixture.marker, "utf8").trim()), "SIGKILL"); } catch { /* gone */ }
+	assert.ok(survived, "the mutant leaves the stubborn descendant running");
 });
 
 test("a hung helper is terminated and reported as a failure, while AO's own processes are never sent SIGKILL", darwin, async (t) => {

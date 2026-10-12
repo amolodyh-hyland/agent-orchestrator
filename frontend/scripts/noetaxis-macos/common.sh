@@ -8,8 +8,8 @@ NOETAXIS_LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Framework
 # Run one of this script's OWN helper commands (ao, osascript, lsof, docker, multica, open ...) with a
 # time limit. A SIGALRM alone does not bound a Go program (the Go runtime catches and ignores it, and
 # the bundled ao is one), so the helper runs as a child of a small perl supervisor, in a process
-# group of its own. At the deadline the supervisor sends that group SIGTERM, waits three seconds,
-# then SIGKILL (also to descendants that outlive a leader that exited on TERM), prints "timed out" on stderr and exits 142 (143 when the script itself is
+# group of its own. At the deadline the supervisor sends that group SIGTERM, waits one second,
+# then SIGKILL (also to descendants that outlive a leader that exited on TERM), copies the helper's output (it wrote to private files) and prints "timed out" on stderr and exits 142 (143 when the script itself is
 # interrupted). This is the ONLY place in the installer that can send SIGKILL, and it can only
 # reach the process group of the helper command it started itself. It never touches AO's own
 # processes (the app, daemon, chat hosts, agents), which are only ever sent SIGTERM, only by
@@ -22,19 +22,48 @@ noetaxis_bounded() {
 		seconds="$NOETAXIS_HELPER_TIMEOUT_MAX"
 	fi
 	/usr/bin/perl -e '
+		use Fcntl;
 		my $limit = shift @ARGV;
+		# The helper writes into private files (mode 0600, unlinked at once), never into this
+		# script'"'"'s pipes: a descendant that outlives the helper or ignores signals can then not hold
+		# the caller'"'"'s command substitution open. The output is copied out after the helper is gone.
+		my $dir = $ENV{TMPDIR} || "/tmp";
+		sub private_file {
+			my $path = sprintf("%s/noetaxis-helper.%d.%d.%d", $dir, $$, time, int(rand(1000000000)));
+			sysopen(my $fh, $path, O_RDWR | O_CREAT | O_EXCL, 0600) or exit 127;
+			unlink $path;
+			return $fh;
+		}
+		my $out = private_file();
+		my $err = private_file();
 		my $child = fork();
 		exit 127 unless defined $child;
-		if (!$child) { setpgrp(0, 0); exec @ARGV; exit 127; }
+		if (!$child) {
+			setpgrp(0, 0);
+			open(STDIN, "<", "/dev/null");
+			open(STDOUT, ">&", $out) or exit 127;
+			open(STDERR, ">&", $err) or exit 127;
+			exec @ARGV;
+			exit 127;
+		}
 		my $reaped = 0;
+		sub flush_output {
+			$| = 1;
+			for my $pair ([$out, \*STDOUT], [$err, \*STDERR]) {
+				seek($pair->[0], 0, 0);
+				local $/;
+				my $data = readline($pair->[0]);
+				print { $pair->[1] } $data if defined $data;
+			}
+		}
 		my $stop = sub {
 			my ($code, $note) = @_;
 			kill "TERM", -$child;
-			my $until = time + 3;
+			my $until = time + 1;
 			while (time < $until) {
 				$reaped = 1 if !$reaped && waitpid($child, 1) == $child;
 				last if $reaped && !kill(0, -$child);
-				select(undef, undef, undef, 0.1);
+				select(undef, undef, undef, 0.05);
 			}
 			$reaped = 1 if !$reaped && waitpid($child, 1) == $child;
 			# Whoever is still in the group after the grace gets KILL: a hung leader, or descendants that
@@ -42,6 +71,7 @@ noetaxis_bounded() {
 			# members remain, so the group is still this helper'"'"'s own when KILL is sent.
 			if (kill(0, -$child)) { kill "KILL", -$child; }
 			waitpid($child, 1) unless $reaped;
+			flush_output();
 			print STDERR "$note\n" if $note;
 			exit $code;
 		};
@@ -49,7 +79,10 @@ noetaxis_bounded() {
 		$SIG{TERM} = $SIG{INT} = $SIG{HUP} = sub { $stop->(143, ""); };
 		alarm $limit;
 		waitpid($child, 0);
-		exit(($? & 127) ? 128 + ($? & 127) : ($? >> 8));
+		my $status = $?;
+		alarm 0;
+		flush_output();
+		exit(($status & 127) ? 128 + ($status & 127) : ($status >> 8));
 	' "$seconds" "$@"
 }
 
