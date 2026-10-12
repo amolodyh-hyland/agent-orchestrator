@@ -35,6 +35,8 @@ sim_app_running_daemon() {
 }
 
 sim_quit_bundle() {
+	# Test hook: a process id is reused (new start time) once the app has been asked to quit.
+	if [[ -f "$SIM/cfg/reuse_pid_after_quit" ]]; then printf 'Tue Oct 13 11:11:11 2026\n' > "$SIM/cfg/lstart_$(cat "$SIM/cfg/reuse_pid_after_quit")"; fi
 	if [[ -f "$SIM/cfg/foreign_after_quit" ]]; then /bin/cp "$SIM/cfg/foreign_after_quit" "$SIM/cfg/foreign_status_versions"; fi
 	sim_remove_prefix "$1/Contents/MacOS/"
 	sim_remove_prefix "$1/Contents/Frameworks/"

@@ -57,7 +57,7 @@ automatically if the new app is not healthy. The app argument defaults to
                              refuse before anything is stopped
   --restore-sessions         afterwards try "ao session restore" once per session that was
                              live (resumes the exited agents)
-  --force                    SIGTERM (never SIGKILL, from this script) processes of THIS bundle that
+  --force                    SIGTERM (never SIGKILL) processes of THIS bundle, only those in the confirmed plan, that
                              survive the waits; each one is logged
   --manual-quit              do not script the tray item; wait for you to click
                              "Quit AO Completely"

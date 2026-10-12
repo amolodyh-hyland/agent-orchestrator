@@ -3,14 +3,25 @@
 // ps, pgrep, osascript, open, kill, curl, multica and docker. Nothing real is quit, killed,
 // installed or contacted, and nothing reads the real ~/.ao, the Keychain or port 3001.
 import test from "node:test";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
-import { cp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import os from "node:os";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { execute, fakesDir, makeWorld, mutatedScripts, newVersion, oldVersion, realScriptsDir } from "./noetaxis-macos-update-world.mjs";
 
 const darwin = { skip: process.platform !== "darwin" };
+
+// Defence in depth: a session added after the plan is stopped by the additions check AND by the
+// per-session identity check. A mutation of the first must also switch off the second to be visible.
+async function alsoDisableSessionIdentity(directory) {
+	const file = path.join(directory, "update-lib.sh");
+	const text = await readFile(file, "utf8");
+	const changed = text.replace('if ! noetaxis_update_session_unchanged "$id"; then', "if false; then");
+	assert.notEqual(changed, text);
+	await writeFile(file, changed);
+}
 
 const callIndex = (calls, pattern) => calls.findIndex((line) => pattern.test(line));
 const matching = (calls, pattern) => calls.filter((line) => pattern.test(line));
@@ -787,6 +798,7 @@ test("only the sessions the plan listed may be ended: one that appears afterward
 
 test("mutation: ending a session that was not in the confirmed plan is caught", darwin, async (t) => {
 	const mutant = await mutatedScripts(t, "update-lib.sh", 'if [[ -n "$additions" ]]; then', "if false; then");
+	await alsoDisableSessionIdentity(mutant);
 	const world = await makeWorld(t, "late-session-mutant", { sessions: [liveSession("s1")], cfg: { add_session_on_call: "2", add_session_line: "s9|demo|worker|working|active|false|\n" } });
 	const result = world.update(["--yes", "--end-sessions"], { scriptsDir: mutant });
 	assert.ok(matching(await world.calls(), /session exit-agent s9/).length > 0 || result.status !== 51, "the mutant must end the unconfirmed session");
@@ -867,6 +879,7 @@ test("a session that appears when the plan listed none is refused too (an empty 
 	assert.equal(callIndex(await world.calls(), /^osascript/), -1);
 	// The mutant with the NR == FNR set difference ends the unconfirmed session.
 	const mutant = await mutatedScripts(t, "update-lib.sh", "'FILENAME == ARGV[1] { known[$1] = 1; next }", "'NR == FNR { known[$1] = 1; next }");
+	await alsoDisableSessionIdentity(mutant);
 	const second = await makeWorld(t, "late-session-empty-mutant", { sessions: [], cfg });
 	second.update(["--yes", "--end-sessions"], { scriptsDir: mutant });
 	assert.ok(callIndex(await second.calls(), /session exit-agent s9/) >= 0, "the NR == FNR version is caught: it ends s9");
@@ -1093,13 +1106,100 @@ test("mutation: applying exit-agent to terminated or exited sessions is caught",
 	assert.ok(violations.some((v) => /exit-agent ran for/.test(v)), violations.join("; "));
 });
 
-test("noetaxis_bounded stops a command that ignores SIGALRM, as a Go program does (exit 142, SIGTERM only)", darwin, async () => {
+test("helper commands are bounded by a watchdog on their own process group: TERM, then KILL after a grace; exit 142 and a timeout message", darwin, async (t) => {
+	const root = await mkdtemp(path.join(os.tmpdir(), "noetaxis-bounded-"));
+	t.after(async () => rm(root, { recursive: true, force: true }));
+	const lib = path.join(realScriptsDir, "common.sh");
+	const run = (limit, script, extra = {}) => execute("/bin/bash", ["-c", `. "${lib}"; rc=0; noetaxis_bounded ${limit} /bin/sh -c '${script}' || rc=$?; echo "rc=$rc"`], { env: { PATH: "/usr/bin:/bin", ...extra }, timeout: 120_000 });
+	// A helper that ignores SIGALRM and SIGTERM (as a hung Go CLI can): it is TERMed, then KILLed.
+	const pidFile = path.join(root, "hung.pid");
 	const started = Date.now();
-	const result = execute("/bin/bash", ["-c", `. "${path.join(realScriptsDir, "update-lib.sh")}"; noetaxis_bounded 2 /bin/sh -c 'trap "" ALRM; exec /bin/sleep 60'; echo "rc=$?"`], { env: { PATH: "/usr/bin:/bin" }, timeout: 120_000 });
-	assert.match(result.stdout, /rc=142/);
+	const hung = run(1, `trap "" ALRM TERM; echo $$ > ${pidFile}; while :; do /bin/sleep 1; done`);
+	assert.match(hung.stdout, /rc=142/);
+	assert.match(hung.stderr, /helper command timed out after 1s/);
 	assert.ok(Date.now() - started < 30_000, `took ${Date.now() - started} ms`);
-	const quick = execute("/bin/bash", ["-c", `. "${path.join(realScriptsDir, "update-lib.sh")}"; noetaxis_bounded 5 /bin/sh -c 'echo out; exit 7'; echo "rc=$?"`], { env: { PATH: "/usr/bin:/bin" } });
+	const pid = Number((await readFile(pidFile, "utf8")).trim());
+	assert.throws(() => process.kill(pid, 0), /ESRCH/, "the hung helper is gone");
+	// A helper that honours TERM ends within the grace period.
+	const polite = run(1, `echo $$ > ${pidFile}; while :; do /bin/sleep 1; done`);
+	assert.match(polite.stdout, /rc=142/);
+	// Normal commands pass their output and exit status through, and are not delayed.
+	const quick = run(5, "echo out; exit 7");
 	assert.match(quick.stdout, /out\nrc=7/);
+	// The deadline can only be lowered by the test cap.
+	const capped = run(60, `trap "" TERM; while :; do /bin/sleep 1; done`, { NOETAXIS_HELPER_TIMEOUT_MAX: "1" });
+	assert.match(capped.stdout, /rc=142/);
+});
+
+test("a hung helper is terminated and reported as a failure, while AO's own processes are never sent SIGKILL", darwin, async (t) => {
+	// A real, unrelated process stands in for a user's AO process: it must survive the whole run.
+	const bystander = spawn("/bin/sleep", ["300"], { stdio: "ignore", detached: true });
+	t.after(() => { try { process.kill(bystander.pid, "SIGTERM"); } catch { /* already gone */ } });
+	const world = await makeWorld(t, "hung-helper", { cfg: { ao_hang: "session ls" }, env: { NOETAXIS_HELPER_TIMEOUT_MAX: "2" } });
+	const before = JSON.stringify(await world.procs());
+	const result = world.update(["--yes"]);
+	assert.equal(result.status, 52, result.stdout + result.stderr);
+	assert.match(result.stderr, /session list could not be read \(the call timed out\)/);
+	assert.match(await readFile(path.join(world.sim, "calls.log"), "utf8"), /session ls/);
+	const hungPid = Number((await readFile(path.join(world.sim, "hung.pid"), "utf8")).trim());
+	assert.throws(() => process.kill(hungPid, 0), /ESRCH/, "the hung helper child was terminated");
+	assert.equal(process.kill(bystander.pid, 0), true, "an unrelated process was never signalled");
+	const calls = await world.calls();
+	assert.equal(matching(calls, /^kill /).length, 0, "the updater sent no signal to any AO process");
+	assert.equal(existsSync(path.join(world.sim, "FORBIDDEN")), false);
+	assert.equal(JSON.stringify(await world.procs()), before, "AO's processes are untouched");
+	assert.equal(callIndex(calls, /^osascript/), -1, "nothing was stopped after the timeout");
+});
+
+test("mutation: a watchdog that never escalates to KILL (or only sets an alarm) is caught", darwin, async (t) => {
+	const mutant = await mutatedScripts(t, "common.sh", 'unless ($reaped) { kill "KILL", -$child; waitpid($child, 1); }', "");
+	const root = await mkdtemp(path.join(os.tmpdir(), "noetaxis-bounded-mutant-"));
+	t.after(async () => rm(root, { recursive: true, force: true }));
+	const pidFile = path.join(root, "hung.pid");
+	// Output goes to a file: the surviving helper would otherwise hold this test's pipe open.
+	const outFile = path.join(root, "out.txt");
+	execute("/bin/bash", ["-c", `{ . "${path.join(mutant, "common.sh")}"; rc=0; noetaxis_bounded 1 /bin/sh -c 'trap "" ALRM TERM; echo $$ > ${pidFile}; while :; do /bin/sleep 1; done' || rc=$?; echo "rc=$rc"; } > ${outFile} 2>&1`], { env: { PATH: "/usr/bin:/bin" }, timeout: 120_000 });
+	const result = { stdout: await readFile(outFile, "utf8") };
+	const pid = Number((await readFile(pidFile, "utf8")).trim());
+	let alive = true;
+	try { process.kill(pid, 0); } catch { alive = false; }
+	try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
+	assert.ok(alive, `the mutant leaves the hung helper running (${result.stdout.trim()})`);
+});
+
+test("every wait is bounded twice: a clock stuck in the past cannot make wait_until endless", darwin, async (t) => {
+	const root = await mkdtemp(path.join(os.tmpdir(), "noetaxis-wait-"));
+	t.after(async () => rm(root, { recursive: true, force: true }));
+	await writeFile(path.join(root, "date"), "#!/bin/sh\necho 1000000\n", { mode: 0o755 });
+	const started = Date.now();
+	const result = execute("/bin/bash", ["-c", `. "${path.join(realScriptsDir, "common.sh")}"; . "${path.join(realScriptsDir, "update-lib.sh")}"; rc=0; noetaxis_wait_until never 1 false || rc=$?; echo "rc=$rc"`], { env: { PATH: `${root}:/usr/bin:/bin`, NOETAXIS_POLL_INTERVAL: "0.05" }, timeout: 60_000 });
+	assert.match(result.stdout, /rc=1/);
+	assert.ok(Date.now() - started < 30_000, `took ${Date.now() - started} ms`);
+	// Without the iteration cap the same loop would never end: the mutant is caught by the timeout.
+	const mutant = await mutatedScripts(t, "update-lib.sh", 'if [[ "$now" -ge "$deadline" || "$iterations" -ge "$max_iterations" ]]; then', 'if [[ "$now" -ge "$deadline" ]]; then');
+	const outFile = path.join(root, "mutant.txt");
+	const hung = spawnSync("/bin/bash", ["-c", `{ . "${path.join(mutant, "common.sh")}"; . "${path.join(mutant, "update-lib.sh")}"; rc=0; noetaxis_wait_until never 1 false || rc=$?; echo "rc=$rc"; } > ${outFile} 2>&1`], { env: { PATH: `${root}:/usr/bin:/bin`, NOETAXIS_POLL_INTERVAL: "0.05" }, timeout: 8_000, killSignal: "SIGKILL" });
+	assert.equal(hung.error?.code, "ETIMEDOUT", "without the cap the loop does not end");
+});
+
+test("SIGKILL exists in exactly one place: the watchdog of noetaxis_bounded, aimed at its own helper's process group", async () => {
+	const hits = [];
+	for (const file of ["common.sh", "install.sh", "rollback.sh", "update.sh", "update-lib.sh", "pkg-scripts/preinstall", "pkg-scripts/postinstall"]) {
+		let fn = "";
+		let heredoc = false;
+		(await readFile(path.join(realScriptsDir, file), "utf8")).split("\n").forEach((line, index) => {
+			const header = line.match(/^(noetaxis_[a-z_]+)\(\) \{/);
+			if (header) fn = header[1];
+			if (/<<'?EOF'?$/.test(line)) heredoc = true;
+			else if (line === "EOF") heredoc = false;
+			if (heredoc) return;
+			// Comments and messages may talk about SIGKILL; executable lines may not.
+			if (/^\s*(#|(printf|noetaxis_update_say|noetaxis_update_warn|noetaxis_error)\b)/.test(line)) return;
+			if (/"KILL"|-KILL|\bSIGKILL\b|(^|\s)-9(\s|$)/.test(line)) hits.push(`${file}:${index + 1} in ${fn || "(top level)"}: ${line.trim()}`);
+		});
+	}
+	assert.equal(hits.length, 1, hits.join("\n"));
+	assert.match(hits[0], /^common\.sh:\d+ in noetaxis_bounded: unless \(\$reaped\) \{ kill "KILL", -\$child;/);
 });
 
 test("the daemon's identity is re-checked before every session is ended, not only once", darwin, async (t) => {
@@ -1134,6 +1234,37 @@ test("mutation: signalling a process that is not in the approved set is caught",
 	const world = await makeWorld(t, "force-late-host-mutant", { sessions: [liveSession("s1")], cfg: { spawn_host_on_exit_agent: "s9" } });
 	world.update(["--yes", "--end-sessions", "--force"], { scriptsDir: mutant });
 	assert.ok(matching(await world.calls(), /^kill -TERM \d+$/).length > 0, "the mutant signals the unapproved host");
+});
+
+test("a session whose host changed since the plan is skipped and reported; the batch continues and nothing else is touched (51)", darwin, async (t) => {
+	const world = await makeWorld(t, "session-changed", { sessions: [liveSession("s1"), liveSession("s2"), liveSession("s3")], cfg: { replace_host_on_exit_agent: "s2" } });
+	const result = world.update(["--yes", "--end-sessions"]);
+	assert.equal(result.status, 51, result.stdout + result.stderr);
+	assert.match(result.stdout, /SKIPPED s2 \[demo\]: its host process changed since the plan/);
+	assert.match(result.stderr, /changed since the plan was confirmed and were not touched/);
+	assert.match(result.stderr, /s2 \[demo\]/);
+	const ended = matching(await world.calls(), /session exit-agent/).map((line) => line.replace(/^.*exit-agent (\S+).*$/, "$1"));
+	assert.deepEqual(ended, ["s1", "s3"], "the unchanged sessions were ended, the changed one never");
+	assert.equal(callIndex(await world.calls(), /^osascript/), -1, "the app is left running");
+});
+
+test("mutation: ending a session without re-checking its identity is caught", darwin, async (t) => {
+	const mutant = await mutatedScripts(t, "update-lib.sh", 'if ! noetaxis_update_session_unchanged "$id"; then', "if false; then");
+	const world = await makeWorld(t, "session-changed-mutant", { sessions: [liveSession("s1"), liveSession("s2")], cfg: { replace_host_on_exit_agent: "s2" } });
+	world.update(["--yes", "--end-sessions"], { scriptsDir: mutant });
+	assert.ok(callIndex(await world.calls(), /session exit-agent s2/) >= 0, "the mutant ends the changed session");
+});
+
+test("--force checks pid AND start time: a pid whose process started later is not signalled", darwin, async (t) => {
+	const world = await makeWorld(t, "force-pid-reuse", { extraProcs: ["<APP>/Contents/Resources/daemon/ao chat-host --session orphan"], cfg: { reuse_pid_after_quit: "4004" } });
+	const result = world.update(["--yes", "--force"]);
+	assert.equal(result.status, 56, result.stdout + result.stderr);
+	assert.match(result.stdout, /NOT signalling pid 4004/);
+	assert.equal(matching(await world.calls(), /^kill /).length, 0);
+	const mutant = await mutatedScripts(t, "update-lib.sh", "$1 == pid && $2 == started && substr", "$1 == pid && substr");
+	const second = await makeWorld(t, "force-pid-reuse-mutant", { extraProcs: ["<APP>/Contents/Resources/daemon/ao chat-host --session orphan"], cfg: { reuse_pid_after_quit: "4004" } });
+	second.update(["--yes", "--force"], { scriptsDir: mutant });
+	assert.ok(matching(await second.calls(), /^kill -TERM 4004$/).length > 0, "without the start-time check the reused pid is signalled");
 });
 
 test("a person's own AO_MULTICA_DAEMON / AO_KEEP_DAEMON settings are not an AO session; any other AO_ variable is, and is named", darwin, async (t) => {

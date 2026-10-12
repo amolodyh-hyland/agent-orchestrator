@@ -5,6 +5,50 @@ NOETAXIS_APP_NAME="Agent Orchestrator.app"
 NOETAXIS_BUNDLE_ID="dev.agent-orchestrator.desktop"
 NOETAXIS_LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
+# Run one of this script's OWN helper commands (ao, osascript, lsof, docker, multica, open ...) with a
+# time limit. A SIGALRM alone does not bound a Go program (the Go runtime catches and ignores it, and
+# the bundled ao is one), so the helper runs as a child of a small perl supervisor, in a process
+# group of its own. At the deadline the supervisor sends that group SIGTERM, waits three seconds,
+# then SIGKILL, prints "timed out" on stderr and exits 142 (143 when the script itself is
+# interrupted). This is the ONLY place in the installer that can send SIGKILL, and it can only
+# reach the process group of the helper command it started itself. It never touches AO's own
+# processes (the app, daemon, chat hosts, agents), which are only ever sent SIGTERM, only by
+# noetaxis_signal_own_pid in update-lib.sh, and only with --force.
+noetaxis_bounded() {
+	local seconds="$1"
+	shift
+	# Tests shorten every helper deadline with NOETAXIS_HELPER_TIMEOUT_MAX; it can only lower a limit.
+	if [[ "${NOETAXIS_HELPER_TIMEOUT_MAX:-}" =~ ^[0-9]+$ && "$NOETAXIS_HELPER_TIMEOUT_MAX" -lt "$seconds" ]]; then
+		seconds="$NOETAXIS_HELPER_TIMEOUT_MAX"
+	fi
+	/usr/bin/perl -e '
+		my $limit = shift @ARGV;
+		my $child = fork();
+		exit 127 unless defined $child;
+		if (!$child) { setpgrp(0, 0); exec @ARGV; exit 127; }
+		my $reaped = 0;
+		my $stop = sub {
+			my ($code, $note) = @_;
+			kill "TERM", -$child;
+			my $until = time + 3;
+			while (time < $until) { if (waitpid($child, 1) == $child) { $reaped = 1; last; } select(undef, undef, undef, 0.1); }
+			unless ($reaped) { kill "KILL", -$child; waitpid($child, 1); }
+			print STDERR "$note\n" if $note;
+			exit $code;
+		};
+		$SIG{ALRM} = sub { $stop->(142, "noetaxis: helper command timed out after ${limit}s: @ARGV"); };
+		$SIG{TERM} = $SIG{INT} = $SIG{HUP} = sub { $stop->(143, ""); };
+		alarm $limit;
+		waitpid($child, 0);
+		exit(($? & 127) ? 128 + ($? & 127) : ($? >> 8));
+	' "$seconds" "$@"
+}
+
+# Start time of a process ("Mon Oct 12 04:33:21 2026"); with the pid it identifies one process.
+noetaxis_process_start() {
+	ps -ww -o lstart= -p "$1" 2>/dev/null | /usr/bin/tr -s ' ' | /usr/bin/sed 's/^ //; s/ $//' || true
+}
+
 noetaxis_error() {
 	printf 'Error: %s\n' "$1" >&2
 }
@@ -208,7 +252,7 @@ noetaxis_assert_idle() {
 noetaxis_port_listener_pids() {
 	local lsof_bin="${NOETAXIS_LSOF:-/usr/sbin/lsof}" port="${NOETAXIS_AO_PORT:-3001}" listener
 	[[ -x "$lsof_bin" ]] || return 0
-	listener="$("$lsof_bin" -nP -iTCP:"$port" -sTCP:LISTEN -Fp 2>/dev/null | /usr/bin/sed -n 's/^p//p' | /usr/bin/tr '\n' ' ')" || true
+	listener="$(noetaxis_bounded 15 "$lsof_bin" -nP -iTCP:"$port" -sTCP:LISTEN -Fp 2>/dev/null | /usr/bin/sed -n 's/^p//p' | /usr/bin/tr '\n' ' ')" || true
 	printf '%s' "${listener% }"
 }
 

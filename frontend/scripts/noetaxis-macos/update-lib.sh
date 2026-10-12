@@ -44,6 +44,8 @@ cap_standalone="unknown"
 cap_stack_running=""
 cap_schema_before=""
 cap_processes_file=""
+cap_hosts_file=""
+update_sessions_changed=""
 
 update_actual_new_version=""
 update_health_detail=""
@@ -92,31 +94,6 @@ noetaxis_update_append() {
 }$line"
 }
 
-# Run a command with a time limit. A SIGALRM alone does not bound a Go program (the Go runtime
-# catches and ignores it, and the bundled ao is one), so the command runs as a child of a small
-# perl supervisor: at the deadline it gets SIGTERM, then three seconds of grace, and the supervisor
-# exits 142 either way. The only signal is this SIGTERM, to the CLI this function itself started;
-# nothing is ever SIGKILLed.
-noetaxis_bounded() {
-	local seconds="$1"
-	shift
-	/usr/bin/perl -e '
-		my $limit = shift @ARGV;
-		my $child = fork();
-		exit 127 unless defined $child;
-		if (!$child) { exec @ARGV; exit 127; }
-		$SIG{ALRM} = sub {
-			kill "TERM", $child;
-			my $until = time + 3;
-			while (time < $until) { last if waitpid($child, 1) == $child; select(undef, undef, undef, 0.1); }
-			exit 142;
-		};
-		alarm $limit;
-		waitpid($child, 0);
-		exit(($? & 127) ? 128 + ($? & 127) : ($? >> 8));
-	' "$seconds" "$@"
-}
-
 noetaxis_json_get() {
 	# noetaxis_json_get <file> <key path>: raw value or a non-zero status.
 	/usr/bin/plutil -extract "$2" raw -o - "$1" 2>/dev/null
@@ -127,11 +104,13 @@ noetaxis_update_sleep() {
 }
 
 # Poll a predicate until it succeeds or the time runs out. Prints a progress line about
-# every five seconds so a long wait never looks hung.
+# every five seconds so a long wait never looks hung. Bounded twice: by the wall-clock deadline and
+# by an iteration cap, so a clock that jumps backwards cannot make the loop endless.
 # noetaxis_wait_until <label> <timeout seconds> <predicate> [args...]
 noetaxis_wait_until() {
-	local label="$1" timeout="$2" now deadline next_note
+	local label="$1" timeout="$2" now deadline next_note iterations=0 max_iterations
 	shift 2
+	max_iterations="$(/usr/bin/awk -v timeout="$timeout" -v interval="${NOETAXIS_POLL_INTERVAL:-1}" 'BEGIN { if (interval < 0.01) interval = 0.01; print int(timeout / interval) * 2 + 5 }')"
 	now="$(date '+%s')"
 	deadline=$((now + timeout))
 	next_note=$((now + 5))
@@ -139,8 +118,9 @@ noetaxis_wait_until() {
 		if "$@"; then
 			return 0
 		fi
+		iterations=$((iterations + 1))
 		now="$(date '+%s')"
-		if [[ "$now" -ge "$deadline" ]]; then
+		if [[ "$now" -ge "$deadline" || "$iterations" -ge "$max_iterations" ]]; then
 			return 1
 		fi
 		if [[ "$now" -ge "$next_note" ]]; then
@@ -231,10 +211,36 @@ noetaxis_describe_processes() {
 # rollback, when the rollback began). A process that appeared later, such as the chat host of a
 # session started after the plan, is never signalled, even with --force.
 update_approved_file=""
+# A process is approved only if its pid, its start time AND its command line match a line of the
+# approved file (pid<TAB>start<TAB>command): a reused pid has a different start time.
 noetaxis_update_process_approved() {
-	local pid="$1" command_line="$2"
+	local pid="$1" command_line="$2" started
 	[[ -n "$update_approved_file" && -f "$update_approved_file" ]] || return 1
-	/usr/bin/awk -F '\t' -v pid="$pid" -v command_line="$command_line" '$1 == pid && substr($0, length($1) + 2) == command_line { found = 1 } END { exit !found }' "$update_approved_file"
+	started="$(noetaxis_process_start "$pid")"
+	[[ -n "$started" ]] || return 1
+	/usr/bin/awk -F '\t' -v pid="$pid" -v started="$started" -v command_line="$command_line" '$1 == pid && $2 == started && substr($0, length($1) + length($2) + 3) == command_line { found = 1 } END { exit !found }' "$update_approved_file"
+}
+
+# pid<TAB>start<TAB>command of every process of the bundle right now.
+noetaxis_update_snapshot_processes() {
+	local app_path="$1" pid command_line
+	while IFS=$'\t' read -r pid command_line; do
+		[[ -n "$pid" ]] || continue
+		printf '%s\t%s\t%s\n' "$pid" "$(noetaxis_process_start "$pid")" "$command_line"
+	done < <(noetaxis_own_bundle_processes "$app_path")
+}
+
+# Chat-host processes of one session: those of the bundle whose command line carries the session id
+# as a word. "pid<TAB>start<TAB>command" lines.
+noetaxis_update_session_hosts() {
+	local app_path="$1" id="$2" pid command_line
+	while IFS=$'\t' read -r pid command_line; do
+		[[ -n "$pid" ]] || continue
+		[[ "$(noetaxis_process_kind "$app_path" "$command_line")" == chat-host ]] || continue
+		case " $command_line " in
+			*" $id "*) printf '%s\t%s\t%s\n' "$pid" "$(noetaxis_process_start "$pid")" "$command_line" ;;
+		esac
+	done < <(noetaxis_own_bundle_processes "$app_path")
 }
 
 noetaxis_update_print_unapproved() {
@@ -303,13 +309,21 @@ noetaxis_update_status_identity() {
 # unreadable status is also 1.
 noetaxis_update_verify_daemon() {
 	local app_path="$1" json
-	json="$(noetaxis_bounded 15 "$app_path/Contents/Resources/daemon/ao" status --json 2>/dev/null)" || { noetaxis_update_identity_detail="ao status could not be read, so the daemon's identity cannot be verified"; return 1; }
+	local status_rc=0
+	json="$(noetaxis_bounded 15 "$app_path/Contents/Resources/daemon/ao" status --json 2>/dev/null)" || status_rc=$?
+	if [[ "$status_rc" -ne 0 ]]; then
+		noetaxis_update_identity_detail="ao status could not be read$([[ "$status_rc" -eq 142 ]] && printf ' (timed out after 15 s)'), so the daemon's identity cannot be verified"
+		return 1
+	fi
 	noetaxis_update_status_identity "$app_path" "$json"
 }
 
+cap_sessions_rc=0
 noetaxis_update_list_sessions_json() {
-	# noetaxis_update_list_sessions_json <output file>
-	noetaxis_bounded 30 "$cap_cli" session ls --all --include-terminated --json > "$1" 2>"$1.err"
+	# noetaxis_update_list_sessions_json <output file>; a timeout is exit 142 and says so in <file>.err
+	cap_sessions_rc=0
+	noetaxis_bounded 30 "$cap_cli" session ls --all --include-terminated --json > "$1" 2>"$1.err" || cap_sessions_rc=$?
+	return "$cap_sessions_rc"
 }
 
 # Parse a sessions JSON file into a tab separated list of the live (not terminated) sessions.
@@ -371,11 +385,14 @@ noetaxis_update_capture_state() {
 		cap_old_version="$(noetaxis_plist_value "$app_path/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null || printf 'unknown')"
 	fi
 	noetaxis_own_bundle_processes "$app_path" > "$cap_processes_file" || true
-	update_approved_file="$cap_processes_file"
+	update_approved_file="$dir/approved-processes.tsv"
+	noetaxis_update_snapshot_processes "$app_path" > "$update_approved_file" || true
 
 	cap_daemon_state="none"
 	if [[ -x "$cap_cli" ]]; then
-		if noetaxis_bounded 20 "$cap_cli" status --json > "$dir/ao-status.json" 2>"$dir/ao-status.err"; then
+		cap_status_rc=0
+		noetaxis_bounded 20 "$cap_cli" status --json > "$dir/ao-status.json" 2>"$dir/ao-status.err" || cap_status_rc=$?
+		if [[ "$cap_status_rc" -eq 0 ]]; then
 			cap_daemon_state="$(noetaxis_json_get "$dir/ao-status.json" state || printf 'unknown')"
 			cap_daemon_port="$(noetaxis_json_get "$dir/ao-status.json" port || true)"
 			cap_daemon_pid="$(noetaxis_json_get "$dir/ao-status.json" pid || true)"
@@ -388,7 +405,7 @@ noetaxis_update_capture_state() {
 	# is shown to be THIS bundle's own, nothing else is read from it or asked of it.
 	cap_identity_detail=""
 	if [[ "$cap_daemon_state" == unknown ]]; then
-		cap_identity_detail="ao status could not be read, so the daemon's identity cannot be verified"
+		cap_identity_detail="ao status could not be read$([[ "${cap_status_rc:-0}" -eq 142 ]] && printf ' (timed out after 20 s)'), so the daemon's identity cannot be verified"
 	elif [[ "$cap_daemon_state" != none ]]; then
 		noetaxis_update_status_identity "$app_path" "$(/bin/cat "$dir/ao-status.json")" || cap_identity_detail="$noetaxis_update_identity_detail"
 	fi
@@ -402,6 +419,14 @@ noetaxis_update_capture_state() {
 				;;
 		esac
 	fi
+	# Identity of each confirmed session: its id plus the host processes (pid, start time, command)
+	# it had when the plan was captured. Re-checked right before each exit-agent.
+	cap_hosts_file="$dir/confirmed-hosts.tsv"
+	: > "$cap_hosts_file"
+	while IFS="$noetaxis_sep" read -r id project role status activity name; do
+		[[ -n "$id" ]] || continue
+		noetaxis_update_session_hosts "$app_path" "$id" | /usr/bin/sed "s/^/$id\t/" >> "$cap_hosts_file" || true
+	done < "$cap_live_file"
 
 	cap_hosted="unknown"
 	cap_hosted_state=""
@@ -579,7 +604,7 @@ noetaxis_update_preflight_refusals() {
 		return 57
 	fi
 	if [[ "$cap_sessions_status" == failed && "$update_force" -ne 1 ]]; then
-		noetaxis_error "The AO daemon is running (state: $cap_daemon_state) but its session list could not be read (see $cap_dir/sessions.json.err), so live sessions cannot be identified. Nothing was stopped. Fix the daemon or rerun with --force to continue without the list (--force may SIGTERM chat hosts of this bundle afterwards)."
+		noetaxis_error "The AO daemon is running (state: $cap_daemon_state) but its session list could not be read$([[ "$cap_sessions_rc" -eq 142 ]] && printf ' (the call timed out)') (see $cap_dir/sessions.json.err), so live sessions cannot be identified. Nothing was stopped. Fix the daemon or rerun with --force to continue without the list (--force may SIGTERM chat hosts of this bundle afterwards)."
 		return 52
 	fi
 	if [[ "$cap_live_count" -gt 0 && "$update_end_sessions" -ne 1 ]]; then
@@ -623,8 +648,35 @@ noetaxis_update_no_live_sessions() {
 }
 
 # End every live session through AO's own command while the daemon can still answer.
+# Is session $1 still the session that was confirmed? It must still be live in a fresh list, be one
+# of the confirmed ids, and have exactly the host processes (pid, start time, command line) it had
+# at the plan. Sets noetaxis_update_session_detail.
+noetaxis_update_session_detail=""
+noetaxis_update_session_unchanged() {
+	local id="$1" confirmed="$cap_dir/confirmed-sessions.tsv" now_hosts expected_hosts
+	noetaxis_update_session_detail=""
+	if ! /usr/bin/awk -F "$noetaxis_sep" -v id="$id" '$1 == id { found = 1 } END { exit !found }' "$confirmed" 2>/dev/null; then
+		noetaxis_update_session_detail="it was not in the confirmed plan"
+		return 1
+	fi
+	if ! noetaxis_update_list_sessions_json "$cap_dir/sessions-each.json" || ! noetaxis_update_parse_live_sessions "$cap_dir/sessions-each.json" "$cap_dir/live-each.tsv"; then
+		noetaxis_update_session_detail="the session list could not be read again"
+		return 1
+	fi
+	if ! /usr/bin/awk -F "$noetaxis_sep" -v id="$id" '$1 == id { found = 1 } END { exit !found }' "$cap_dir/live-each.tsv"; then
+		noetaxis_update_session_detail="it is no longer live"
+		return 1
+	fi
+	expected_hosts="$(/usr/bin/awk -F '\t' -v id="$id" '$1 == id { sub(/^[^\t]*\t/, ""); print }' "$cap_hosts_file" | LC_ALL=C /usr/bin/sort)"
+	now_hosts="$(noetaxis_update_session_hosts "$target_app" "$id" | LC_ALL=C /usr/bin/sort)"
+	if [[ "$expected_hosts" != "$now_hosts" ]]; then
+		noetaxis_update_session_detail="its host process changed since the plan (pid, start time or command line differ)"
+		return 1
+	fi
+}
+
 noetaxis_update_end_sessions() {
-	local id project role status activity name output status_code failed=0 total=0 ended=0
+	local id project role status activity name output status_code failed=0 total=0 ended=0 timed_out=0
 	noetaxis_update_step "Ending $cap_live_count live session(s)"
 	while IFS="$noetaxis_sep" read -r id project role status activity name; do
 		[[ -n "$id" ]] || continue
@@ -633,6 +685,12 @@ noetaxis_update_end_sessions() {
 		if ! noetaxis_update_verify_daemon "$target_app"; then
 			noetaxis_error "Stopped before ending $id: $noetaxis_update_identity_detail. Sessions ended so far stay ended; the app and daemon were not touched."
 			return 57
+		fi
+		# Immediately before acting: the session must still be exactly the confirmed one.
+		if ! noetaxis_update_session_unchanged "$id"; then
+			noetaxis_update_say "SKIPPED $id [$project]: $noetaxis_update_session_detail"
+			noetaxis_update_append update_sessions_changed "$id [$project]: $noetaxis_update_session_detail"
+			continue
 		fi
 		status_code=0
 		output="$(noetaxis_bounded 90 "$cap_cli" session exit-agent "$id" ${project:+--project "$project"} 2>&1)" || status_code=$?
@@ -643,11 +701,17 @@ noetaxis_update_end_sessions() {
 			noetaxis_update_append noetaxis_update_summary_stopped "session $id: agent stopped (ao session exit-agent; session and worktree kept)"
 		else
 			failed=$((failed + 1))
-			noetaxis_update_say "FAILED to end $id [$project]: ${output:-exit $status_code}"
+			[[ "$status_code" -ne 142 ]] || timed_out=$((timed_out + 1))
+			noetaxis_update_say "FAILED to end $id [$project]: ${output:-exit $status_code}$([[ "$status_code" -eq 142 ]] && printf ' (timed out)')"
 		fi
 	done < "$cap_live_file"
+	if [[ -n "$update_sessions_changed" ]]; then
+		noetaxis_error "Session(s) changed since the plan was confirmed and were not touched (the app and daemon were not touched either; rerun to see a new plan):"
+		printf '%s\n' "$update_sessions_changed" | /usr/bin/sed 's/^/      /' >&2
+		return 51
+	fi
 	if [[ "$failed" -gt 0 ]]; then
-		noetaxis_error "$failed of $total session(s) could not be ended (their agents were not stopped). The app and daemon were not touched."
+		noetaxis_error "$failed of $total session(s) could not be ended (their agents were not stopped$([[ "$timed_out" -gt 0 ]] && printf '; %s helper call(s) timed out' "$timed_out"). The app and daemon were not touched."
 		return 53
 	fi
 	if ! noetaxis_wait_until "the daemon to report no live sessions" "$update_stop_timeout" noetaxis_update_no_live_sessions; then
@@ -927,7 +991,7 @@ noetaxis_update_start_and_wait() {
 	update_health_executable=""
 	update_health_port=""
 	noetaxis_update_step "Starting $label"
-	"${NOETAXIS_OPEN:-/usr/bin/open}" -a "$app_path" || status_code=$?
+	noetaxis_bounded 60 "${NOETAXIS_OPEN:-/usr/bin/open}" -a "$app_path" || status_code=$?
 	if [[ "$status_code" -ne 0 ]]; then
 		update_health_detail="open -a exited with status $status_code"
 		return 1
@@ -1116,7 +1180,7 @@ noetaxis_update_rollback_swap() {
 		rollback_args+=(--restore-db)
 	fi
 	# The approved set of a rollback is what the new app, started by this run, runs right now.
-	noetaxis_own_bundle_processes "$failed_app" > "$cap_dir/approved-rollback.tsv" || true
+	noetaxis_update_snapshot_processes "$failed_app" > "$cap_dir/approved-rollback.tsv" || true
 	update_approved_file="$cap_dir/approved-rollback.tsv"
 	noetaxis_update_quit_app "$failed_app" || return 61
 	noetaxis_update_stop_daemon "$failed_app" || return 61

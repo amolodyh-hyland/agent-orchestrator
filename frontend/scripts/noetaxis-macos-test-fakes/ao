@@ -7,6 +7,15 @@ sim_log "ao[$APP] $* (AO_ vars in env: $(/usr/bin/env | /usr/bin/grep -c '^AO_')
 daemon_up() { sim_app_running_daemon "$APP"; }
 version() { /usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist"; }
 
+# Test hook: a helper call that hangs and ignores SIGTERM, to prove the watchdog ends it.
+if [[ -f "$SIM/cfg/ao_hang" && "$*" == *"$(sim_value ao_hang)"* ]]; then
+	trap '' TERM
+	printf '%s' "$$" > "$SIM/hung.pid"
+	# Bounded even though it is meant to be killed: a leftover hung fake must not live forever.
+	for _ in $(seq 1 300); do /bin/sleep 1; done
+	exit 1
+fi
+
 case "$1" in
 	version) printf 'dev\n' ;;
 	spawn)
@@ -72,6 +81,12 @@ case "$1" in
 				/bin/mv "$SIM/sessions.tmp" "$SIM/sessions"
 				sim_remove_prefix "$APP/Contents/Resources/daemon/ao chat-host --session $id"
 				if [[ -f "$SIM/cfg/foreign_after_exit_agent" ]]; then /bin/cp "$SIM/cfg/foreign_after_exit_agent" "$SIM/cfg/foreign_status_versions"; fi
+				# Test hook: another session's host is replaced by a new process while the batch runs.
+				if [[ -f "$SIM/cfg/replace_host_on_exit_agent" ]]; then
+					replaced="$(sim_value replace_host_on_exit_agent)"
+					sim_remove_prefix "$APP/Contents/Resources/daemon/ao chat-host --session $replaced"
+					sim_add_proc "$APP/Contents/Resources/daemon/ao chat-host --session $replaced" > /dev/null
+				fi
 				if [[ -f "$SIM/cfg/spawn_host_on_exit_agent" ]]; then sim_add_proc "$APP/Contents/Resources/daemon/ao chat-host --session $(sim_value spawn_host_on_exit_agent)" > /dev/null; fi
 				printf 'agent exited for session %s\n' "$id"
 				;;

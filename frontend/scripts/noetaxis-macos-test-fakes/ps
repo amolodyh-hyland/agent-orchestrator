@@ -7,6 +7,10 @@ case "$*" in
 		[[ -n "$command" ]] || exit 1
 		printf '%s\n' "$command"
 		;;
+	*lstart=*)
+		[[ -n "$(sim_command_of "$pid")" ]] || exit 1
+		if [[ -f "$SIM/cfg/lstart_$pid" ]]; then cat "$SIM/cfg/lstart_$pid"; else printf 'Mon Oct 12 00:00:%02d 2026\n' "$((pid % 60))"; fi
+		;;
 	*ppid=*) printf '1\n' ;;
 	*) exit 1 ;;
 esac

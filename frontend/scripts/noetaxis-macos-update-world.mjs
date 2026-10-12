@@ -158,7 +158,7 @@ export async function makeWorld(t, label, options = {}) {
 		// Output goes to files, not pipes: a stray grandchild that outlives the script can then not hold
 		// the test up, and a timeout keeps everything the script printed plus the processes still alive
 		// under this world (evidence for the rare multi-minute stalls seen on a loaded host).
-		run(args, { input = "", scriptsDir = realScriptsDir, script = "install.sh", extraEnv = {}, timeout = 300_000 } = {}) {
+		run(args, { input = "", scriptsDir = realScriptsDir, script = "install.sh", extraEnv = {}, timeout = 150_000 } = {}) {
 			const outPath = path.join(root, `run-${Math.random().toString(36).slice(2)}.out`);
 			const errPath = `${outPath}.err`;
 			const outFd = openSync(outPath, "w");
@@ -170,7 +170,7 @@ export async function makeWorld(t, label, options = {}) {
 			const sampler = spawn("/bin/sh", ["-c", `/bin/sleep 120; /bin/ps -axo pid,ppid,stat,wchan,etime,command | /usr/bin/grep -F "${root}" > "${samplePath}"`], { stdio: "ignore" });
 			let result;
 			try {
-				result = spawnSync(path.join(scriptsDir, script), args, { input, env: { ...env, ...extraEnv }, timeout, encoding: "utf8", stdio: ["pipe", outFd, errFd] });
+				result = spawnSync(path.join(scriptsDir, script), args, { input, env: { ...env, ...extraEnv }, timeout, killSignal: "SIGKILL", encoding: "utf8", stdio: ["pipe", outFd, errFd] });
 			} finally {
 				sampler.kill();
 				closeSync(outFd);
