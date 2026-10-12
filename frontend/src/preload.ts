@@ -54,6 +54,23 @@ import type {
 import type { UpdateOutcome } from "./shared/update-telemetry";
 import type { UiSettings } from "./main/ui-settings";
 import {
+	MULTICA_LOCAL_SERVER_CANCEL_CHANNEL,
+	MULTICA_LOCAL_SERVER_CHOOSE_FOLDER_CHANNEL,
+	MULTICA_LOCAL_SERVER_GET_LOGS_CHANNEL,
+	MULTICA_LOCAL_SERVER_GET_STATE_CHANNEL,
+	MULTICA_LOCAL_SERVER_RESTART_CHANNEL,
+	MULTICA_LOCAL_SERVER_SETUP_CHANNEL,
+	MULTICA_LOCAL_SERVER_START_CHANNEL,
+	MULTICA_LOCAL_SERVER_STATUS_CHANNEL,
+	MULTICA_LOCAL_SERVER_STOP_CHANNEL,
+	MULTICA_LOCAL_SERVER_USE_DETECTED_CHANNEL,
+	MULTICA_LOCAL_SERVER_WATCH_CHANNEL,
+	type LocalServerLogsResult,
+	type LocalServerResult,
+	type LocalServerService,
+	type LocalServerStatus,
+} from "./shared/multica-local-server";
+import {
 	MULTICA_CHECK_SERVER_CHANNEL,
 	MULTICA_GET_SETTINGS_CHANNEL,
 	MULTICA_GET_STATE_CHANNEL,
@@ -731,6 +748,26 @@ const api = {
 			ipcRenderer.invoke(MULTICA_SET_SETTINGS_CHANNEL, request) as Promise<MulticaSetSettingsResult>,
 		checkServer: (request: Pick<MulticaSetSettingsRequest, "customUrl" | "apiUrl">) =>
 			ipcRenderer.invoke(MULTICA_CHECK_SERVER_CHANNEL, request) as Promise<MulticaCheckResult>,
+		localServer: {
+			getState: () => ipcRenderer.invoke(MULTICA_LOCAL_SERVER_GET_STATE_CHANNEL) as Promise<LocalServerStatus>,
+			watch: (enabled: boolean) => ipcRenderer.invoke(MULTICA_LOCAL_SERVER_WATCH_CHANNEL, enabled) as Promise<LocalServerResult>,
+			start: () => ipcRenderer.invoke(MULTICA_LOCAL_SERVER_START_CHANNEL) as Promise<LocalServerResult>,
+			stop: () => ipcRenderer.invoke(MULTICA_LOCAL_SERVER_STOP_CHANNEL) as Promise<LocalServerResult>,
+			restart: () => ipcRenderer.invoke(MULTICA_LOCAL_SERVER_RESTART_CHANNEL) as Promise<LocalServerResult>,
+			cancel: () => ipcRenderer.invoke(MULTICA_LOCAL_SERVER_CANCEL_CHANNEL) as Promise<LocalServerResult>,
+			setup: () => ipcRenderer.invoke(MULTICA_LOCAL_SERVER_SETUP_CHANNEL) as Promise<LocalServerResult>,
+			chooseFolder: () => ipcRenderer.invoke(MULTICA_LOCAL_SERVER_CHOOSE_FOLDER_CHANNEL) as Promise<LocalServerResult>,
+			useDetectedFolder: () => ipcRenderer.invoke(MULTICA_LOCAL_SERVER_USE_DETECTED_CHANNEL) as Promise<LocalServerResult>,
+			getLogs: (service: LocalServerService, tail?: number) =>
+				ipcRenderer.invoke(MULTICA_LOCAL_SERVER_GET_LOGS_CHANNEL, { service, ...(tail === undefined ? {} : { tail }) }) as Promise<LocalServerLogsResult>,
+			onStatus: (listener: (status: LocalServerStatus) => void) => {
+				const wrapped = (_event: Electron.IpcRendererEvent, status: LocalServerStatus) => listener(status);
+				ipcRenderer.on(MULTICA_LOCAL_SERVER_STATUS_CHANNEL, wrapped);
+				return () => {
+					ipcRenderer.off(MULTICA_LOCAL_SERVER_STATUS_CHANNEL, wrapped);
+				};
+			},
+		},
 		onState: (listener: (state: MulticaViewState) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, state: MulticaViewState) => listener(state);
 			ipcRenderer.on(MULTICA_STATE_CHANNEL, wrapped);
