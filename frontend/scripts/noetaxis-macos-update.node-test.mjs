@@ -15,6 +15,16 @@ const darwin = { skip: process.platform !== "darwin" };
 
 // Defence in depth: a session added after the plan is stopped by the additions check AND by the
 // per-session identity check. A mutation of the first must also switch off the second to be visible.
+// The last, local-only host check before exit-agent is one more defence layer: a mutation of the
+// layers before it must switch it off too to be visible.
+async function disableFinalHostCheck(directory) {
+	const file = path.join(directory, "update-lib.sh");
+	const text = await readFile(file, "utf8");
+	const changed = text.replace('if ! noetaxis_update_host_unchanged "$id"; then', "if false; then");
+	assert.notEqual(changed, text);
+	await writeFile(file, changed);
+}
+
 async function alsoDisableSessionIdentity(directory) {
 	const file = path.join(directory, "update-lib.sh");
 	const text = await readFile(file, "utf8");
@@ -23,6 +33,7 @@ async function alsoDisableSessionIdentity(directory) {
 	assert.notEqual(changed, text);
 	assert.ok(!changed.includes('/bin/cp "$confirmed" "$cap_live_file"'));
 	await writeFile(file, changed);
+	await disableFinalHostCheck(directory);
 }
 
 // An install run started asynchronously (to interrupt or pause it): stdout and stderr are drained, and
@@ -1134,6 +1145,7 @@ test("mutation: applying exit-agent to terminated or exited sessions is caught",
 	const loosened = text.replace('if ! /usr/bin/awk -F \'\\t\' -v id="$id" \'$1 == id { found = 1 } END { exit !found }\' "$cap_hosts_file"; then\n\t\t\tnoetaxis_update_say "NOT ENDED', 'if false; then\n\t\t\tnoetaxis_update_say "NOT ENDED').replace('if [[ -z "$expected_hosts" ]]; then', "if false; then");
 	assert.notEqual(loosened, text);
 	await writeFile(file, loosened);
+	await disableFinalHostCheck(mutant);
 	const violations = await scenarioExactSessionIds(t, mutant);
 	assert.ok(violations.some((v) => /exit-agent ran for/.test(v)), violations.join("; "));
 });
@@ -1529,6 +1541,7 @@ test("a session whose host changed since the plan is skipped and reported; the b
 
 test("mutation: ending a session without re-checking its identity is caught", darwin, async (t) => {
 	const mutant = await mutatedScripts(t, "update-lib.sh", 'if ! noetaxis_update_session_unchanged "$id"; then', "if false; then");
+	await disableFinalHostCheck(mutant);
 	const world = await makeWorld(t, "session-changed-mutant", { sessions: [liveSession("s1"), liveSession("s2")], cfg: { replace_host_on_exit_agent: "s2" } });
 	world.update(["--yes", "--end-sessions"], { scriptsDir: mutant });
 	assert.ok(callIndex(await world.calls(), /session exit-agent s2/) >= 0, "the mutant ends the changed session");
@@ -1575,6 +1588,7 @@ test("mutation: ending a hostless session (empty host sets treated as equal) is 
 	const loosened = text.replace('if [[ -z "$expected_hosts" ]]; then', "if false; then");
 	assert.notEqual(loosened, text);
 	await writeFile(file, loosened);
+	await disableFinalHostCheck(mutant);
 	const world = await makeWorld(t, "hostless-mutant", { sessions: [liveSession("s1"), liveSession("s2", { host: false })] });
 	world.update(["--yes", "--end-sessions"], { scriptsDir: mutant });
 	assert.ok(exitAgentIds(await world.calls()).includes("s2"), "the mutant ends the hostless session");
