@@ -498,6 +498,32 @@ test("--restart-multica-daemon and --restart-multica-stack restart only what was
 	assert.equal(matching(idleCalls, /^docker restart/).length, 0);
 });
 
+test("a failed docker restart is a failure of that step: labelled, counted (exit 62) and left for the user", darwin, async (t) => {
+	const world = await makeWorld(t, "docker-fails", { docker: ["multica-backend-1", "multica-postgres-1"], cfg: { docker_restart_fail: "multica-postgres-1\n" } });
+	const result = world.update(["--yes", "--restart-multica-stack"]);
+	assert.equal(result.status, 62, result.stdout + result.stderr);
+	assert.match(result.stdout, /docker restart multica-postgres-1: FAILED \(exit 1\)/);
+	assert.match(result.stdout, /Docker container multica-postgres-1: restart FAILED \(exit 1\)/);
+	assert.match(result.stdout, /Docker container multica-backend-1 restarted/);
+	assert.match(result.stdout, /The Multica Docker container multica-postgres-1 did not restart/);
+	assert.doesNotMatch(result.stdout, /multica-postgres-1 restarted/);
+});
+
+test("the tray click tries the quit label of every UI locale, and the list follows the app's translations", darwin, async (t) => {
+	const i18n = path.resolve(realScriptsDir, "../../src/renderer/i18n");
+	const labels = new Map();
+	for (const file of (await readdir(i18n)).filter((name) => name.endsWith(".json"))) {
+		const value = JSON.parse(await readFile(path.join(i18n, file), "utf8"))["tray.quit"];
+		if (value) labels.set(file, value);
+	}
+	assert.ok(labels.size >= 8, `expected the eight known locales, found ${labels.size}`);
+	const world = await makeWorld(t, "tray-locales");
+	const result = world.update(["--yes"]);
+	assert.equal(result.status, 0, result.stdout + result.stderr);
+	const script = matching(await world.calls(), /^osascript/)[0];
+	for (const [file, label] of labels) assert.ok(script.includes(`"${label}"`), `the tray click does not know the ${file} label "${label}"`);
+});
+
 test("a hosted Multica daemon that was on and is off after the restart is reported with how to turn it on, without touching a profile", darwin, async (t) => {
 	const world = await makeWorld(t, "hosting", { hosting: "on", cfg: { hosting_after_open: "off" } });
 	const result = world.update(["--yes"]);

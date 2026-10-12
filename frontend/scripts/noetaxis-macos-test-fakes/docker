@@ -8,6 +8,9 @@ case "$1" in
 			*) cat "$SIM/docker_containers" ;;
 		esac
 		;;
-	restart) exit 0 ;;
+	restart)
+		if /usr/bin/grep -qxF "$2" "$SIM/cfg/docker_restart_fail" 2>/dev/null; then printf 'Error response from daemon\n' >&2; exit 1; fi
+		exit 0
+		;;
 	*) exit 2 ;;
 esac

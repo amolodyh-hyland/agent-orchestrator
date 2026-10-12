@@ -608,23 +608,34 @@ noetaxis_update_end_sessions() {
 # "Quit AO Completely" (and a system shutdown) exits the app, and there is no CLI, daemon
 # API or URL for it. So the supported action is driven through the accessibility API, for
 # one specific process id (never by bundle id, which another copy shares).
+# The tray item's label is the translated "tray.quit" string of the app's UI locale. These are
+# all of them (frontend/src/renderer/i18n/*.json); a test fails when a locale is added or a
+# string changes without this list following.
+noetaxis_tray_quit_names=("Quit AO Completely" "AO vollständig beenden" "AO を完全に終了" "完全退出 AO" "Sair completamente do AO" "AO 완전히 종료" "Quitter complètement AO" "Salir completamente de AO")
+
 noetaxis_tray_quit() {
-	local pid="$1"
+	local pid="$1" name name_list=""
+	for name in "${noetaxis_tray_quit_names[@]}"; do
+		name_list="${name_list}${name_list:+, }\"$name\""
+	done
 	noetaxis_bounded 20 "${NOETAXIS_OSASCRIPT:-/usr/bin/osascript}" \
 		-e 'on run argv' \
 		-e 'set targetPid to (item 1 of argv) as integer' \
 		-e 'tell application "System Events"' \
 		-e 'set targetProcess to first application process whose unix id is targetPid' \
+		-e "set quitNames to {$name_list}" \
 		-e 'repeat with theBar in menu bars of targetProcess' \
 		-e 'repeat with theItem in menu bar items of theBar' \
+		-e 'repeat with quitName in quitNames' \
 		-e 'try' \
-		-e 'click (first menu item of menu 1 of theItem whose name starts with "Quit AO Completely")' \
+		-e 'click (first menu item of menu 1 of theItem whose name is (contents of quitName))' \
 		-e 'return "clicked"' \
 		-e 'end try' \
 		-e 'end repeat' \
 		-e 'end repeat' \
+		-e 'end repeat' \
 		-e 'end tell' \
-		-e 'error "the Quit AO Completely tray item was not found"' \
+		-e 'error "no tray item for quitting AO completely was found in any known language"' \
 		-e 'end run' \
 		"$pid"
 }
@@ -643,7 +654,7 @@ noetaxis_update_quit_app() {
 			if [[ "$status_code" -eq 0 ]]; then
 				noetaxis_update_say "clicked \"Quit AO Completely\" for pid $main_pid"
 			else
-				noetaxis_update_say "could not click the tray item (${output:-exit $status_code}). Click the Agent Orchestrator icon in the menu bar and choose \"Quit AO Completely\" yourself. Scripting it needs Accessibility/Automation permission for your terminal."
+				noetaxis_update_say "could not click the tray item (${output:-exit $status_code}). Click the Agent Orchestrator icon in the menu bar and choose \"Quit AO Completely\" (or its translation in your language) yourself. Scripting it needs Accessibility/Automation permission for your terminal."
 			fi
 		fi
 	else
@@ -1004,8 +1015,15 @@ noetaxis_update_restart_multica() {
 			[[ -n "$name" ]] || continue
 			status_code=0
 			noetaxis_bounded 120 "${NOETAXIS_DOCKER:-docker}" restart "$name" >/dev/null 2>&1 || status_code=$?
-			noetaxis_update_say "docker restart $name: exit $status_code"
-			noetaxis_update_append noetaxis_update_summary_extra "Docker container $name restarted (exit $status_code)"
+			if [[ "$status_code" -eq 0 ]]; then
+				noetaxis_update_say "docker restart $name: ok"
+				noetaxis_update_append noetaxis_update_summary_extra "Docker container $name restarted"
+			else
+				noetaxis_update_say "docker restart $name: FAILED (exit $status_code)"
+				noetaxis_update_append noetaxis_update_summary_extra "Docker container $name: restart FAILED (exit $status_code)"
+				noetaxis_update_post_check warn "docker restart $name failed (exit $status_code); check the container with: docker ps -a --filter name=$name"
+				noetaxis_update_note_user "The Multica Docker container $name did not restart (exit $status_code). Check it with \"docker ps -a\" and restart it yourself."
+			fi
 		done <<EOF
 $cap_stack_running
 EOF
