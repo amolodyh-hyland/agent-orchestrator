@@ -194,6 +194,11 @@ import {
 } from "./main/multica-daemon-hosted";
 import { createMulticaDaemonOwnerStore, listRunningMulticaDaemons } from "./main/multica-daemon-guard";
 import { probeMulticaHealth } from "./main/multica-health-probe";
+import { createMulticaLocalServer, type MulticaLocalServer } from "./main/multica-local-server";
+import { registerMulticaLocalServerIpc } from "./main/multica-local-server-ipc";
+import { nodeExec } from "./main/multica-local-server-commands";
+import { nodeSetupDeps, readLocalServerSettings, setupStackEnv, validateStackDir, writeLocalServerSettings } from "./main/multica-local-server-stack";
+import { MULTICA_LOCAL_SERVER_STATUS_CHANNEL } from "./shared/multica-local-server";
 import { multicaBridgeChannels } from "./main/multica-desktop-bridge";
 import { resolveMulticaDesktopBundle } from "./main/multica-desktop-bundle";
 import { createMulticaIssueLinkService, type MulticaIssueLinkService } from "./main/multica-issue-link-service";
@@ -359,6 +364,8 @@ let multicaViewHost: MulticaViewHost | null = null;
 let multicaIssueLinkService: MulticaIssueLinkService | null = null;
 let multicaStatusSync: MulticaStatusSync | null = null;
 let multicaStatusSyncIpc: { dispose: () => void } | null = null;
+let multicaLocalServer: MulticaLocalServer | null = null;
+let multicaLocalServerIpc: { dispose: () => void } | null = null;
 let multicaAwareness: MulticaAwareness | null = null;
 const combinedBadge = createCombinedBadge();
 let browserProfileIpc: BrowserProfileIpc | null = null;
@@ -958,6 +965,31 @@ async function createWindowInternal(): Promise<void> {
 		record: createSyncAuditSink(getMulticaActionLog(browserProfileStateDir())),
 	});
 	multicaStatusSyncIpc = registerMulticaStatusSyncIpc({ ipcMain, shellWebContents, engine: multicaStatusSync });
+	// Start, stop and restart the self-hosted Multica server (Docker Compose). Nothing runs until
+	// the Settings block is shown; the Multica view host is not involved.
+	multicaLocalServer = createMulticaLocalServer({
+		readServerSettings: () => readMulticaSettings(browserProfileStateDir()),
+		readStackSettings: () => readLocalServerSettings(browserProfileStateDir()),
+		writeStackSettings: (settings) => writeLocalServerSettings(browserProfileStateDir(), settings),
+		validate: (dir) => validateStackDir(dir),
+		fileExists: async (file) => existsSync(file),
+		setupEnv: (stack) => setupStackEnv(stack, nodeSetupDeps(randomBytes)),
+		probe: (request) => checkMulticaServer(request, createMulticaCheckGet((url, init) => net.fetch(url, init))),
+		chooseFolder: async () => {
+			const options: OpenDialogOptions = { properties: ["openDirectory"] };
+			const result = mainWindow && !mainWindow.isDestroyed() ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
+			return result.canceled ? null : (result.filePaths[0] ?? null);
+		},
+		exec: nodeExec,
+		dockerHomeDir: path.join(browserProfileStateDir(), "local-server-docker"),
+		emit: (status) => {
+			if (!shellWebContents.isDestroyed()) shellWebContents.send(MULTICA_LOCAL_SERVER_STATUS_CHANNEL, status);
+		},
+		home: os.homedir(),
+		env: process.env,
+		platform: process.platform,
+	});
+	multicaLocalServerIpc = registerMulticaLocalServerIpc({ ipcMain, shellWebContents, server: multicaLocalServer });
 	// Registered before the renderer loads: the shell queries its state on mount.
 	// Multica awareness (read-only): nothing is watched until the user switches it on in Settings.
 	const multicaIssueLinkStore = createMulticaIssueLinkStore(browserProfileStateDir());
@@ -1175,6 +1207,10 @@ async function createWindowInternal(): Promise<void> {
 		multicaIssueLinkService = null;
 		multicaStatusSyncIpc?.dispose();
 		multicaStatusSyncIpc = null;
+		multicaLocalServerIpc?.dispose();
+		multicaLocalServerIpc = null;
+		multicaLocalServer?.dispose();
+		multicaLocalServer = null;
 		multicaStatusSync?.dispose();
 		multicaStatusSync = null;
 		multicaAwareness?.dispose();
