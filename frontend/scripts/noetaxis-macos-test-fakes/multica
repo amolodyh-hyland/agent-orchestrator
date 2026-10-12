@@ -1,0 +1,10 @@
+#!/bin/bash
+. "${NOETAXIS_FAKES:?}/sim-lib.sh"
+sim_log "multica $*"
+case "$1 $2" in
+	"daemon status")
+		if [[ "$(cat "$SIM/standalone" 2>/dev/null)" == running ]]; then printf '{"status":"running","pid":777}\n'; else printf '{"status":"stopped"}\n'; fi
+		;;
+	"daemon restart"|"daemon start") printf 'running' > "$SIM/standalone" ;;
+	*) exit 2 ;;
+esac

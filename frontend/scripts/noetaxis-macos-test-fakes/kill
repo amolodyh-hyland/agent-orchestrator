@@ -1,0 +1,12 @@
+#!/bin/bash
+# Fake kill. Only a plain "-TERM <pid>" is legitimate; anything else marks the run as forbidden.
+. "${NOETAXIS_FAKES:?}/sim-lib.sh"
+sim_log "kill $*"
+if [[ "$1" != -TERM || $# -ne 2 ]]; then
+	sim_log "FORBIDDEN signal: $*"
+	: > "$SIM/FORBIDDEN"
+	exit 0
+fi
+pid="$2"
+if /usr/bin/grep -qxF "$pid" "$SIM/cfg/stubborn" 2>/dev/null; then exit 0; fi
+sim_remove_pid "$pid"
