@@ -40,6 +40,10 @@ case "$1" in
 		daemon_up || { printf 'AO daemon is not running\n' >&2; exit 1; }
 		case "$2" in
 			ls)
+				# Test hook: a session that appears on the Nth "session ls" call.
+				calls_so_far=$(( $(cat "$SIM/ls_calls" 2>/dev/null || echo 0) + 1 ))
+				printf '%s' "$calls_so_far" > "$SIM/ls_calls"
+				if [[ "$calls_so_far" == "$(sim_value add_session_on_call)" ]]; then cat "$SIM/cfg/add_session_line" >> "$SIM/sessions"; fi
 				if sim_has sessions_ls_fails; then printf 'internal error\n' >&2; exit 1; fi
 				printf '{"data":['
 				first=1

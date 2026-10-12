@@ -55,9 +55,10 @@ AO="/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao"
 5. **Stage** the new build with `ditto` and verify the staged copy (as `install.sh` always did).
 6. **Stop**, with a bounded wait and a progress line at each step:
    1. `--end-sessions` only: `"$AO" session exit-agent <id>` for every live session, while the daemon can still answer. That stops the agent (and its chat host) but keeps the session, its worktree and its conversation; **`ao session kill` is never used** because it also tears down the worktree.
-   2. Quit the desktop app completely, see below.
-   3. Wait for the app-owned daemon to stop itself (about 5 s after the app exits); if it does not, `"$AO" stop`.
-   4. Wait for chat hosts, helper processes and ShipIt to exit. Survivors are listed and the run stops (exit 56; ShipIt: 22) unless `--force`.
+   2. Only the sessions the plan listed and you confirmed are touched: the list is re-read first, and a session that appeared since is refused (exit 51) so you see it in a new plan.
+   3. Quit the desktop app completely, see below.
+   4. Wait for the app-owned daemon to stop itself (about 5 s after the app exits); if it does not, `"$AO" stop`.
+   5. Wait for chat hosts, helper processes and ShipIt to exit. Survivors are listed and the run stops (exit 56; ShipIt: 22) unless `--force`.
 7. **Back up**, exactly as in the manual flow: `ao.db` + WAL/SHM, `app-state.json`, `update-settings.json`, `editor-settings.json`, the old app renamed `*.app.bak`, `BACKUP_COMPLETE` written **before** the old app moves, the swap trap restores the old app on interruption; plus `state-before/` (the captured state) and `update-actions.log` (every step and every signal sent) in the same `~/ao-backups/<stamp>/` folder.
 8. **Install**: swap the staged app in, clear quarantine, re-verify manifest, signature and version stamp.
 9. **Restart**: `open -a "/Applications/Agent Orchestrator.app"`, wait for the app process, then for `"$AO" status --json` to say `ready` and `http://127.0.0.1:<port>/healthz` (the port `ao status` reports) to say `ok`, up to `--health-timeout` seconds (default 120).
@@ -103,6 +104,7 @@ An update run inside an AO session would end that session in the middle (it quit
 | 20 | Inside an AO session (use `--detached`). |
 | 21 / 22 | Other processes block / ShipIt is running. |
 | 23-35 | As in the default install (metadata, manifest, space, backup, privilege, staging, swap). |
+| 36 | Another install, update or rollback holds the lock (`~/.ao-install.lock`, owner pid in `pid`); a dead owner's lock is taken over. A dry run does not take it. |
 | 50 | You answered anything but `yes`; nothing changed. |
 | 51 | Live sessions and no `--end-sessions`; nothing stopped. |
 | 52 | The daemon runs but its session list could not be read; nothing stopped. |

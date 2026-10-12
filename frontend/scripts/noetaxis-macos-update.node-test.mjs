@@ -4,8 +4,8 @@
 // installed or contacted, and nothing reads the real ~/.ao, the Keychain or port 3001.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cp, mkdir, readFile, readdir, stat } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { cp, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { execute, makeWorld, mutatedScripts, newVersion, oldVersion, realScriptsDir } from "./noetaxis-macos-update-world.mjs";
 
@@ -668,6 +668,64 @@ test("inside an AO session the update refuses (20) and nothing runs; --allow-ao-
 	// A dry run may look from inside a session when that is explicit.
 	const dry = world.run(["--update", "--dry-run", "--allow-ao-session", world.newApp], { extraEnv: { AO_SESSION_ID: "mer-3" } });
 	assert.equal(dry.status, 0, dry.stderr);
+});
+
+test("only the sessions the plan listed may be ended: one that appears afterwards is refused with a new plan", darwin, async (t) => {
+	const addedLine = "s9|demo|worker|working|active|false|Started late";
+	const world = await makeWorld(t, "late-session", { sessions: [liveSession("s1")], cfg: { add_session_on_call: "2", add_session_line: `${addedLine}\n` } });
+	await world.addProc(`${world.targetApp}/Contents/Resources/daemon/ao chat-host --session s9`);
+	const result = world.update(["--yes", "--end-sessions"]);
+	assert.equal(result.status, 51, result.stdout + result.stderr);
+	assert.match(result.stderr, /appeared since the plan was shown and confirmed/);
+	assert.match(result.stderr, /s9/);
+	const calls = await world.calls();
+	assert.equal(callIndex(calls, /session exit-agent/), -1, "not even the confirmed session was touched");
+	assert.equal(callIndex(calls, /^osascript/), -1);
+	assert.equal(world.installedVersion(), oldVersion);
+	// A new plan lists both, and then both may be ended.
+	const again = world.update(["--yes", "--end-sessions"]);
+	assert.equal(again.status, 0, again.stdout + again.stderr);
+	assert.equal(matching(await world.calls(), /session exit-agent/).length, 2);
+});
+
+test("mutation: ending a session that was not in the confirmed plan is caught", darwin, async (t) => {
+	const mutant = await mutatedScripts(t, "update-lib.sh", 'if [[ -n "$additions" ]]; then', "if false; then");
+	const world = await makeWorld(t, "late-session-mutant", { sessions: [liveSession("s1")], cfg: { add_session_on_call: "2", add_session_line: "s9|demo|worker|working|active|false|\n" } });
+	const result = world.update(["--yes", "--end-sessions"], { scriptsDir: mutant });
+	assert.ok(matching(await world.calls(), /session exit-agent s9/).length > 0 || result.status !== 51, "the mutant must end the unconfirmed session");
+});
+
+test("only one install, update or rollback runs at a time (exit 36); a dead owner's lock is taken over; a dry run ignores it", darwin, async (t) => {
+	const world = await makeWorld(t, "lock");
+	const lock = path.join(world.home, ".ao-install.lock");
+	await mkdir(lock, { recursive: true });
+	await writeFile(path.join(lock, "pid"), String(process.pid));
+	const blocked = world.update(["--yes"]);
+	assert.equal(blocked.status, 36);
+	assert.match(blocked.stderr, new RegExp(`Another install, update or rollback is running \\(pid ${process.pid}`));
+	assert.equal(callIndex(await world.calls(), /^osascript/), -1);
+	assert.equal(world.installedVersion(), oldVersion);
+	const idle = await makeWorld(t, "lock-default", { running: false });
+	await mkdir(path.join(idle.home, ".ao-install.lock"), { recursive: true });
+	await writeFile(path.join(idle.home, ".ao-install.lock/pid"), String(process.pid));
+	assert.equal(idle.run([idle.newApp]).status, 36, "the default install takes the lock too");
+	const rollback = world.run([], { script: "rollback.sh" });
+	assert.equal(rollback.status, 36);
+	assert.equal(world.update(["--dry-run"]).status, 0, "a dry run changes nothing and takes no lock");
+	// A lock whose owner is gone is stale.
+	const dead = execute("/bin/sh", ["-c", "echo $$"]).stdout.trim();
+	await writeFile(path.join(lock, "pid"), dead);
+	const result = world.update(["--yes"]);
+	assert.equal(result.status, 0, result.stdout + result.stderr);
+	assert.equal(existsSync(lock), false, "the lock is released at exit");
+	assert.equal(readdirSync(world.home).filter((name) => name.startsWith(".ao-install.lock")).length, 0);
+});
+
+test("the automatic rollback inside an update runs under the update's own lock", darwin, async (t) => {
+	const world = await makeWorld(t, "lock-rollback", { cfg: { unhealthy_versions: `${newVersion}\n` } });
+	const result = world.update(["--yes"]);
+	assert.equal(result.status, 60, result.stdout + result.stderr);
+	assert.equal(existsSync(path.join(world.home, ".ao-install.lock")), false);
 });
 
 test("a person's own AO_MULTICA_DAEMON / AO_KEEP_DAEMON settings are not an AO session; any other AO_ variable is, and is named", darwin, async (t) => {

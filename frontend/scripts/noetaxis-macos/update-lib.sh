@@ -688,13 +688,26 @@ noetaxis_update_shipit_gone() {
 	! noetaxis_shipit_running
 }
 
+# Lines of the live list ($cap_live_file) whose session id is not in the given confirmed list.
+noetaxis_update_sessions_not_in() {
+	/usr/bin/awk -F "$noetaxis_sep" 'NR == FNR { known[$1] = 1; next } !($1 in known)' "$1" "$cap_live_file"
+}
+
 noetaxis_update_stop_all() {
-	local app_path="$1"
+	local app_path="$1" confirmed="$cap_dir/confirmed-sessions.tsv" additions
 	if [[ "$update_end_sessions" -eq 1 ]]; then
-		# Sessions can only be ended while the daemon answers, so they go first; take a fresh
-		# list so one started since the plan is ended too.
+		# Sessions can only be ended while the daemon answers, so they go first. Only the sessions
+		# the plan listed (and the user confirmed) may be ended: re-read the list, and refuse if a
+		# session appeared since, so the user sees and confirms it in a new plan.
 		if [[ "$cap_sessions_status" == ok ]]; then
+			/bin/cp "$cap_live_file" "$confirmed"
 			noetaxis_update_capture_sessions || { noetaxis_error "The session list could not be read again; nothing was stopped."; return 52; }
+			additions="$(noetaxis_update_sessions_not_in "$confirmed")"
+			if [[ -n "$additions" ]]; then
+				noetaxis_error "Session(s) appeared since the plan was shown and confirmed; they were not part of it. Nothing was stopped. Rerun to see a new plan:"
+				printf '%s\n' "$additions" | /usr/bin/awk -F "$noetaxis_sep" '{ printf "      %s  [%s]  %s  %s/%s  %s\n", $1, $2, $3, $4, $5, $6 }' >&2
+				return 51
+			fi
 		fi
 		if [[ "$cap_live_count" -gt 0 ]]; then
 			noetaxis_update_end_sessions || return $?
@@ -1069,6 +1082,7 @@ noetaxis_update_exit_report() {
 # EXIT handler of update mode: the summary, then the temporary capture directory goes.
 noetaxis_update_exit_handler() {
 	noetaxis_update_exit_report "$1"
+	noetaxis_release_lock
 	if [[ -n "${update_capture_dir:-}" && -d "$update_capture_dir" ]]; then
 		/bin/rm -rf "$update_capture_dir"
 	fi

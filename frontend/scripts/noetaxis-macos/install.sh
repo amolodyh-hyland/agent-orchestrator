@@ -224,6 +224,19 @@ fi
 
 noetaxis_check_space "$source_app" "$ao_home" "$user_home" "$apps_dir"
 
+# A dry run changes nothing, so it does not take the lock.
+if [[ "$dry_run" -eq 0 ]]; then
+	lock_status=0
+	noetaxis_acquire_lock "$user_home" || lock_status=$?
+	if [[ "$lock_status" -ne 0 ]]; then
+		exit "$lock_status"
+	fi
+	export NOETAXIS_LOCK_HELD_BY="$$"
+	if [[ "$update_mode" -eq 0 ]]; then
+		trap noetaxis_release_lock EXIT
+	fi
+fi
+
 if [[ "$update_mode" -eq 1 ]]; then
 	# Everything up to the confirmation only reads: nothing has been stopped yet.
 	noetaxis_update_new_version="$(noetaxis_plist_value "$source_app/Contents/Info.plist" CFBundleShortVersionString)"
@@ -278,6 +291,7 @@ old_moved=0
 backup_dir=""
 noetaxis_install_cleanup() {
 	local exit_status=$?
+	noetaxis_release_lock
 	# Complete once the new app is in place, even if the signal landed before the flag was set.
 	if [[ "$old_moved" -eq 1 && ! -e "$staged_app" && -d "$target_app" ]]; then
 		install_complete=1

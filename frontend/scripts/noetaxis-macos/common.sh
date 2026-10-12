@@ -519,3 +519,51 @@ noetaxis_print_post_install_checks() {
 	fi
 	printf '\nAfter opening the app from Finder, run:\n  "%s" status\n' "$cli"
 }
+
+# One install, update or rollback at a time: two of them swapping the same app, or one
+# restoring a backup under another's stop, would corrupt both. The lock is a directory
+# (mkdir is atomic) holding the owner's pid at <home>/.ao-install.lock. A dead owner's lock is
+# taken over by renaming it away first, and a live owner (by ps) is never displaced.
+# A rollback.sh started by install.sh --update inherits the lock through NOETAXIS_LOCK_HELD_BY.
+noetaxis_lock_held=0
+
+noetaxis_acquire_lock() {
+	local user_home="$1" lock holder stale
+	lock="$user_home/.ao-install.lock"
+	if [[ -n "${NOETAXIS_LOCK_HELD_BY:-}" && "$(/bin/cat "$lock/pid" 2>/dev/null || true)" == "$NOETAXIS_LOCK_HELD_BY" ]]; then
+		return 0
+	fi
+	if ! /bin/mkdir "$lock" 2>/dev/null; then
+		holder="$(/bin/cat "$lock/pid" 2>/dev/null || true)"
+		if [[ "$holder" =~ ^[0-9]+$ ]] && /bin/ps -p "$holder" >/dev/null 2>&1; then
+			noetaxis_error "Another install, update or rollback is running (pid $holder, lock $lock). Wait for it to finish; two at once could corrupt the app or the backup."
+			return 36
+		fi
+		stale="$lock.stale-$$"
+		if ! /bin/mv "$lock" "$stale" 2>/dev/null; then
+			noetaxis_error "Another install, update or rollback just took the lock ($lock). Wait for it to finish."
+			return 36
+		fi
+		# The directory moved may be a live owner's lock created after the check above.
+		holder="$(/bin/cat "$stale/pid" 2>/dev/null || true)"
+		if [[ "$holder" =~ ^[0-9]+$ ]] && /bin/ps -p "$holder" >/dev/null 2>&1; then
+			/bin/mv "$stale" "$lock" 2>/dev/null || true
+			noetaxis_error "Another install, update or rollback is running (pid $holder, lock $lock)."
+			return 36
+		fi
+		/bin/rm -rf "$stale"
+		if ! /bin/mkdir "$lock" 2>/dev/null; then
+			noetaxis_error "Another install, update or rollback just took the lock ($lock). Wait for it to finish."
+			return 36
+		fi
+	fi
+	printf '%s' "$$" > "$lock/pid"
+	noetaxis_lock_held="$lock"
+}
+
+noetaxis_release_lock() {
+	if [[ "$noetaxis_lock_held" != 0 && -d "$noetaxis_lock_held" && "$(/bin/cat "$noetaxis_lock_held/pid" 2>/dev/null || true)" == "$$" ]]; then
+		/bin/rm -rf "$noetaxis_lock_held"
+	fi
+	noetaxis_lock_held=0
+}
