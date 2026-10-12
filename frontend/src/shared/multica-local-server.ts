@@ -29,6 +29,7 @@ export type LocalServerState =
 	| "no_folder"
 	| "invalid_folder"
 	| "needs_setup"
+	| "unknown"
 	| "docker_not_installed"
 	| "compose_missing"
 	| "docker_not_running"
@@ -62,6 +63,7 @@ export type LocalServerErrorCode =
 	| "cancelled"
 	| "command_failed"
 	| "no_detected_folder"
+	| "inspect_failed"
 	| "bad_request";
 
 export type LocalServerStatus = {

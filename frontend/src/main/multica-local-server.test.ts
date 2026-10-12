@@ -410,6 +410,61 @@ describe("start, stop and restart", () => {
 	});
 });
 
+describe("a failed inspection is not a stopped stack", () => {
+	const denied = { error: { code: 1 }, stderr: "permission denied while reading /var/run/compose with POSTGRES_PASSWORD=pg-secret-1" };
+
+	it("reports an unknown state, with the redacted reason, when docker compose ps fails", async () => {
+		const h = harness({ handlers: { ps: () => denied }, probe: { ok: false, error: "unreachable" } });
+
+		const status = await h.server.getStatus();
+
+		expect(status.state).toBe("unknown");
+		expect(status.error?.code).toBe("inspect_failed");
+		expect(status.error?.detail).toContain("permission denied");
+		expect(JSON.stringify(status)).not.toContain("pg-secret-1");
+	});
+
+	it("reports an unknown state for output that is not Compose's JSON, and does not probe", async () => {
+		const h = harness({ ps: "this is not json", probe: { ok: false, error: "unreachable" } });
+		const probe = vi.spyOn(h.options, "probe");
+		const status = await createMulticaLocalServer(h.options).getStatus();
+
+		expect(status).toMatchObject({ state: "unknown", error: { code: "inspect_failed", detail: "Unexpected output from docker compose ps" } });
+		expect(probe).not.toHaveBeenCalled();
+	});
+
+	it("is unknown even when something answers at the address", async () => {
+		const h = harness({ handlers: { ps: () => denied }, probe: { ok: true, apiUrl: "" } });
+		expect((await h.server.getStatus()).state).toBe("unknown");
+	});
+
+	it("recovers on its own once docker compose ps works again", async () => {
+		const h = harness({ handlers: { ps: () => denied } });
+		expect((await h.server.getStatus()).state).toBe("unknown");
+		delete h.fake.handlers["ps"];
+		const status = await h.server.getStatus();
+		expect(status.state).toBe("stopped");
+		expect(status.error).toBeNull();
+	});
+
+	it("is unknown when docker itself answers with a permission error, and starts nothing", async () => {
+		const h = harness({
+			handlers: { "docker-version": () => ({ error: { code: 1 }, stderr: "permission denied while trying to connect to the Docker daemon socket" }) },
+		});
+
+		expect(await h.server.getStatus()).toMatchObject({ state: "unknown", error: { code: "inspect_failed" } });
+		expect(await h.server.start()).toMatchObject({ ok: false, code: "inspect_failed" });
+		expect(await h.server.stop()).toMatchObject({ ok: false, code: "inspect_failed" });
+		expect(await h.server.getLogs("backend", 5)).toMatchObject({ ok: false, code: "inspect_failed" });
+		expect(h.calls.some((call) => call.file === "/usr/bin/open")).toBe(false);
+		expect(h.verbs()).not.toContain("up");
+	});
+
+	it("still reports a plainly stopped engine as not running", async () => {
+		expect((await harness({ engine: "down" }).server.getStatus()).state).toBe("docker_not_running");
+	});
+});
+
 describe("a remote API with a local web address", () => {
 	const REMOTE_API: MulticaSettings = { mode: "local", customUrl: "http://localhost:3000", apiUrl: "https://remote.example" };
 

@@ -24,6 +24,7 @@ const base: DeriveInput = {
 	docker: "ok",
 	composeInstalled: true,
 	containers: [],
+	inspected: true,
 	probe: "unreachable",
 	unreadyForMs: 0,
 	portFailure: false,
@@ -45,6 +46,20 @@ describe("deriveLocalServerState", () => {
 		expect(derive({ folder: "none" })).toBe("no_folder");
 		expect(derive({ folder: "invalid" })).toBe("invalid_folder");
 		expect(derive({ hasEnv: false })).toBe("needs_setup");
+	});
+
+	it("is unknown, never stopped, when the stack could not be inspected", () => {
+		expect(derive({ inspected: false })).toBe("unknown");
+		expect(derive({ inspected: false, probe: "unreachable", containers: [] })).toBe("unknown");
+		expect(derive({ inspected: false, probe: "ok" })).toBe("unknown");
+		expect(derive({ docker: "unknown" })).toBe("unknown");
+	});
+
+	it("still reports the things that do not need an inspection first", () => {
+		expect(derive({ inspected: false, docker: "not_running" })).toBe("docker_not_running");
+		expect(derive({ inspected: false, hasEnv: false })).toBe("needs_setup");
+		expect(derive({ inspected: false, folder: "invalid" })).toBe("invalid_folder");
+		expect(derive({ inspected: false, op: "stopping" })).toBe("stopping");
 	});
 
 	it("is stopped when there are no running containers and nothing answers", () => {
@@ -123,7 +138,17 @@ describe("docker error classification", () => {
 	it("tells a missing docker from a stopped engine", () => {
 		expect(classifyDockerError(null)).toBe("ok");
 		expect(classifyDockerError({ code: "ENOENT" })).toBe("not_installed");
-		expect(classifyDockerError({ code: 1 })).toBe("not_running");
+		expect(classifyDockerError({ code: 1 }, "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?")).toBe("not_running");
+		expect(classifyDockerError({ code: 1 }, "dial unix /Users/me/.docker/run/docker.sock: connect: connection refused")).toBe("not_running");
+		expect(classifyDockerError({ code: "NO_LOCAL_ENGINE" })).toBe("not_running");
+		expect(classifyDockerError({ code: 1 }, "")).toBe("not_running");
+	});
+
+	it("does not call an error that proves nothing a stopped engine", () => {
+		expect(classifyDockerError({ code: 1 }, "permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock")).toBe("unknown");
+		expect(classifyDockerError({ code: 1 }, "Got permission denied")).toBe("unknown");
+		expect(classifyDockerError({ code: 1 }, 'permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock: Get "http://%2Fvar%2Frun%2Fdocker.sock/v1.24/version": dial unix /var/run/docker.sock: connect: permission denied')).toBe("unknown");
+		expect(classifyDockerError({ code: 1 }, "request returned 500 Internal Server Error for API route")).toBe("unknown");
 	});
 
 	it("recognizes a missing Compose plugin and a taken port", () => {

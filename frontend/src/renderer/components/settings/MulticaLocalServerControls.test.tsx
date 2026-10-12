@@ -103,6 +103,7 @@ describe("MulticaLocalServerControls", () => {
 		["docker_not_installed", "Docker not installed", { start: false, stop: false, restart: false }],
 		["compose_missing", "Docker Compose missing", { start: false, stop: false, restart: false }],
 		["docker_not_running", "Docker not running", { start: true, stop: false, restart: false }],
+		["unknown", "Status unknown", { start: false, stop: false, restart: false }],
 	])("%s: shows %s and enables the right buttons", async (state, label, enabled) => {
 		await open(state);
 
@@ -111,6 +112,15 @@ describe("MulticaLocalServerControls", () => {
 		expect(start.hasAttribute("disabled")).toBe(!enabled.start);
 		expect(button("Stop").hasAttribute("disabled")).toBe(!enabled.stop);
 		expect(button("Restart").hasAttribute("disabled")).toBe(!enabled.restart);
+	});
+
+	it("shows why the state is unknown and never offers Start for it", async () => {
+		await open("unknown", { error: { code: "inspect_failed", detail: "permission denied" } });
+
+		expect(screen.getByText(/isn't offering Start/)).toBeInTheDocument();
+		expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't read the server's state from Docker.");
+		expect(screen.getByRole("alert")).toHaveTextContent("permission denied");
+		expect(button("Start").hasAttribute("disabled")).toBe(true);
 	});
 
 	it("cannot start while Docker is down on a platform where AO can't launch it", async () => {

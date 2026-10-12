@@ -84,13 +84,25 @@ export function publishedWebPort(containers: ContainerInfo[]): number | null {
 	return containers.find((container) => container.service === "frontend")?.publishedPorts[0] ?? null;
 }
 
-export type DockerProbe = "ok" | "not_installed" | "not_running";
+/** `unknown`: Docker answered in a way that proves nothing about whether the engine runs (for example permission denied). */
+export type DockerProbe = "ok" | "not_installed" | "not_running" | "unknown";
 
-/** Distinguishes "no docker" from "docker is installed but its engine is not running". */
-export function classifyDockerError(error: { code?: string | number | null } | null): DockerProbe {
+const ENGINE_DOWN = /cannot connect|can't connect|connection refused|is the docker daemon running|error during connect|failed to connect|no such file or directory|dial unix|docker desktop is (?:stopped|starting)/i;
+const ACCESS_DENIED = /permission denied|access is denied|operation not permitted/i;
+
+/**
+ * Distinguishes "no docker" from "the engine is not running" from "the answer proves
+ * nothing". Only a recognized connection failure counts as a stopped engine: any other
+ * error (permission denied on the socket, an unexpected message) is `unknown`, because a
+ * failed inspection is not evidence that nothing is running.
+ */
+export function classifyDockerError(error: { code?: string | number | null } | null, stderr = ""): DockerProbe {
 	if (!error) return "ok";
 	if (error.code === "ENOENT") return "not_installed";
-	return "not_running";
+	if (error.code === "NO_LOCAL_ENGINE") return "not_running";
+	if (ACCESS_DENIED.test(stderr)) return "unknown";
+	if (ENGINE_DOWN.test(stderr)) return "not_running";
+	return stderr.trim() === "" ? "not_running" : "unknown";
 }
 
 export function isComposeMissing(stderr: string): boolean {
@@ -122,6 +134,8 @@ export type DeriveInput = {
 	docker: DockerProbe;
 	composeInstalled: boolean;
 	containers: ContainerInfo[];
+	/** `docker compose ps` ran and its output was understood. False means the stack was not inspected. */
+	inspected: boolean;
 	probe: ProbeOutcome;
 	/** How long the stack has been running without answering; 0 when it was just seen. */
 	unreadyForMs: number;
@@ -135,11 +149,14 @@ const DEAD_STATES = new Set(["exited", "dead", "restarting", "paused", "removing
 export function deriveLocalServerState(input: DeriveInput): LocalServerState {
 	if (input.op) return input.op;
 	if (input.docker === "not_installed") return "docker_not_installed";
+	if (input.docker === "unknown") return "unknown";
 	if (!input.composeInstalled && input.docker === "ok") return "compose_missing";
 	if (input.folder === "none") return input.docker === "not_running" ? "docker_not_running" : "no_folder";
 	if (input.folder === "invalid") return "invalid_folder";
 	if (!input.hasEnv) return "needs_setup";
 	if (input.docker === "not_running") return "docker_not_running";
+	// A failed inspection is not proof of a stopped stack: say so instead of offering Start.
+	if (!input.inspected) return "unknown";
 
 	const running = input.containers.filter((container) => container.state === "running");
 	if (running.length === 0 && !input.containers.some((container) => container.state === "created")) {

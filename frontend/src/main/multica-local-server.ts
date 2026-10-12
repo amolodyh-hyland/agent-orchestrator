@@ -168,11 +168,13 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 		return check.ok ? { kind: "ok", stack: { dir: check.dir, file: check.file } } : { kind: "none" };
 	}
 
-	async function engineState(docker: string | null, signal?: AbortSignal): Promise<DockerProbe> {
-		if (!docker) return "not_installed";
+	async function inspectEngine(docker: string | null, signal?: AbortSignal): Promise<{ state: DockerProbe; detail?: string }> {
+		if (!docker) return { state: "not_installed" };
 		const result = await run(dockerVersionCommand(docker), signal);
-		return classifyDockerError(result.error);
+		const state = classifyDockerError(result.error, result.stderr);
+		return state === "unknown" ? { state, detail: redactCommandText(result.stderr || result.error?.message || "") } : { state };
 	}
+	const engineState = async (docker: string | null, signal?: AbortSignal): Promise<DockerProbe> => (await inspectEngine(docker, signal)).state;
 
 	async function composeInstalled(docker: string): Promise<boolean> {
 		const result = await run(composeVersionCommand(docker));
@@ -204,7 +206,10 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 		}
 		const folder = await resolveFolder();
 		const docker = findDocker();
-		const engine = await engineState(docker);
+		const inspectedEngine = await inspectEngine(docker);
+		const engine = inspectedEngine.state;
+		let inspectFailure: LocalServerStatus["error"] = engine === "unknown" ? { code: "inspect_failed", ...(inspectedEngine.detail ? { detail: inspectedEngine.detail } : {}) } : null;
+		let inspected = true;
 		const installed = engine === "ok" && docker ? await composeInstalled(docker) : true;
 
 		let hasEnv = false;
@@ -217,8 +222,15 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 			if (folder.kind === "ok") {
 				if (hasEnv) {
 					const ps = await run(psCommand(docker, folder.stack));
-					containers = (ps.error ? null : parseComposePs(ps.stdout)) ?? [];
-					probe = probeOutcomeFromCheck(await options.probe({ customUrl: availability.webUrl, apiUrl: availability.apiUrl }));
+					const parsed = ps.error ? null : parseComposePs(ps.stdout);
+					if (parsed === null) {
+						// Neither an error nor unreadable output says the stack is stopped.
+						inspected = false;
+						inspectFailure = { code: "inspect_failed", detail: ps.error ? redactCommandText(ps.stderr || ps.error.message) : "Unexpected output from docker compose ps" };
+					} else {
+						containers = parsed;
+					}
+					if (inspected) probe = probeOutcomeFromCheck(await options.probe({ customUrl: availability.webUrl, apiUrl: availability.apiUrl }));
 				}
 			} else {
 				detectedFolder = await detectFolder(docker, folder.kind === "invalid" ? folder.dir : null);
@@ -233,6 +245,7 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 			docker: engine,
 			composeInstalled: installed,
 			containers,
+			inspected,
 			probe,
 			unreadyForMs: unreadyAt === null ? 0 : now - unreadyAt,
 			portFailure,
@@ -248,7 +261,7 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 			folder: folder.kind === "ok" ? folder.stack.dir : folder.kind === "invalid" ? folder.dir : null,
 			detectedFolder,
 			portMismatch: published !== null && published !== availability.webPort ? { published, configured: availability.webPort } : null,
-			error: lastError,
+			error: inspectFailure ?? lastError,
 		};
 	}
 
@@ -335,8 +348,9 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 
 	/** Makes sure Docker's engine answers; on macOS a stopped Docker Desktop is started and waited for. */
 	async function ensureEngine(docker: string, signal: AbortSignal, mayLaunch: boolean): Promise<LocalServerResult> {
-		const engine = await engineState(docker, signal);
-		if (engine === "ok") return { ok: true };
+		const inspected = await inspectEngine(docker, signal);
+		if (inspected.state === "ok") return { ok: true };
+		if (inspected.state === "unknown") return { ok: false, code: "inspect_failed", ...(inspected.detail ? { detail: inspected.detail } : {}) };
 		if (!mayLaunch || !canLaunchDocker) return { ok: false, code: "docker_not_running" };
 		setOp("docker_starting");
 		const opened = await run(openDockerCommand(), signal);
@@ -432,7 +446,9 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 		getLogs: async (service, tail) => {
 			const prepared = await prepare();
 			if (!prepared.ok) return prepared;
-			if ((await engineState(prepared.docker)) !== "ok") return { ok: false, code: "docker_not_running" };
+			const engine = await inspectEngine(prepared.docker);
+			if (engine.state === "unknown") return { ok: false, code: "inspect_failed", ...(engine.detail ? { detail: engine.detail } : {}) };
+			if (engine.state !== "ok") return { ok: false, code: "docker_not_running" };
 			const result = await run(logsCommand(prepared.docker, prepared.stack, service, tail));
 			if (result.error) {
 				if (result.error.killed) return { ok: false, code: "timeout" };
