@@ -55,6 +55,7 @@ update_restore_failed=0
 update_rolled_back=0
 update_report_done=0
 update_app_started=0
+update_sessions_ended=0
 cap_identity_detail=""
 update_dry_run=0
 
@@ -585,6 +586,7 @@ noetaxis_update_end_sessions() {
 		output="$(noetaxis_bounded 90 "$cap_cli" session exit-agent "$id" ${project:+--project "$project"} 2>&1)" || status_code=$?
 		if [[ "$status_code" -eq 0 ]]; then
 			ended=$((ended + 1))
+			update_sessions_ended=1
 			noetaxis_update_say "agent of $id [$project] $role stopped: $output"
 			noetaxis_update_append noetaxis_update_summary_stopped "session $id: agent stopped (ao session exit-agent; session and worktree kept)"
 		else
@@ -992,6 +994,14 @@ noetaxis_update_restore_sessions() {
 	noetaxis_update_say "$attempted restore attempt(s); $back came back; $update_restore_failed did not"
 }
 
+# --restore-sessions also applies when the update ends on the previous app (a healthy rollback, or
+# a reopen after a failure before the swap): the agents this run stopped should come back there too.
+noetaxis_update_restore_if_asked() {
+	if [[ "$update_restore_sessions" -eq 1 && "$update_sessions_ended" -eq 1 ]]; then
+		noetaxis_update_restore_sessions "$1"
+	fi
+}
+
 noetaxis_update_restart_multica() {
 	local app_path="$1" status_code=0 name
 	if [[ "$cap_standalone" == yes ]]; then
@@ -1077,6 +1087,7 @@ noetaxis_update_auto_rollback() {
 	if noetaxis_update_start_and_wait "$app_path" "the restored previous app"; then
 		noetaxis_update_say "the previous app is healthy again ($update_health_detail)"
 		noetaxis_update_append noetaxis_update_summary_extra "previous app restarted and healthy"
+		noetaxis_update_restore_if_asked "$app_path"
 		return 60
 	fi
 	noetaxis_update_say "the previous app is not healthy either ($update_health_detail)"
@@ -1088,6 +1099,7 @@ noetaxis_update_auto_rollback() {
 			noetaxis_update_say "the database was migrated from schema $cap_schema_before to $schema_now; restoring the backed-up database (--rollback-restore-db)"
 			if noetaxis_update_quit_app "$app_path" && noetaxis_update_stop_daemon "$app_path" && noetaxis_update_stop_helpers "$app_path" && "$script_dir/rollback.sh" --backup-dir "$backup_dir" --restore-db && noetaxis_update_start_and_wait "$app_path" "the previous app with the restored database"; then
 				noetaxis_update_append noetaxis_update_summary_extra "database restored from $backup_dir; previous app healthy"
+				noetaxis_update_restore_if_asked "$app_path"
 				return 60
 			fi
 			noetaxis_update_note_user "The database restore after the failed update did not finish cleanly. Quit AO completely and run: \"$script_dir/rollback.sh\" --backup-dir \"$backup_dir\" --restore-db"
@@ -1159,8 +1171,12 @@ noetaxis_update_exit_report() {
 	fi
 	if [[ -n "$noetaxis_update_summary_restore" ]]; then
 		printf 'Sessions:\n%s\n' "$(printf '%s\n' "$noetaxis_update_summary_restore" | /usr/bin/sed 's/^/  - /')"
-	elif [[ "$cap_live_count" -gt 0 && "$update_end_sessions" -eq 1 && "$update_restore_sessions" -ne 1 ]]; then
-		printf 'Sessions:  %s agent(s) stopped; resume with "ao session restore <id>" (or rerun with --restore-sessions). Ids:\n' "$cap_live_count"
+	elif [[ "$update_sessions_ended" -eq 1 ]]; then
+		if [[ "$update_restore_sessions" -eq 1 ]]; then
+			printf 'Sessions:  %s agent(s) were stopped and --restore-sessions was given, but no restore ran (the update did not reach a healthy app). Resume them with "ao session restore <id> --project <project>" once AO runs. Ids:\n' "$cap_live_count"
+		else
+			printf 'Sessions:  %s agent(s) stopped; resume with "ao session restore <id>" (or rerun with --restore-sessions). Ids:\n' "$cap_live_count"
+		fi
 		/usr/bin/awk -F "$noetaxis_sep" '{ printf "  - %s [%s]\n", $1, $2 }' "$cap_live_file"
 	fi
 	if [[ -n "$noetaxis_update_summary_extra" ]]; then
@@ -1197,6 +1213,7 @@ noetaxis_update_reopen_previous() {
 	update_health_timeout="$wait_seconds"
 	if noetaxis_update_start_and_wait "$app_path" "the previous app"; then
 		noetaxis_update_append noetaxis_update_summary_extra "previous app reopened and healthy (the update did not finish; nothing was installed)"
+		noetaxis_update_restore_if_asked "$app_path"
 	else
 		noetaxis_update_append noetaxis_update_summary_extra "previous app reopened but not confirmed healthy within ${wait_seconds}s: $update_health_detail"
 		update_app_started=1

@@ -596,6 +596,34 @@ test("an unhealthy new daemon is rolled back automatically: new app quit, old ap
 	assert.equal(world.schema(), "190", "the database was not touched");
 });
 
+test("--restore-sessions is honoured when the update ends on the previous app, and otherwise the ended sessions are listed", darwin, async (t) => {
+	const world = await makeWorld(t, "rollback-restore", { sessions: [liveSession("s1"), liveSession("s2")], cfg: { unhealthy_versions: `${newVersion}\n` } });
+	const result = world.update(["--yes", "--end-sessions", "--restore-sessions"]);
+	assert.equal(result.status, 60, result.stdout + result.stderr);
+	assert.equal(world.installedVersion(), oldVersion);
+	const calls = await world.calls();
+	assert.equal(matching(calls, /session restore s1/).length, 1);
+	assert.equal(matching(calls, /session restore s2/).length, 1);
+	assert.match(result.stdout, /s1: came back/);
+	assert.deepEqual((await world.sessionsNow()).map((s) => s.activity), ["active", "active"]);
+
+	// A failed rollback restores nothing but says which sessions are waiting and how to resume them.
+	const stuck = await makeWorld(t, "rollback-no-restore", { sessions: [liveSession("s1")], cfg: { unhealthy_versions: `${newVersion}\n`, tray_fail_versions: `${newVersion}\n` } });
+	const failed = stuck.update(["--yes", "--end-sessions", "--restore-sessions"]);
+	assert.equal(failed.status, 61);
+	assert.equal(matching(await stuck.calls(), /session restore/).length, 0);
+	assert.match(failed.stdout, /--restore-sessions was given, but no restore ran/);
+	assert.match(failed.stdout, /- s1 \[demo\]/);
+});
+
+test("--restore-sessions also applies when a failure before the swap reopens the previous app", darwin, async (t) => {
+	const world = await makeWorld(t, "reopen-restore", { sessions: [liveSession("s1")], extraProcs: ["<APP>/Contents/Resources/daemon/ao chat-host --session orphan"] });
+	const result = world.update(["--yes", "--end-sessions", "--restore-sessions"]);
+	assert.equal(result.status, 56);
+	assert.equal(matching(await world.calls(), /session restore s1/).length, 1);
+	assert.match(result.stdout, /s1: came back/);
+});
+
 test("a new app that never starts is rolled back too", darwin, async (t) => {
 	const world = await makeWorld(t, "rollback-nostart", { cfg: { no_start_versions: `${newVersion}\n` } });
 	const result = world.update(["--yes"]);
