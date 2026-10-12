@@ -1,4 +1,4 @@
-import { coerceMulticaSettings, parseMulticaUrl, type MulticaSettings } from "./multica";
+import { coerceMulticaSettings, multicaRuntimeConfig, parseMulticaUrl, type MulticaSettings } from "./multica";
 
 // Controls for the self-hosted Multica SERVER (backend, web app and Postgres run by Docker
 // Compose on this computer). Not the Multica agent daemon, which is a separate program.
@@ -22,7 +22,7 @@ export type LocalServerService = (typeof LOCAL_SERVER_SERVICES)[number];
 export const LOCAL_SERVER_LOG_TAIL_DEFAULT = 200;
 export const LOCAL_SERVER_LOG_TAIL_MAX = 500;
 
-export type LocalServerUnavailableReason = "cloud" | "no_url" | "remote_url";
+export type LocalServerUnavailableReason = "cloud" | "no_url" | "remote_url" | "remote_api";
 
 export type LocalServerState =
 	| "unavailable"
@@ -93,7 +93,7 @@ export type LocalServerResult = { ok: true } | { ok: false; code: LocalServerErr
 export type LocalServerLogsResult = { ok: true; lines: string[] } | { ok: false; code: LocalServerErrorCode; detail?: string };
 
 export type LocalServerAvailability =
-	| { available: true; webUrl: string; webPort: number }
+	| { available: true; webUrl: string; webPort: number; /** The explicit API origin, or "" to derive it from the web address. Always loopback. */ apiUrl: string }
 	| { available: false; reason: LocalServerUnavailableReason };
 
 /** The only addresses this computer's own stack can answer on (it binds 127.0.0.1). */
@@ -107,7 +107,9 @@ export function isLoopbackMulticaHost(hostname: string): boolean {
 /**
  * Whether the saved server settings point at a server this computer can run: Cloud
  * never, an empty or non-loopback address never (a LAN or remote address is another
- * machine, and the stack AO manages listens on this one only).
+ * machine, and the stack AO manages listens on this one only). The API address the
+ * view uses must be on this computer too: a local web address with a remote API is a
+ * remote server, and the status probe must never be answered by it.
  */
 export function localServerAvailability(settings: MulticaSettings): LocalServerAvailability {
 	const coerced = coerceMulticaSettings(settings);
@@ -116,8 +118,18 @@ export function localServerAvailability(settings: MulticaSettings): LocalServerA
 	if (!parsed.ok) return { available: false, reason: "no_url" };
 	const url = new URL(parsed.origin);
 	if (!isLoopbackMulticaHost(url.hostname)) return { available: false, reason: "remote_url" };
+	let apiUrl = "";
+	if (coerced.apiUrl !== "") {
+		const api = parseMulticaUrl(coerced.apiUrl);
+		if (!api.ok) return { available: false, reason: "remote_api" };
+		apiUrl = api.origin;
+	}
+	// The API the view will really use: the explicit one, else the one derived from the web address.
+	const derived = multicaRuntimeConfig(parsed.origin);
+	const effectiveApi = apiUrl !== "" ? apiUrl : derived.ok ? derived.config.apiUrl : "";
+	if (effectiveApi === "" || !isLoopbackMulticaHost(new URL(effectiveApi).hostname)) return { available: false, reason: "remote_api" };
 	const port = url.port !== "" ? Number(url.port) : url.protocol === "https:" ? 443 : 80;
-	return { available: true, webUrl: parsed.origin, webPort: port };
+	return { available: true, webUrl: parsed.origin, webPort: port, apiUrl };
 }
 
 export function parseLocalServerService(value: unknown): LocalServerService | null {

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MulticaCheckResult, MulticaSettings } from "../shared/multica";
 import type { LocalServerStatus } from "../shared/multica-local-server";
+import { checkMulticaServer } from "./multica-server-check";
 import { createMulticaLocalServer, type MulticaLocalServer, type MulticaLocalServerOptions } from "./multica-local-server";
 import type { ExecError, ExecFileLike } from "./multica-local-server-commands";
 import type { SetupOutcome, StackCheck } from "./multica-local-server-stack";
@@ -381,6 +382,65 @@ describe("start, stop and restart", () => {
 	it("maps a command that hit its timeout to a timeout error", async () => {
 		const h = harness({ handlers: { up: () => ({ error: { killed: true, code: null } }) } });
 		expect(await h.server.start()).toEqual({ ok: false, code: "timeout" });
+	});
+});
+
+describe("a remote API with a local web address", () => {
+	const REMOTE_API: MulticaSettings = { mode: "local", customUrl: "http://localhost:3000", apiUrl: "https://remote.example" };
+
+	it("is unavailable: no docker command, no probe, and every operation is refused", async () => {
+		const h = harness({ settings: REMOTE_API, ps: ALL_UP });
+		const probe = vi.spyOn(h.options, "probe");
+		const server = createMulticaLocalServer(h.options);
+
+		expect(await server.getStatus()).toMatchObject({ state: "unavailable", unavailableReason: "remote_api" });
+		expect(await server.start()).toEqual({ ok: false, code: "unavailable" });
+		expect(await server.stop()).toEqual({ ok: false, code: "unavailable" });
+		expect(await server.restart()).toEqual({ ok: false, code: "unavailable" });
+		expect(await server.setup()).toEqual({ ok: false, code: "unavailable" });
+		expect(await server.chooseFolder()).toEqual({ ok: false, code: "unavailable" });
+		expect(await server.getLogs("backend", 5)).toEqual({ ok: false, code: "unavailable" });
+		expect(h.calls).toEqual([]);
+		expect(probe).not.toHaveBeenCalled();
+	});
+
+	it("never sends a request to the remote host, and a healthy remote answer cannot make the local stack healthy", async () => {
+		const requested: string[] = [];
+		const get = async (url: string) => {
+			requested.push(url);
+			return url.endsWith("/api/config") ? { status: 200, body: JSON.stringify({ allow_signup: true }) } : { status: 200, body: "{}" };
+		};
+		const h = harness({ settings: REMOTE_API, ps: ALL_UP });
+		h.options.probe = (request) => checkMulticaServer(request, get);
+		const server = createMulticaLocalServer(h.options);
+
+		const status = await server.getStatus();
+
+		expect(requested).toEqual([]);
+		expect(status.state).not.toBe("healthy");
+	});
+
+	it("probes only loopback addresses, with the normalized web and API origins, when both are local", async () => {
+		const requested: string[] = [];
+		const get = async (url: string) => {
+			requested.push(url);
+			return { status: 200, body: JSON.stringify({ allow_signup: true }) };
+		};
+		const h = harness({ settings: { mode: "local", customUrl: "http://localhost:3000", apiUrl: "http://127.0.0.1:8081" }, ps: ALL_UP });
+		h.options.probe = (request) => checkMulticaServer(request, get);
+		const server = createMulticaLocalServer(h.options);
+
+		expect((await server.getStatus()).state).toBe("healthy");
+
+		expect(requested.length).toBeGreaterThan(0);
+		for (const url of requested) expect(["localhost", "127.0.0.1"]).toContain(new URL(url).hostname);
+	});
+
+	it("passes the validated origins to the probe, not the raw settings", async () => {
+		const h = harness({ settings: { mode: "local", customUrl: "http://localhost:3000/", apiUrl: "" }, ps: ALL_UP });
+		const probe = vi.spyOn(h.options, "probe");
+		await createMulticaLocalServer(h.options).getStatus();
+		expect(probe).toHaveBeenCalledWith({ customUrl: "http://localhost:3000", apiUrl: "" });
 	});
 });
 

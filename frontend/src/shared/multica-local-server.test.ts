@@ -8,7 +8,7 @@ import {
 
 describe("localServerAvailability", () => {
 	it("is available for the default local server and for other loopback addresses", () => {
-		expect(localServerAvailability({ mode: "local", customUrl: "http://localhost:3000", apiUrl: "" })).toEqual({ available: true, webUrl: "http://localhost:3000", webPort: 3000 });
+		expect(localServerAvailability({ mode: "local", customUrl: "http://localhost:3000", apiUrl: "" })).toEqual({ available: true, webUrl: "http://localhost:3000", webPort: 3000, apiUrl: "" });
 		expect(localServerAvailability({ mode: "local", customUrl: "http://127.0.0.1:3001", apiUrl: "" })).toMatchObject({ available: true, webPort: 3001 });
 		expect(localServerAvailability({ mode: "local", customUrl: "http://[::1]:3000", apiUrl: "" })).toMatchObject({ available: true });
 	});
@@ -25,6 +25,22 @@ describe("localServerAvailability", () => {
 		for (const customUrl of ["http://192.168.1.20:3000", "http://10.0.0.5:3000", "http://mybox:3000", "http://multica.lan", "https://multica.example.com", "http://100.64.0.1:3000"]) {
 			expect(localServerAvailability({ mode: "local", customUrl, apiUrl: "" }), customUrl).toEqual({ available: false, reason: "remote_url" });
 		}
+	});
+
+	it("is not available when the web address is local but the API is remote or on another machine", () => {
+		for (const apiUrl of ["https://remote.example", "https://api.multica.ai", "http://192.168.1.20:8080", "http://mybox:8080", "http://127.evil.com:8080", "http://localhost.evil.com:8080"]) {
+			expect(localServerAvailability({ mode: "local", customUrl: "http://localhost:3000", apiUrl }), apiUrl).toEqual({ available: false, reason: "remote_api" });
+		}
+	});
+
+	it("is available with a loopback API on another port, and reports the API it will probe", () => {
+		expect(localServerAvailability({ mode: "local", customUrl: "http://localhost:3000", apiUrl: "http://127.0.0.1:8081" })).toEqual({
+			available: true,
+			webUrl: "http://localhost:3000",
+			webPort: 3000,
+			apiUrl: "http://127.0.0.1:8081",
+		});
+		expect(localServerAvailability({ mode: "local", customUrl: "http://localhost:3000", apiUrl: "" })).toMatchObject({ available: true, apiUrl: "" });
 	});
 
 	it("does not mistake a host that merely starts with 127 or contains localhost", () => {

@@ -218,7 +218,7 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 				if (hasEnv) {
 					const ps = await run(psCommand(docker, folder.stack));
 					containers = (ps.error ? null : parseComposePs(ps.stdout)) ?? [];
-					probe = probeOutcomeFromCheck(await options.probe({ customUrl: settings.customUrl, apiUrl: settings.apiUrl }));
+					probe = probeOutcomeFromCheck(await options.probe({ customUrl: availability.webUrl, apiUrl: availability.apiUrl }));
 				}
 			} else {
 				detectedFolder = await detectFolder(docker, folder.kind === "invalid" ? folder.dir : null);

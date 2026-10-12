@@ -93,7 +93,7 @@ Not offered: obtaining the Multica files (cloning the repository or running the 
 
 ## Server switch interplay
 
-`availability` is a pure function of the saved server settings: Cloud → `unavailable: cloud`; Local with an empty URL → `unavailable: no_url`; Local with a host that is not loopback (`localhost`, `127.0.0.0/8`, `::1`) → `unavailable: remote_url` (the Compose stack binds `127.0.0.1`, so a LAN or remote address is a different machine and AO must not offer to control it); otherwise available. The probe target is the same resolved server the view uses. Saving a different URL in the switch does not start or stop anything. The view host, its partition logic and attach/detach are not modified; after the server is healthy the user presses Retry in the Multica pane (or opens it).
+`availability` is a pure function of the saved server settings: Cloud → `unavailable: cloud`; Local with an empty URL → `unavailable: no_url`; Local with a host that is not loopback (`localhost`, `127.0.0.0/8`, `::1`) → `unavailable: remote_url`; a loopback web address whose resolved API address (explicit `apiUrl`, else the derived one) is not loopback → `unavailable: remote_api` (the Compose stack binds `127.0.0.1`, so a LAN or remote address is a different machine and AO must not offer to control it); otherwise available. The probe target is the same resolved server the view uses. Saving a different URL in the switch does not start or stop anything. The view host, its partition logic and attach/detach are not modified; after the server is healthy the user presses Retry in the Multica pane (or opens it).
 
 ## Security
 
