@@ -468,7 +468,7 @@ noetaxis_update_print_plan() {
 		printf '\n  Live sessions (%s):\n' "$cap_live_count"
 		noetaxis_update_print_live_sessions
 		if [[ "$update_end_sessions" -eq 1 ]]; then
-			printf '    These agents WILL BE STOPPED (--end-sessions): running turns and terminals end; each session, worktree and conversation stays. AO's own agent teardown can force-kill the agent's process group (SIGKILL by AO, outside this script's signal rules), so a running turn is cut off.\n'
+			printf '    These agents WILL BE STOPPED (--end-sessions): running turns and terminals end; each session, worktree and conversation stays. The agent teardown inside AO can force-kill the agent process group (SIGKILL sent by AO, outside the signal rules of this script), so a running turn is cut off.\n'
 			if [[ "$update_restore_sessions" -eq 1 ]]; then
 				printf '    --restore-sessions: one "ao session restore" attempt each afterwards (best effort, restore has been unreliable).\n'
 			fi
