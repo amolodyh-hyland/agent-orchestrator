@@ -14,12 +14,16 @@ case "$1" in
 		;;
 	project) printf '  --permission-fallback\n' ;;
 	status)
-		if daemon_up; then
+		# Test hook: a foreign or old daemon answers "ready" for this app, with its own binary path.
+		if /usr/bin/grep -qxF "$(version)" "$SIM/cfg/foreign_status_versions" 2>/dev/null; then
+			printf '{"state":"ready","pid":%s,"port":3999,"executablePath":"%s","runFile":"r","dataDir":"d"}\n' "$(sim_value foreign_status_pid)" "$(sim_value foreign_status_exe)"
+		elif daemon_up; then
 			state=ready
 			if /usr/bin/grep -qxF "$(version)" "$SIM/cfg/unhealthy_versions" 2>/dev/null; then state=not_ready; fi
 			max="$(sim_value "max_schema_$(version)")"
 			if [[ -n "$max" && "$(sim_schema)" -gt "$max" ]]; then state=not_ready; fi
-			printf '{"state":"%s","pid":4242,"port":3999,"executablePath":"%s/Contents/Resources/daemon/ao","runFile":"r","dataDir":"d"}\n' "$state" "$APP"
+			daemon_pid="$(/usr/bin/awk -F '|' -v want="|$APP/Contents/Resources/daemon/ao daemon" 'index($0, want) { print $1; exit }' "$SIM/procs")"
+			printf '{"state":"%s","pid":%s,"port":3999,"executablePath":"%s/Contents/Resources/daemon/ao","runFile":"r","dataDir":"d"}\n' "$state" "$daemon_pid" "$APP"
 		else
 			printf '{"state":"stopped","runFile":"r","dataDir":"d"}\n'
 		fi

@@ -3,8 +3,9 @@
 // ps, pgrep, osascript, open, kill, curl, multica and docker. Nothing real is quit, killed,
 // installed or contacted, and nothing reads the real ~/.ao, the Keychain or port 3001.
 import test from "node:test";
+import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
-import { cp, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, stat, symlink, writeFile } from "node:fs/promises";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { execute, makeWorld, mutatedScripts, newVersion, oldVersion, realScriptsDir } from "./noetaxis-macos-update-world.mjs";
@@ -728,6 +729,83 @@ test("the automatic rollback inside an update runs under the update's own lock",
 	assert.equal(existsSync(path.join(world.home, ".ao-install.lock")), false);
 });
 
+test("a ready daemon of another binary, or with a pid that is not this bundle's daemon, is not healthy: the update rolls back", darwin, async (t) => {
+	// The new app starts only its desktop process; a foreign daemon answers ready on the port.
+	const foreign = await makeWorld(t, "health-foreign", { cfg: { open_mode: "app-only", foreign_status_versions: `${newVersion}\n`, foreign_status_exe: "/Users/x/Old/Agent Orchestrator.app/Contents/Resources/daemon/ao", foreign_status_pid: "4242" } });
+	let result = foreign.update(["--yes"]);
+	assert.match(result.stdout, /an old or foreign daemon is serving the port/);
+	assert.ok([60, 61].includes(result.status), `${result.status}`);
+	assert.equal(foreign.installedVersion(), oldVersion, "rolled back instead of accepting the foreign daemon");
+	// Right binary path but a pid that is none of this bundle's daemon processes.
+	const wrongPid = await makeWorld(t, "health-pid", { cfg: { open_mode: "app-only", foreign_status_versions: `${newVersion}\n`, foreign_status_exe: "<NEW>", foreign_status_pid: "31337" } });
+	await wrongPid.setCfg("foreign_status_exe", `${wrongPid.targetApp}/Contents/Resources/daemon/ao`);
+	result = wrongPid.update(["--yes"]);
+	assert.match(result.stdout, /pid 31337, which is not a daemon process of/);
+	assert.equal(wrongPid.installedVersion(), oldVersion);
+});
+
+test("mutation: accepting a ready daemon without checking its identity is caught", darwin, async (t) => {
+	let dir = await mutatedScripts(t, "update-lib.sh", 'if [[ -z "$executable" || "$(noetaxis_physical_file "$executable")" != "$(noetaxis_physical_file "$expected")" ]]; then', "if false; then");
+	const file = path.join(dir, "update-lib.sh");
+	const text = await readFile(file, "utf8");
+	const loosened = text.replace('if [[ ! "$pid" =~ ^[0-9]+$ ]] ||', "if false &&");
+	assert.notEqual(loosened, text);
+	await writeFile(file, loosened);
+	const world = await makeWorld(t, "health-mutant", { cfg: { open_mode: "app-only", foreign_status_versions: `${newVersion}\n`, foreign_status_exe: "/Users/x/Old/Agent Orchestrator.app/Contents/Resources/daemon/ao", foreign_status_pid: "4242" } });
+	const result = world.update(["--yes"], { scriptsDir: dir });
+	assert.equal(world.installedVersion(), newVersion, "the mutant keeps an app whose own daemon never started");
+	assert.notEqual(result.status, 60);
+});
+
+test("a symlinked Applications folder does not make the right daemon look foreign", darwin, async (t) => {
+	const world = await makeWorld(t, "health-symlink");
+	const link = path.join(world.root, "AppsLink");
+	await symlink(world.appsDir, link);
+	const result = world.update(["--yes"], { extraEnv: { APPS_DIR: link } });
+	assert.equal(result.status, 0, result.stdout + result.stderr);
+});
+
+for (const point of ["after-record", "after-old-moved"]) {
+	test(`an interruption at ${point} after the stop restores the previous app and reopens it`, darwin, async (t) => {
+		const world = await makeWorld(t, `interrupt-${point}`);
+		const marker = path.join(world.root, "paused");
+		const child = spawn(path.join(realScriptsDir, "install.sh"), ["--update", "--quit-timeout", "3", "--stop-timeout", "3", "--health-timeout", "3", "--yes", world.newApp], {
+			env: { ...world.env, NOETAXIS_TEST_PAUSE_AT: point, NOETAXIS_TEST_PAUSE_MARKER: marker },
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		let output = "";
+		child.stdout.on("data", (chunk) => { output += chunk; });
+		const exited = new Promise((resolve) => child.on("exit", (code) => resolve(code)));
+		for (let attempt = 0; attempt < 300 && !existsSync(marker); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+		assert.ok(existsSync(marker), `never reached ${point}`);
+		child.kill("SIGTERM");
+		assert.equal(await exited, 143);
+		assert.equal(world.installedVersion(), oldVersion, "the previous app is back");
+		assert.ok((await world.procs()).some((p) => p.command === `${world.targetApp}/Contents/MacOS/Agent Orchestrator`), "and running again");
+		const calls = await world.calls();
+		assert.ok(callIndex(calls, /^open -a /) > callIndex(calls, /^osascript/), "reopened after it was quit");
+		assert.match(output, /reopening the previous app/);
+		assert.equal(existsSync(path.join(world.home, ".ao-install.lock")), false);
+	});
+}
+
+test("an interruption while staging, before anything is stopped, leaves the running app alone", darwin, async (t) => {
+	const world = await makeWorld(t, "interrupt-staged");
+	const marker = path.join(world.root, "paused");
+	const child = spawn(path.join(realScriptsDir, "install.sh"), ["--update", "--yes", world.newApp], {
+		env: { ...world.env, NOETAXIS_TEST_PAUSE_AT: "after-staged", NOETAXIS_TEST_PAUSE_MARKER: marker },
+		stdio: "ignore",
+	});
+	const exited = new Promise((resolve) => child.on("exit", (code) => resolve(code)));
+	for (let attempt = 0; attempt < 300 && !existsSync(marker); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+	child.kill("SIGTERM");
+	assert.equal(await exited, 143);
+	const calls = await world.calls();
+	assert.equal(callIndex(calls, /^osascript/), -1);
+	assert.equal(callIndex(calls, /^open /), -1);
+	assert.equal(world.installedVersion(), oldVersion);
+});
+
 test("a person's own AO_MULTICA_DAEMON / AO_KEEP_DAEMON settings are not an AO session; any other AO_ variable is, and is named", darwin, async (t) => {
 	const world = await makeWorld(t, "guard-config");
 	const configured = world.update(["--dry-run"], { extraEnv: { AO_MULTICA_DAEMON: "1", AO_KEEP_DAEMON: "1" } });
@@ -740,7 +818,7 @@ test("a person's own AO_MULTICA_DAEMON / AO_KEEP_DAEMON settings are not an AO s
 	assert.doesNotMatch(inside.stderr, /AO_MULTICA_DAEMON/);
 });
 
-test("a refusal says nothing was changed; a failure after the stop says AO is not running and how to reopen it", darwin, async (t) => {
+test("a refusal says nothing was changed; a failure after the stop reopens the previous app", darwin, async (t) => {
 	const refused = await makeWorld(t, "result-line", { sessions: [liveSession("s1")] });
 	const result = refused.update(["--yes"]);
 	assert.equal(result.status, 51);
@@ -749,7 +827,11 @@ test("a refusal says nothing was changed; a failure after the stop says AO is no
 	const failed = stopped.update(["--yes"]);
 	assert.equal(failed.status, 56);
 	assert.match(failed.stdout, /Update summary \(exit 56/);
-	assert.match(failed.stdout, /AO was stopped by this run and is not running now\. Reopen it with: open -a/);
+	assert.match(failed.stdout, /reopening the previous app/);
+	assert.match(failed.stdout, /previous app reopened and healthy \(the update did not finish; nothing was installed\)/);
+	assert.equal(failed.status, 56);
+	assert.equal(stopped.installedVersion(), oldVersion);
+	assert.ok((await stopped.procs()).some((p) => p.command.endsWith("Contents/MacOS/Agent Orchestrator")), "the previous app runs again");
 });
 
 test("an AO daemon in the process ancestry also refuses the update", darwin, async (t) => {

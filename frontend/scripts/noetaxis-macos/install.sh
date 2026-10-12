@@ -304,6 +304,11 @@ noetaxis_install_cleanup() {
 		fi
 	fi
 	if [[ "$update_mode" -eq 1 ]]; then
+		# The update stopped AO and then failed before the new app was in place: the previous app is
+		# back on disk (above), so reopen it instead of leaving AO closed.
+		if [[ "$install_complete" -eq 0 && "$exit_status" -ne 0 ]]; then
+			noetaxis_update_reopen_previous "$target_app"
+		fi
 		noetaxis_update_exit_handler "$exit_status"
 	fi
 }

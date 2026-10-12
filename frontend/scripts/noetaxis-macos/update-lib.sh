@@ -739,7 +739,7 @@ noetaxis_update_stop_all() {
 
 # Sets update_health_detail. 0 only when the daemon reports ready and answers healthz.
 noetaxis_update_daemon_healthy() {
-	local app_path="$1" cli json state port executable health
+	local app_path="$1" cli json state port executable health pid expected
 	cli="$app_path/Contents/Resources/daemon/ao"
 	update_health_detail="daemon not reachable"
 	json="$(noetaxis_bounded 15 "$cli" status --json 2>/dev/null)" || return 1
@@ -750,6 +750,18 @@ noetaxis_update_daemon_healthy() {
 	executable="$(printf '%s' "$json" | /usr/bin/plutil -extract executablePath raw -o - - 2>/dev/null || true)"
 	update_health_executable="$executable"
 	update_health_port="$port"
+	# Identity: the daemon that answers must be THIS bundle's own process, not an old or foreign
+	# daemon that happens to be ready on the same port.
+	pid="$(printf '%s' "$json" | /usr/bin/plutil -extract pid raw -o - - 2>/dev/null || true)"
+	expected="$app_path/Contents/Resources/daemon/ao"
+	if [[ -z "$executable" || "$(noetaxis_physical_file "$executable")" != "$(noetaxis_physical_file "$expected")" ]]; then
+		update_health_detail="the daemon that answers runs ${executable:-an unknown binary}, not $expected (an old or foreign daemon is serving the port)"
+		return 1
+	fi
+	if [[ ! "$pid" =~ ^[0-9]+$ ]] || ! noetaxis_own_pids_of_kind "$app_path" daemon | /usr/bin/awk -F '\t' -v pid="$pid" '$1 == pid { found = 1 } END { exit !found }'; then
+		update_health_detail="the daemon that answers has pid ${pid:-unknown}, which is not a daemon process of $app_path"
+		return 1
+	fi
 	if [[ "$port" =~ ^[0-9]+$ ]] && command -v "${NOETAXIS_CURL:-/usr/bin/curl}" >/dev/null 2>&1; then
 		health="$("${NOETAXIS_CURL:-/usr/bin/curl}" -fsS --max-time 5 "http://127.0.0.1:$port/healthz" 2>/dev/null)" || { update_health_detail="ao status ready but /healthz on port $port did not answer"; return 1; }
 		if [[ "$(printf '%s' "$health" | /usr/bin/plutil -extract status raw -o - - 2>/dev/null || true)" != ok ]]; then
@@ -759,6 +771,13 @@ noetaxis_update_daemon_healthy() {
 	fi
 	update_health_detail="ao status ready${port:+, /healthz ok on port $port}"
 	return 0
+}
+
+# Absolute path with the directory part resolved (symlinked folders compare equal).
+noetaxis_physical_file() {
+	local directory
+	directory="$(cd -P "$(/usr/bin/dirname "$1")" 2>/dev/null && pwd -P)" || { printf '%s' "$1"; return 0; }
+	printf '%s/%s' "$directory" "$(/usr/bin/basename "$1")"
 }
 
 noetaxis_update_desktop_started() {
@@ -841,9 +860,6 @@ noetaxis_update_post_checks() {
 		noetaxis_update_post_check ok "$output"
 	else
 		noetaxis_update_post_check warn "ao-app:// handler not confirmed (see the line printed above); run: $NOETAXIS_LSREGISTER -f \"$app_path\""
-	fi
-	if [[ -n "${update_health_executable:-}" && "$update_health_executable" != "$app_path/"* ]]; then
-		noetaxis_update_post_check warn "the daemon reports the binary $update_health_executable, which is outside $app_path (symlinked folder, or an old daemon is still answering)"
 	fi
 }
 
@@ -1077,6 +1093,30 @@ noetaxis_update_exit_report() {
 			/bin/cp "$noetaxis_update_log_file" "$backup_dir/update-actions.log" 2>/dev/null || true
 		fi
 	fi
+}
+
+# After a failure that happened once AO had been stopped but before the new app replaced the old
+# one: open the previous app again (best effort, short wait; this may run while a signal is
+# ending the script). Does nothing when this run stopped nothing or the app is already running.
+noetaxis_update_reopen_previous() {
+	local app_path="$1" wait_seconds="$update_health_timeout"
+	[[ -n "$noetaxis_update_summary_stopped" && "$update_app_started" -eq 0 && -d "$app_path" ]] || return 0
+	if ! noetaxis_none_running_of_kind "$app_path" desktop; then
+		return 0
+	fi
+	if [[ "$wait_seconds" -gt 30 ]]; then
+		wait_seconds=30
+	fi
+	noetaxis_update_step "The update did not finish: reopening the previous app"
+	local saved="$update_health_timeout"
+	update_health_timeout="$wait_seconds"
+	if noetaxis_update_start_and_wait "$app_path" "the previous app"; then
+		noetaxis_update_append noetaxis_update_summary_extra "previous app reopened and healthy (the update did not finish; nothing was installed)"
+	else
+		noetaxis_update_append noetaxis_update_summary_extra "previous app reopened but not confirmed healthy within ${wait_seconds}s: $update_health_detail"
+		update_app_started=1
+	fi
+	update_health_timeout="$saved"
 }
 
 # EXIT handler of update mode: the summary, then the temporary capture directory goes.
