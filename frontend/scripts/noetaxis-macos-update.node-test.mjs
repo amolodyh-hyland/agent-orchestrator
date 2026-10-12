@@ -25,6 +25,30 @@ async function alsoDisableSessionIdentity(directory) {
 	await writeFile(file, changed);
 }
 
+// An install run started asynchronously (to interrupt or pause it): stdout and stderr are drained, and
+// the run has a hard lifetime, so a stalled run fails fast with what it printed instead of hanging a test.
+function startRun(scriptsDir, args, env, { lifetime = 120_000 } = {}) {
+	const child = spawn(path.join(scriptsDir, "install.sh"), args, { env, stdio: ["ignore", "pipe", "pipe"] });
+	const output = { stdout: "", stderr: "" };
+	child.stdout.on("data", (chunk) => { output.stdout += chunk; });
+	child.stderr.on("data", (chunk) => { output.stderr += chunk; });
+	const exited = new Promise((resolve, reject) => {
+		const timer = setTimeout(() => {
+			child.kill("SIGKILL");
+			reject(new Error(`the run did not exit within ${lifetime} ms\nstdout:\n${output.stdout}\nstderr:\n${output.stderr}`));
+		}, lifetime);
+		child.on("exit", (code) => { clearTimeout(timer); resolve(code); });
+	});
+	exited.catch(() => {});
+	return { child, exited, output };
+}
+
+async function waitForMarker(file, what, timeoutMs = 60_000) {
+	const deadline = Date.now() + timeoutMs;
+	while (!existsSync(file) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
+	assert.ok(existsSync(file), `never reached ${what}`);
+}
+
 const callIndex = (calls, pattern) => calls.findIndex((line) => pattern.test(line));
 const matching = (calls, pattern) => calls.filter((line) => pattern.test(line));
 const liveSession = (id, extra = {}) => ({ id, ...extra });
@@ -122,12 +146,9 @@ async function scenarioRecordBeforeMove(t, scriptsDir) {
 	for (const point of ["after-record", "after-old-moved"]) {
 		const world = await makeWorld(t, `record-${point}`);
 		const marker = path.join(world.root, "paused");
-		const child = spawn(path.join(scriptsDir, "install.sh"), ["--update", "--quit-timeout", "3", "--stop-timeout", "3", "--health-timeout", "3", "--yes", world.newApp], {
-			env: { ...world.env, NOETAXIS_TEST_PAUSE_AT: point, NOETAXIS_TEST_PAUSE_MARKER: marker },
-			stdio: "ignore",
-		});
-		const exited = new Promise((resolve) => child.on("exit", (code) => resolve(code)));
-		for (let attempt = 0; attempt < 300 && !existsSync(marker); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+		const run = startRun(scriptsDir, ["--update", "--quit-timeout", "3", "--stop-timeout", "3", "--health-timeout", "3", "--yes", world.newApp], { ...world.env, NOETAXIS_TEST_PAUSE_AT: point, NOETAXIS_TEST_PAUSE_MARKER: marker });
+		const { child, exited } = run;
+		await waitForMarker(marker, point).catch(() => violations.push(`${point}: the swap never reached the pause`));
 		const [dir] = await world.backupDirs();
 		const complete = dir ? existsSync(path.join(dir, "BACKUP_COMPLETE")) : false;
 		const moved = dir ? (await readdir(dir)).some((name) => name.endsWith(".app.bak")) : false;
@@ -848,13 +869,9 @@ test("a lock left by a dead owner is never taken over: the message gives the exa
 test("a second install cannot swap while the first is paused mid-swap; the first still ends with an intact bundle", darwin, async (t) => {
 	const world = await makeWorld(t, "lock-swap", { running: false });
 	const marker = path.join(world.root, "paused");
-	const first = spawn(path.join(realScriptsDir, "install.sh"), [world.newApp], {
-		env: { ...world.env, NOETAXIS_TEST_PAUSE_AT: "after-old-moved", NOETAXIS_TEST_PAUSE_MARKER: marker, NOETAXIS_TEST_PAUSE_SECONDS: "5" },
-		stdio: "ignore",
-	});
-	const exited = new Promise((resolve) => first.on("exit", (code) => resolve(code)));
-	for (let attempt = 0; attempt < 300 && !existsSync(marker); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100));
-	assert.ok(existsSync(marker), "the first install never reached the pause");
+	const run = startRun(realScriptsDir, [world.newApp], { ...world.env, NOETAXIS_TEST_PAUSE_AT: "after-old-moved", NOETAXIS_TEST_PAUSE_MARKER: marker, NOETAXIS_TEST_PAUSE_SECONDS: "5" });
+	const exited = run.exited;
+	await waitForMarker(marker, "the pause of the first install");
 	// The old app is moved away and the new one is not in place yet: a second run must not touch anything.
 	assert.equal(world.run([world.newApp]).status, 36);
 	assert.equal(world.update(["--yes"]).status, 36);
@@ -925,16 +942,11 @@ test("a lock directory without a readable pid fails closed (36), including while
 test("the lock is released last: it still stands while the cleanup restores the previous app", darwin, async (t) => {
 	const world = await makeWorld(t, "lock-last");
 	const marker = path.join(world.root, "paused");
-	const child = spawn(path.join(realScriptsDir, "install.sh"), ["--update", "--quit-timeout", "3", "--stop-timeout", "3", "--health-timeout", "3", "--yes", world.newApp], {
-		env: { ...world.env, NOETAXIS_TEST_PAUSE_AT: "after-old-moved cleanup-end", NOETAXIS_TEST_PAUSE_MARKER: marker, NOETAXIS_TEST_PAUSE_SECONDS: "6" },
-		stdio: "ignore",
-	});
-	const exited = new Promise((resolve) => child.on("exit", (code) => resolve(code)));
-	for (let attempt = 0; attempt < 300 && !existsSync(marker); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100));
-	assert.ok(existsSync(marker), "never reached after-old-moved");
+	const run = startRun(realScriptsDir, ["--update", "--quit-timeout", "3", "--stop-timeout", "3", "--health-timeout", "3", "--yes", world.newApp], { ...world.env, NOETAXIS_TEST_PAUSE_AT: "after-old-moved cleanup-end", NOETAXIS_TEST_PAUSE_MARKER: marker, NOETAXIS_TEST_PAUSE_SECONDS: "6" });
+	const { child, exited } = run;
+	await waitForMarker(marker, "after-old-moved");
 	child.kill("SIGTERM");
-	for (let attempt = 0; attempt < 300 && !existsSync(`${marker}.cleanup`); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100));
-	assert.ok(existsSync(`${marker}.cleanup`), "never reached the end of the cleanup");
+	await waitForMarker(`${marker}.cleanup`, "the end of the cleanup");
 	// The previous app is already back, and the lock still stands: another run is refused.
 	assert.equal(world.installedVersion(), oldVersion);
 	assert.equal(existsSync(path.join(world.home, ".ao-install.lock")), true);
@@ -1044,11 +1056,10 @@ test("mutation: removing the lock is caught by the paused-swap scenario", darwin
 	const mutant = await mutatedScripts(t, "common.sh", "noetaxis_acquire_lock() {\n", "noetaxis_acquire_lock() {\n\treturn 0\n");
 	const world = await makeWorld(t, "lock-mutant", { running: false });
 	const marker = path.join(world.root, "paused");
-	const first = spawn(path.join(mutant, "install.sh"), [world.newApp], { env: { ...world.env, NOETAXIS_TEST_PAUSE_AT: "after-old-moved", NOETAXIS_TEST_PAUSE_MARKER: marker }, stdio: "ignore" });
-	const exited = new Promise((resolve) => first.on("exit", (code) => resolve(code)));
-	for (let attempt = 0; attempt < 300 && !existsSync(marker); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+	const run = startRun(mutant, [world.newApp], { ...world.env, NOETAXIS_TEST_PAUSE_AT: "after-old-moved", NOETAXIS_TEST_PAUSE_MARKER: marker, NOETAXIS_TEST_PAUSE_SECONDS: "5" });
+	await waitForMarker(marker, "the pause of the first install");
 	const second = world.run([world.newApp], { scriptsDir: mutant });
-	await exited;
+	await run.exited;
 	assert.notEqual(second.status, 36, "without a lock the second run is not refused");
 });
 
@@ -1064,22 +1075,17 @@ for (const point of ["after-record", "after-old-moved"]) {
 	test(`an interruption at ${point} after the stop restores the previous app and reopens it`, darwin, async (t) => {
 		const world = await makeWorld(t, `interrupt-${point}`);
 		const marker = path.join(world.root, "paused");
-		const child = spawn(path.join(realScriptsDir, "install.sh"), ["--update", "--quit-timeout", "3", "--stop-timeout", "3", "--health-timeout", "3", "--yes", world.newApp], {
-			env: { ...world.env, NOETAXIS_TEST_PAUSE_AT: point, NOETAXIS_TEST_PAUSE_MARKER: marker },
-			stdio: ["ignore", "pipe", "pipe"],
-		});
-		let output = "";
-		child.stdout.on("data", (chunk) => { output += chunk; });
-		const exited = new Promise((resolve) => child.on("exit", (code) => resolve(code)));
-		for (let attempt = 0; attempt < 300 && !existsSync(marker); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100));
-		assert.ok(existsSync(marker), `never reached ${point}`);
+		const run = startRun(realScriptsDir, ["--update", "--quit-timeout", "3", "--stop-timeout", "3", "--health-timeout", "3", "--yes", world.newApp], { ...world.env, NOETAXIS_TEST_PAUSE_AT: point, NOETAXIS_TEST_PAUSE_MARKER: marker });
+		const { child, exited } = run;
+		const output = { toString: () => run.output.stdout };
+		await waitForMarker(marker, point);
 		child.kill("SIGTERM");
 		assert.equal(await exited, 143);
 		assert.equal(world.installedVersion(), oldVersion, "the previous app is back");
 		assert.ok((await world.procs()).some((p) => p.command === `${world.targetApp}/Contents/MacOS/Agent Orchestrator`), "and running again");
 		const calls = await world.calls();
 		assert.ok(callIndex(calls, /^open -a /) > callIndex(calls, /^osascript/), "reopened after it was quit");
-		assert.match(output, /reopening the previous app/);
+		assert.match(run.output.stdout, /reopening the previous app/);
 		assert.equal(existsSync(path.join(world.home, ".ao-install.lock")), false);
 	});
 }
@@ -1087,14 +1093,10 @@ for (const point of ["after-record", "after-old-moved"]) {
 test("an interruption while staging, before anything is stopped, leaves the running app alone", darwin, async (t) => {
 	const world = await makeWorld(t, "interrupt-staged");
 	const marker = path.join(world.root, "paused");
-	const child = spawn(path.join(realScriptsDir, "install.sh"), ["--update", "--yes", world.newApp], {
-		env: { ...world.env, NOETAXIS_TEST_PAUSE_AT: "after-staged", NOETAXIS_TEST_PAUSE_MARKER: marker },
-		stdio: "ignore",
-	});
-	const exited = new Promise((resolve) => child.on("exit", (code) => resolve(code)));
-	for (let attempt = 0; attempt < 300 && !existsSync(marker); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100));
-	child.kill("SIGTERM");
-	assert.equal(await exited, 143);
+	const run = startRun(realScriptsDir, ["--update", "--yes", world.newApp], { ...world.env, NOETAXIS_TEST_PAUSE_AT: "after-staged", NOETAXIS_TEST_PAUSE_MARKER: marker });
+	await waitForMarker(marker, "after-staged");
+	run.child.kill("SIGTERM");
+	assert.equal(await run.exited, 143);
 	const calls = await world.calls();
 	assert.equal(callIndex(calls, /^osascript/), -1);
 	assert.equal(callIndex(calls, /^open /), -1);
@@ -1223,13 +1225,123 @@ test("mutation: letting the helper inherit the caller's pipes is caught by the e
 	assert.equal(result.error?.code, "ETIMEDOUT", "an inherited pipe is held open by the escaped descendant");
 });
 
-test("mutation: gating the group KILL on the leader not having been reaped is caught by the cooperative-leader case", darwin, async (t) => {
-	const mutant = await mutatedScripts(t, "common.sh", 'if (kill(0, -$child)) { kill "KILL", -$child; }', 'unless ($reaped) { kill "KILL", -$child; }');
-	const fixture = await watchdogFixture(t, "gate-mutant");
-	fixture.capture(path.join(mutant, "common.sh"), "cooperative-leader.sh", 1, 20_000);
-	const survived = fixture.alive(fixture.marker);
-	try { process.kill(Number(readFileSync(fixture.marker, "utf8").trim()), "SIGKILL"); } catch { /* gone */ }
-	assert.ok(survived, "the mutant leaves the stubborn descendant running");
+// PGID reuse: the helper's process (and group) id is reserved only while its leader is unreaped, so
+// the supervisor may reap the leader (a) when it exits on its own before any deadline, nothing signalled
+// afterwards, or (b) after the LAST signal. This reads the stop sequence and reports any waitpid that
+// comes before the final KILL, and any unblocked signal handler window around a reap.
+function reapsBeforeLastSignal(source) {
+	const body = source.slice(source.indexOf("noetaxis_bounded() {"), source.indexOf("\n}\n", source.indexOf("noetaxis_bounded() {")));
+	const stop = body.slice(body.indexOf("# Stop sequence"));
+	const kill = stop.indexOf('kill "KILL"');
+	const problems = [];
+	if (kill < 0) problems.push("no KILL in the stop sequence");
+	if (/waitpid/.test(stop.slice(0, Math.max(kill, 0)))) problems.push("the leader is reaped before the last signal");
+	const loop = body.slice(body.indexOf("while (1) {"), body.indexOf("# Stop sequence"));
+	if (!/sigprocmask\(SIG_BLOCK, \$blocked\);\s*unless \(\$fired\) \{\s*if \(waitpid/.test(loop)) problems.push("the reap in the polling loop is not done with the stop signals blocked and the fired flag checked");
+	if (/\bkill\b/.test(loop.replace(/#.*$/gm, ""))) problems.push("a signal is sent from the polling loop");
+	return problems;
+}
+
+test("the helper watchdog reaps its leader only when nothing will be signalled any more (the group id stays reserved)", async () => {
+	assert.deepEqual(reapsBeforeLastSignal(await readFile(path.join(realScriptsDir, "common.sh"), "utf8")), []);
+});
+
+test("mutation: reaping the leader before the last signal (the PGID-reuse race) is caught", darwin, async (t) => {
+	const mutant = await mutatedScripts(t, "common.sh", '		select(undef, undef, undef, 1);\n', '		select(undef, undef, undef, 1);\n		waitpid($child, WNOHANG);\n');
+	assert.ok(reapsBeforeLastSignal(await readFile(path.join(mutant, "common.sh"), "utf8")).some((p) => /reaped before the last signal/.test(p)));
+	const unblocked = await mutatedScripts(t, "common.sh", "sigprocmask(SIG_BLOCK, $blocked);\n			unless ($fired) {", "unless ($fired) {");
+	assert.ok(reapsBeforeLastSignal(await readFile(path.join(unblocked, "common.sh"), "utf8")).some((p) => /stop signals blocked/.test(p)));
+});
+
+test("helper output is capped in size: a runaway or oversized output is cut, flagged, and fails the call (144)", darwin, async (t) => {
+	const root = await mkdtemp(path.join(os.tmpdir(), "noetaxis-cap-"));
+	t.after(async () => rm(root, { recursive: true, force: true }));
+	const run = (script, limit, extra = {}) => {
+		const started = Date.now();
+		const outFile = path.join(root, "out");
+		const errFile = path.join(root, "err");
+		const result = spawnSync("/bin/bash", ["-c", `. "${path.join(realScriptsDir, "common.sh")}"; rc=0; noetaxis_bounded ${limit} /bin/sh -c '${script}' > ${outFile} 2> ${errFile} || rc=$?; echo "rc=$rc"`], { env: { PATH: "/usr/bin:/bin", TMPDIR: root, NOETAXIS_HELPER_OUTPUT_MAX: "65536", ...extra }, encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL" });
+		return { result, elapsed: Date.now() - started, out: readFileSync(outFile), err: readFileSync(errFile, "utf8") };
+	};
+	// Never-ending output from a helper that also ignores TERM: stopped at the cap, not at the deadline.
+	const endless = run(`trap "" TERM; yes`, 30);
+	assert.match(endless.result.stdout, /rc=144/);
+	assert.ok(endless.elapsed < 15_000, `returned after ${endless.elapsed} ms`);
+	assert.ok(endless.out.length <= 65536, `copied ${endless.out.length} bytes`);
+	assert.match(endless.err, /helper output exceeded 65536 bytes and was truncated/);
+	assert.deepEqual((await readdir(root)).filter((name) => name.startsWith("noetaxis-helper")), [], "no temporary file is left behind");
+	// A finite but oversized output is cut and flagged even though the helper succeeded.
+	const big = run("head -c 300000 /dev/zero", 30);
+	assert.match(big.result.stdout, /rc=144/);
+	assert.equal(big.out.length, 65536);
+	assert.match(big.err, /truncated/);
+	// Output under the cap is passed through untouched.
+	const small = run("head -c 1000 /dev/zero", 30);
+	assert.match(small.result.stdout, /rc=0/);
+	assert.equal(small.out.length, 1000);
+});
+
+test("mutation: an uncapped helper output is caught", darwin, async (t) => {
+	const mutant = await mutatedScripts(t, "common.sh", "my $max = shift @ARGV;", "my $max = 1000000000; shift @ARGV;");
+	const text = await readFile(path.join(mutant, "common.sh"), "utf8");
+	await writeFile(path.join(mutant, "common.sh"), text.replace(/\( ulimit -f [^;]*; exec/, "( exec"));
+	const root = await mkdtemp(path.join(os.tmpdir(), "noetaxis-cap-mutant-"));
+	t.after(async () => rm(root, { recursive: true, force: true }));
+	const outFile = path.join(root, "out");
+	spawnSync("/bin/bash", ["-c", `. "${path.join(mutant, "common.sh")}"; noetaxis_bounded 30 /bin/sh -c 'head -c 300000 /dev/zero' > ${outFile} 2> /dev/null; true`], { env: { PATH: "/usr/bin:/bin", TMPDIR: root, NOETAXIS_HELPER_OUTPUT_MAX: "65536" }, timeout: 60_000, killSignal: "SIGKILL" });
+	assert.equal(readFileSync(outFile).length, 300000, "without the cap the whole oversized output is copied");
+});
+
+// Dynamic evidence for the PGID rule: the real supervisor runs with kill and waitpid traced (perl's
+// CORE::GLOBAL overrides, loaded through PERL5OPT), and the order of the calls is checked: the leader
+// must not be reaped before the last signal, and a helper that ends by itself is never signalled.
+async function tracedWatchdog(t, libPath, label) {
+	const root = await mkdtemp(path.join(os.tmpdir(), `noetaxis-trace-${label}-`));
+	t.after(async () => rm(root, { recursive: true, force: true }));
+	await writeFile(path.join(root, "Trace.pm"), `package Trace;
+BEGIN {
+	my $log = $ENV{TRACE_LOG};
+	*CORE::GLOBAL::kill = sub { my ($sig, @pids) = @_; open(my $f, ">>", $log); print $f "kill $sig @pids\\n"; close $f; return CORE::kill($sig, @pids); };
+	*CORE::GLOBAL::waitpid = sub { my $r = CORE::waitpid($_[0], $_[1]); open(my $f, ">>", $log); print $f "waitpid $_[0] $_[1] => $r\\n"; close $f; return $r; };
+}
+1;
+`);
+	await writeFile(path.join(root, "cooperative.sh"), `#!/bin/sh\nwhile :; do /bin/sleep 1; done\n`, { mode: 0o755 });
+	const trace = path.join(root, "trace.log");
+	const env = { PATH: "/usr/bin:/bin", TMPDIR: root, TRACE_LOG: trace, PERL5OPT: `-I${root} -MTrace` };
+	const outFile = path.join(root, "o");
+	const runIt = (limit, command) => spawnSync("/bin/bash", ["-c", `. "${libPath}"; noetaxis_bounded ${limit} ${command} > ${outFile} 2>&1; true`], { env, timeout: 60_000, killSignal: "SIGKILL" });
+	runIt(1, `"${path.join(root, "cooperative.sh")}"`);
+	const timedOut = readFileSync(trace, "utf8").trim().split("\n");
+	await rm(trace);
+	runIt(5, "/bin/sh -c 'exit 0'");
+	const quick = existsSync(trace) ? readFileSync(trace, "utf8").trim().split("\n") : [];
+	return { timedOut, quick };
+}
+
+function orderProblems({ timedOut, quick }) {
+	const problems = [];
+	const lastKill = timedOut.map((line, index) => (line.startsWith("kill ") ? index : -1)).reduce((a, b) => Math.max(a, b), -1);
+	if (lastKill < 0) problems.push("a timed-out helper was not signalled");
+	timedOut.slice(0, Math.max(lastKill, 0)).forEach((line) => {
+		const reaped = line.match(/^waitpid (\d+) \d+ => (\d+)$/);
+		if (reaped && Number(reaped[2]) > 0) problems.push(`the leader was reaped before the last signal: ${line}`);
+	});
+	if (!timedOut.some((line) => /^kill KILL -\d+$/.test(line))) problems.push("no group KILL");
+	if (quick.some((line) => line.startsWith("kill "))) problems.push("a helper that exited by itself was signalled");
+	return problems;
+}
+
+test("traced supervisor: the leader is reaped only after the last signal, and a helper that ends by itself is never signalled", darwin, async (t) => {
+	const traced = await tracedWatchdog(t, path.join(realScriptsDir, "common.sh"), "real");
+	assert.deepEqual(orderProblems(traced), [], traced.timedOut.join("\n"));
+	assert.ok(traced.timedOut.some((line) => /^kill TERM -\d+$/.test(line)));
+});
+
+test("mutation: reaping the leader before the last signal is caught by the traced supervisor", darwin, async (t) => {
+	const mutant = await mutatedScripts(t, "common.sh", '		select(undef, undef, undef, 1);\n', '		select(undef, undef, undef, 1);\n		waitpid($child, WNOHANG);\n');
+	const traced = await tracedWatchdog(t, path.join(mutant, "common.sh"), "mutant");
+	assert.ok(orderProblems(traced).some((problem) => /reaped before the last signal/.test(problem)), traced.timedOut.join("\n"));
 });
 
 test("a hung helper is terminated and reported as a failure, while AO's own processes are never sent SIGKILL", darwin, async (t) => {
@@ -1253,7 +1365,7 @@ test("a hung helper is terminated and reported as a failure, while AO's own proc
 });
 
 test("mutation: a watchdog that never escalates to KILL (or only sets an alarm) is caught", darwin, async (t) => {
-	const mutant = await mutatedScripts(t, "common.sh", 'if (kill(0, -$child)) { kill "KILL", -$child; }', "");
+	const mutant = await mutatedScripts(t, "common.sh", '		kill "KILL", -$child;\n', "");
 	const root = await mkdtemp(path.join(os.tmpdir(), "noetaxis-bounded-mutant-"));
 	t.after(async () => rm(root, { recursive: true, force: true }));
 	const pidFile = path.join(root, "hung.pid");
@@ -1300,7 +1412,7 @@ test("SIGKILL exists in exactly one place: the watchdog of noetaxis_bounded, aim
 		});
 	}
 	assert.equal(hits.length, 1, hits.join("\n"));
-	assert.match(hits[0], /^common\.sh:\d+ in noetaxis_bounded: if \(kill\(0, -\$child\)\) \{ kill "KILL", -\$child; \}$/);
+	assert.match(hits[0], /^common\.sh:\d+ in noetaxis_bounded: kill "KILL", -\$child;$/);
 });
 
 test("the daemon's identity is re-checked before every session is ended, not only once", darwin, async (t) => {

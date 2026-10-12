@@ -9,7 +9,7 @@ NOETAXIS_LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Framework
 # time limit. A SIGALRM alone does not bound a Go program (the Go runtime catches and ignores it, and
 # the bundled ao is one), so the helper runs as a child of a small perl supervisor, in a process
 # group of its own. At the deadline the supervisor sends that group SIGTERM, waits one second,
-# then SIGKILL (also to descendants that outlive a leader that exited on TERM), copies the helper's output (it wrote to private files) and prints "timed out" on stderr and exits 142 (143 when the script itself is
+# then SIGKILL (also to descendants that outlive a leader that exited on TERM; the group id stays reserved because the leader is reaped only after the last signal), copies the helper's output (it wrote to private files) and prints "timed out" on stderr and exits 142 (143 when the script itself is
 # interrupted). This is the ONLY place in the installer that can send SIGKILL, and it can only
 # reach the process group of the helper command it started itself. It never touches AO's own
 # processes (the app, daemon, chat hosts, agents), which are only ever sent SIGTERM, only by
@@ -21,9 +21,13 @@ noetaxis_bounded() {
 	if [[ "${NOETAXIS_HELPER_TIMEOUT_MAX:-}" =~ ^[0-9]+$ && "$NOETAXIS_HELPER_TIMEOUT_MAX" -lt "$seconds" ]]; then
 		seconds="$NOETAXIS_HELPER_TIMEOUT_MAX"
 	fi
-	/usr/bin/perl -e '
+	# The helper's output is capped in size too: ulimit -f stops a runaway writer at twice the cap, the
+	# supervisor stops it at the cap, and at most the cap is copied out (and said to be truncated).
+	local max_bytes="${NOETAXIS_HELPER_OUTPUT_MAX:-4194304}"
+	( ulimit -f "$(( max_bytes * 2 / 512 + 8 ))" 2>/dev/null; exec /usr/bin/perl -e '
 		use Fcntl;
 		my $limit = shift @ARGV;
+		my $max = shift @ARGV;
 		# The helper writes into private files (mode 0600, unlinked at once), never into this
 		# script'"'"'s pipes: a descendant that outlives the helper or ignores signals can then not hold
 		# the caller'"'"'s command substitution open. The output is copied out after the helper is gone.
@@ -46,44 +50,61 @@ noetaxis_bounded() {
 			exec @ARGV;
 			exit 127;
 		}
-		my $reaped = 0;
+		# Copies at most $max bytes of each stream; returns 1 when something was cut off.
 		sub flush_output {
 			$| = 1;
+			my $cut = 0;
 			for my $pair ([$out, \*STDOUT], [$err, \*STDERR]) {
+				$cut = 1 if (-s $pair->[0]) > $max;
 				seek($pair->[0], 0, 0);
-				local $/;
-				my $data = readline($pair->[0]);
-				print { $pair->[1] } $data if defined $data;
+				my $data = "";
+				read($pair->[0], $data, $max);
+				print { $pair->[1] } $data;
 			}
+			return $cut;
 		}
-		my $stop = sub {
-			my ($code, $note) = @_;
-			kill "TERM", -$child;
-			my $until = time + 1;
-			while (time < $until) {
-				$reaped = 1 if !$reaped && waitpid($child, 1) == $child;
-				last if $reaped && !kill(0, -$child);
-				select(undef, undef, undef, 0.05);
-			}
-			$reaped = 1 if !$reaped && waitpid($child, 1) == $child;
-			# Whoever is still in the group after the grace gets KILL: a hung leader, or descendants that
-			# outlived a leader that exited on TERM. Reaping the leader does not release the group id while
-			# members remain, so the group is still this helper'"'"'s own when KILL is sent.
-			if (kill(0, -$child)) { kill "KILL", -$child; }
-			waitpid($child, 1) unless $reaped;
-			flush_output();
-			print STDERR "$note\n" if $note;
-			exit $code;
-		};
-		$SIG{ALRM} = sub { $stop->(142, "noetaxis: helper command timed out after ${limit}s: @ARGV"); };
-		$SIG{TERM} = $SIG{INT} = $SIG{HUP} = sub { $stop->(143, ""); };
+		# Group ownership: the helper'"'"'s process id (and so its group id) stays reserved for as long as
+		# its leader is unreaped, so every signal below can only reach this helper'"'"'s own group. The
+		# leader is therefore reaped ONLY (a) when it exits on its own before any deadline or
+		# interruption, after which nothing is ever signalled, or (b) after the last signal was sent.
+		# The signals that could start the stop sequence are blocked while the leader is polled and
+		# reaped, so a handler can never run between a reap and a kill.
+		use POSIX qw(:signal_h :sys_wait_h);
+		my $blocked = POSIX::SigSet->new(SIGALRM, SIGTERM, SIGINT, SIGHUP);
+		my $fired = 0;
+		$SIG{ALRM} = sub { $fired ||= 142; };
+		$SIG{TERM} = $SIG{INT} = $SIG{HUP} = sub { $fired ||= 143; };
 		alarm $limit;
-		waitpid($child, 0);
-		my $status = $?;
-		alarm 0;
-		flush_output();
-		exit(($status & 127) ? 128 + ($status & 127) : ($status >> 8));
-	' "$seconds" "$@"
+		while (1) {
+			sigprocmask(SIG_BLOCK, $blocked);
+			unless ($fired) {
+				if (waitpid($child, WNOHANG) == $child) {
+					my $status = $?;
+					alarm 0;
+					if (flush_output()) {
+						print STDERR "noetaxis: helper output exceeded $max bytes and was truncated: @ARGV\n";
+						exit 144;
+					}
+					exit(($status & 127) ? 128 + ($status & 127) : ($status >> 8));
+				}
+				$fired = 144 if (-s $out) > $max || (-s $err) > $max;
+			}
+			last if $fired;
+			sigprocmask(SIG_UNBLOCK, $blocked);
+			select(undef, undef, undef, 0.05);
+		}
+		# Stop sequence, with the signals still blocked and the leader still unreaped.
+		kill "TERM", -$child;
+		select(undef, undef, undef, 1);
+		# Whoever is still in the group after the grace (a hung leader, or descendants that outlived a
+		# leader that exited on TERM) gets KILL; the leader is a zombie at worst, so the group id is ours.
+		kill "KILL", -$child;
+		for (1 .. 60) { last if waitpid($child, WNOHANG) == $child; select(undef, undef, undef, 0.05); }
+		my $cut = flush_output();
+		print STDERR "noetaxis: helper command timed out after ${limit}s: @ARGV\n" if $fired == 142;
+		print STDERR "noetaxis: helper output exceeded $max bytes and was truncated: @ARGV\n" if $fired == 144 || $cut;
+		exit $fired;
+	' "$seconds" "$max_bytes" "$@" )
 }
 
 # Start time of a process ("Mon Oct 12 04:33:21 2026"); with the pid it identifies one process.
