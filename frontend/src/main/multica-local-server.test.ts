@@ -69,6 +69,8 @@ type Fake = {
 	env: NodeJS.ProcessEnv;
 	plugin: string | null;
 	dockerConfig: "ok" | "untrusted";
+	dockerUntrusted: boolean;
+	composeUntrusted: boolean;
 };
 
 function harness(patch: Partial<Fake> = {}) {
@@ -91,6 +93,8 @@ function harness(patch: Partial<Fake> = {}) {
 		endpoint: SOCKET,
 		plugin: PLUGIN,
 		dockerConfig: "ok",
+		dockerUntrusted: false,
+		composeUntrusted: false,
 		env: { PATH: "/usr/bin", HOME },
 		...patch,
 	};
@@ -160,6 +164,8 @@ function harness(patch: Partial<Fake> = {}) {
 		findPathDirs: () => ["/usr/local/bin", "/usr/bin"],
 		dockerHomeDir: AO_DOCKER_HOME,
 		findComposePlugin: () => fake.plugin,
+		isDockerUntrusted: () => fake.dockerUntrusted,
+		isComposeUntrusted: () => fake.composeUntrusted,
 		ensureDockerConfig: async (pluginDir) => {
 			ensured.push(pluginDir);
 			return fake.dockerConfig === "ok" ? { ok: true, home: AO_DOCKER_HOME, config: `${AO_DOCKER_HOME}/.docker` } : { ok: false };
@@ -617,6 +623,40 @@ describe("Docker's home and plugins are AO's own", () => {
 		await h.server.start();
 		const open = h.calls.find((call) => call.file === "/usr/bin/open");
 		expect(open?.env.DOCKER_CONFIG).toBeUndefined();
+	});
+});
+
+describe("a docker or Compose plugin at a location others can modify", () => {
+	it("is reported as such, not as not installed, and nothing runs", async () => {
+		const h = harness({ docker: null, dockerUntrusted: true });
+
+		expect(await h.server.getStatus()).toMatchObject({ state: "docker_untrusted" });
+		expect(await h.server.start()).toEqual({ ok: false, code: "docker_untrusted" });
+		expect(await h.server.stop()).toEqual({ ok: false, code: "docker_untrusted" });
+		expect(await h.server.getLogs("backend", 5)).toEqual({ ok: false, code: "docker_untrusted" });
+		expect(h.calls).toEqual([]);
+	});
+
+	it("is still plain 'not installed' when there is no docker anywhere", async () => {
+		const h = harness({ docker: null, dockerUntrusted: false });
+		expect((await h.server.getStatus()).state).toBe("docker_not_installed");
+		expect(await h.server.start()).toEqual({ ok: false, code: "docker_not_installed" });
+	});
+
+	it("applies to an untrusted Compose plugin too, while a missing one stays 'Compose missing'", async () => {
+		const untrusted = harness({ plugin: null, composeUntrusted: true });
+		expect((await untrusted.server.getStatus()).state).toBe("docker_untrusted");
+		expect(await untrusted.server.start()).toEqual({ ok: false, code: "docker_untrusted" });
+		expect(untrusted.verbs()).not.toContain("up");
+
+		const missing = harness({ plugin: null, composeUntrusted: false });
+		expect((await missing.server.getStatus()).state).toBe("compose_missing");
+		expect(await missing.server.start()).toEqual({ ok: false, code: "compose_missing" });
+	});
+
+	it("offers a detected folder adoption no docker command either", async () => {
+		const h = harness({ docker: null, dockerUntrusted: true });
+		expect(await h.server.useDetectedFolder()).toEqual({ ok: false, code: "docker_untrusted" });
 	});
 });
 

@@ -85,7 +85,7 @@ export function publishedWebPort(containers: ContainerInfo[]): number | null {
 }
 
 /** `unknown`: Docker answered in a way that proves nothing about whether the engine runs (for example permission denied). */
-export type DockerProbe = "ok" | "not_installed" | "not_running" | "unknown";
+export type DockerProbe = "ok" | "not_installed" | "untrusted" | "not_running" | "unknown";
 
 const ENGINE_DOWN = /cannot connect|can't connect|connection refused|is the docker daemon running|error during connect|failed to connect|no such file or directory|dial unix|docker desktop is (?:stopped|starting)/i;
 const ACCESS_DENIED = /permission denied|access is denied|operation not permitted/i;
@@ -149,6 +149,8 @@ const DEAD_STATES = new Set(["exited", "dead", "restarting", "paused", "removing
 export function deriveLocalServerState(input: DeriveInput): LocalServerState {
 	if (input.op) return input.op;
 	if (input.docker === "not_installed") return "docker_not_installed";
+	// Found, but where other users can modify it: reported as such, never run.
+	if (input.docker === "untrusted") return "docker_untrusted";
 	if (input.docker === "unknown") return "unknown";
 	if (!input.composeInstalled && input.docker === "ok") return "compose_missing";
 	if (input.folder === "none") return input.docker === "not_running" ? "docker_not_running" : "no_folder";

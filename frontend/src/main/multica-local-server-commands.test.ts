@@ -15,6 +15,8 @@ import {
 	findComposePlugin,
 	findDockerBinary,
 	findLocalDockerEndpoint,
+	inspectComposePlugin,
+	inspectDockerBinary,
 	hasPinnedDockerHome,
 	isIssuedCommand,
 	isLocalDockerEndpoint,
@@ -267,6 +269,40 @@ describe("isLocalDockerEndpoint", () => {
 	});
 });
 
+describe("inspecting for an untrusted docker or Compose plugin", () => {
+	const executable = (file: string) => file === "/opt/homebrew/bin/docker" || file === "/opt/homebrew/lib/docker/cli-plugins/docker-compose";
+
+	it("says when docker exists but fails the check, instead of reporting it as missing", () => {
+		expect(inspectDockerBinary({ home: "/Users/me", platform: "darwin", isExecutable: executable, isTrusted: () => false })).toEqual({ path: null, untrusted: true });
+		expect(inspectDockerBinary({ home: "/Users/me", platform: "darwin", isExecutable: executable, isTrusted: () => true })).toEqual({ path: "/opt/homebrew/bin/docker", untrusted: false });
+		expect(inspectDockerBinary({ home: "/Users/me", platform: "darwin", isExecutable: () => false, isTrusted: () => false })).toEqual({ path: null, untrusted: false });
+	});
+
+	it("takes a later trusted docker and still notes nothing is wrong", () => {
+		const both = (file: string) => file === "/usr/local/bin/docker" || file === "/opt/homebrew/bin/docker";
+		const result = inspectDockerBinary({ home: "/Users/me", platform: "darwin", isExecutable: both, isTrusted: (file) => file === "/opt/homebrew/bin/docker" });
+		expect(result.path).toBe("/opt/homebrew/bin/docker");
+	});
+
+	it("says the same for the Compose plugin", () => {
+		expect(inspectComposePlugin({ home: "/Users/me", platform: "darwin", isExecutable: executable, isTrusted: () => false })).toEqual({ path: null, untrusted: true });
+		expect(inspectComposePlugin({ home: "/Users/me", platform: "darwin", isExecutable: () => false, isTrusted: () => false })).toEqual({ path: null, untrusted: false });
+	});
+
+	it("a group-writable Homebrew layout is reported untrusted by the real check on a fake tree", () => {
+		const entries: Record<string, FakeEntry> = {
+			"/": { type: "dir", mode: 0o755 },
+			"/opt": { type: "dir", mode: 0o755 },
+			"/opt/homebrew": { type: "dir", mode: 0o775, uid: 501, gid: 80 },
+			"/opt/homebrew/bin": { type: "dir", mode: 0o755, uid: 501, gid: 80 },
+			"/opt/homebrew/bin/docker": { type: "file", mode: 0o755, uid: 501, gid: 80 },
+		};
+		const fs = fakeTree(entries);
+		const result = inspectDockerBinary({ home: "/Users/me", platform: "darwin", uid: 501, gid: 20, isExecutable: (file) => file in entries, isTrusted: (file) => isTrustedExecutable(file, { uid: 501, gid: 20, fs }) });
+		expect(result).toEqual({ path: null, untrusted: true });
+	});
+});
+
 describe("findComposePlugin", () => {
 	const only = (target: string) => (file: string) => file === target;
 	const ever = () => true;
@@ -445,29 +481,30 @@ describe("isTrustedExecutable", () => {
 		}
 	});
 
-	it("accepts group write only for root/wheel and the administrator group", () => {
-		const withGroup = (gid: number, uid = 0) => ({ ...base, "/usr/local/bin": dir(0o775, uid, gid) });
-		expect(trusted(withGroup(0))).toBe(true);
-		expect(trusted(withGroup(80))).toBe(true);
-		expect(trusted(withGroup(80, 501))).toBe(true);
+	it("accepts a group-writable directory only when it is root-owned with group root/wheel or admin (/Applications is root:admin 775)", () => {
+		const withDir = (uid: number, gid: number) => ({ ...base, "/usr/local/bin": dir(0o775, uid, gid) });
+		expect(trusted(withDir(0, 0))).toBe(true);
+		expect(trusted(withDir(0, 80))).toBe(true);
 	});
 
-	it("rejects group write for shared groups: staff, the user's own primary group, and any other", () => {
-		const dirWith = (gid: number, uid = 0) => ({ ...base, "/usr/local/bin": dir(0o775, uid, gid) });
-		for (const gid of [20, 50, 1234]) {
-			expect(trusted(dirWith(gid)), `dir gid ${gid}`).toBe(false);
-			expect(trusted(dirWith(gid, 501)), `user-owned dir gid ${gid}`).toBe(false);
+	it("rejects every group-writable directory that is not root-owned, whatever the group: Homebrew admin 775, staff, the primary group", () => {
+		const withDir = (uid: number, gid: number) => ({ ...base, "/usr/local/bin": dir(0o775, uid, gid) });
+		for (const gid of [0, 20, 50, 80, 1234]) {
+			expect(trusted(withDir(501, gid)), `user-owned dir gid ${gid}`).toBe(false);
 		}
-		// The user's own primary group is not exclusive: other members can write too.
-		expect(trusted(dirWith(20, 501), "/usr/local/bin/docker", { uid: 501, gid: 20 })).toBe(false);
-		expect(trusted(dirWith(777, 501), "/usr/local/bin/docker", { uid: 501, gid: 777 })).toBe(false);
+		expect(trusted(withDir(501, 20), "/usr/local/bin/docker", { uid: 501, gid: 20 })).toBe(false);
+		expect(trusted(withDir(501, 80), "/opt/homebrew/bin/docker")).toBe(false);
 	});
 
-	it("rejects a current-user docker binary that is group-writable by a shared group (0775:staff)", () => {
-		for (const gid of [20, 50, 1234]) {
-			expect(trusted({ ...base, "/usr/local/bin/docker": file(0o775, 501, gid) }), String(gid)).toBe(false);
+	it("rejects a root-owned group-writable directory for a shared group", () => {
+		for (const gid of [20, 50, 1234]) expect(trusted({ ...base, "/usr/local/bin": dir(0o775, 0, gid) }), String(gid)).toBe(false);
+	});
+
+	it("rejects a docker binary that is group-writable, for every group including root and admin, owned by root or the user", () => {
+		for (const gid of [0, 20, 50, 80, 1234]) {
+			for (const uid of [0, 501]) expect(trusted({ ...base, "/usr/local/bin/docker": file(0o775, uid, gid) }), `uid ${uid} gid ${gid}`).toBe(false);
 		}
-		expect(trusted({ ...base, "/usr/local/bin/docker": file(0o775, 501, 80) })).toBe(true);
+		expect(trusted({ ...base, "/usr/local/bin/docker": file(0o755, 501, 80) })).toBe(true);
 	});
 
 	it("rejects files or directories owned by another user", () => {

@@ -18,6 +18,8 @@ import {
 	dockerVersionCommand,
 	findComposePlugin,
 	findDockerBinary,
+	inspectComposePlugin,
+	inspectDockerBinary,
 	findLocalDockerEndpoint,
 	localServerChildEnv,
 	trustedPathDirs,
@@ -99,6 +101,10 @@ export type MulticaLocalServerOptions = {
 	findPathDirs?: () => string[];
 	/** AO's own folder used as HOME (and DOCKER_CONFIG's parent) for every Docker command, under its state dir. */
 	dockerHomeDir: string;
+	/** True when a docker CLI exists in a usual install location but fails the ownership/permission check. */
+	isDockerUntrusted?: () => boolean;
+	/** True when a Compose plugin exists in a usual install location but fails the ownership/permission check. */
+	isComposeUntrusted?: () => boolean;
 	/** The Compose plugin binary in a trusted location; defaults to a search of the usual install paths. */
 	findComposePlugin?: () => string | null;
 	/** Prepares AO's Docker home so Docker only loads the validated Compose plugin; defaults to the file-system implementation. */
@@ -138,6 +144,8 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 	const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
 	const gid = typeof process.getgid === "function" ? process.getgid() : undefined;
 	const findDocker = options.findDocker ?? (() => findDockerBinary({ home: options.home, platform: options.platform, uid, gid }));
+	const dockerUntrusted = options.isDockerUntrusted ?? (() => inspectDockerBinary({ home: options.home, platform: options.platform, uid, gid }).untrusted);
+	const composeUntrusted = options.isComposeUntrusted ?? (() => inspectComposePlugin({ home: options.home, platform: options.platform, uid, gid }).untrusted);
 	const locateComposePlugin = options.findComposePlugin ?? (() => findComposePlugin({ home: options.home, platform: options.platform, uid, gid }));
 	const ensureDockerConfig = options.ensureDockerConfig ?? ((pluginDir: string | null) => ensureLocalDockerConfig({ root: options.dockerHomeDir, pluginDir, uid }));
 	const findPathDirs = options.findPathDirs ?? (() => trustedPathDirs({ home: options.home, platform: options.platform, uid, gid }));
@@ -193,7 +201,7 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 	}
 
 	async function inspectEngine(docker: string | null, signal?: AbortSignal): Promise<{ state: DockerProbe; detail?: string }> {
-		if (!docker) return { state: "not_installed" };
+		if (!docker) return { state: dockerUntrusted() ? "untrusted" : "not_installed" };
 		const result = await run(dockerVersionCommand(docker), signal);
 		const state = classifyDockerError(result.error, result.stderr);
 		return state === "unknown" ? { state, detail: redactCommandText(result.stderr || result.error?.message || "") } : { state };
@@ -268,7 +276,8 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 			op: null,
 			folder: folder.kind,
 			hasEnv,
-			docker: engine,
+			// A Compose plugin that exists but is not trusted is the same finding as an untrusted docker.
+			docker: engine === "ok" && !installed && composeUntrusted() ? "untrusted" : engine,
 			composeInstalled: installed,
 			containers,
 			inspected,
@@ -347,7 +356,7 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 		if (folder.kind === "invalid") return { ok: false, code: "invalid_folder" };
 		if (!(await options.fileExists(path.join(folder.stack.dir, ENV_FILE_NAME)))) return { ok: false, code: "needs_setup" };
 		const docker = findDocker();
-		if (!docker) return { ok: false, code: "docker_not_installed" };
+		if (!docker) return { ok: false, code: dockerUntrusted() ? "docker_untrusted" : "docker_not_installed" };
 		return { ok: true, stack: folder.stack, docker };
 	}
 
@@ -404,7 +413,7 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 			if (!engine.ok) return engine;
 			const installed = await composeInstalled(prepared.docker);
 			if (signal.aborted) return { ok: false, code: "cancelled" };
-			if (!installed) return { ok: false, code: "compose_missing" };
+			if (!installed) return { ok: false, code: composeUntrusted() ? "docker_untrusted" : "compose_missing" };
 			// The stack is validated again right before the command: the Docker wait above can be long, and the folder or its .env may have changed since.
 			const fresh = await prepare();
 			if (signal.aborted) return { ok: false, code: "cancelled" };
@@ -486,7 +495,7 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 			if (operationBusy) return { ok: false, code: "busy" };
 			if (!localServerAvailability(await readSettings()).available) return { ok: false, code: "unavailable" };
 			const docker = findDocker();
-			if (!docker) return { ok: false, code: "docker_not_installed" };
+			if (!docker) return { ok: false, code: dockerUntrusted() ? "docker_untrusted" : "docker_not_installed" };
 			const folder = await resolveFolder();
 			const detected = await detectFolder(docker, folder.kind === "ok" ? folder.stack.dir : folder.kind === "invalid" ? folder.dir : null);
 			if (!detected) return { ok: false, code: "no_detected_folder" };

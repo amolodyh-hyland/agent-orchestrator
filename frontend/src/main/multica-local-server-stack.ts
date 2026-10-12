@@ -1,7 +1,7 @@
 import { mkdir, lstat, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
 import { load } from "js-yaml";
 import path from "node:path";
-import { COMPOSE_FILE_NAME, ownedAndNotWritableByOthers, type StackPaths, type TrustStat } from "./multica-local-server-commands";
+import { COMPOSE_FILE_NAME, directoryTrusted, fileTrusted, type StackPaths, type TrustStat } from "./multica-local-server-commands";
 
 export const LOCAL_SERVER_SETTINGS_FILE_NAME = "multica-local-server.json";
 export const ENV_FILE_NAME = ".env";
@@ -60,6 +60,9 @@ const ALLOWED_SERVICE_KEYS = new Set(["image", "environment", "volumes", "ports"
 const ALLOWED_HEALTHCHECK_KEYS = new Set(["test", "interval", "timeout", "retries", "start_period", "start_interval", "disable"]);
 const ALLOWED_DEPENDS_CONDITIONS = new Set(["service_started", "service_healthy", "service_completed_successfully"]);
 const RESTART_POLICIES = new Set(["no", "always", "unless-stopped", "on-failure"]);
+// A `<<` key, quoted or not (YAML merge): refused because it pulls keys in from elsewhere.
+const MERGE_KEY = /(^|[\s{,\[])["']?<<["']?[ \t]*:/m;
+const MAX_STRING = 4096;
 const SERVICE_NAME = /^[a-z][a-z0-9_-]{0,62}$/;
 const VOLUME_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/;
 // <named volume>:<absolute container path>[:ro|rw]; a host path, ./relative or ~ cannot match a bare volume name.
@@ -100,11 +103,19 @@ function isScalar(value: unknown): boolean {
  */
 export function unsafeComposeReason(text: string): string | null {
 	let document: unknown;
+	let sawAnchor = false;
 	try {
-		document = load(text);
+		document = load(text, {
+			listener: (event, state) => {
+				if (event === "close" && state.anchorMap && Object.keys(state.anchorMap).length > 0) sawAnchor = true;
+			},
+		});
 	} catch {
 		return "unparseable";
 	}
+	// No anchors or aliases (so no shared or expanded structure), no merge keys: what is read is what is there.
+	if (sawAnchor) return "anchor";
+	if (MERGE_KEY.test(text)) return "merge_key";
 	if (!isPlainObject(document)) return "not_a_mapping";
 	for (const key of Object.keys(document)) if (!ALLOWED_TOP_LEVEL.has(key)) return `top_level_${key}`;
 	if (document.name !== "multica") return "name";
@@ -176,14 +187,23 @@ export function unsafeComposeReason(text: string): string | null {
 			}
 		}
 	}
-	return null;
+	return longestString(document) > MAX_STRING ? "long_string" : null;
 }
 
+function longestString(value: unknown): number {
+	if (typeof value === "string") return value.length;
+	if (Array.isArray(value)) return value.reduce<number>((longest, item) => Math.max(longest, longestString(item)), 0);
+	if (isPlainObject(value)) return Object.entries(value).reduce((longest, [key, item]) => Math.max(longest, key.length, longestString(item)), 0);
+	return 0;
+}
+
+/** The folder itself must be strictly the user's (no group or other write); the directories above it follow the directory rule. */
 async function ancestorsTrusted(dir: string, fs: StackFs, uid: number | undefined, gid: number | undefined): Promise<boolean> {
+	const context = { uid, gid };
 	let current = dir;
-	for (;;) {
+	for (let leaf = true; ; leaf = false) {
 		const info = await fs.stat(current);
-		if (!info.isDirectory() || !ownedAndNotWritableByOthers(info, { uid, gid })) return false;
+		if (!info.isDirectory() || !(leaf ? fileTrusted(info, context) : directoryTrusted(info, context))) return false;
 		const parent = path.dirname(current);
 		if (parent === current) return true;
 		current = parent;
@@ -233,7 +253,7 @@ export async function validateStackDir(dir: string, options: ValidateOptions = {
 		return { ok: false, error: "no_compose_file" };
 	}
 	if (fileInfo.isSymbolicLink() || !fileInfo.isFile() || fileInfo.size > MAX_COMPOSE_BYTES) return { ok: false, error: "unsafe_compose_file" };
-	if (uid !== undefined && (fileInfo.uid !== uid || !ownedAndNotWritableByOthers(fileInfo, { uid, gid }))) return { ok: false, error: "unsafe_compose_file" };
+	if (uid !== undefined && (fileInfo.uid !== uid || !fileTrusted(fileInfo, { uid, gid }))) return { ok: false, error: "unsafe_compose_file" };
 	try {
 		const real = await fs.realpath(file);
 		if (real !== file || !insideDirectory(canonical, real)) return { ok: false, error: "unsafe_compose_file" };
@@ -249,7 +269,7 @@ export async function validateStackDir(dir: string, options: ValidateOptions = {
 		const envInfo = await fs.lstat(envFile);
 		if (envInfo.isSymbolicLink() || !envInfo.isFile() || envInfo.size > MAX_ENV_BYTES) return { ok: false, error: "unsafe_env_file" };
 		// Secrets live here, so unlike the folder it is not writable by any group at all.
-		if (uid !== undefined && (envInfo.uid !== uid || (envInfo.mode & 0o022) !== 0 || !ownedAndNotWritableByOthers(envInfo, { uid, gid }))) return { ok: false, error: "unsafe_env_file" };
+		if (uid !== undefined && (envInfo.uid !== uid || !fileTrusted(envInfo, { uid, gid }))) return { ok: false, error: "unsafe_env_file" };
 	} catch (error) {
 		if ((error as { code?: string } | null)?.code !== "ENOENT") return { ok: false, error: "unsafe_env_file" };
 	}

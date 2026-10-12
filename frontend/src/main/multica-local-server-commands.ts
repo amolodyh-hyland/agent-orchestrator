@@ -147,14 +147,6 @@ function composePluginCandidates(home: string, platform: NodeJS.Platform): strin
 
 const SYSTEM_DIRS = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
 
-/**
- * The only groups whose write access is accepted: root/wheel (0) and the macOS `admin` group
- * (80), whose members are administrators anyway. Shared groups such as `staff` (every ordinary
- * macOS user, and Debian's staff) and the user's own primary group are not: another member
- * could rewrite the file or directory without changing its owner.
- */
-const TRUSTED_GROUP_IDS = new Set([0, 80]);
-
 export type TrustStat = { isFile: () => boolean; isDirectory: () => boolean; mode: number; uid: number; gid: number };
 export type TrustFs = {
 	realpath: (file: string) => string;
@@ -175,11 +167,28 @@ export type TrustContext = {
 	fs?: TrustFs;
 };
 
-export function ownedAndNotWritableByOthers(info: TrustStat, context: TrustContext): boolean {
+/**
+ * A file that will be executed or parsed (the docker binary, the Compose plugin, the compose file,
+ * `.env`): owned by root or the current user and not writable by group or others. No group is
+ * trusted, not `staff`, not the user's own primary group, not `admin`.
+ */
+export function fileTrusted(info: TrustStat, context: TrustContext): boolean {
+	if (context.uid === undefined) return true;
+	return (info.uid === 0 || info.uid === context.uid) && (info.mode & 0o022) === 0;
+}
+
+// Root-owned system directories such as /Applications (root:admin, group-writable) are the single
+// narrow exception: their group is root/wheel or the administrator group, whose members are
+// administrators anyway. A user-owned directory (a Homebrew prefix that is group-writable by
+// admin, a folder in staff) gets no such exception.
+const ROOT_DIRECTORY_GROUP_IDS = new Set([0, 80]);
+
+/** A directory above or holding something that will be executed or parsed. */
+export function directoryTrusted(info: TrustStat, context: TrustContext): boolean {
 	if (context.uid === undefined) return true;
 	if (info.uid !== 0 && info.uid !== context.uid) return false;
 	if ((info.mode & 0o002) !== 0) return false;
-	return (info.mode & 0o020) === 0 || TRUSTED_GROUP_IDS.has(info.gid);
+	return (info.mode & 0o020) === 0 || (info.uid === 0 && ROOT_DIRECTORY_GROUP_IDS.has(info.gid));
 }
 
 function directoryChainTrusted(start: string, context: TrustContext): boolean {
@@ -192,7 +201,7 @@ function directoryChainTrusted(start: string, context: TrustContext): boolean {
 		} catch {
 			return false;
 		}
-		if (!info.isDirectory() || !ownedAndNotWritableByOthers(info, context)) return false;
+		if (!info.isDirectory() || !directoryTrusted(info, context)) return false;
 		const parent = path.dirname(dir);
 		if (parent === dir) return true;
 		dir = parent;
@@ -210,7 +219,7 @@ export function isTrustedExecutable(file: string, context: TrustContext = {}): b
 	try {
 		const canonical = fs.realpath(file);
 		const info = fs.stat(canonical);
-		if (!info.isFile() || !ownedAndNotWritableByOthers(info, context)) return false;
+		if (!info.isFile() || !fileTrusted(info, context)) return false;
 		return directoryChainTrusted(path.dirname(file), context) && directoryChainTrusted(path.dirname(canonical), context);
 	} catch {
 		return false;
@@ -236,17 +245,29 @@ export type FindDockerOptions = {
 	isTrusted?: (file: string) => boolean;
 };
 
-/** Locates the docker CLI in the trusted install roots only, and only if it passes the ownership and permission check. */
-export function findDockerBinary(options: FindDockerOptions): string | null {
+/**
+ * Looks for the docker CLI in the trusted install roots only. `untrusted` is true when a docker
+ * executable exists in one of them but fails the ownership and permission check (for example a
+ * group-writable Homebrew prefix), so the UI can say so instead of "not installed".
+ */
+export function inspectDockerBinary(options: FindDockerOptions): { path: string | null; untrusted: boolean } {
 	const isExecutable = options.isExecutable ?? isExecutableFile;
 	const isTrusted = options.isTrusted ?? ((file: string) => isTrustedExecutable(file, { uid: options.uid, gid: options.gid }));
 	const name = options.platform === "win32" ? "docker.exe" : "docker";
+	let untrusted = false;
 	for (const dir of trustedInstallDirs(options.home, options.platform)) {
 		if (!path.isAbsolute(dir)) continue;
 		const candidate = path.join(dir, name);
-		if (isExecutable(candidate) && isTrusted(candidate)) return candidate;
+		if (!isExecutable(candidate)) continue;
+		if (isTrusted(candidate)) return { path: candidate, untrusted };
+		untrusted = true;
 	}
-	return null;
+	return { path: null, untrusted };
+}
+
+/** The docker CLI in a trusted install root, or null. */
+export function findDockerBinary(options: FindDockerOptions): string | null {
+	return inspectDockerBinary(options).path;
 }
 
 export type TrustedPathOptions = {
@@ -274,14 +295,22 @@ export type FindComposePluginOptions = {
 	isTrusted?: (file: string) => boolean;
 };
 
-/** The Compose plugin binary in a trusted install location, passing the same ownership and permission check as docker itself; null when none. */
-export function findComposePlugin(options: FindComposePluginOptions): string | null {
+/** The Compose plugin in a trusted install location (same check as docker); `untrusted` when one exists but fails it. */
+export function inspectComposePlugin(options: FindComposePluginOptions): { path: string | null; untrusted: boolean } {
 	const isExecutable = options.isExecutable ?? isExecutableFile;
 	const isTrusted = options.isTrusted ?? ((file: string) => isTrustedExecutable(file, { uid: options.uid, gid: options.gid }));
+	let untrusted = false;
 	for (const candidate of composePluginCandidates(options.home, options.platform)) {
-		if (path.isAbsolute(candidate) && isExecutable(candidate) && isTrusted(candidate)) return candidate;
+		if (!path.isAbsolute(candidate) || !isExecutable(candidate)) continue;
+		if (isTrusted(candidate)) return { path: candidate, untrusted };
+		untrusted = true;
 	}
-	return null;
+	return { path: null, untrusted };
+}
+
+/** The Compose plugin binary in a trusted install location; null when none. */
+export function findComposePlugin(options: FindComposePluginOptions): string | null {
+	return inspectComposePlugin(options).path;
 }
 
 /** True only for an environment localServerChildEnv built with AO's Docker home (a copy or a hand-made one is not). */

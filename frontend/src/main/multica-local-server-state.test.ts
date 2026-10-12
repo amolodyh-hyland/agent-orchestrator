@@ -48,6 +48,13 @@ describe("deriveLocalServerState", () => {
 		expect(derive({ hasEnv: false })).toBe("needs_setup");
 	});
 
+	it("reports an untrusted docker location ahead of the folder and setup states, and never as 'not installed'", () => {
+		expect(derive({ docker: "untrusted" })).toBe("docker_untrusted");
+		expect(derive({ docker: "untrusted", folder: "none", hasEnv: false })).toBe("docker_untrusted");
+		expect(derive({ docker: "untrusted", op: "stopping" })).toBe("stopping");
+		expect(derive({ docker: "not_installed" })).toBe("docker_not_installed");
+	});
+
 	it("is unknown, never stopped, when the stack could not be inspected", () => {
 		expect(derive({ inspected: false })).toBe("unknown");
 		expect(derive({ inspected: false, probe: "unreachable", containers: [] })).toBe("unknown");

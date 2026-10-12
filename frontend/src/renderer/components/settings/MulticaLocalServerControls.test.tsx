@@ -104,6 +104,7 @@ describe("MulticaLocalServerControls", () => {
 		["compose_missing", "Docker Compose missing", { start: false, stop: false, restart: false }],
 		["docker_not_running", "Docker not running", { start: true, stop: false, restart: false }],
 		["unknown", "Status unknown", { start: false, stop: false, restart: false }],
+		["docker_untrusted", "Docker location not trusted", { start: false, stop: false, restart: false }],
 	])("%s: shows %s and enables the right buttons", async (state, label, enabled) => {
 		await open(state);
 
@@ -112,6 +113,15 @@ describe("MulticaLocalServerControls", () => {
 		expect(start.hasAttribute("disabled")).toBe(!enabled.start);
 		expect(button("Stop").hasAttribute("disabled")).toBe(!enabled.stop);
 		expect(button("Restart").hasAttribute("disabled")).toBe(!enabled.restart);
+	});
+
+	it("tells the user Docker was found where other users can modify it, and how to fix that", async () => {
+		await open("docker_untrusted", { error: { code: "docker_untrusted" } });
+
+		expect(screen.getByText(/location other users can modify, so AO won't run it/)).toBeInTheDocument();
+		expect(screen.getByText(/Install Docker Desktop in \/Applications/)).toBeInTheDocument();
+		expect(await screen.findByRole("alert")).toHaveTextContent("Docker was found at a location other users can modify.");
+		expect(button("Start").hasAttribute("disabled")).toBe(true);
 	});
 
 	it("shows why the state is unknown and never offers Start for it", async () => {

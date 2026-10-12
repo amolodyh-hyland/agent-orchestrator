@@ -122,19 +122,33 @@ describe("validateStackDir", () => {
 		await expect(validate(tree({ "/Users/me": dir(0o775, 501, 1234) }))).resolves.toEqual({ ok: false, error: "unsafe_directory" });
 	});
 
-	it("accepts a group-writable ancestor only for root/wheel and the administrator group", async () => {
-		await expect(validate(tree({ "/Users/me": dir(0o775, 501, 80) }))).resolves.toMatchObject({ ok: true });
-		await expect(validate(tree({ "/Users/me": dir(0o775, 501, 0) }))).resolves.toMatchObject({ ok: true });
+	it("accepts a group-writable ancestor only when it is root-owned with group root/wheel or admin", async () => {
+		await expect(validate(tree({ "/Users": dir(0o775, 0, 80) }))).resolves.toMatchObject({ ok: true });
+		await expect(validate(tree({ "/Users": dir(0o775, 0, 0) }))).resolves.toMatchObject({ ok: true });
 	});
 
-	it("rejects a group-writable ancestor, folder or compose file for staff, the user's own group or any shared group", async () => {
+	it("rejects a group-writable ancestor that is user-owned (any group) or root-owned for a shared group", async () => {
+		for (const gid of [0, 20, 50, 80, 1234]) {
+			await expect(validate(tree({ "/Users/me": dir(0o775, 501, gid) })), `user-owned ancestor ${gid}`).resolves.toEqual({ ok: false, error: "unsafe_directory" });
+		}
 		for (const gid of [20, 50, 1234]) {
-			await expect(validate(tree({ "/Users/me": dir(0o775, 501, gid) })), `ancestor ${gid}`).resolves.toEqual({ ok: false, error: "unsafe_directory" });
+			await expect(validate(tree({ "/Users": dir(0o775, 0, gid) })), `root-owned ancestor ${gid}`).resolves.toEqual({ ok: false, error: "unsafe_directory" });
+		}
+	});
+
+	it("rejects a stack folder, compose file or .env that any group can write, whatever the group", async () => {
+		for (const gid of [0, 20, 50, 80, 1234]) {
 			await expect(validate(tree({ [D]: dir(0o775, 501, gid) })), `folder ${gid}`).resolves.toEqual({ ok: false, error: "unsafe_directory" });
 			await expect(validate(tree({ [F]: file(COMPOSE, 0o664, 501, gid) })), `compose ${gid}`).resolves.toEqual({ ok: false, error: "unsafe_compose_file" });
+			await expect(validate(tree({ [`${D}/.env`]: file("x", 0o660, 501, gid) })), `env ${gid}`).resolves.toEqual({ ok: false, error: "unsafe_env_file" });
 		}
 		// ME has primary group 20: that is not exclusive ownership either.
 		await expect(validate(tree({ [F]: file(COMPOSE, 0o664, 501, 20) }), D, { uid: 501, gid: 20 })).resolves.toEqual({ ok: false, error: "unsafe_compose_file" });
+	});
+
+	it("holds the stack folder itself to the strict rule: a root-owned folder that group admin can write is refused too", async () => {
+		await expect(validate(tree({ [D]: dir(0o775, 0, 80) }))).resolves.toEqual({ ok: false, error: "unsafe_directory" });
+		await expect(validate(tree({ [D]: dir(0o775, 0, 0) }))).resolves.toEqual({ ok: false, error: "unsafe_directory" });
 	});
 
 	it("rejects a folder, ancestor or compose file owned by another user", async () => {
@@ -371,6 +385,49 @@ volumes:
 			]) {
 				expect(await rejected(text), text).toEqual({ ok: false, error: expect.stringMatching(/not_multica|unsafe_compose_content/) });
 			}
+		});
+
+		it("rejects anchors, aliases and merge keys even when the decoded result would be fine", async () => {
+			const withAnchor = "name: multica\nservices:\n  postgres:\n    image: &img pgvector\n  backend:\n    image: *img\n  frontend:\n    image: f\n";
+			expect(reasonOf(withAnchor)).not.toBeNull();
+			expect(reasonOf("name: multica\nservices:\n  postgres:\n    image: &img x\n")).not.toBeNull();
+			expect(await rejected(withAnchor)).toEqual(refused);
+			for (const merge of ["<<: { image: x }", '"<<": { image: x }', "'<<' : { image: x }", "<<:\n      image: x"]) {
+				expect(reasonOf(`name: multica\nservices:\n  postgres:\n    ${merge}\n`), merge).not.toBeNull();
+			}
+			expect(reasonOf("name: multica\nservices:\n  postgres:\n    image: x\n    environment:\n      A: &v 1\n")).not.toBeNull();
+		});
+
+		it("accepts the characters & * ! < in ordinary string values (they are not anchors, tags or merge keys)", () => {
+			expect(reasonOf(SERVICES('\n    healthcheck:\n      test: ["CMD-SHELL", "a && b || c; echo *.log !x <<EOF"]'))).toBeNull();
+		});
+
+		it("rejects very long strings anywhere", () => {
+			const long = "x".repeat(5000);
+			expect(reasonOf(SERVICES(`\n    environment:\n      A: ${long}`))).not.toBeNull();
+			expect(reasonOf(`name: multica\nservices:\n  postgres:\n    image: ${long}\n`)).not.toBeNull();
+			expect(reasonOf(SERVICES(`\n    healthcheck:\n      test: ["CMD", "${long}"]`))).not.toBeNull();
+			expect(reasonOf(SERVICES(`\n    environment:\n      ${long}: a`))).not.toBeNull();
+			expect(reasonOf(SERVICES(`\n    environment:\n      A: ${"y".repeat(4000)}`))).toBeNull();
+		});
+
+		it("rejects look-alike keys and names (Cyrillic, full-width, zero-width) instead of treating them as the real ones", () => {
+			for (const key of ["\u0440rivileged", "privileged\u200b", "\uff50rivileged", "imag\u0435", "ports\u200b"]) {
+				expect(reasonOf(SERVICES(`\n    ${key}: true`)), key).not.toBeNull();
+			}
+			expect(reasonOf("na\u043de: multica\nservices:\n  postgres:\n    image: x\n")).not.toBeNull();
+			expect(reasonOf("name: multica\nservices:\n  p\u043estgres:\n    image: x\n")).not.toBeNull();
+			expect(reasonOf(SERVICES('\n    ports:\n      - "127.0.0.\uff11:80:80"'))).not.toBeNull();
+			expect(reasonOf(SERVICES('\n    volumes:\n      - "\u0440gdata:/data"') + "volumes:\n  pgdata:\n")).not.toBeNull();
+		});
+
+		it("rejects a BOM-prefixed or control-character-laden file as unparseable or unknown, never as accepted garbage", () => {
+			expect(reasonOf("\uFEFFname: multica\nservices:\n  postgres:\n    image: x\n")).toBeNull();
+			expect(reasonOf("name: multica\nservices:\n  postgres:\n    image: x\u0000y\n")).not.toBeNull();
+		});
+
+		it("rejects documents with extra YAML documents, including a trailing empty one with content after it", () => {
+			expect(reasonOf(`${SERVICES()}\n...\n---\nname: other\n`)).not.toBeNull();
 		});
 
 		it("rejects a document that is empty, null, a scalar or a list without throwing", () => {
