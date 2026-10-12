@@ -1114,6 +1114,28 @@ test("the daemon's identity is re-checked before every session is ended, not onl
 	assert.equal(callIndex(await world.calls(), /^osascript/), -1);
 });
 
+test("--force never signals a process that started after the plan was confirmed (a late session's chat host)", darwin, async (t) => {
+	const world = await makeWorld(t, "force-late-host", { sessions: [liveSession("s1")], cfg: { spawn_host_on_exit_agent: "s9" } });
+	const result = world.update(["--yes", "--end-sessions", "--force"]);
+	assert.equal(result.status, 56, result.stdout + result.stderr);
+	assert.match(result.stdout, /NOT signalling pid \d+ \(survived the stop\): it was started after the plan was confirmed/);
+	assert.match(result.stderr, /Started after the plan was confirmed, so not part of it and never signalled/);
+	assert.match(result.stderr, /chat-host --session s9/);
+	assert.equal(matching(await world.calls(), /^kill /).length, 0, "nothing was signalled");
+	assert.ok((await world.procs()).some((p) => p.command.endsWith("chat-host --session s9")), "the late host is still running");
+	// An approved survivor is still terminated with --force.
+	const approved = await makeWorld(t, "force-approved-host", { extraProcs: ["<APP>/Contents/Resources/daemon/ao chat-host --session orphan"] });
+	assert.equal(approved.update(["--yes", "--force"]).status, 0);
+	assert.equal(matching(await approved.calls(), /^kill -TERM \d+$/).length, 1);
+});
+
+test("mutation: signalling a process that is not in the approved set is caught", darwin, async (t) => {
+	const mutant = await mutatedScripts(t, "update-lib.sh", "if ! noetaxis_update_process_approved \"$pid\" \"$command_line\"; then\n\t\tnoetaxis_update_say \"NOT signalling", "if false; then\n\t\tnoetaxis_update_say \"NOT signalling");
+	const world = await makeWorld(t, "force-late-host-mutant", { sessions: [liveSession("s1")], cfg: { spawn_host_on_exit_agent: "s9" } });
+	world.update(["--yes", "--end-sessions", "--force"], { scriptsDir: mutant });
+	assert.ok(matching(await world.calls(), /^kill -TERM \d+$/).length > 0, "the mutant signals the unapproved host");
+});
+
 test("a person's own AO_MULTICA_DAEMON / AO_KEEP_DAEMON settings are not an AO session; any other AO_ variable is, and is named", darwin, async (t) => {
 	const world = await makeWorld(t, "guard-config");
 	const configured = world.update(["--dry-run"], { extraEnv: { AO_MULTICA_DAEMON: "1", AO_KEEP_DAEMON: "1" } });

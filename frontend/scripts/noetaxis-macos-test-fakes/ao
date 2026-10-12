@@ -72,6 +72,7 @@ case "$1" in
 				/bin/mv "$SIM/sessions.tmp" "$SIM/sessions"
 				sim_remove_prefix "$APP/Contents/Resources/daemon/ao chat-host --session $id"
 				if [[ -f "$SIM/cfg/foreign_after_exit_agent" ]]; then /bin/cp "$SIM/cfg/foreign_after_exit_agent" "$SIM/cfg/foreign_status_versions"; fi
+				if [[ -f "$SIM/cfg/spawn_host_on_exit_agent" ]]; then sim_add_proc "$APP/Contents/Resources/daemon/ao chat-host --session $(sim_value spawn_host_on_exit_agent)" > /dev/null; fi
 				printf 'agent exited for session %s\n' "$id"
 				;;
 			restore)

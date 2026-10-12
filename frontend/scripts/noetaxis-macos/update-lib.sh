@@ -227,6 +227,31 @@ noetaxis_describe_processes() {
 
 # The only place that signals a process: SIGTERM, only to a process that is still one of
 # this bundle's own at the moment of the signal. Every call is logged.
+# The set of processes the user approved: those of the bundle when the plan was captured (or, in a
+# rollback, when the rollback began). A process that appeared later, such as the chat host of a
+# session started after the plan, is never signalled, even with --force.
+update_approved_file=""
+noetaxis_update_process_approved() {
+	local pid="$1" command_line="$2"
+	[[ -n "$update_approved_file" && -f "$update_approved_file" ]] || return 1
+	/usr/bin/awk -F '\t' -v pid="$pid" -v command_line="$command_line" '$1 == pid && substr($0, length($1) + 2) == command_line { found = 1 } END { exit !found }' "$update_approved_file"
+}
+
+noetaxis_update_print_unapproved() {
+	# Own processes still running that are not in the approved set, for the error messages.
+	local app_path="$1" pid command_line found=""
+	while IFS=$'\t' read -r pid command_line; do
+		[[ -n "$pid" ]] || continue
+		if ! noetaxis_update_process_approved "$pid" "$command_line"; then
+			found="${found}${pid}\t${command_line}\n"
+		fi
+	done < <(noetaxis_own_bundle_processes "$app_path")
+	if [[ -n "$found" ]]; then
+		printf 'Started after the plan was confirmed, so not part of it and never signalled:\n' >&2
+		printf '%b' "$found" | noetaxis_describe_processes >&2
+	fi
+}
+
 noetaxis_signal_own_pid() {
 	local app_path="$1" pid="$2" reason="$3" command_line
 	command_line="$(ps -ww -o command= -p "$pid" 2>/dev/null || true)"
@@ -237,6 +262,10 @@ noetaxis_signal_own_pid() {
 			return 1
 			;;
 	esac
+	if ! noetaxis_update_process_approved "$pid" "$command_line"; then
+		noetaxis_update_say "NOT signalling pid $pid ($reason): it was started after the plan was confirmed: $command_line"
+		return 1
+	fi
 	noetaxis_update_say "SIGTERM to pid $pid ($reason): $command_line"
 	"${NOETAXIS_KILL:-/bin/kill}" -TERM "$pid" || return 1
 }
@@ -342,6 +371,7 @@ noetaxis_update_capture_state() {
 		cap_old_version="$(noetaxis_plist_value "$app_path/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null || printf 'unknown')"
 	fi
 	noetaxis_own_bundle_processes "$app_path" > "$cap_processes_file" || true
+	update_approved_file="$cap_processes_file"
 
 	cap_daemon_state="none"
 	if [[ -x "$cap_cli" ]]; then
@@ -777,6 +807,7 @@ noetaxis_update_stop_helpers() {
 	fi
 	noetaxis_error "Processes of this bundle are still running after the wait. They keep agent conversations or terminals alive:"
 	noetaxis_own_pids_of_kind "$app_path" any | noetaxis_describe_processes >&2
+	noetaxis_update_print_unapproved "$app_path"
 	printf 'Nothing was installed and AO is stopped. Reopen it (open -a "%s"), end the sessions (--end-sessions with the daemon up), or rerun with --force to SIGTERM these processes (their conversations end). No process was force-killed.\n' "$app_path" >&2
 	return 56
 }
@@ -1084,6 +1115,9 @@ noetaxis_update_rollback_swap() {
 	if [[ "$restore_db" -eq 1 ]]; then
 		rollback_args+=(--restore-db)
 	fi
+	# The approved set of a rollback is what the new app, started by this run, runs right now.
+	noetaxis_own_bundle_processes "$failed_app" > "$cap_dir/approved-rollback.tsv" || true
+	update_approved_file="$cap_dir/approved-rollback.tsv"
 	noetaxis_update_quit_app "$failed_app" || return 61
 	noetaxis_update_stop_daemon "$failed_app" || return 61
 	noetaxis_update_stop_helpers "$failed_app" || return 61

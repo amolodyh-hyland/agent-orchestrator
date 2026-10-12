@@ -83,7 +83,7 @@ The guarantee is about **signals this script sends itself**: only SIGTERM, only 
 | `--yes` | Do not ask for confirmation. Required with `--detached`. |
 | `--end-sessions` | Stop the agents of live sessions with `ao session exit-agent` (sessions, worktrees and conversations are kept). Without it, live sessions are refused. |
 | `--restore-sessions` | Afterwards try `ao session restore` once per session that was live. |
-| `--force` | SIGTERM, never SIGKILL (sent by this script), to processes of **this bundle only** (command line starts with `<app>/Contents/`) that survive the waits; each is logged. |
+| `--force` | SIGTERM, never SIGKILL (sent by this script), to processes of **this bundle only** (command line starts with `<app>/Contents/`) that survive the waits and were already running when the plan was captured (a process that started afterwards, such as the chat host of a session created after you confirmed, is listed but never signalled); each signal is logged. |
 | `--manual-quit` | Do not script the tray; wait for your click. |
 | `--restart-multica-daemon` | Restart a standalone `multica` CLI daemon that was running before. |
 | `--restart-multica-stack` | `docker restart` the Multica containers that were running before. |
