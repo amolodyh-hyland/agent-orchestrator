@@ -710,6 +710,16 @@ noetaxis_update_session_unchanged() {
 	fi
 }
 
+# Local-only final check: the confirmed host processes of session $1 (pid, start time, command line) are
+# exactly the ones the process table shows right now. An empty confirmed set never passes.
+noetaxis_update_host_unchanged() {
+	local id="$1" expected now
+	expected="$(/usr/bin/awk -F '\t' -v id="$id" '$1 == id { sub(/^[^\t]*\t/, ""); print }' "$cap_hosts_file" | LC_ALL=C /usr/bin/sort)"
+	[[ -n "$expected" ]] || return 1
+	now="$(noetaxis_update_session_hosts "$target_app" "$id" | LC_ALL=C /usr/bin/sort)"
+	[[ "$expected" == "$now" ]]
+}
+
 noetaxis_update_end_sessions() {
 	local id project role status activity name created harness branch issue output status_code failed=0 total=0 ended=0 timed_out=0
 	noetaxis_update_step "Ending $cap_live_count live session(s)"
@@ -735,6 +745,14 @@ noetaxis_update_end_sessions() {
 		if ! noetaxis_update_verify_daemon "$target_app"; then
 			noetaxis_error "Stopped before ending $id: $noetaxis_update_identity_detail. Sessions ended so far stay ended; the app and daemon were not touched."
 			return 57
+		fi
+		# The daemon check above is a blocking call, and the session's host can change while it runs. So
+		# the very last check before the call reads the host from the local process table only: no ao
+		# call, no RPC, no wait between it and the exit-agent line.
+		if ! noetaxis_update_host_unchanged "$id"; then
+			noetaxis_update_say "SKIPPED $id [$project]: host replaced during the daemon check"
+			noetaxis_update_append update_sessions_changed "$id [$project]: host replaced during the daemon check"
+			continue
 		fi
 		status_code=0
 		output="$(noetaxis_bounded 90 "$cap_cli" session exit-agent "$id" ${project:+--project "$project"} 2>&1)" || status_code=$?

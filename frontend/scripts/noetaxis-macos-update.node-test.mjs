@@ -1588,6 +1588,54 @@ test("mutation: comparing only the session id (not its record) is caught", darwi
 	assert.ok(exitAgentIds(await second.calls()).includes("s2"), "the mutant ends the new generation of s2");
 });
 
+test("a host replaced during the daemon status call is not ended: the final local host check skips it (51)", darwin, async (t) => {
+	// Status calls: 1 capture, 2 before the recheck, 3 the per-session check of s1: the swap happens inside it.
+	const world = await makeWorld(t, "host-swap-in-status", { sessions: [liveSession("s1"), liveSession("s2")], cfg: { swap_host_on_status_call: "3:s1" } });
+	const result = world.update(["--yes", "--end-sessions"]);
+	assert.equal(result.status, 51, result.stdout + result.stderr);
+	assert.match(result.stdout, /SKIPPED s1 \[demo\]: host replaced during the daemon check/);
+	assert.match(result.stderr, /changed since the plan was confirmed and were not touched/);
+	assert.deepEqual(exitAgentIds(await world.calls()), ["s2"], "the replacement host's session was never ended");
+	assert.equal(callIndex(await world.calls(), /^osascript/), -1);
+});
+
+test("the final host check comes after the daemon check and before exit-agent, with no ao call or wait in between", async () => {
+	const text = await readFile(path.join(realScriptsDir, "update-lib.sh"), "utf8");
+	const loop = text.slice(text.indexOf("noetaxis_update_end_sessions() {"));
+	const verify = loop.indexOf('noetaxis_update_verify_daemon "$target_app"');
+	const final = loop.indexOf('noetaxis_update_host_unchanged "$id"');
+	const call = loop.indexOf('session exit-agent "$id"');
+	assert.ok(verify > 0 && verify < final && final < call, "order: verify_daemon, host_unchanged, exit-agent");
+	const callLine = loop.indexOf('output="$(noetaxis_bounded 90');
+	assert.ok(callLine > final && callLine <= call);
+	const between = loop.slice(final, callLine).split("\n").filter((line) => !/^\s*#/.test(line)).join("\n");
+	assert.doesNotMatch(between, /noetaxis_bounded|"\$cap_cli"|sleep|noetaxis_update_list_sessions_json|noetaxis_update_verify_daemon/);
+	// The check itself reads only the process table.
+	const fn = text.slice(text.indexOf("noetaxis_update_host_unchanged() {"), text.indexOf("noetaxis_update_end_sessions() {"));
+	assert.doesNotMatch(fn, /noetaxis_bounded|\$cap_cli|sleep/);
+});
+
+test("mutation: dropping the final host check, or moving it before the daemon check, is caught", darwin, async (t) => {
+	const options = { sessions: [liveSession("s1"), liveSession("s2")], cfg: { swap_host_on_status_call: "3:s1" } };
+	const dropped = await mutatedScripts(t, "update-lib.sh", 'if ! noetaxis_update_host_unchanged "$id"; then', "if false; then");
+	const first = await makeWorld(t, "host-swap-dropped", options);
+	first.update(["--yes", "--end-sessions"], { scriptsDir: dropped });
+	assert.ok(exitAgentIds(await first.calls()).includes("s1"), "without the final check the replacement host is ended");
+	// Moved before verify_daemon: the swap during the daemon call is then not seen.
+	const moved = await mutatedScripts(t, "update-lib.sh", null, null);
+	const file = path.join(moved, "update-lib.sh");
+	const text = await readFile(file, "utf8");
+	const blockStart = text.indexOf("		# The daemon check above is a blocking call");
+	const blockEnd = text.indexOf("		status_code=0", blockStart);
+	const block = text.slice(blockStart, blockEnd);
+	const verifyStart = text.indexOf("		if ! noetaxis_update_verify_daemon \"$target_app\"; then\n			noetaxis_error \"Stopped before ending");
+	assert.ok(blockStart > 0 && verifyStart > 0 && verifyStart < blockStart);
+	await writeFile(file, text.slice(0, verifyStart) + block + text.slice(verifyStart, blockStart) + text.slice(blockEnd));
+	const second = await makeWorld(t, "host-swap-moved", options);
+	second.update(["--yes", "--end-sessions"], { scriptsDir: moved });
+	assert.ok(exitAgentIds(await second.calls()).includes("s1"), "with the check before the daemon call the swap goes unseen");
+});
+
 test("a person's own AO_MULTICA_DAEMON / AO_KEEP_DAEMON settings are not an AO session; any other AO_ variable is, and is named", darwin, async (t) => {
 	const world = await makeWorld(t, "guard-config");
 	const configured = world.update(["--dry-run"], { extraEnv: { AO_MULTICA_DAEMON: "1", AO_KEEP_DAEMON: "1" } });

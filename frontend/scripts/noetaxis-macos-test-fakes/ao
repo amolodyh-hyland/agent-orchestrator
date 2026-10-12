@@ -23,6 +23,16 @@ case "$1" in
 		;;
 	project) printf '  --permission-fallback\n' ;;
 	status)
+		# Test hook "N:id": on the Nth status call the host of session id is replaced by a new process while
+		# the call is still running (the status call also sleeps, as a slow RPC would).
+		status_calls=$(( $(cat "$SIM/status_calls" 2>/dev/null || echo 0) + 1 ))
+		printf '%s' "$status_calls" > "$SIM/status_calls"
+		if [[ "$status_calls" == "$(sim_value swap_host_on_status_call | /usr/bin/cut -d: -f1)" ]]; then
+			swapped="$(sim_value swap_host_on_status_call | /usr/bin/cut -d: -f2)"
+			/bin/sleep 0.3
+			sim_remove_prefix "$APP/Contents/Resources/daemon/ao chat-host --session $swapped"
+			sim_add_proc "$APP/Contents/Resources/daemon/ao chat-host --session $swapped" > /dev/null
+		fi
 		# Test hook: a foreign or old daemon answers "ready" for this app, with its own binary path.
 		if /usr/bin/grep -qxF "$(version)" "$SIM/cfg/foreign_status_versions" 2>/dev/null; then
 			printf '{"state":"ready","pid":%s,"port":3999,"executablePath":"%s","runFile":"r","dataDir":"d"}\n' "$(sim_value foreign_status_pid)" "$(sim_value foreign_status_exe)"
