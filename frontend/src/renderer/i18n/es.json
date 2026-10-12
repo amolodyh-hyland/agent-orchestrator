@@ -930,7 +930,7 @@
 	"multica.localServer.error.needs_setup": "Configura primero el servidor: la carpeta no tiene archivo .env.",
 	"multica.localServer.error.inspect_failed": "No se pudo leer el estado del servidor desde Docker.",
 	"multica.localServer.error.already_set_up": "Esta carpeta ya está configurada.",
-	"multica.localServer.error.setup_failed": "No se pudo crear el archivo .env. Comprueba que .env.example esté en la carpeta.",
+	"multica.localServer.error.setup_failed": "No se pudo crear el archivo .env. Comprueba que puedes escribir en la carpeta.",
 	"multica.localServer.error.docker_not_installed": "Docker no está instalado.",
 	"multica.localServer.error.docker_untrusted": "Se encontró Docker en una ubicación que otros usuarios pueden modificar.",
 	"multica.localServer.error.compose_missing": "Falta el plugin Compose de Docker.",

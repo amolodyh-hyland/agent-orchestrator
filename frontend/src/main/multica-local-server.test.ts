@@ -526,7 +526,7 @@ describe("a failed inspection is not a stopped stack", () => {
 	});
 
 	it("is unknown for valid JSON of an unexpected shape, never stopped, and does not probe", async () => {
-		for (const ps of ['[{"unexpected":"schema"}]', '{"unexpected":"schema"}', '[{"Service":"backend"}]', '[{"State":"running"}]', "[1]", '[{"Service":"backend","State":"exploding"}]']) {
+		for (const ps of ['[{"Service":"backend","State":"running"}', '{"Service":"postgres","State":"running"}\n{"Service":"backend","State":"runn', '{', '[{"unexpected":"schema"}]', '{"unexpected":"schema"}', '[{"Service":"backend"}]', '[{"State":"running"}]', "[1]", '[{"Service":"backend","State":"exploding"}]']) {
 			const h = harness({ ps, probe: { ok: false, error: "unreachable" } });
 			const probe = vi.spyOn(h.options, "probe");
 			const status = await createMulticaLocalServer(h.options).getStatus();

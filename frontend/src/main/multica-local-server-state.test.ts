@@ -171,6 +171,34 @@ describe("parseComposePs rejects output of an unexpected shape as a whole", () =
 		}
 	});
 
+	it("rejects partial output: a truncated array, a truncated last NDJSON line, a cut-off record", () => {
+		for (const out of [
+			`[${ok}`,
+			`[${ok},{"Service":"backend","State":"runn`,
+			`${ok}\n{"Service":"backend","State":"running"`,
+			`${ok}\n{"Service":"backend","State":"run`,
+			'{"Service":"backend","State":"running"',
+			`${ok}\n${ok.slice(0, 15)}`,
+			'[{"Service":"backend",',
+			"{",
+			"[",
+		]) {
+			expect(parseComposePs(out), out).toBeNull();
+		}
+	});
+
+	it("reads NDJSON and an array of the same containers the same way, and an empty list is not partial output", () => {
+		const a = '{"Service":"postgres","State":"running","Health":"healthy"}';
+		const b = '{"Service":"backend","State":"exited","ExitCode":1}';
+		expect(parseComposePs(`${a}\n${b}\n`)).toEqual(parseComposePs(`[${a},${b}]`));
+		expect(parseComposePs("[]")).toEqual([]);
+		expect(parseComposePs("\n\n")).toEqual([]);
+	});
+
+	it("accepts a record without Health, ExitCode or Publishers (older Compose omits them) and reads it as having none", () => {
+		expect(parseComposePs('{"Service":"backend","State":"running"}')).toEqual([{ service: "backend", state: "running", health: "", exitCode: 0, publishedPorts: [] }]);
+	});
+
 	it("rejects optional fields of the wrong type or value", () => {
 		for (const extra of ['"Health":5', '"Health":{}', '"ExitCode":"1"', '"ExitCode":1.5', '"Publishers":"x"', '"Publishers":{}', '"Publishers":[1]', '"Publishers":[{"PublishedPort":"80"}]', '"Publishers":[{"PublishedPort":70000}]', '"Publishers":[{"PublishedPort":-1}]', '"Publishers":[{"TargetPort":"x"}]']) {
 			expect(parseComposePs(`{"Service":"backend","State":"running",${extra}}`), extra).toBeNull();

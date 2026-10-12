@@ -923,7 +923,7 @@
 	"multica.localServer.error.needs_setup": "먼저 서버를 설정하세요. 폴더에 .env 파일이 없습니다.",
 	"multica.localServer.error.inspect_failed": "Docker에서 서버 상태를 읽지 못했습니다.",
 	"multica.localServer.error.already_set_up": "이 폴더는 이미 설정되어 있습니다.",
-	"multica.localServer.error.setup_failed": ".env 파일을 만들 수 없습니다. 폴더에 .env.example이 있는지 확인하세요.",
+	"multica.localServer.error.setup_failed": ".env 파일을 만들 수 없습니다. 폴더에 쓸 수 있는지 확인하세요.",
 	"multica.localServer.error.docker_not_installed": "Docker가 설치되어 있지 않습니다.",
 	"multica.localServer.error.docker_untrusted": "다른 사용자가 수정할 수 있는 위치에서 Docker를 찾았습니다.",
 	"multica.localServer.error.compose_missing": "Docker의 Compose 플러그인이 없습니다.",

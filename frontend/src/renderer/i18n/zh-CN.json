@@ -923,7 +923,7 @@
 	"multica.localServer.error.needs_setup": "请先设置服务器：该文件夹没有 .env 文件。",
 	"multica.localServer.error.inspect_failed": "无法从 Docker 读取服务器状态。",
 	"multica.localServer.error.already_set_up": "该文件夹已经设置好了。",
-	"multica.localServer.error.setup_failed": "无法创建 .env 文件。请确认文件夹中有 .env.example。",
+	"multica.localServer.error.setup_failed": "无法创建 .env 文件。请确认你对该文件夹有写入权限。",
 	"multica.localServer.error.docker_not_installed": "未安装 Docker。",
 	"multica.localServer.error.docker_untrusted": "在其他用户可修改的位置找到了 Docker。",
 	"multica.localServer.error.compose_missing": "缺少 Docker 的 Compose 插件。",

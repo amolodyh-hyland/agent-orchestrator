@@ -923,7 +923,7 @@
 	"multica.localServer.error.needs_setup": "先にサーバーをセットアップしてください。フォルダーに .env ファイルがありません。",
 	"multica.localServer.error.inspect_failed": "Docker からサーバーの状態を読み取れませんでした。",
 	"multica.localServer.error.already_set_up": "このフォルダーはすでにセットアップ済みです。",
-	"multica.localServer.error.setup_failed": ".env ファイルを作成できませんでした。フォルダーに .env.example があるか確認してください。",
+	"multica.localServer.error.setup_failed": ".env ファイルを作成できませんでした。フォルダーへの書き込み権限があるか確認してください。",
 	"multica.localServer.error.docker_not_installed": "Docker がインストールされていません。",
 	"multica.localServer.error.docker_untrusted": "他のユーザーが変更できる場所に Docker が見つかりました。",
 	"multica.localServer.error.compose_missing": "Docker の Compose プラグインがありません。",
