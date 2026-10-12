@@ -427,7 +427,7 @@ noetaxis_clear_quarantine() {
 }
 
 noetaxis_write_backup_record() {
-	local backup_dir="$1" app_backup="$2" app_version="$3" allow_background="${4:-0}" temporary_record
+	local backup_dir="$1" app_backup="$2" app_version="$3" allow_background="${4:-0}" extra_lines="${5:-}" temporary_record
 	temporary_record="$backup_dir/.BACKUP_COMPLETE-$$"
 	if ! {
 		printf 'created_at=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -436,6 +436,10 @@ noetaxis_write_backup_record() {
 		# Audit trail: this install went ahead with AO background processes still running.
 		if [[ "$allow_background" -eq 1 ]]; then
 			printf 'allow_background_processes=1\n'
+		fi
+		# Update mode records its mode and the schema it saw before the swap.
+		if [[ -n "$extra_lines" ]]; then
+			printf '%s\n' "$extra_lines"
 		fi
 	} > "$temporary_record"; then
 		/bin/rm -f "$temporary_record"
@@ -462,11 +466,12 @@ noetaxis_schema_query() {
 # A WAL-mode database with no -wal/-shm files (the daemon is not running) cannot
 # be opened with -readonly: SQLite would need to create the -shm file. Read a
 # temporary copy in that case so the real data directory is never written.
-# The check is informational and never fails the install.
-noetaxis_print_schema_version() {
+# Prints the version and returns 0 (read directly), 2 (read from a temporary copy)
+# or 1 (unreadable, nothing printed). Never fails the install.
+noetaxis_read_schema_version() {
 	local database="$1" version copy_dir
 	if version="$(noetaxis_schema_query "$database" -readonly 2>/dev/null)"; then
-		printf 'SQLite schema version: %s\n' "$version"
+		printf '%s' "$version"
 		return 0
 	fi
 	copy_dir="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/noetaxis-schema.XXXXXX")" || copy_dir=""
@@ -476,11 +481,22 @@ noetaxis_print_schema_version() {
 		version="$(noetaxis_schema_query "$copy_dir/ao.db" 2>/dev/null)" || version=""
 		/bin/rm -rf "$copy_dir"
 		if [[ -n "$version" ]]; then
-			printf 'SQLite schema version: %s (read from a temporary copy; the daemon is not running)\n' "$version"
-			return 0
+			printf '%s' "$version"
+			return 2
 		fi
 	fi
-	printf 'SQLite schema version: could not be read from %s (non-fatal check; run the sqlite3 command from the README after opening the app).\n' "$database"
+	return 1
+}
+
+# The check is informational and never fails the install.
+noetaxis_print_schema_version() {
+	local database="$1" version status=0
+	version="$(noetaxis_read_schema_version "$database")" || status=$?
+	case "$status" in
+		0) printf 'SQLite schema version: %s\n' "$version" ;;
+		2) printf 'SQLite schema version: %s (read from a temporary copy; the daemon is not running)\n' "$version" ;;
+		*) printf 'SQLite schema version: could not be read from %s (non-fatal check; run the sqlite3 command from the README after opening the app).\n' "$database" ;;
+	esac
 }
 
 noetaxis_print_post_install_checks() {

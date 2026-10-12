@@ -3,26 +3,86 @@ set -euo pipefail
 
 script_dir="$(cd "$(/usr/bin/dirname "$0")" && pwd)"
 . "$script_dir/common.sh"
+. "$script_dir/update-lib.sh"
 
 dry_run=0
 allow_ao_session=0
 allow_background=0
 source_app=""
+update_mode=0
+update_yes=0
+update_end_sessions=0
+update_force=0
+update_restore_sessions=0
+update_restart_multica_daemon=0
+update_restart_multica_stack=0
+update_rollback_restore_db=0
+update_manual_quit=0
+update_detached=0
+update_quit_timeout=60
+update_stop_timeout=45
+update_health_timeout=120
+update_flag_given=""
+update_capture_dir=""
+update_record_extra=""
+update_noop=0
+noetaxis_update_new_version=""
+original_args=("$@")
 
 usage() {
 	cat <<'EOF'
 Usage: install.sh [--dry-run] [--allow-ao-session] [--allow-background-processes] <Agent Orchestrator.app>
+       install.sh --update [update options] [<Agent Orchestrator.app>]
+       update.sh [update options] [<Agent Orchestrator.app>]
 
 Install a verified build into APPS_DIR (default /Applications) and back up the
 current app and selected AO state under ~/ao-backups/<stamp>.
 
-The desktop app must be fully quit first: on macOS Quit / Cmd+Q only close its
-window, so use "Quit AO Completely" in the menu-bar tray. By default the install
-also refuses while the bundled daemon or agent chat hosts are still running.
---allow-background-processes lets it proceed past those (never past the desktop
-app or ShipIt); stop the old daemon with "<app>/Contents/Resources/daemon/ao stop"
-before opening the new app. Nothing here stops a process for you.
+Default mode (safe, never stops anything): the desktop app must be fully quit first.
+On macOS Quit / Cmd+Q only close its window, so use "Quit AO Completely" in the
+menu-bar tray. The install also refuses while the bundled daemon or agent chat hosts
+are still running. --allow-background-processes lets it proceed past those (never
+past the desktop app or ShipIt); stop the old daemon with
+"<app>/Contents/Resources/daemon/ao stop" before opening the new app.
+
+--update (opt-in, one command): capture state, print a PLAN and ask, stop AO in the
+safest supported order, back up, install, restart, verify, and roll back
+automatically if the new app is not healthy. The app argument defaults to
+../Applications/Agent Orchestrator.app next to this script. Update options:
+  --yes                      do not ask for confirmation (required with --detached)
+  --end-sessions             stop the agents of live sessions with "ao session exit-agent"
+                             (keeps each session, worktree and conversation; "ao session
+                             kill" is never used). Without it live sessions make the run
+                             refuse before anything is stopped
+  --restore-sessions         afterwards try "ao session restore" once per session that was
+                             live (resumes the exited agents)
+  --force                    SIGTERM (never SIGKILL) processes of THIS bundle that
+                             survive the waits; each one is logged
+  --manual-quit              do not script the tray item; wait for you to click
+                             "Quit AO Completely"
+  --restart-multica-daemon   restart a standalone multica CLI daemon that was running
+  --restart-multica-stack    restart the running local Multica Docker containers
+  --rollback-restore-db      on a failed update also restore the database if the
+                             schema was migrated and the old app stays unhealthy
+  --detached                 re-run in a new session with nohup and a log file (use
+                             from inside an AO session; that session ends)
+  --quit-timeout N | --stop-timeout N | --health-timeout N   waits in seconds
+                             (defaults 60 / 45 / 120)
+  --dry-run                  verify, capture and print the plan; change nothing
+Update exit codes: 0 ok; 20 inside an AO session (use --detached); 21 other
+processes block; 22 ShipIt; 50 cancelled; 51 live sessions; 52 session list
+unavailable; 53 a session could not be ended; 54 app did not quit; 55 daemon did
+not stop; 56 chat hosts/helpers remain; 60 rolled back and healthy; 61 rollback
+needs you; 62 healthy but post-install checks warn; 63 healthy but a session did
+not come back. Other codes as in the default mode.
 EOF
+}
+
+noetaxis_require_number() {
+	if [[ ! "${2:-}" =~ ^[0-9]+$ || "$2" -lt 1 ]]; then
+		noetaxis_error "$1 requires a whole number of seconds (1 or more)."
+		exit 2
+	fi
 }
 
 while [[ $# -gt 0 ]]; do
@@ -35,6 +95,33 @@ while [[ $# -gt 0 ]]; do
 			;;
 		--allow-background-processes)
 			allow_background=1
+			;;
+		--update)
+			update_mode=1
+			;;
+		--yes|--end-sessions|--restore-sessions|--force|--manual-quit|--restart-multica-daemon|--restart-multica-stack|--rollback-restore-db|--detached)
+			case "$1" in
+				--yes) update_yes=1 ;;
+				--end-sessions) update_end_sessions=1 ;;
+				--restore-sessions) update_restore_sessions=1 ;;
+				--force) update_force=1 ;;
+				--manual-quit) update_manual_quit=1 ;;
+				--restart-multica-daemon) update_restart_multica_daemon=1 ;;
+				--restart-multica-stack) update_restart_multica_stack=1 ;;
+				--rollback-restore-db) update_rollback_restore_db=1 ;;
+				--detached) update_detached=1 ;;
+			esac
+			update_flag_given="$update_flag_given $1"
+			;;
+		--quit-timeout|--stop-timeout|--health-timeout)
+			noetaxis_require_number "$1" "${2:-}"
+			case "$1" in
+				--quit-timeout) update_quit_timeout="$2" ;;
+				--stop-timeout) update_stop_timeout="$2" ;;
+				--health-timeout) update_health_timeout="$2" ;;
+			esac
+			update_flag_given="$update_flag_given $1"
+			shift
 			;;
 		-h|--help)
 			usage
@@ -56,6 +143,28 @@ while [[ $# -gt 0 ]]; do
 	shift
 done
 
+if [[ "$update_mode" -eq 0 && -n "$update_flag_given" ]]; then
+	noetaxis_error "Options${update_flag_given} only apply with --update."
+	exit 2
+fi
+if [[ "$update_mode" -eq 1 ]]; then
+	if [[ "$allow_background" -eq 1 ]]; then
+		noetaxis_error "--update stops the background processes itself; --allow-background-processes does not apply."
+		exit 2
+	fi
+	if [[ "$allow_ao_session" -eq 1 && "$dry_run" -eq 0 ]]; then
+		noetaxis_error "--update cannot run inside an AO session with --allow-ao-session: the session would end mid-install. Use --detached."
+		exit 2
+	fi
+	if [[ "$update_detached" -eq 1 && "$update_yes" -eq 0 && "$dry_run" -eq 0 ]]; then
+		noetaxis_error "--detached has no terminal to ask on; add --yes."
+		exit 2
+	fi
+	if [[ -z "$source_app" ]]; then
+		source_app="$script_dir/../Applications/$NOETAXIS_APP_NAME"
+		[[ -d "$source_app" ]] || { noetaxis_error "No app bundle given and none found at $source_app."; usage >&2; exit 2; }
+	fi
+fi
 if [[ -z "$source_app" ]]; then
 	usage >&2
 	exit 2
@@ -69,8 +178,34 @@ target_app="$apps_dir/$NOETAXIS_APP_NAME"
 user_home="$(noetaxis_user_home)"
 ao_home="$(noetaxis_ao_home)"
 
-noetaxis_check_safe_origin "$allow_ao_session"
-noetaxis_assert_idle "$target_app" "$allow_background"
+if [[ "$update_mode" -eq 1 ]]; then
+	if [[ "$update_detached" -eq 1 && -z "${NOETAXIS_DETACHED_CHILD:-}" ]]; then
+		child_args=()
+		for argument in ${original_args[@]+"${original_args[@]}"}; do
+			[[ "$argument" == --detached ]] || child_args+=("$argument")
+		done
+		noetaxis_update_detach "$script_dir/install.sh" "$user_home/ao-backups/update-$(date '+%Y%m%d-%H%M%S')-$$.log" ${child_args[@]+"${child_args[@]}"}
+		exit 0
+	fi
+	trap 'noetaxis_update_exit_handler $?' EXIT
+	trap 'exit 130' INT
+	trap 'exit 143' TERM
+	trap 'exit 129' HUP
+	# The detached child was started by the parent that already accepted this; the marker is internal.
+	if [[ -z "${NOETAXIS_DETACHED_CHILD:-}" ]]; then
+		guard_override=0
+		if [[ "$dry_run" -eq 1 && "$allow_ao_session" -eq 1 ]]; then
+			guard_override=1
+		fi
+		if ! noetaxis_update_origin_ok "$guard_override"; then
+			noetaxis_error "This update was started inside Agent Orchestrator (${noetaxis_update_origin_detail}). It would stop AO and end this session mid-install. Run it from your own Terminal, or add --detached (with --yes) to re-run it in a new session with a log file; the AO session that starts it will end."
+			exit 20
+		fi
+	fi
+else
+	noetaxis_check_safe_origin "$allow_ao_session"
+	noetaxis_assert_idle "$target_app" "$allow_background"
+fi
 noetaxis_verify_manifest "$source_app" "$manifest"
 noetaxis_verify_build_metadata "$source_app"
 [[ -d "$apps_dir" ]] || { noetaxis_error "Applications directory does not exist: $apps_dir"; exit 29; }
@@ -78,12 +213,47 @@ noetaxis_verify_build_metadata "$source_app"
 noetaxis_require_human_user
 if [[ -d "$target_app" ]] && noetaxis_verify_manifest "$target_app" "$manifest" >/dev/null 2>&1 && noetaxis_verify_build_metadata "$target_app" >/dev/null 2>&1; then
 	printf 'Already installed: %s\n' "$(noetaxis_plist_value "$target_app/Contents/Info.plist" CFBundleShortVersionString)"
+	if [[ "$update_mode" -eq 1 ]]; then
+		printf 'Nothing was stopped, backed up or changed. If AO is not running, open it with: open -a "%s"\n' "$target_app"
+		update_noop=1
+	fi
 	noetaxis_report_handler "$target_app"
 	noetaxis_print_post_install_checks "$target_app" "$ao_home"
 	exit 0
 fi
 
 noetaxis_check_space "$source_app" "$ao_home" "$user_home" "$apps_dir"
+
+if [[ "$update_mode" -eq 1 ]]; then
+	# Everything up to the confirmation only reads: nothing has been stopped yet.
+	noetaxis_update_new_version="$(noetaxis_plist_value "$source_app/Contents/Info.plist" CFBundleShortVersionString)"
+	noetaxis_verify_signature "$source_app"
+	update_capture_dir="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/noetaxis-update.XXXXXX")"
+	noetaxis_update_log_file="$update_capture_dir/update-actions.log"
+	noetaxis_update_step "Capturing the current state (read only)"
+	noetaxis_update_capture_state "$target_app" "$update_capture_dir"
+	noetaxis_update_print_plan "$target_app" "$noetaxis_update_new_version" "$user_home/ao-backups"
+	refusal_status=0
+	noetaxis_update_preflight_refusals "$target_app" || refusal_status=$?
+	if [[ "$refusal_status" -ne 0 ]]; then
+		exit "$refusal_status"
+	fi
+	if [[ "$dry_run" -eq 1 ]]; then
+		printf 'Dry run passed. Nothing was stopped, backed up or installed; rerun without --dry-run to update.\n'
+		update_dry_run=1
+		exit 0
+	fi
+	confirm_status=0
+	noetaxis_update_confirm || confirm_status=$?
+	if [[ "$confirm_status" -ne 0 ]]; then
+		exit "$confirm_status"
+	fi
+	privilege_status=0
+	noetaxis_update_prepare_privilege || privilege_status=$?
+	if [[ "$privilege_status" -ne 0 ]]; then
+		exit "$privilege_status"
+	fi
+fi
 
 stamp="$(date '+%Y%m%d-%H%M%S')-$$"
 staged_app="$apps_dir/.Agent-Orchestrator-installing-$stamp.app"
@@ -92,7 +262,7 @@ if [[ -e "$staged_app" ]]; then
 	exit 30
 fi
 
-if [[ "$dry_run" -eq 1 ]]; then
+if [[ "$dry_run" -eq 1 && "$update_mode" -eq 0 ]]; then
 	printf 'Dry run passed. Would stage %s into %s, back up AO state under %s/ao-backups, rename the current app to .app.bak, then install the new app.\n' "$source_app" "$apps_dir" "$user_home"
 	exit 0
 fi
@@ -107,6 +277,7 @@ old_app_path=""
 old_moved=0
 backup_dir=""
 noetaxis_install_cleanup() {
+	local exit_status=$?
 	# Complete once the new app is in place, even if the signal landed before the flag was set.
 	if [[ "$old_moved" -eq 1 && ! -e "$staged_app" && -d "$target_app" ]]; then
 		install_complete=1
@@ -117,6 +288,9 @@ noetaxis_install_cleanup() {
 		if [[ -n "$backup_dir" && -f "$backup_dir/BACKUP_COMPLETE" ]]; then
 			/bin/mv "$backup_dir/BACKUP_COMPLETE" "$backup_dir/BACKUP_ABORTED" || true
 		fi
+	fi
+	if [[ "$update_mode" -eq 1 ]]; then
+		noetaxis_update_exit_handler "$exit_status"
 	fi
 }
 trap noetaxis_install_cleanup EXIT
@@ -132,6 +306,22 @@ if ! noetaxis_verify_manifest "$staged_app" "$manifest" || ! noetaxis_verify_sig
 fi
 noetaxis_test_pause after-staged
 
+if [[ "$update_mode" -eq 1 ]]; then
+	# The new build is staged and verified; now stop AO. The backup directory exists from here
+	# on so the captured state is kept even if a stop step fails.
+	backup_dir="$(noetaxis_new_backup_dir "$user_home")"
+	/bin/mkdir -p "$backup_dir/state-before"
+	/bin/cp -R "$update_capture_dir/." "$backup_dir/state-before/" 2>/dev/null || true
+	stop_status=0
+	noetaxis_update_stop_all "$target_app" || stop_status=$?
+	if [[ "$stop_status" -ne 0 ]]; then
+		noetaxis_run_privileged /bin/rm -rf "$staged_app"
+		exit "$stop_status"
+	fi
+	update_record_extra="update_mode=1
+schema_before=$cap_schema_before"
+fi
+
 idle_status=0
 noetaxis_assert_idle "$target_app" "$allow_background" || idle_status=$?
 if [[ "$idle_status" -ne 0 ]]; then
@@ -139,7 +329,9 @@ if [[ "$idle_status" -ne 0 ]]; then
 	exit "$idle_status"
 fi
 
-backup_dir="$(noetaxis_new_backup_dir "$user_home")"
+if [[ -z "$backup_dir" ]]; then
+	backup_dir="$(noetaxis_new_backup_dir "$user_home")"
+fi
 if ! noetaxis_copy_state_backup "$ao_home" "$backup_dir"; then
 	noetaxis_run_privileged /bin/rm -rf "$staged_app"
 	noetaxis_error "State backup did not complete. The installed app was left in place. Partial backup: $backup_dir"
@@ -154,7 +346,7 @@ if [[ -d "$target_app" ]]; then
 fi
 # The record is written before the old app moves so an interruption after the move
 # still leaves a complete backup that rollback.sh can restore from.
-if ! noetaxis_write_backup_record "$backup_dir" "$old_app_backup" "$old_version" "$allow_background"; then
+if ! noetaxis_write_backup_record "$backup_dir" "$old_app_backup" "$old_version" "$allow_background" "$update_record_extra"; then
 	noetaxis_run_privileged /bin/rm -rf "$staged_app"
 	noetaxis_error "Could not write the backup record. The installed app was left in place; backup data remains at $backup_dir"
 	exit 35
@@ -187,4 +379,9 @@ noetaxis_verify_signature "$target_app"
 noetaxis_verify_build_metadata "$target_app"
 noetaxis_report_handler "$target_app"
 printf 'Backup: %s\n' "$backup_dir"
+if [[ "$update_mode" -eq 1 ]]; then
+	finish_status=0
+	noetaxis_update_finish "$target_app" "$noetaxis_update_new_version" || finish_status=$?
+	exit "$finish_status"
+fi
 noetaxis_print_post_install_checks "$target_app" "$ao_home"
