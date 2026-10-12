@@ -103,7 +103,7 @@ export async function makeWorld(t, label, options = {}) {
 	const sessions = (options.sessions ?? defaultSessions).map((session) => ({ project: "demo", role: "worker", status: "working", activity: "active", terminated: false, name: "", host: true, ...session }));
 	await writeFile(
 		path.join(sim, "sessions"),
-		sessions.map((s) => [s.id, s.project, s.role, s.status, s.activity, s.terminated ? "true" : "false", s.name].join("|")).join("\n") + (sessions.length ? "\n" : ""),
+		sessions.map((s) => [s.id, s.project, s.role, s.status, s.activity, s.terminated ? "true" : "false", s.name, s.created ?? "2026-10-01T00:00:00Z"].join("|")).join("\n") + (sessions.length ? "\n" : ""),
 	);
 	await writeFile(path.join(sim, "hosting"), options.hosting ?? "off");
 	await writeFile(path.join(sim, "standalone"), options.standalone ? "running" : "stopped");

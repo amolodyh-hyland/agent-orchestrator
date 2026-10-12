@@ -18,8 +18,10 @@ const darwin = { skip: process.platform !== "darwin" };
 async function alsoDisableSessionIdentity(directory) {
 	const file = path.join(directory, "update-lib.sh");
 	const text = await readFile(file, "utf8");
-	const changed = text.replace('if ! noetaxis_update_session_unchanged "$id"; then', "if false; then");
+	// Four layers: the additions check, the per-session identity check, iterating only the confirmed list, and the hostless skip.
+	const changed = text.replace('if ! noetaxis_update_session_unchanged "$id"; then', "if false; then").replace('/bin/cp "$confirmed" "$cap_live_file"', ":").replace('if ! /usr/bin/awk -F \'\\t\' -v id="$id" \'$1 == id { found = 1 } END { exit !found }\' "$cap_hosts_file"; then\n\t\t\tnoetaxis_update_say "NOT ENDED', 'if false; then\n\t\t\tnoetaxis_update_say "NOT ENDED');
 	assert.notEqual(changed, text);
+	assert.ok(!changed.includes('/bin/cp "$confirmed" "$cap_live_file"'));
 	await writeFile(file, changed);
 }
 
@@ -1124,6 +1126,12 @@ test("only live sessions are stopped and restored, by exact id (not terminated o
 
 test("mutation: applying exit-agent to terminated or exited sessions is caught", darwin, async (t) => {
 	const mutant = await mutatedScripts(t, "update-lib.sh", 'if [[ "$terminated" != true && "$activity" != exited ]]; then', "if true; then");
+	// The hostless skip would also keep these hostless sessions safe: switch it off so the filter alone is under test.
+	const file = path.join(mutant, "update-lib.sh");
+	const text = await readFile(file, "utf8");
+	const loosened = text.replace('if ! /usr/bin/awk -F \'\\t\' -v id="$id" \'$1 == id { found = 1 } END { exit !found }\' "$cap_hosts_file"; then\n\t\t\tnoetaxis_update_say "NOT ENDED', 'if false; then\n\t\t\tnoetaxis_update_say "NOT ENDED').replace('if [[ -z "$expected_hosts" ]]; then', "if false; then");
+	assert.notEqual(loosened, text);
+	await writeFile(file, loosened);
 	const violations = await scenarioExactSessionIds(t, mutant);
 	assert.ok(violations.some((v) => /exit-agent ran for/.test(v)), violations.join("; "));
 });
@@ -1358,6 +1366,83 @@ test("--force checks pid AND start time: a pid whose process started later is no
 	const second = await makeWorld(t, "force-pid-reuse-mutant", { extraProcs: ["<APP>/Contents/Resources/daemon/ao chat-host --session orphan"], cfg: { reuse_pid_after_quit: "4004" } });
 	second.update(["--yes", "--force"], { scriptsDir: mutant });
 	assert.ok(matching(await second.calls(), /^kill -TERM 4004$/).length > 0, "without the start-time check the reused pid is signalled");
+});
+
+const exitAgentIds = (calls) => matching(calls, /session exit-agent/).map((line) => line.replace(/^.*exit-agent (\S+).*$/, "$1"));
+
+test("hostless (unverifiable) sessions are reported in the plan and never ended, even when their record is unchanged or a new generation replaced them", darwin, async (t) => {
+	// s2 is a terminal (TUI) session: no chat host of the bundle, so its agent process cannot be verified.
+	const plain = await makeWorld(t, "hostless-ok", { sessions: [liveSession("s1"), liveSession("s2", { host: false })] });
+	const planned = plain.update(["--dry-run", "--end-sessions"]);
+	assert.match(planned.stdout, /Hostless \(no chat host of this app, for example a terminal agent\): s2 \[demo\]/);
+	assert.match(planned.stdout, /NOT ended and keep running/);
+	const done = plain.update(["--yes", "--end-sessions"]);
+	assert.equal(done.status, 0, done.stdout + done.stderr);
+	assert.deepEqual(exitAgentIds(await plain.calls()), ["s1"], "the hostless session is never ended");
+	assert.match(done.stdout, /NOT ENDED s2 \[demo\]: no chat host of this app/);
+	assert.match(done.stdout, /Not ended \(hostless, unverifiable, left running\):\n\s+- s2 \[demo\]/);
+	assert.equal((await plain.sessionsNow()).find((s) => s.id === "s2").activity, "active", "and keeps running");
+
+	// A new generation reusing the hostless id mid-run is not touched either (empty host sets are never "equal").
+	const reused = await makeWorld(t, "hostless-generation", { sessions: [liveSession("s1"), liveSession("s2", { host: false })], cfg: { recreate_created_on_exit_agent: "s2" } });
+	const result = reused.update(["--yes", "--end-sessions"]);
+	assert.equal(result.status, 0, result.stdout + result.stderr);
+	assert.deepEqual(exitAgentIds(await reused.calls()), ["s1"]);
+});
+
+test("mutation: ending a hostless session (empty host sets treated as equal) is caught", darwin, async (t) => {
+	let mutant = await mutatedScripts(t, "update-lib.sh", 'if ! /usr/bin/awk -F \'\\t\' -v id="$id" \'$1 == id { found = 1 } END { exit !found }\' "$cap_hosts_file"; then\n\t\t\tnoetaxis_update_say "NOT ENDED', 'if false; then\n\t\t\tnoetaxis_update_say "NOT ENDED');
+	const file = path.join(mutant, "update-lib.sh");
+	const text = await readFile(file, "utf8");
+	const loosened = text.replace('if [[ -z "$expected_hosts" ]]; then', "if false; then");
+	assert.notEqual(loosened, text);
+	await writeFile(file, loosened);
+	const world = await makeWorld(t, "hostless-mutant", { sessions: [liveSession("s1"), liveSession("s2", { host: false })] });
+	world.update(["--yes", "--end-sessions"], { scriptsDir: mutant });
+	assert.ok(exitAgentIds(await world.calls()).includes("s2"), "the mutant ends the hostless session");
+});
+
+test("a foreign daemon appearing in the window of the per-session list read aborts before exit-agent (57)", darwin, async (t) => {
+	const foreign = { foreign_status_exe: "/Users/x/Other/Agent Orchestrator.app/Contents/Resources/daemon/ao", foreign_status_pid: "4242" };
+	// List calls: 1 capture, 2 recheck, 3 the first per-session read: the swap happens inside that read.
+	const world = await makeWorld(t, "daemon-swap-window", { sessions: [liveSession("s1"), liveSession("s2")], cfg: { ...foreign, foreign_on_ls_call: `3:${oldVersion}` } });
+	const result = world.update(["--yes", "--end-sessions"]);
+	assert.equal(result.status, 57, result.stdout + result.stderr);
+	assert.match(result.stderr, /Stopped before ending s1: the daemon that owns the shared run file/);
+	assert.deepEqual(exitAgentIds(await world.calls()), [], "not one exit-agent reached the foreign daemon");
+	assert.equal(callIndex(await world.calls(), /^osascript/), -1);
+	// The same swap before the batch is caught as well (earlier test); and a verify placed BEFORE the list read misses this one.
+	const text = await readFile(path.join(realScriptsDir, "update-lib.sh"), "utf8");
+	const mutant = await mutatedScripts(t, "update-lib.sh", null, null);
+	const after = text.slice(text.indexOf("		# ...and the daemon behind the shared run file"), text.indexOf("		status_code=0\n		output=\"$(noetaxis_bounded 90 \"$cap_cli\" session exit-agent"));
+	assert.ok(after.includes("noetaxis_update_verify_daemon"));
+	const before = text.indexOf("		# The session must still be exactly the confirmed one (this reads a fresh session list)...");
+	const moved = text.replace(after, "").replace(text.slice(before, before), "").replace("		# The session must still be exactly the confirmed one (this reads a fresh session list)...", after + "		# The session must still be exactly the confirmed one (this reads a fresh session list)...");
+	assert.notEqual(moved, text);
+	await writeFile(path.join(mutant, "update-lib.sh"), moved);
+	const second = await makeWorld(t, "daemon-swap-window-mutant", { sessions: [liveSession("s1"), liveSession("s2")], cfg: { ...foreign, foreign_on_ls_call: `3:${oldVersion}` } });
+	second.update(["--yes", "--end-sessions"], { scriptsDir: mutant });
+	assert.ok(exitAgentIds(await second.calls()).includes("s1"), "with the verify before the list read, the foreign daemon still receives exit-agent");
+});
+
+test("a confirmed list cannot be replaced before the exits: a re-created id is skipped, nothing re-listed is adopted", darwin, async (t) => {
+	// The re-list that follows the confirmation shows s1 as a new generation (same id, new creation time).
+	const world = await makeWorld(t, "list-replaced", { sessions: [liveSession("s1"), liveSession("s2")], cfg: { recreate_session_on_call: "2:s1" } });
+	const result = world.update(["--yes", "--end-sessions"]);
+	assert.equal(result.status, 51, result.stdout + result.stderr);
+	assert.match(result.stdout, /SKIPPED s1 \[demo\]: the session record is not the confirmed one/);
+	assert.deepEqual(exitAgentIds(await world.calls()), ["s2"], "only the unchanged confirmed session was ended");
+	assert.equal(callIndex(await world.calls(), /^osascript/), -1);
+});
+
+test("mutation: comparing only the session id (not its record) is caught", darwin, async (t) => {
+	const mutant = await mutatedScripts(t, "update-lib.sh", 'local record_fields=\'{ print $2 "|" $3 "|" $7 "|" $8 "|" $9 "|" $10 }\'', 'local record_fields=\'{ print $2 "|" $3 }\'');
+	const world = await makeWorld(t, "list-replaced-mutant", { sessions: [liveSession("s1"), liveSession("s2")], cfg: { recreate_session_on_call: "2:s1" } });
+	world.update(["--yes", "--end-sessions"], { scriptsDir: mutant });
+	assert.ok(exitAgentIds(await world.calls()).includes("s1"), "the mutant ends the re-created session");
+	const second = await makeWorld(t, "generation-mutant", { sessions: [liveSession("s1"), liveSession("s2")], cfg: { recreate_created_on_exit_agent: "s2" } });
+	second.update(["--yes", "--end-sessions"], { scriptsDir: mutant });
+	assert.ok(exitAgentIds(await second.calls()).includes("s2"), "the mutant ends the new generation of s2");
 });
 
 test("a person's own AO_MULTICA_DAEMON / AO_KEEP_DAEMON settings are not an AO session; any other AO_ variable is, and is named", darwin, async (t) => {

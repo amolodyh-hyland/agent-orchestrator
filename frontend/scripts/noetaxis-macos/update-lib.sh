@@ -45,6 +45,8 @@ cap_stack_running=""
 cap_schema_before=""
 cap_processes_file=""
 cap_hosts_file=""
+cap_hostless=""
+update_sessions_unverifiable=""
 update_sessions_changed=""
 
 update_actual_new_version=""
@@ -329,7 +331,7 @@ noetaxis_update_list_sessions_json() {
 # Parse a sessions JSON file into a tab separated list of the live (not terminated) sessions.
 # Returns 1 when the file is not the expected document.
 noetaxis_update_parse_live_sessions() {
-	local file="$1" out="$2" count index terminated id project role status activity name
+	local file="$1" out="$2" count index terminated id project role status activity name created harness branch issue
 	# A session is live when it is not terminated and its agent has not exited: only then does
 	# an agent process (a chat host or terminal runtime) stand to be interrupted.
 	: > "$out"
@@ -349,10 +351,18 @@ noetaxis_update_parse_live_sessions() {
 			role="$(noetaxis_json_get "$file" "data.$index.role" || true)"
 			status="$(noetaxis_json_get "$file" "data.$index.status" || true)"
 			name="$(noetaxis_json_get "$file" "data.$index.displayName" || true)"
+			# The session record's own identity: a new session (or a re-created one) reusing an id has a
+			# different creation time, and the harness, branch and issue pin which work it is.
+			created="$(noetaxis_json_get "$file" "data.$index.createdAt" || true)"
+			harness="$(noetaxis_json_get "$file" "data.$index.harness" || true)"
+			branch="$(noetaxis_json_get "$file" "data.$index.branch" || true)"
+			issue="$(noetaxis_json_get "$file" "data.$index.issueId" || true)"
 			if [[ -n "$id" ]]; then
-				# One line per session: tabs and control characters in a name must not break it.
+				# One line per session: tabs and control characters in a field must not break it.
 				name="$(printf '%s' "$name" | /usr/bin/tr -d '\000-\037')"
-				printf '%s%s%s%s%s%s%s%s%s%s%s\n' "$id" "$noetaxis_sep" "$project" "$noetaxis_sep" "$role" "$noetaxis_sep" "$status" "$noetaxis_sep" "$activity" "$noetaxis_sep" "$name" >> "$out"
+				branch="$(printf '%s' "$branch" | /usr/bin/tr -d '\000-\037')"
+				local s="$noetaxis_sep"
+				printf '%s\n' "${id}${s}${project}${s}${role}${s}${status}${s}${activity}${s}${name}${s}${created}${s}${harness}${s}${branch}${s}${issue}" >> "$out"
 			fi
 		fi
 		index=$((index + 1))
@@ -423,9 +433,18 @@ noetaxis_update_capture_state() {
 	# it had when the plan was captured. Re-checked right before each exit-agent.
 	cap_hosts_file="$dir/confirmed-hosts.tsv"
 	: > "$cap_hosts_file"
-	while IFS="$noetaxis_sep" read -r id project role status activity name; do
+	while IFS="$noetaxis_sep" read -r id project role status activity name created harness branch issue; do
 		[[ -n "$id" ]] || continue
 		noetaxis_update_session_hosts "$app_path" "$id" | /usr/bin/sed "s/^/$id\t/" >> "$cap_hosts_file" || true
+	done < "$cap_live_file"
+	# Sessions with no host process of the bundle (a TUI agent run by a terminal runtime): the updater
+	# cannot see their agent process, so only the session record pins their identity.
+	cap_hostless=""
+	while IFS="$noetaxis_sep" read -r id project role status activity name created harness branch issue; do
+		[[ -n "$id" ]] || continue
+		if ! /usr/bin/awk -F '\t' -v id="$id" '$1 == id { found = 1 } END { exit !found }' "$cap_hosts_file"; then
+			cap_hostless="${cap_hostless}${cap_hostless:+, }$id [$project]"
+		fi
 	done < "$cap_live_file"
 
 	cap_hosted="unknown"
@@ -541,6 +560,9 @@ noetaxis_update_print_plan() {
 		printf '\n  Live sessions (%s):\n' "$cap_live_count"
 		noetaxis_update_print_live_sessions
 		if [[ "$update_end_sessions" -eq 1 ]]; then
+			if [[ -n "$cap_hostless" ]]; then
+				printf '    Hostless (no chat host of this app, for example a terminal agent): %s. The updater cannot see or verify their agent process, so they are NOT ended and keep running; they are only listed.\n' "$cap_hostless"
+			fi
 			printf '    These agents WILL BE STOPPED (--end-sessions): running turns and terminals end; each session, worktree and conversation stays. The agent teardown inside AO can force-kill the agent process group (SIGKILL sent by AO, outside the signal rules of this script), so a running turn is cut off.\n'
 			if [[ "$update_restore_sessions" -eq 1 ]]; then
 				printf '    --restore-sessions: one "ao session restore" attempt each afterwards (best effort, restore has been unreliable).\n'
@@ -644,7 +666,8 @@ noetaxis_update_confirm() {
 # ---------------------------------------------------------------------------
 
 noetaxis_update_no_live_sessions() {
-	noetaxis_update_list_sessions_json "$cap_dir/sessions-recheck.json" && noetaxis_update_parse_live_sessions "$cap_dir/sessions-recheck.json" "$cap_dir/live-recheck.tsv" && [[ ! -s "$cap_dir/live-recheck.tsv" ]]
+	# Sessions that were deliberately not ended (hostless) may still be live; every other one may not.
+	noetaxis_update_list_sessions_json "$cap_dir/sessions-recheck.json" && noetaxis_update_parse_live_sessions "$cap_dir/sessions-recheck.json" "$cap_dir/live-recheck.tsv" && : >> "$cap_dir/unverifiable-ids.txt" && [[ -z "$(/usr/bin/awk -F "$noetaxis_sep" 'FILENAME == ARGV[1] { skip[$1] = 1; next } !($1 in skip)' "$cap_dir/unverifiable-ids.txt" "$cap_dir/live-recheck.tsv")" ]]
 }
 
 # End every live session through AO's own command while the daemon can still answer.
@@ -667,7 +690,19 @@ noetaxis_update_session_unchanged() {
 		noetaxis_update_session_detail="it is no longer live"
 		return 1
 	fi
+	# The record must be the confirmed one: same project, role, creation time, harness, branch and issue.
+	# A hostless session (a TUI agent whose process the updater cannot see) is pinned by this alone.
+	local record_fields='{ print $2 "|" $3 "|" $7 "|" $8 "|" $9 "|" $10 }'
+	if [[ "$(/usr/bin/awk -F "$noetaxis_sep" -v id="$id" "\$1 == id $record_fields" "$confirmed")" != "$(/usr/bin/awk -F "$noetaxis_sep" -v id="$id" "\$1 == id $record_fields" "$cap_dir/live-each.tsv")" ]]; then
+		noetaxis_update_session_detail="the session record is not the confirmed one (a different generation: creation time, harness, branch or issue differ)"
+		return 1
+	fi
 	expected_hosts="$(/usr/bin/awk -F '\t' -v id="$id" '$1 == id { sub(/^[^\t]*\t/, ""); print }' "$cap_hosts_file" | LC_ALL=C /usr/bin/sort)"
+	if [[ -z "$expected_hosts" ]]; then
+		# Two empty host sets are not "the same": nothing was confirmed that could be compared.
+		noetaxis_update_session_detail="no host process was confirmed for it, so its identity cannot be verified"
+		return 1
+	fi
 	now_hosts="$(noetaxis_update_session_hosts "$target_app" "$id" | LC_ALL=C /usr/bin/sort)"
 	if [[ "$expected_hosts" != "$now_hosts" ]]; then
 		noetaxis_update_session_detail="its host process changed since the plan (pid, start time or command line differ)"
@@ -676,21 +711,30 @@ noetaxis_update_session_unchanged() {
 }
 
 noetaxis_update_end_sessions() {
-	local id project role status activity name output status_code failed=0 total=0 ended=0 timed_out=0
+	local id project role status activity name created harness branch issue output status_code failed=0 total=0 ended=0 timed_out=0
 	noetaxis_update_step "Ending $cap_live_count live session(s)"
-	while IFS="$noetaxis_sep" read -r id project role status activity name; do
+	while IFS="$noetaxis_sep" read -r id project role status activity name created harness branch issue; do
 		[[ -n "$id" ]] || continue
 		total=$((total + 1))
-		# The daemon behind the shared run file can change while the list is worked through.
-		if ! noetaxis_update_verify_daemon "$target_app"; then
-			noetaxis_error "Stopped before ending $id: $noetaxis_update_identity_detail. Sessions ended so far stay ended; the app and daemon were not touched."
-			return 57
+		# A session with no chat host of this app (a terminal agent) cannot be verified: its agent process
+		# is invisible here, so it is reported and never ended.
+		if ! /usr/bin/awk -F '\t' -v id="$id" '$1 == id { found = 1 } END { exit !found }' "$cap_hosts_file"; then
+			noetaxis_update_say "NOT ENDED $id [$project]: no chat host of this app, so its agent process cannot be verified"
+			noetaxis_update_append update_sessions_unverifiable "$id [$project]"
+			printf '%s\n' "$id" >> "$cap_dir/unverifiable-ids.txt"
+			continue
 		fi
-		# Immediately before acting: the session must still be exactly the confirmed one.
+		# The session must still be exactly the confirmed one (this reads a fresh session list)...
 		if ! noetaxis_update_session_unchanged "$id"; then
 			noetaxis_update_say "SKIPPED $id [$project]: $noetaxis_update_session_detail"
 			noetaxis_update_append update_sessions_changed "$id [$project]: $noetaxis_update_session_detail"
 			continue
+		fi
+		# ...and the daemon behind the shared run file must still be this bundle's, checked AFTER that
+		# list was read and immediately before the call, so nothing can change in between.
+		if ! noetaxis_update_verify_daemon "$target_app"; then
+			noetaxis_error "Stopped before ending $id: $noetaxis_update_identity_detail. Sessions ended so far stay ended; the app and daemon were not touched."
+			return 57
 		fi
 		status_code=0
 		output="$(noetaxis_bounded 90 "$cap_cli" session exit-agent "$id" ${project:+--project "$project"} 2>&1)" || status_code=$?
@@ -899,6 +943,10 @@ noetaxis_update_stop_all() {
 			/bin/cp "$cap_live_file" "$confirmed"
 			noetaxis_update_capture_sessions || { noetaxis_error "The session list could not be read again; nothing was stopped."; return 52; }
 			additions="$(noetaxis_update_sessions_not_in "$confirmed")"
+			# The confirmed list is what gets worked through, never the list read just now: nothing new is
+			# adopted, and every session is re-verified against its confirmed identity one by one.
+			/bin/cp "$confirmed" "$cap_live_file"
+			cap_live_count="$(/usr/bin/awk 'END { print NR }' "$cap_live_file")"
 			if [[ -n "$additions" ]]; then
 				noetaxis_error "Session(s) appeared since the plan was shown and confirmed; they were not part of it. Nothing was stopped. Rerun to see a new plan:"
 				printf '%s\n' "$additions" | /usr/bin/awk -F "$noetaxis_sep" '{ printf "      %s  [%s]  %s  %s/%s  %s\n", $1, $2, $3, $4, $5, $6 }' >&2
@@ -1065,7 +1113,7 @@ noetaxis_update_live_ids_now() {
 }
 
 noetaxis_update_restore_sessions() {
-	local app_path="$1" cli id project role status activity name output status_code attempted=0 back=0
+	local app_path="$1" cli id project role status activity name created harness branch issue output status_code attempted=0 back=0
 	cli="$app_path/Contents/Resources/daemon/ao"
 	if [[ "$cap_sessions_status" != ok || "$cap_live_count" -eq 0 ]]; then
 		noetaxis_update_say "no sessions were live before; nothing to restore"
@@ -1076,7 +1124,7 @@ noetaxis_update_restore_sessions() {
 		noetaxis_update_say "the session list could not be read; trying each restore anyway"
 		: > "$cap_dir/live-now.tsv"
 	fi
-	while IFS="$noetaxis_sep" read -r id project role status activity name; do
+	while IFS="$noetaxis_sep" read -r id project role status activity name created harness branch issue; do
 		[[ -n "$id" ]] || continue
 		if /usr/bin/awk -F "$noetaxis_sep" -v id="$id" '$1 == id { found = 1 } END { exit !found }' "$cap_dir/live-now.tsv"; then
 			noetaxis_update_append noetaxis_update_summary_restore "$id: already live, nothing to restore"
@@ -1093,7 +1141,7 @@ noetaxis_update_restore_sessions() {
 	done < "$cap_live_file"
 	# Judge by what the daemon lists afterwards, not by the command's exit status alone.
 	noetaxis_update_live_ids_now || : > "$cap_dir/live-now.tsv"
-	while IFS="$noetaxis_sep" read -r id project role status activity name; do
+	while IFS="$noetaxis_sep" read -r id project role status activity name created harness branch issue; do
 		[[ -n "$id" ]] || continue
 		if /usr/bin/awk -F "$noetaxis_sep" -v id="$id" '$1 == id { found = 1 } END { exit !found }' "$cap_dir/live-now.tsv"; then
 			case "$noetaxis_update_summary_restore" in
@@ -1288,6 +1336,9 @@ noetaxis_update_exit_report() {
 	fi
 	if [[ -n "$noetaxis_update_summary_checks" ]]; then
 		printf 'Checks:\n%s\n' "$(printf '%s\n' "$noetaxis_update_summary_checks" | /usr/bin/sed 's/^/  - /')"
+	fi
+	if [[ -n "$update_sessions_unverifiable" ]]; then
+		printf 'Not ended (hostless, unverifiable, left running):\n%s\n' "$(printf '%s\n' "$update_sessions_unverifiable" | /usr/bin/sed 's/^/  - /')"
 	fi
 	if [[ -n "$noetaxis_update_summary_restore" ]]; then
 		printf 'Sessions:\n%s\n' "$(printf '%s\n' "$noetaxis_update_summary_restore" | /usr/bin/sed 's/^/  - /')"

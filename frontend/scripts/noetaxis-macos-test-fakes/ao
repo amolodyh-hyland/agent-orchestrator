@@ -56,15 +56,25 @@ case "$1" in
 				# Test hook: a session that appears on the Nth "session ls" call.
 				calls_so_far=$(( $(cat "$SIM/ls_calls" 2>/dev/null || echo 0) + 1 ))
 				printf '%s' "$calls_so_far" > "$SIM/ls_calls"
+				# Test hook "N:version": from the Nth list call on, a foreign daemon answers status for that app version.
+				if [[ "$calls_so_far" == "$(sim_value foreign_on_ls_call | /usr/bin/cut -d: -f1)" ]]; then
+					sim_value foreign_on_ls_call | /usr/bin/cut -d: -f2 > "$SIM/cfg/foreign_status_versions"
+				fi
+				# Test hook "N:id": the session id is re-created (new creation time) on the Nth list call.
+				if [[ "$calls_so_far:" == "$(sim_value recreate_session_on_call | /usr/bin/cut -d: -f1):" ]]; then
+					recreated="$(sim_value recreate_session_on_call | /usr/bin/cut -d: -f2)"
+					/usr/bin/awk -F '|' -v OFS='|' -v id="$recreated" '$1 == id { $8 = "2026-10-09T09:09:09Z" } { print }' "$SIM/sessions" > "$SIM/sessions.tmp"
+					/bin/mv "$SIM/sessions.tmp" "$SIM/sessions"
+				fi
 				if [[ "$calls_so_far" == "$(sim_value add_session_on_call)" ]]; then cat "$SIM/cfg/add_session_line" >> "$SIM/sessions"; fi
 				if sim_has sessions_ls_fails; then printf 'internal error\n' >&2; exit 1; fi
 				printf '{"data":['
 				first=1
-				while IFS='|' read -r id project role status activity terminated name; do
+				while IFS='|' read -r id project role status activity terminated name created; do
 					[[ -n "$id" ]] || continue
 					[[ "$first" -eq 1 ]] || printf ','
 					first=0
-					printf '{"id":"%s","projectId":"%s","role":"%s","displayName":"%s","status":"%s","activity":"%s","isTerminated":%s,"prs":[],"createdAt":"2026-10-01T00:00:00Z","updatedAt":"2026-10-01T00:00:00Z"}' "$id" "$project" "$role" "$(sim_json_escape "$name")" "$status" "$activity" "$terminated"
+					printf '{"id":"%s","projectId":"%s","role":"%s","displayName":"%s","status":"%s","activity":"%s","isTerminated":%s,"harness":"claude","branch":"ao/%s","prs":[],"createdAt":"%s","updatedAt":"2026-10-01T00:00:00Z"}' "$id" "$project" "$role" "$(sim_json_escape "$name")" "$status" "$activity" "$terminated" "$id" "${created:-2026-10-01T00:00:00Z}"
 				done < "$SIM/sessions"
 				printf '],"meta":{"hiddenTerminatedCount":0,"hiddenOrchestratorCount":0}}\n'
 				;;
@@ -81,6 +91,11 @@ case "$1" in
 				/bin/mv "$SIM/sessions.tmp" "$SIM/sessions"
 				sim_remove_prefix "$APP/Contents/Resources/daemon/ao chat-host --session $id"
 				if [[ -f "$SIM/cfg/foreign_after_exit_agent" ]]; then /bin/cp "$SIM/cfg/foreign_after_exit_agent" "$SIM/cfg/foreign_status_versions"; fi
+				# Test hook: another session is re-created (new generation) while the batch runs.
+				if [[ -f "$SIM/cfg/recreate_created_on_exit_agent" ]]; then
+					/usr/bin/awk -F '|' -v OFS='|' -v id="$(sim_value recreate_created_on_exit_agent)" '$1 == id { $8 = "2026-10-09T09:09:09Z" } { print }' "$SIM/sessions" > "$SIM/sessions.tmp"
+					/bin/mv "$SIM/sessions.tmp" "$SIM/sessions"
+				fi
 				# Test hook: another session's host is replaced by a new process while the batch runs.
 				if [[ -f "$SIM/cfg/replace_host_on_exit_agent" ]]; then
 					replaced="$(sim_value replace_host_on_exit_agent)"
