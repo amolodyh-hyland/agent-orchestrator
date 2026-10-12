@@ -1,4 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// Every way to start a process is a recorder, so nothing real can run and any other entry point shows up.
+const childProcess = vi.hoisted(() => {
+	const others = ["exec", "execSync", "execFileSync", "spawn", "spawnSync", "fork"] as const;
+	const fns = { execFile: vi.fn(), ...Object.fromEntries(others.map((name) => [name, vi.fn(() => { throw new Error(`unexpected child_process.${name}`); })])) } as Record<string, ReturnType<typeof vi.fn>>;
+	return { execFile: fns.execFile as ReturnType<typeof vi.fn>, fns, others };
+});
+vi.mock("node:child_process", () => ({ ...childProcess.fns, default: childProcess.fns }));
+
 import {
 	composeListCommand,
 	composeVersionCommand,
@@ -9,6 +18,7 @@ import {
 	isLocalDockerEndpoint,
 	localServerChildEnv,
 	logsCommand,
+	nodeExec,
 	openDockerCommand,
 	psCommand,
 	restartCommand,
@@ -224,5 +234,103 @@ describe("findDockerBinary", () => {
 	it("ignores relative PATH entries and returns null when nothing is executable", () => {
 		expect(findDockerBinary({ pathEnv: "bin:.", home: "/Users/me", platform: "darwin", isExecutable: only("bin/docker") })).toBeNull();
 		expect(findDockerBinary({ pathEnv: "/usr/bin", home: "/Users/me", platform: "linux", isExecutable: () => false })).toBeNull();
+	});
+});
+
+describe("the production adapter (nodeExec) with a mocked child_process", () => {
+	const ENV = { PATH: "/usr/bin", DOCKER_HOST: "unix:///Users/me/.docker/run/docker.sock" };
+	const HOSTILE_NAMES = ["my dir", "a'b", 'a"b', "a;rm -rf x", "a$(id)b", "a`id`b", "a|b", "a&b", "a\nb", "a\tb", " leading", "trailing ", "--rm", "-f", "a b c d e f", "ünï cödé", "a\\b"];
+
+	beforeEach(() => {
+		for (const name of childProcess.others) childProcess.fns[name]?.mockClear();
+		childProcess.execFile.mockReset();
+		childProcess.execFile.mockImplementation((_file, _args, _options, callback) => callback(null, Buffer.from("out"), Buffer.from("err")));
+	});
+
+	const stackIn = (name: string): StackPaths => {
+		const dir = `/Users/me/${name}`;
+		return { dir, file: `${dir}/docker-compose.selfhost.yml` };
+	};
+
+	it("hands execFile the file, the untouched argument array and only the intended options, never a shell", async () => {
+		const spec = upCommand(DOCKER, STACK);
+
+		const result = await runLocalServerCommand(nodeExec, spec, ENV);
+
+		expect(result).toEqual({ error: null, stdout: "out", stderr: "err" });
+		expect(childProcess.execFile).toHaveBeenCalledOnce();
+		const [file, args, options, callback] = childProcess.execFile.mock.calls[0] as [string, string[], Record<string, unknown>, unknown];
+		expect(file).toBe(DOCKER);
+		expect(args).toEqual([...BASE, "up", "-d"]);
+		expect(Array.isArray(args)).toBe(true);
+		expect(options).toEqual({ timeout: 600_000, maxBuffer: 512 * 1024, windowsHide: true, env: ENV });
+		expect(options).not.toHaveProperty("shell");
+		expect(typeof callback).toBe("function");
+	});
+
+	it("keeps every validated path one argument, whatever characters it holds, for every stack command", async () => {
+		for (const name of HOSTILE_NAMES) {
+			const stack = stackIn(name);
+			for (const [spec, tail] of [
+				[psCommand(DOCKER, stack), ["ps", "--all", "--format", "json"]],
+				[upCommand(DOCKER, stack), ["up", "-d"]],
+				[stopCommand(DOCKER, stack), ["stop"]],
+				[restartCommand(DOCKER, stack), ["restart"]],
+				[logsCommand(DOCKER, stack, "backend", 50), ["logs", "--no-color", "--tail", "50", "backend"]],
+			] as const) {
+				childProcess.execFile.mockClear();
+
+				await runLocalServerCommand(nodeExec, spec, ENV);
+
+				const [file, args, options] = childProcess.execFile.mock.calls[0] as [string, string[], Record<string, unknown>];
+				expect(file, name).toBe(DOCKER);
+				expect(args, name).toEqual(["compose", "-f", stack.file, "--project-directory", stack.dir, ...tail]);
+				expect(args[2], name).toBe(stack.file);
+				expect(args[4], name).toBe(stack.dir);
+				expect(args, name).toHaveLength(5 + tail.length);
+				expect(options, name).not.toHaveProperty("shell");
+			}
+		}
+	});
+
+	it("never passes shell, a shell binary or a command string for any command, including Docker Desktop's launcher", async () => {
+		const stack = stackIn("a b;c");
+		const specs = [dockerVersionCommand(DOCKER), composeVersionCommand(DOCKER), composeListCommand(DOCKER), psCommand(DOCKER, stack), upCommand(DOCKER, stack), stopCommand(DOCKER, stack), restartCommand(DOCKER, stack), logsCommand(DOCKER, stack, "frontend", 5), openDockerCommand()];
+		for (const spec of specs) {
+			childProcess.execFile.mockClear();
+			await runLocalServerCommand(nodeExec, spec, ENV);
+			const [file, args, options] = childProcess.execFile.mock.calls[0] as [string, string[], Record<string, unknown>];
+			expect(["/bin/sh", "/bin/bash", "/bin/zsh", "sh", "bash", "cmd.exe"].some((shell) => file.endsWith(shell)), spec.name).toBe(false);
+			expect(args.some((arg) => arg === "-c" || arg === "/c"), spec.name).toBe(false);
+			expect(options.shell, spec.name).toBeUndefined();
+			expect(options.windowsVerbatimArguments, spec.name).toBeUndefined();
+			expect(options.windowsHide, spec.name).toBe(true);
+		}
+	});
+
+	it("uses no other way to start a process", async () => {
+		await runLocalServerCommand(nodeExec, upCommand(DOCKER, STACK), ENV);
+		await runLocalServerCommand(nodeExec, openDockerCommand(), ENV);
+		for (const name of childProcess.others) expect(childProcess.fns[name], name).not.toHaveBeenCalled();
+	});
+
+	it("reports a failed process with its error, stdout and stderr as strings", async () => {
+		childProcess.execFile.mockImplementation((_f, _a, _o, callback) => callback(Object.assign(new Error("exit 1"), { code: 1 }), Buffer.from(""), Buffer.from("boom")));
+		const result = await runLocalServerCommand(nodeExec, stopCommand(DOCKER, STACK), ENV);
+		expect(result.error?.code).toBe(1);
+		expect(result.stderr).toBe("boom");
+	});
+
+	it("passes the abort signal to execFile for cancel", async () => {
+		const controller = new AbortController();
+		await runLocalServerCommand(nodeExec, stopCommand(DOCKER, STACK), ENV, controller.signal);
+		expect((childProcess.execFile.mock.calls[0]?.[2] as { signal?: AbortSignal }).signal).toBe(controller.signal);
+	});
+
+	it("does not reach execFile for a command the module did not issue or without a local endpoint", async () => {
+		const forged: CommandSpec = { name: "up", file: "/bin/sh", args: ["-c", "echo hi"], timeoutMs: 1000, engine: false };
+		await expect(runLocalServerCommand(nodeExec, forged, ENV)).rejects.toThrow();
+		await expect(runLocalServerCommand(nodeExec, upCommand(DOCKER, STACK), { PATH: "/usr/bin" })).rejects.toThrow();
+		expect(childProcess.execFile).not.toHaveBeenCalled();
 	});
 });

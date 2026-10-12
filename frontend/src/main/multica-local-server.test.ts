@@ -1,4 +1,29 @@
+import { readdirSync } from "node:fs";
+import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Records every file-system write the code under test attempts (and lets it through), so a
+// log line that is persisted anywhere shows up, whichever fs API or import style is used.
+const fsWrites = vi.hoisted(() => ({ calls: [] as string[] }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs/promises")>();
+	const wrap = (names: string[], target: Record<string, unknown>) =>
+		Object.fromEntries(names.map((name) => [name, (...args: unknown[]) => { fsWrites.calls.push(`fs/promises.${name}`); return (target[name] as (...a: unknown[]) => unknown)(...args); }]));
+	const names = ["writeFile", "appendFile", "open", "mkdir", "rename", "copyFile", "cp", "truncate", "mkdtemp", "symlink", "link"];
+	const wrapped = { ...actual, ...wrap(names, actual as never) };
+	return { ...wrapped, default: wrapped };
+});
+vi.mock("node:fs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs")>();
+	const wrap = (names: string[], target: Record<string, unknown>, prefix: string) =>
+		Object.fromEntries(names.map((name) => [name, (...args: unknown[]) => { fsWrites.calls.push(`${prefix}.${name}`); return (target[name] as (...a: unknown[]) => unknown)(...args); }]));
+	const syncNames = ["writeFileSync", "appendFileSync", "openSync", "writeSync", "mkdirSync", "renameSync", "copyFileSync", "truncateSync", "createWriteStream", "writeFile", "appendFile", "mkdtempSync"];
+	const promiseNames = ["writeFile", "appendFile", "open", "mkdir", "rename", "copyFile", "cp", "truncate"];
+	const promises = { ...actual.promises, ...wrap(promiseNames, actual.promises as never, "fs.promises") };
+	const wrapped = { ...actual, ...wrap(syncNames, actual as never, "fs"), promises };
+	return { ...wrapped, default: wrapped };
+});
+
 import type { MulticaCheckResult, MulticaSettings } from "../shared/multica";
 import type { LocalServerStatus } from "../shared/multica-local-server";
 import { checkMulticaServer } from "./multica-server-check";
@@ -505,6 +530,49 @@ describe("the local Docker engine", () => {
 		const h = harness({ endpoint: "tcp://10.0.0.5:2375" });
 		expect(await h.server.start()).toEqual({ ok: false, code: "command_failed" });
 		expect(h.calls.some((call) => call.args.includes("up"))).toBe(false);
+	});
+});
+
+describe("backend log lines are never persisted", () => {
+	const CODE_LINE = "backend-1  | [DEV] Verification code for me@example.com: 987654";
+	const listTmp = () => readdirSync(os.tmpdir()).sort();
+
+	beforeEach(() => {
+		fsWrites.calls.length = 0;
+	});
+
+	it("writes no file, logs nothing and pushes nothing while the log is read, polled and the server is operated", async () => {
+		const consoleSpies = (["log", "info", "warn", "error", "debug", "trace"] as const).map((name) => vi.spyOn(console, name).mockImplementation(() => undefined));
+		const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const before = listTmp();
+		try {
+			const h = harness({ ps: ALL_UP, probe: { ok: true, apiUrl: "" }, handlers: { logs: () => ({ stdout: `${CODE_LINE}\n` }) } });
+
+			for (let i = 0; i < 3; i += 1) expect(await h.server.getLogs("backend", 200)).toEqual({ ok: true, lines: [CODE_LINE] });
+			await h.server.getStatus();
+			await h.server.restart();
+			await h.server.getLogs("backend", 200);
+			h.server.dispose();
+
+			expect(fsWrites.calls).toEqual([]);
+			expect(listTmp()).toEqual(before);
+			expect(JSON.stringify([h.emitted, h.writes, h.calls])).not.toContain("987654");
+			for (const spy of consoleSpies) expect(spy).not.toHaveBeenCalled();
+			expect(stdoutWrite).not.toHaveBeenCalled();
+			expect(stderrWrite).not.toHaveBeenCalled();
+		} finally {
+			for (const spy of consoleSpies) spy.mockRestore();
+			stdoutWrite.mockRestore();
+			stderrWrite.mockRestore();
+		}
+	});
+
+	it("keeps a failed log read's lines out of the error details too", async () => {
+		const h = harness({ ps: ALL_UP, handlers: { logs: () => ({ error: { code: 1 }, stdout: `${CODE_LINE}\n`, stderr: "no such service" }) } });
+		const result = await h.server.getLogs("backend", 10);
+		expect(JSON.stringify(result)).not.toContain("987654");
+		expect(fsWrites.calls).toEqual([]);
 	});
 });
 

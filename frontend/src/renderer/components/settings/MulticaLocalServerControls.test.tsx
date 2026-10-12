@@ -271,6 +271,31 @@ describe("MulticaLocalServerControls", () => {
 			expect(screen.queryByText("secret-looking line")).not.toBeInTheDocument();
 		});
 
+		it("keeps the lines in memory only: no browser storage, no console output", async () => {
+			const spies = (["log", "info", "warn", "error", "debug"] as const).map((name) => vi.spyOn(console, name).mockImplementation(() => undefined));
+			// localStorage is a plain stub in these tests; sessionStorage is jsdom's, so spy on both.
+			const local = vi.spyOn(window.localStorage, "setItem");
+			const session = vi.spyOn(Storage.prototype, "setItem");
+			try {
+				fake.getLogs.mockResolvedValue({ ok: true, lines: ["[DEV] Verification code for a@b.c: 424242"] });
+				window.localStorage.clear();
+				window.sessionStorage.clear();
+				await open("healthy");
+				await userEvent.click(button("Show log"));
+				await screen.findByText(/424242/);
+				await userEvent.click(button("Copy log"));
+
+				expect(local).not.toHaveBeenCalled();
+				expect(session).not.toHaveBeenCalled();
+				expect(window.localStorage.getItem("ao-log")).toBeNull();
+				for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+			} finally {
+				local.mockRestore();
+				session.mockRestore();
+				for (const spy of spies) spy.mockRestore();
+			}
+		});
+
 		it("does not show old lines when the log is opened again later", async () => {
 			fake.getLogs.mockResolvedValueOnce({ ok: true, lines: ["old sign-in line 111111"] });
 			await open("healthy");
