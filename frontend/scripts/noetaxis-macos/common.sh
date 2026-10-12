@@ -9,7 +9,7 @@ NOETAXIS_LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Framework
 # time limit. A SIGALRM alone does not bound a Go program (the Go runtime catches and ignores it, and
 # the bundled ao is one), so the helper runs as a child of a small perl supervisor, in a process
 # group of its own. At the deadline the supervisor sends that group SIGTERM, waits three seconds,
-# then SIGKILL, prints "timed out" on stderr and exits 142 (143 when the script itself is
+# then SIGKILL (also to descendants that outlive a leader that exited on TERM), prints "timed out" on stderr and exits 142 (143 when the script itself is
 # interrupted). This is the ONLY place in the installer that can send SIGKILL, and it can only
 # reach the process group of the helper command it started itself. It never touches AO's own
 # processes (the app, daemon, chat hosts, agents), which are only ever sent SIGTERM, only by
@@ -31,8 +31,17 @@ noetaxis_bounded() {
 			my ($code, $note) = @_;
 			kill "TERM", -$child;
 			my $until = time + 3;
-			while (time < $until) { if (waitpid($child, 1) == $child) { $reaped = 1; last; } select(undef, undef, undef, 0.1); }
-			unless ($reaped) { kill "KILL", -$child; waitpid($child, 1); }
+			while (time < $until) {
+				$reaped = 1 if !$reaped && waitpid($child, 1) == $child;
+				last if $reaped && !kill(0, -$child);
+				select(undef, undef, undef, 0.1);
+			}
+			$reaped = 1 if !$reaped && waitpid($child, 1) == $child;
+			# Whoever is still in the group after the grace gets KILL: a hung leader, or descendants that
+			# outlived a leader that exited on TERM. Reaping the leader does not release the group id while
+			# members remain, so the group is still this helper'"'"'s own when KILL is sent.
+			if (kill(0, -$child)) { kill "KILL", -$child; }
+			waitpid($child, 1) unless $reaped;
 			print STDERR "$note\n" if $note;
 			exit $code;
 		};

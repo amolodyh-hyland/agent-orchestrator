@@ -1153,6 +1153,35 @@ test("helper commands are bounded by a watchdog on their own process group: TERM
 	assert.match(capped.stdout, /rc=142/);
 });
 
+test("a cooperative leader does not shield a TERM-ignoring descendant: the group still gets KILL and the capture pipe closes", darwin, async (t) => {
+	const root = await mkdtemp(path.join(os.tmpdir(), "noetaxis-bounded-desc-"));
+	t.after(async () => rm(root, { recursive: true, force: true }));
+	const marker = path.join(root, "descendant.pid");
+	const leader = `/bin/sh -c "trap '' TERM; echo \\$\\$ > ${marker}; while :; do /bin/sleep 1; done" & while :; do /bin/sleep 1; done`;
+	const started = Date.now();
+	// Command substitution: a descendant that keeps the pipe open would block it until the child exits.
+	const result = execute("/bin/bash", ["-c", `. "${path.join(realScriptsDir, "common.sh")}"; rc=0; out=$(noetaxis_bounded 1 /bin/sh -c '${leader.replaceAll("'", "'\\''")}' 2>&1) || rc=$?; echo "rc=$rc"`], { env: { PATH: "/usr/bin:/bin" }, timeout: 60_000, killSignal: "SIGKILL" });
+	assert.match(result.stdout, /rc=142/);
+	assert.ok(Date.now() - started < 15_000, `returned after ${Date.now() - started} ms`);
+	const pid = Number((await readFile(marker, "utf8")).trim());
+	assert.throws(() => process.kill(pid, 0), /ESRCH/, "the TERM-ignoring descendant was killed with the group");
+});
+
+test("mutation: gating the group KILL on the leader not having been reaped is caught by the cooperative-leader case", darwin, async (t) => {
+	const mutant = await mutatedScripts(t, "common.sh", 'if (kill(0, -$child)) { kill "KILL", -$child; }', 'unless ($reaped) { kill "KILL", -$child; }');
+	const root = await mkdtemp(path.join(os.tmpdir(), "noetaxis-bounded-gate-"));
+	t.after(async () => rm(root, { recursive: true, force: true }));
+	const marker = path.join(root, "descendant.pid");
+	const outFile = path.join(root, "out.txt");
+	const leader = `/bin/sh -c "trap '' TERM; echo \\$\\$ > ${marker}; while :; do /bin/sleep 1; done" & while :; do /bin/sleep 1; done`;
+	execute("/bin/bash", ["-c", `{ . "${path.join(mutant, "common.sh")}"; rc=0; noetaxis_bounded 1 /bin/sh -c '${leader.replaceAll("'", "'\\''")}' || rc=$?; echo "rc=$rc"; } > ${outFile} 2>&1`], { env: { PATH: "/usr/bin:/bin" }, timeout: 60_000, killSignal: "SIGKILL" });
+	const pid = Number((await readFile(marker, "utf8")).trim());
+	let alive = true;
+	try { process.kill(pid, 0); } catch { alive = false; }
+	try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
+	assert.ok(alive, "the mutant leaves the stubborn descendant running");
+});
+
 test("a hung helper is terminated and reported as a failure, while AO's own processes are never sent SIGKILL", darwin, async (t) => {
 	// A real, unrelated process stands in for a user's AO process: it must survive the whole run.
 	const bystander = spawn("/bin/sleep", ["300"], { stdio: "ignore", detached: true });
@@ -1174,7 +1203,7 @@ test("a hung helper is terminated and reported as a failure, while AO's own proc
 });
 
 test("mutation: a watchdog that never escalates to KILL (or only sets an alarm) is caught", darwin, async (t) => {
-	const mutant = await mutatedScripts(t, "common.sh", 'unless ($reaped) { kill "KILL", -$child; waitpid($child, 1); }', "");
+	const mutant = await mutatedScripts(t, "common.sh", 'if (kill(0, -$child)) { kill "KILL", -$child; }', "");
 	const root = await mkdtemp(path.join(os.tmpdir(), "noetaxis-bounded-mutant-"));
 	t.after(async () => rm(root, { recursive: true, force: true }));
 	const pidFile = path.join(root, "hung.pid");
@@ -1221,7 +1250,7 @@ test("SIGKILL exists in exactly one place: the watchdog of noetaxis_bounded, aim
 		});
 	}
 	assert.equal(hits.length, 1, hits.join("\n"));
-	assert.match(hits[0], /^common\.sh:\d+ in noetaxis_bounded: unless \(\$reaped\) \{ kill "KILL", -\$child;/);
+	assert.match(hits[0], /^common\.sh:\d+ in noetaxis_bounded: if \(kill\(0, -\$child\)\) \{ kill "KILL", -\$child; \}$/);
 });
 
 test("the daemon's identity is re-checked before every session is ended, not only once", darwin, async (t) => {
