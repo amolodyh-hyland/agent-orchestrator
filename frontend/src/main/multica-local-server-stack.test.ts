@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -536,6 +536,142 @@ describe("first-time setup", () => {
 
 	it("adds JWT_SECRET when the template has none, because the compose file requires it", () => {
 		expect(buildEnvContent("FRONTEND_ORIGIN=http://localhost:3000", counter())).toContain(`JWT_SECRET=${"01".repeat(32)}\n`);
+	});
+
+	describe("the template is untrusted input", () => {
+		const STACK = { dir: "/Users/me/.multica/server", file: "/Users/me/.multica/server/docker-compose.selfhost.yml" };
+		const fakeDeps = (template: string, patch: { uid?: number; mode?: number; gid?: number; type?: "file" | "link" | "dir"; size?: number; userId?: number | undefined } = {}) => {
+			const created: Array<{ file: string; content: string }> = [];
+			const deps: SetupDeps = {
+				randomBytes: (size) => Buffer.alloc(size, 7),
+				readTemplate: async () => template,
+				statTemplate: async () => ({
+					isFile: () => (patch.type ?? "file") === "file",
+					isDirectory: () => patch.type === "dir",
+					isSymbolicLink: () => patch.type === "link",
+					size: patch.size ?? template.length,
+					mode: patch.mode ?? 0o644,
+					uid: patch.uid ?? 501,
+					gid: patch.gid ?? 20,
+				}),
+				createFile: async (file, content) => {
+					created.push({ file, content });
+				},
+				uid: "userId" in patch ? patch.userId : 501,
+				gid: 20,
+			};
+			return { deps, created };
+		};
+
+		it("accepts a template owned by the user or root that others cannot write", async () => {
+			for (const [uid, mode] of [[501, 0o644], [501, 0o600], [0, 0o644], [501, 0o755]] as const) {
+				const { deps, created } = fakeDeps(TEMPLATE, { uid, mode });
+				expect(await setupStackEnv(STACK, deps), `${uid} ${mode.toString(8)}`).toBe("created");
+				expect(created).toHaveLength(1);
+			}
+		});
+
+		it("refuses a template owned by another user, whatever its mode, and writes nothing", async () => {
+			for (const mode of [0o644, 0o600, 0o666]) {
+				const { deps, created } = fakeDeps(TEMPLATE, { uid: 502, mode });
+				expect(await setupStackEnv(STACK, deps), mode.toString(8)).toBe("failed");
+				expect(created).toEqual([]);
+			}
+		});
+
+		it("refuses a template that group or others can write, even when the user owns it", async () => {
+			for (const mode of [0o666, 0o664, 0o660, 0o646, 0o622, 0o777]) {
+				const { deps, created } = fakeDeps(TEMPLATE, { uid: 501, mode });
+				expect(await setupStackEnv(STACK, deps), mode.toString(8)).toBe("failed");
+				expect(created).toEqual([]);
+			}
+		});
+
+		it("refuses a foreign-owned 0666 template (the reviewer's case)", async () => {
+			const { deps, created } = fakeDeps(`${TEMPLATE}JWT_SECRET=known-to-attacker\n`, { uid: 502, mode: 0o666 });
+			expect(await setupStackEnv(STACK, deps)).toBe("failed");
+			expect(created).toEqual([]);
+		});
+
+		it("does not judge ownership or mode where there is no user id (Windows)", async () => {
+			const { deps } = fakeDeps(TEMPLATE, { uid: 999, mode: 0o666, userId: undefined });
+			expect(await setupStackEnv(STACK, deps)).toBe("created");
+		});
+
+		it("refuses a symlink, a directory and an oversized template", async () => {
+			for (const patch of [{ type: "link" as const }, { type: "dir" as const }, { size: 70 * 1024 }]) {
+				const { deps, created } = fakeDeps(TEMPLATE, patch);
+				expect(await setupStackEnv(STACK, deps), JSON.stringify(patch)).toBe("failed");
+				expect(created).toEqual([]);
+			}
+		});
+
+		it("refuses a template that assigns a managed secret twice, however it is written, and writes nothing", async () => {
+			for (const duplicate of [
+				"JWT_SECRET=known-to-attacker",
+				"export JWT_SECRET=known-to-attacker",
+				"  JWT_SECRET=known-to-attacker",
+				"\tJWT_SECRET = known-to-attacker",
+				"JWT_SECRET: known-to-attacker",
+				"POSTGRES_PASSWORD=known",
+				"export POSTGRES_PASSWORD=known",
+				"MULTICA_VCS_SECRET_KEY=known",
+				"DATABASE_URL=postgres://multica:known@localhost:5432/multica",
+				" export DATABASE_URL=postgres://multica:known@localhost/db",
+			]) {
+				const { deps, created } = fakeDeps(`${TEMPLATE}${duplicate}\n`);
+				expect(await setupStackEnv(STACK, deps), duplicate).toBe("failed");
+				expect(created, duplicate).toEqual([]);
+			}
+		});
+
+		it("refuses a managed key hidden in an alternative form even when it is the only assignment", async () => {
+			for (const only of ["export JWT_SECRET=known", "  JWT_SECRET=known", "JWT_SECRET: known", "JWT_SECRET =known"]) {
+				const template = TEMPLATE.replace(/^JWT_SECRET=.*\n/m, "") + `${only}\n`;
+				expect(buildEnvContent(template, () => Buffer.alloc(32, 1)), only).toBeNull();
+			}
+		});
+
+		it("does not count comments or similar names as assignments", () => {
+			const template = `${TEMPLATE}# JWT_SECRET=old\n#export POSTGRES_PASSWORD=x\nMY_JWT_SECRET=other\nJWT_SECRET_FILE=/x\nPOSTGRES_PASSWORD_HINT=y\n`;
+			const content = buildEnvContent(template, (size) => Buffer.alloc(size, 1));
+			expect(content).not.toBeNull();
+			expect(content).toContain(`JWT_SECRET=${"01".repeat(32)}`);
+			expect(content).toContain("# JWT_SECRET=old");
+			expect(content).toContain("MY_JWT_SECRET=other");
+		});
+
+		it("wires the real current user into the real dependencies: a group-writable template on disk is refused", async () => {
+			if (process.getuid === undefined) return;
+			const dir = await mkdtemp(path.join(os.tmpdir(), "ao-local-server-template-"));
+			try {
+				await writeFile(path.join(dir, ".env.example"), TEMPLATE, { mode: 0o644 });
+				const deps = nodeSetupDeps((size) => Buffer.alloc(size, 7));
+				expect(deps.uid).toBe(process.getuid());
+				expect(await setupStackEnv({ dir, file: path.join(dir, "docker-compose.selfhost.yml") }, deps)).toBe("created");
+				await rm(path.join(dir, ".env"));
+				await chmod(path.join(dir, ".env.example"), 0o666);
+				expect(await setupStackEnv({ dir, file: path.join(dir, "docker-compose.selfhost.yml") }, deps)).toBe("failed");
+				await expect(stat(path.join(dir, ".env"))).rejects.toThrow();
+			} finally {
+				await rm(dir, { recursive: true, force: true });
+			}
+		});
+
+		it("leaves exactly one assignment of each managed key in what it writes", async () => {
+			const { deps, created } = fakeDeps(TEMPLATE);
+			expect(await setupStackEnv(STACK, deps)).toBe("created");
+			const content = created[0]?.content ?? "";
+			for (const key of ["JWT_SECRET", "POSTGRES_PASSWORD", "MULTICA_VCS_SECRET_KEY", "DATABASE_URL"]) {
+				expect([...content.matchAll(new RegExp(`^[ \\t]*(?:export[ \\t]+)?${key}[ \\t]*[=:]`, "gm"))].length, key).toBe(1);
+			}
+		});
+
+		it("refuses a template that also carries a CRLF-smuggled duplicate", async () => {
+			const { deps, created } = fakeDeps(`${TEMPLATE.replace(/\n/g, "\r\n")}JWT_SECRET=known\r\n`);
+			expect(await setupStackEnv(STACK, deps)).toBe("failed");
+			expect(created).toEqual([]);
+		});
 	});
 
 	describe("on disk", () => {

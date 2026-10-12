@@ -319,9 +319,12 @@ export type SetupOutcome = "created" | "already_set_up" | "failed";
 export type SetupDeps = {
 	randomBytes: (size: number) => Buffer;
 	readTemplate: (file: string) => Promise<string>;
-	statTemplate: (file: string) => Promise<{ isFile: () => boolean; isSymbolicLink: () => boolean; size: number }>;
+	statTemplate: (file: string) => Promise<TrustStat & { isSymbolicLink: () => boolean; size: number }>;
 	/** Creates the file exclusively with mode 0600; rejects with EEXIST when it exists. */
 	createFile: (file: string, content: string) => Promise<void>;
+	/** The current user; the template's ownership and mode are not judged where there is none (Windows). */
+	uid?: number | undefined;
+	gid?: number | undefined;
 };
 
 export const nodeSetupDeps = (randomBytes: SetupDeps["randomBytes"]): SetupDeps => ({
@@ -329,7 +332,30 @@ export const nodeSetupDeps = (randomBytes: SetupDeps["randomBytes"]): SetupDeps 
 	readTemplate: (file) => readFile(file, "utf8"),
 	statTemplate: (file) => lstat(file),
 	createFile: (file, content) => writeFile(file, content, { flag: "wx", mode: 0o600 }),
+	uid: currentUid(),
+	gid: currentGid(),
 });
+
+/** The values `.env` gets fresh: a second (or differently written) assignment of one would override them. */
+const MANAGED_KEYS = ["JWT_SECRET", "POSTGRES_PASSWORD", "MULTICA_VCS_SECRET_KEY", "DATABASE_URL"] as const;
+
+/** Any way a dotenv-style file can assign `key`: `KEY=`, `export KEY=`, ` KEY =`, `KEY:`; comments do not count. */
+function assignments(text: string, key: string): number {
+	return [...text.matchAll(new RegExp(`^[ \\t]*(?:export[ \\t]+)?${key}[ \\t]*[=:]`, "gm"))].length;
+}
+
+function canonicalAssignments(text: string, key: string): number {
+	return [...text.matchAll(new RegExp(`^${key}=`, "gm"))].length;
+}
+
+/**
+ * Whether the template defines each managed key at most once, and only in the plain `KEY=value`
+ * form: a duplicate or an `export KEY=` / indented / `KEY:` variant would survive next to the
+ * fresh secret and could win when the file is read (dotenv parsers keep the last assignment).
+ */
+export function templateAssignsManagedKeysOnce(text: string): boolean {
+	return MANAGED_KEYS.every((key) => assignments(text, key) <= 1 && assignments(text, key) === canonicalAssignments(text, key));
+}
 
 function replaceKey(text: string, key: string, value: string): { text: string; found: boolean } {
 	const pattern = new RegExp(`^${key}=.*$`, "m");
@@ -341,10 +367,13 @@ function replaceKey(text: string, key: string, value: string): { text: string; f
  * Builds `.env` content from the template as Multica's `make selfhost` does: random
  * JWT_SECRET, POSTGRES_PASSWORD and MULTICA_VCS_SECRET_KEY, and the new password inside
  * DATABASE_URL. JWT_SECRET is required by the compose file, so it is added when the
- * template has no such line.
+ * template has no such line. Returns null when the template assigns a managed key twice or
+ * in a form that would sit next to the fresh value, or when the result does not hold each
+ * managed key exactly once.
  */
-export function buildEnvContent(template: string, randomBytes: SetupDeps["randomBytes"]): string {
+export function buildEnvContent(template: string, randomBytes: SetupDeps["randomBytes"]): string | null {
 	let text = template.replace(/\r\n/g, "\n");
+	if (!templateAssignsManagedKeysOnce(text)) return null;
 	const jwt = randomBytes(32).toString("hex");
 	const postgres = randomBytes(24).toString("hex");
 	const vcs = randomBytes(32).toString("base64");
@@ -353,19 +382,24 @@ export function buildEnvContent(template: string, randomBytes: SetupDeps["random
 	text = replaceKey(text, "POSTGRES_PASSWORD", postgres).text;
 	text = replaceKey(text, "MULTICA_VCS_SECRET_KEY", vcs).text;
 	text = text.replace(/^(DATABASE_URL=postgres:\/\/[^:\n]+:)[^@\n]*(@.*)$/m, (_match, head: string, tail: string) => `${head}${postgres}${tail}`);
+	// Whatever the input, the result must carry each managed key at most once and JWT_SECRET exactly once.
+	if (!MANAGED_KEYS.every((key) => assignments(text, key) <= 1) || assignments(text, "JWT_SECRET") !== 1) return null;
 	return text;
 }
 
 /**
- * Creates `.env` in a validated stack folder. Never overwrites, returns nothing about
- * the content, and runs no process.
+ * Creates `.env` in a validated stack folder. The template must be a plain file owned by root or
+ * the user that group and others cannot write (it is the source of everything AO copies into
+ * `.env`). Never overwrites, returns nothing about the content, and runs no process.
  */
 export async function setupStackEnv(stack: StackPaths, deps: SetupDeps): Promise<SetupOutcome> {
 	const template = path.join(stack.dir, ENV_EXAMPLE_FILE_NAME);
 	try {
 		const info = await deps.statTemplate(template);
 		if (info.isSymbolicLink() || !info.isFile() || info.size > MAX_ENV_EXAMPLE_BYTES) return "failed";
+		if (deps.uid !== undefined && !fileTrusted(info, { uid: deps.uid, gid: deps.gid })) return "failed";
 		const content = buildEnvContent(await deps.readTemplate(template), deps.randomBytes);
+		if (content === null) return "failed";
 		await deps.createFile(path.join(stack.dir, ENV_FILE_NAME), content);
 		return "created";
 	} catch (error) {
