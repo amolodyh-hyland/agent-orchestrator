@@ -1369,10 +1369,45 @@ test("a caller that does not drain stderr cannot hold the watchdog past its boun
 });
 
 test("mutation: a copy-out that blocks until the caller drains is caught", darwin, async (t) => {
-	const mutant = await mutatedScripts(t, "common.sh", "return 0 if time >= $deadline;", "");
+	const mutant = await mutatedScripts(t, "common.sh", "my $until = time + 2;\n			while (time < $until) {\n				if (waitpid($copier", "my $until = time + 100000;\n			while (time < $until) {\n				if (waitpid($copier");
 	const root = await mkdtemp(path.join(os.tmpdir(), "noetaxis-undrained-mutant-"));
 	t.after(async () => rm(root, { recursive: true, force: true }));
 	await assert.rejects(runWithUndrainedStderr(path.join(mutant, "common.sh"), root, 12_000), /still blocked/);
+});
+
+// O_NONBLOCK belongs to the open file description, which the caller shares: the watchdog must leave the
+// flags of the descriptors it inherited exactly as they were, and later writes under backpressure must work.
+const FLAGS_PROBE = `/usr/bin/perl -e 'use Fcntl; for my $fd (1, 2) { open(my $h, ">&=", $fd); print(((fcntl($h, F_GETFL, 0) & O_NONBLOCK) ? "NB" : "B") . "$fd ") }'`;
+
+function runFlagsProbe(libPath, root, helper) {
+	return spawnSync("/bin/bash", ["-c", `. "${libPath}"; noetaxis_bounded 5 ${helper} || true; ${FLAGS_PROBE}`], { env: { PATH: "/usr/bin:/bin", TMPDIR: root }, encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL" });
+}
+
+test("the watchdog leaves the caller's stdout and stderr flags untouched, and a later printf under backpressure succeeds", darwin, async (t) => {
+	const root = await mkdtemp(path.join(os.tmpdir(), "noetaxis-flags-"));
+	t.after(async () => rm(root, { recursive: true, force: true }));
+	const lib = path.join(realScriptsDir, "common.sh");
+	for (const helper of ["/usr/bin/true", "'/bin/sh -c \"echo out; echo err >&2\"'", "'/bin/sh -c \"head -c 300000 /dev/zero\"'"]) {
+		const result = runFlagsProbe(lib, root, helper.startsWith("'") ? helper.slice(1, -1) : helper);
+		assert.match(result.stdout, /B1 B2 $/, `flags after ${helper}: ${result.stdout}`);
+	}
+	// Backpressure: the reader starts late, so the caller's printf must block (not fail with EAGAIN) and finish.
+	const child = spawn("/bin/bash", ["-c", `. "${lib}"; noetaxis_bounded 5 /usr/bin/true; big="$(head -c 400000 /dev/zero | tr '\\0' x)"; printf '%s' "$big"; echo " rc=$?"`], { env: { PATH: "/usr/bin:/bin", TMPDIR: root }, stdio: ["ignore", "pipe", "pipe"] });
+	child.stderr.resume();
+	let received = "";
+	await new Promise((resolve) => setTimeout(resolve, 1500));
+	child.stdout.on("data", (chunk) => { received += chunk; });
+	await Promise.race([new Promise((resolve) => child.on("exit", resolve)), new Promise((_, reject) => setTimeout(() => { child.kill("SIGKILL"); reject(new Error("printf under backpressure did not finish")); }, 30_000))]);
+	assert.equal(received.length, 400000 + " rc=0\n".length, "the whole write got through");
+	assert.ok(received.endsWith(" rc=0\n"));
+});
+
+test("mutation: leaving the caller's descriptors non-blocking is caught", darwin, async (t) => {
+	const mutant = await mutatedScripts(t, "common.sh", "			my ($outdata, $errdata) = @_;\n", "			my ($outdata, $errdata) = @_;\n			fcntl(STDOUT, F_SETFL, fcntl(STDOUT, F_GETFL, 0) | O_NONBLOCK);\n");
+	const root = await mkdtemp(path.join(os.tmpdir(), "noetaxis-flags-mutant-"));
+	t.after(async () => rm(root, { recursive: true, force: true }));
+	const result = runFlagsProbe(path.join(mutant, "common.sh"), root, "/usr/bin/true");
+	assert.match(result.stdout, /NB1/, `the mutant sets O_NONBLOCK: ${result.stdout}`);
 });
 
 test("a hung helper is terminated and reported as a failure, while AO's own processes are never sent SIGKILL", darwin, async (t) => {

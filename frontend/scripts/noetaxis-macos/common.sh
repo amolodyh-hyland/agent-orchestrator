@@ -26,6 +26,8 @@ noetaxis_bounded() {
 	local max_bytes="${NOETAXIS_HELPER_OUTPUT_MAX:-4194304}"
 	( ulimit -f "$(( max_bytes * 2 / 512 + 8 ))" 2>/dev/null; exec /usr/bin/perl -e '
 		use Fcntl;
+		use POSIX qw(:signal_h :sys_wait_h);
+		my $blocked = POSIX::SigSet->new(SIGALRM, SIGTERM, SIGINT, SIGHUP);
 		my $limit = shift @ARGV;
 		my $max = shift @ARGV;
 		# The helper writes into private files (mode 0600, unlinked at once), never into this
@@ -50,42 +52,51 @@ noetaxis_bounded() {
 			exec @ARGV;
 			exit 127;
 		}
-		# Writes without ever blocking past a deadline: a caller that does not drain its pipe (a full
-		# pipe) must not hold this supervisor beyond its bound. Returns 0 when the data was not all written.
-		sub write_bounded {
-			my ($fh, $data, $deadline) = @_;
-			my $fd = fileno($fh);
-			my $flags = fcntl($fh, F_GETFL, 0);
-			fcntl($fh, F_SETFL, $flags | O_NONBLOCK);
-			my $offset = 0;
-			my $length = length($data);
-			while ($offset < $length) {
-				my $written = syswrite($fh, $data, $length - $offset, $offset);
-				if (defined $written) { $offset += $written; next; }
-				return 0 unless $!{EAGAIN} || $!{EWOULDBLOCK};
-				return 0 if time >= $deadline;
-				my $writable = "";
-				vec($writable, $fd, 1) = 1;
-				select(undef, $writable, undef, 0.1);
-			}
-			return 1;
-		}
-		# Copies at most $max bytes of each stream within two seconds. Returns 0, 1 when something was
-		# cut off by the size cap, or 2 when the caller did not take the output in time.
-		sub flush_output {
-			my $result = 0;
-			my $deadline = time + 2;
-			for my $pair ([$out, \*STDOUT], [$err, \*STDERR]) {
-				$result = 1 if $result == 0 && (-s $pair->[0]) > $max;
-				seek($pair->[0], 0, 0);
+		# The captured output is read from the private files (at most $max bytes each) and handed to the
+		# caller by a short-lived COPIER child that makes ordinary blocking writes on the inherited
+		# descriptors. This process never changes the flags of the descriptors it inherited (O_NONBLOCK belongs
+		# to the open file description, which the caller shares), and a caller that does not drain its
+		# pipe only blocks the copier: after two seconds the copier is terminated and the call fails (145).
+		sub gather {
+			my $cut = 0;
+			my @data;
+			for my $file ($out, $err) {
+				$cut = 1 if (-s $file) > $max;
+				seek($file, 0, 0);
 				my $data = "";
-				read($pair->[0], $data, $max);
-				$result = 2 unless write_bounded($pair->[1], $data, $deadline);
+				read($file, $data, $max);
+				push @data, $data;
 			}
-			return $result;
+			return ($cut, @data);
 		}
-		sub note {
-			write_bounded(\*STDERR, $_[0], time + 1);
+		# Returns 0 when everything was written, 1 when the caller did not take it in time.
+		sub deliver {
+			my ($outdata, $errdata) = @_;
+			my $copier = fork();
+			return 1 unless defined $copier;
+			if (!$copier) {
+				# The stop signals are blocked in this process; the copier must be terminable.
+				sigprocmask(SIG_UNBLOCK, $blocked);
+				$SIG{TERM} = "DEFAULT";
+				for my $pair ([\*STDOUT, $outdata], [\*STDERR, $errdata]) {
+					my ($fh, $data) = @$pair;
+					my $offset = 0;
+					while ($offset < length($data)) {
+						my $written = syswrite($fh, $data, length($data) - $offset, $offset);
+						POSIX::_exit(1) unless defined $written;
+						$offset += $written;
+					}
+				}
+				POSIX::_exit(0);
+			}
+			my $until = time + 2;
+			while (time < $until) {
+				if (waitpid($copier, WNOHANG) == $copier) { return $? == 0 ? 0 : 1; }
+				select(undef, undef, undef, 0.05);
+			}
+			kill "TERM", $copier;
+			for (1 .. 20) { last if waitpid($copier, WNOHANG) == $copier; select(undef, undef, undef, 0.05); }
+			return 1;
 		}
 		# Group ownership: the helper'"'"'s process id (and so its group id) stays reserved for as long as
 		# its leader is unreaped, so every signal below can only reach this helper'"'"'s own group. The
@@ -93,8 +104,6 @@ noetaxis_bounded() {
 		# interruption, after which nothing is ever signalled, or (b) after the last signal was sent.
 		# The signals that could start the stop sequence are blocked while the leader is polled and
 		# reaped, so a handler can never run between a reap and a kill.
-		use POSIX qw(:signal_h :sys_wait_h);
-		my $blocked = POSIX::SigSet->new(SIGALRM, SIGTERM, SIGINT, SIGHUP);
 		my $fired = 0;
 		$SIG{ALRM} = sub { $fired ||= 142; };
 		$SIG{TERM} = $SIG{INT} = $SIG{HUP} = sub { $fired ||= 143; };
@@ -105,12 +114,10 @@ noetaxis_bounded() {
 				if (waitpid($child, WNOHANG) == $child) {
 					my $status = $?;
 					alarm 0;
-					my $flushed = flush_output();
-					exit 145 if $flushed == 2;
-					if ($flushed) {
-						note("noetaxis: helper output exceeded $max bytes and was truncated: @ARGV\n");
-						exit 144;
-					}
+					my ($cut, $outdata, $errdata) = gather();
+					$errdata .= "noetaxis: helper output exceeded $max bytes and was truncated: @ARGV\n" if $cut;
+					exit 145 if deliver($outdata, $errdata);
+					exit 144 if $cut;
 					exit(($status & 127) ? 128 + ($status & 127) : ($status >> 8));
 				}
 				$fired = 144 if (-s $out) > $max || (-s $err) > $max;
@@ -126,10 +133,10 @@ noetaxis_bounded() {
 		# leader that exited on TERM) gets KILL; the leader is a zombie at worst, so the group id is ours.
 		kill "KILL", -$child;
 		for (1 .. 60) { last if waitpid($child, WNOHANG) == $child; select(undef, undef, undef, 0.05); }
-		my $cut = flush_output();
-		note("noetaxis: helper command timed out after ${limit}s: @ARGV\n") if $fired == 142;
-		note("noetaxis: helper output exceeded $max bytes and was truncated: @ARGV\n") if $fired == 144 || $cut == 1;
-		exit 145 if $cut == 2 && $fired == 0;
+		my ($cut, $outdata, $errdata) = gather();
+		$errdata .= "noetaxis: helper command timed out after ${limit}s: @ARGV\n" if $fired == 142;
+		$errdata .= "noetaxis: helper output exceeded $max bytes and was truncated: @ARGV\n" if $fired == 144 || $cut;
+		deliver($outdata, $errdata);
 		exit $fired;
 	' "$seconds" "$max_bytes" "$@" )
 }
