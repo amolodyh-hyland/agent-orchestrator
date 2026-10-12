@@ -1,5 +1,5 @@
 import { mkdir, lstat, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
-import { load } from "js-yaml";
+import { CORE_SCHEMA, load } from "js-yaml";
 import path from "node:path";
 import { COMPOSE_FILE_NAME, directoryTrusted, fileTrusted, type StackPaths, type TrustStat } from "./multica-local-server-commands";
 
@@ -58,8 +58,6 @@ const ALLOWED_SERVICE_KEYS = new Set(["image", "environment", "volumes", "ports"
 const ALLOWED_HEALTHCHECK_KEYS = new Set(["test", "interval", "timeout", "retries", "start_period", "start_interval", "disable"]);
 const ALLOWED_DEPENDS_CONDITIONS = new Set(["service_started", "service_healthy", "service_completed_successfully"]);
 const RESTART_POLICIES = new Set(["no", "always", "unless-stopped", "on-failure"]);
-// A `<<` key, quoted or not (YAML merge): refused because it pulls keys in from elsewhere.
-const MERGE_KEY = /(^|[\s{,\[])["']?<<["']?[ \t]*:/m;
 const MAX_STRING = 4096;
 const SERVICE_NAME = /^[a-z][a-z0-9_-]{0,62}$/;
 const VOLUME_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/;
@@ -103,7 +101,10 @@ export function unsafeComposeReason(text: string): string | null {
 	let document: unknown;
 	let sawAnchor = false;
 	try {
+		// The core schema has no merge key and no timestamp/binary/set/omap types: `<<` (in any spelling, quoted,
+		// escaped or tagged `!!merge`) is just a key, or an unknown tag that fails to parse.
 		document = load(text, {
+			schema: CORE_SCHEMA,
 			listener: (event, state) => {
 				if (event === "close" && state.anchorMap && Object.keys(state.anchorMap).length > 0) sawAnchor = true;
 			},
@@ -111,9 +112,8 @@ export function unsafeComposeReason(text: string): string | null {
 	} catch {
 		return "unparseable";
 	}
-	// No anchors or aliases (so no shared or expanded structure), no merge keys: what is read is what is there.
+	// No anchors or aliases (so no shared or expanded structure): what is read is what is there.
 	if (sawAnchor) return "anchor";
-	if (MERGE_KEY.test(text)) return "merge_key";
 	if (!isPlainObject(document)) return "not_a_mapping";
 	for (const key of Object.keys(document)) if (!ALLOWED_TOP_LEVEL.has(key)) return `top_level_${key}`;
 	if (document.name !== "multica") return "name";

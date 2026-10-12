@@ -399,6 +399,31 @@ volumes:
 			expect(reasonOf("name: multica\nservices:\n  postgres:\n    image: x\n    environment:\n      A: &v 1\n")).not.toBeNull();
 		});
 
+		it("rejects a merge key in every spelling, even when it would only merge a harmless field", async () => {
+			const svc = (body: string) => `name: multica\nservices:\n  postgres:\n    image: x\n  backend:\n    image: b\n  frontend:\n    image: f\n${body}`;
+			for (const merge of [
+				'    !!merge "\\x3c\\x3c": { image: backend }',
+				'    !!merge "\\u003c\\u003c": { image: backend }',
+				'    !!merge <<: { image: backend }',
+				'    "\\x3c\\x3c": { image: backend }',
+				'    "\\u003c\\u003c": { image: backend }',
+				"    '<<': { image: backend }",
+				"    <<: { image: backend }",
+				"    ? <<\n    : { image: backend }",
+				"    <<: [ { image: backend } ]",
+			]) {
+				const text = svc("").replace("  backend:\n    image: b\n", `  backend:\n    image: b\n${merge}\n`);
+				expect(reasonOf(text), merge).not.toBeNull();
+				expect(await rejected(text), merge).toEqual(refused);
+			}
+		});
+
+		it("rejects the other YAML-specific tags too (binary, timestamp, set, omap) instead of decoding them", () => {
+			for (const tagged of ["image: !!binary aGVsbG8=", "image: !!timestamp 2001-12-14", "image: !!set { a, b }", "image: !!omap [ a: 1 ]", "image: !!js/function 'x'", "image: !custom x"]) {
+				expect(reasonOf(`name: multica\nservices:\n  postgres:\n    ${tagged}\n`), tagged).not.toBeNull();
+			}
+		});
+
 		it("accepts the characters & * ! < in ordinary string values (they are not anchors, tags or merge keys)", () => {
 			expect(reasonOf(SERVICES('\n    healthcheck:\n      test: ["CMD-SHELL", "a && b || c; echo *.log !x <<EOF"]'))).toBeNull();
 		});
