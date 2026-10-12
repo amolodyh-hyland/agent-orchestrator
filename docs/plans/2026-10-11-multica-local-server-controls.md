@@ -123,3 +123,10 @@ Vitest, each test must fail without the change, safety tests mutation-checked:
 3. Verification codes are visible in the log viewer and never persisted.
 4. `.env` creation is offered (small, local, exclusive-create); fetching Multica's files is documented, not automated.
 5. A separate settings file and a separate IPC module; the server switch and the view host are untouched.
+
+## Implementation notes
+
+- The `.env` existence check runs whenever the folder is valid, even with Docker down, so "Docker not running" is reported when `.env` exists and "Needs setup" when it does not.
+- The runner only executes command objects issued by the builders in `multica-local-server-commands.ts` (a module-private `WeakSet`); a hand-built or spread copy is rejected.
+- Mutation check of the safety tests: 47 single-point mutants (allow-list guard, service and tail validation, path and mode checks, symlink and escape checks, `.env` exclusive create and mode, redaction, busy flag, timeout and cancel mapping, availability rules, IPC sender and payload checks, UI gating). Every mutant is killed except five single-layer removals of checks that other layers duplicate (the compose-file symlink, the compose-file escape and the template symlink are each rejected by two or three independent checks); removing all layers together is killed.
+- The Settings form tests and the e2e fake bridge stub the preload bridge and needed the new `multica.localServer` entry.
