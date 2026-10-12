@@ -293,7 +293,6 @@ old_moved=0
 backup_dir=""
 noetaxis_install_cleanup() {
 	local exit_status=$?
-	noetaxis_release_lock
 	# Complete once the new app is in place, even if the signal landed before the flag was set.
 	if [[ "$old_moved" -eq 1 && ! -e "$staged_app" && -d "$target_app" ]]; then
 		install_complete=1
@@ -312,7 +311,11 @@ noetaxis_install_cleanup() {
 			noetaxis_update_reopen_previous "$target_app"
 		fi
 		noetaxis_update_exit_handler "$exit_status"
+	else
+		noetaxis_test_pause cleanup-end
 	fi
+	# Released last, after the staged copy and the previous app have been dealt with.
+	noetaxis_release_lock
 }
 trap noetaxis_install_cleanup EXIT
 trap 'exit 130' INT

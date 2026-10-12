@@ -857,6 +857,64 @@ test("if ps cannot run, an owner is assumed alive: the lock and another run's st
 	assert.equal(existsSync(staging), true, "another updater's staging copy survives when its owner cannot be checked");
 });
 
+test("a session that appears when the plan listed none is refused too (an empty confirmed set confirms nothing)", darwin, async (t) => {
+	const cfg = { add_session_on_call: "2", add_session_line: "s9|demo|worker|working|active|false|Late\n" };
+	const world = await makeWorld(t, "late-session-empty", { sessions: [], cfg });
+	const result = world.update(["--yes", "--end-sessions"]);
+	assert.equal(result.status, 51, result.stdout + result.stderr);
+	assert.match(result.stderr, /s9/);
+	assert.equal(callIndex(await world.calls(), /session exit-agent/), -1);
+	assert.equal(callIndex(await world.calls(), /^osascript/), -1);
+	// The mutant with the NR == FNR set difference ends the unconfirmed session.
+	const mutant = await mutatedScripts(t, "update-lib.sh", "'FILENAME == ARGV[1] { known[$1] = 1; next }", "'NR == FNR { known[$1] = 1; next }");
+	const second = await makeWorld(t, "late-session-empty-mutant", { sessions: [], cfg });
+	second.update(["--yes", "--end-sessions"], { scriptsDir: mutant });
+	assert.ok(callIndex(await second.calls(), /session exit-agent s9/) >= 0, "the NR == FNR version is caught: it ends s9");
+});
+
+test("a lock directory without a readable pid fails closed (36), including while its creator has not written the pid yet", darwin, async (t) => {
+	const world = await makeWorld(t, "lock-no-pid");
+	const lock = path.join(world.home, ".ao-install.lock");
+	await mkdir(lock, { recursive: true });
+	const blocked = world.update(["--yes"]);
+	assert.equal(blocked.status, 36, blocked.stdout + blocked.stderr);
+	assert.equal(existsSync(lock), true, "the lock was not taken over");
+	await writeFile(path.join(lock, "pid"), "not-a-pid");
+	assert.equal(world.update(["--yes"]).status, 36);
+	await rm(lock, { recursive: true });
+	// The creator writes its pid a moment after mkdir: the second run waits for it and is refused.
+	const late = await makeWorld(t, "lock-late-pid");
+	const lateLock = path.join(late.home, ".ao-install.lock");
+	await mkdir(lateLock, { recursive: true });
+	// spawnSync blocks this event loop, so the late writer is its own process.
+	spawn("/bin/sh", ["-c", `/bin/sleep 0.5; printf %s ${process.pid} > "${path.join(lateLock, "pid")}"`], { stdio: "ignore" }).unref();
+	const result = late.update(["--yes"]);
+	assert.equal(result.status, 36);
+	assert.match(result.stderr, new RegExp(`pid ${process.pid}`));
+	assert.equal(late.installedVersion(), oldVersion);
+});
+
+test("the lock is released last: it still stands while the cleanup restores the previous app", darwin, async (t) => {
+	const world = await makeWorld(t, "lock-last");
+	const marker = path.join(world.root, "paused");
+	const child = spawn(path.join(realScriptsDir, "install.sh"), ["--update", "--quit-timeout", "3", "--stop-timeout", "3", "--health-timeout", "3", "--yes", world.newApp], {
+		env: { ...world.env, NOETAXIS_TEST_PAUSE_AT: "after-old-moved cleanup-end", NOETAXIS_TEST_PAUSE_MARKER: marker, NOETAXIS_TEST_PAUSE_SECONDS: "6" },
+		stdio: "ignore",
+	});
+	const exited = new Promise((resolve) => child.on("exit", (code) => resolve(code)));
+	for (let attempt = 0; attempt < 300 && !existsSync(marker); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+	assert.ok(existsSync(marker), "never reached after-old-moved");
+	child.kill("SIGTERM");
+	for (let attempt = 0; attempt < 300 && !existsSync(`${marker}.cleanup`); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+	assert.ok(existsSync(`${marker}.cleanup`), "never reached the end of the cleanup");
+	// The previous app is already back, and the lock still stands: another run is refused.
+	assert.equal(world.installedVersion(), oldVersion);
+	assert.equal(existsSync(path.join(world.home, ".ao-install.lock")), true);
+	assert.equal(world.update(["--yes"]).status, 36);
+	assert.equal(await exited, 143);
+	assert.equal(existsSync(path.join(world.home, ".ao-install.lock")), false);
+});
+
 test("the automatic rollback inside an update runs under the update's own lock", darwin, async (t) => {
 	const world = await makeWorld(t, "lock-rollback", { cfg: { unhealthy_versions: `${newVersion}\n` } });
 	const result = world.update(["--yes"]);

@@ -765,7 +765,7 @@ noetaxis_update_shipit_gone() {
 
 # Lines of the live list ($cap_live_file) whose session id is not in the given confirmed list.
 noetaxis_update_sessions_not_in() {
-	/usr/bin/awk -F "$noetaxis_sep" 'NR == FNR { known[$1] = 1; next } !($1 in known)' "$1" "$cap_live_file"
+	/usr/bin/awk -F "$noetaxis_sep" 'FILENAME == ARGV[1] { known[$1] = 1; next } !($1 in known)' "$1" "$cap_live_file"
 }
 
 noetaxis_update_stop_all() {
@@ -1224,10 +1224,12 @@ noetaxis_update_reopen_previous() {
 # EXIT handler of update mode: the summary, then the temporary capture directory goes.
 noetaxis_update_exit_handler() {
 	noetaxis_update_exit_report "$1"
-	noetaxis_release_lock
 	if [[ -n "${update_capture_dir:-}" && -d "$update_capture_dir" ]]; then
 		/bin/rm -rf "$update_capture_dir"
 	fi
+	# Last: the lock must outlive every step that restores or removes the app.
+	noetaxis_test_pause cleanup-end
+	noetaxis_release_lock
 }
 
 # Ask for administrator rights once, before anything is stopped, when the Applications

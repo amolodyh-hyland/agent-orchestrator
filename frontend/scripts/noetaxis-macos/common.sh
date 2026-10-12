@@ -264,9 +264,12 @@ noetaxis_verify_signature() {
 # Inert unless NOETAXIS_TEST_PAUSE_AT names this point: lets tests deliver a signal
 # at an exact step of the swap (marker file, then a wait that a signal interrupts).
 noetaxis_test_pause() {
-	[[ -n "${NOETAXIS_TEST_PAUSE_AT:-}" && "$NOETAXIS_TEST_PAUSE_AT" == "$1" ]] || return 0
-	/usr/bin/touch "${NOETAXIS_TEST_PAUSE_MARKER:?}"
-	/bin/sleep 20 &
+	local marker="${NOETAXIS_TEST_PAUSE_MARKER:-}"
+	[[ -n "${NOETAXIS_TEST_PAUSE_AT:-}" && " $NOETAXIS_TEST_PAUSE_AT " == *" $1 "* ]] || return 0
+	# The cleanup pause has its own marker so a test can tell the two pauses apart.
+	[[ "$1" != cleanup-end ]] || marker="${marker:?}.cleanup"
+	/usr/bin/touch "${marker:?}"
+	/bin/sleep "${NOETAXIS_TEST_PAUSE_SECONDS:-20}" &
 	wait $! || true
 }
 
@@ -531,7 +534,9 @@ noetaxis_lock_held=0
 # run or is refused (a sandbox, a missing binary), the owner is assumed alive and the lock stands.
 noetaxis_pid_may_be_alive() {
 	local pid="$1" output status=0
-	[[ "$pid" =~ ^[0-9]+$ ]] || return 1
+	# No readable pid (the creator has not written it yet, or the file is damaged) is unknown, and
+	# unknown fails closed: the owner may be alive.
+	[[ "$pid" =~ ^[0-9]+$ ]] || return 0
 	output="$("${NOETAXIS_PS:-/bin/ps}" -p "$pid" 2>&1)" || status=$?
 	if [[ "$status" -eq 0 ]]; then
 		return 0
@@ -550,6 +555,13 @@ noetaxis_acquire_lock() {
 	fi
 	if ! /bin/mkdir "$lock" 2>/dev/null; then
 		holder="$(/bin/cat "$lock/pid" 2>/dev/null || true)"
+		# The creator makes the directory and writes its pid a moment later: give it time.
+		local waited=0
+		while [[ ! "$holder" =~ ^[0-9]+$ && "$waited" -lt 20 ]]; do
+			/bin/sleep 0.1
+			waited=$((waited + 1))
+			holder="$(/bin/cat "$lock/pid" 2>/dev/null || true)"
+		done
 		if noetaxis_pid_may_be_alive "$holder"; then
 			noetaxis_error "Another install, update or rollback is running (pid ${holder:-unknown}, lock $lock). Wait for it to finish; two at once could corrupt the app or the backup."
 			return 36
