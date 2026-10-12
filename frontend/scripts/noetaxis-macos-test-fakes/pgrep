@@ -1,0 +1,17 @@
+#!/bin/bash
+. "${NOETAXIS_FAKES:?}/sim-lib.sh"
+sim_tick
+args=("$@")
+pattern="${args[${#args[@]}-1]}"
+status=1
+while IFS='|' read -r pid command; do
+	[[ -n "$pid" ]] || continue
+	if printf '%s' "$command" | /usr/bin/grep -Eq -- "$pattern"; then
+		status=0
+		case "$1" in
+			-fl|-lf) printf '%s %s\n' "$pid" "$command" ;;
+			*) printf '%s\n' "$pid" ;;
+		esac
+	fi
+done < "$SIM/procs"
+exit "$status"

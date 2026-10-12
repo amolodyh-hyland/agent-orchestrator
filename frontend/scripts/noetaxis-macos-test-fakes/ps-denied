@@ -1,0 +1,3 @@
+#!/bin/bash
+printf "ps: Operation not permitted\n" >&2
+exit 1

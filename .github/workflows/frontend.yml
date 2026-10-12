@@ -62,6 +62,23 @@ jobs:
           xcrun swiftc -module-cache-path "$HOME/.ao/build-cache/update-helper/tests" native/update-helper/UpdateProgressState.swift native/update-helper/StateTests.swift -o "$HOME/.ao/build-cache/update-helper/state-tests"
           "$HOME/.ao/build-cache/update-helper/state-tests"
 
+  mac-update-flow:
+    # The update suite drives fake worlds with real waits and watchdogs and
+    # takes about 15 minutes, so it runs in its own job instead of stretching
+    # mac-update-helper past its timeout.
+    runs-on: macos-26-intel
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Test the one-command update flow against fakes
+        run: node --test scripts/noetaxis-macos-update.node-test.mjs
+
   test:
     runs-on: ubuntu-latest
     defaults:
