@@ -251,7 +251,9 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 			portFailure,
 		};
 		const state = deriveLocalServerState(input);
-		unreadyAt = (state === "starting" || state === "unhealthy") && containers.some((container) => container.state === "running") ? (unreadyAt ?? now) : null;
+		// The grace clock runs for any stack that is up or being created, so a stack that never gets past "created" still turns unhealthy.
+		const present = containers.some((container) => container.state === "running" || container.state === "created");
+		unreadyAt = (state === "starting" || state === "unhealthy") && present ? (unreadyAt ?? now) : null;
 		if (state === "healthy") portFailure = false;
 
 		const published = publishedWebPort(containers);

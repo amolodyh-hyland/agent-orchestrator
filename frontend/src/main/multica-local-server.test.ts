@@ -231,6 +231,39 @@ describe("status", () => {
 		expect((await h.server.getStatus()).state).toBe("healthy");
 	});
 
+	it("turns a stack that stays in 'created' unhealthy after the grace period too", async () => {
+		const created = ndjson([row("postgres", "created"), row("backend", "created"), row("frontend", "created")]);
+		const h = harness({ ps: created });
+
+		expect((await h.server.getStatus()).state).toBe("starting");
+		h.fake.now += STARTING_GRACE_MS - 1;
+		expect((await h.server.getStatus()).state).toBe("starting");
+		h.fake.now += 2;
+		expect((await h.server.getStatus()).state).toBe("unhealthy");
+	});
+
+	it("does the same for a stack with some containers created and the rest running", async () => {
+		const mixed = ndjson([row("postgres", "running", { Health: "healthy" }), row("backend", "created"), row("frontend", "created")]);
+		const h = harness({ ps: mixed });
+
+		expect((await h.server.getStatus()).state).toBe("starting");
+		h.fake.now += STARTING_GRACE_MS + 1;
+		expect((await h.server.getStatus()).state).toBe("unhealthy");
+	});
+
+	it("restarts the grace clock after the stack went away and came back", async () => {
+		const created = ndjson([row("postgres", "created")]);
+		const h = harness({ ps: created });
+		await h.server.getStatus();
+		h.fake.now += STARTING_GRACE_MS + 1;
+		expect((await h.server.getStatus()).state).toBe("unhealthy");
+
+		h.fake.ps = "";
+		expect((await h.server.getStatus()).state).toBe("stopped");
+		h.fake.ps = created;
+		expect((await h.server.getStatus()).state).toBe("starting");
+	});
+
 	it("notes when the published web port differs from the configured address", async () => {
 		const h = harness({
 			ps: ndjson([row("postgres"), row("backend"), row("frontend", "running", { Publishers: [{ TargetPort: 3000, PublishedPort: 3001 }] })]),
