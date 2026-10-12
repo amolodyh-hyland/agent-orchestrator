@@ -26,7 +26,11 @@ function parseJsonRecords(stdout: string): Record<string, unknown>[] | null {
 	if (text === "") return [];
 	try {
 		const whole: unknown = JSON.parse(text);
-		if (Array.isArray(whole)) return whole.map(asRecord).filter((entry): entry is Record<string, unknown> => entry !== null);
+		if (Array.isArray(whole)) {
+			// An element that is not an object makes the whole output unusable; it is not dropped.
+			const records = whole.map(asRecord);
+			return records.every((entry): entry is Record<string, unknown> => entry !== null) ? records : null;
+		}
 		const single = asRecord(whole);
 		return single ? [single] : null;
 	} catch {
@@ -45,38 +49,72 @@ function parseJsonRecords(stdout: string): Record<string, unknown>[] | null {
 	}
 }
 
-/** Containers of the stack, or null when the output is not Compose's JSON. */
+const CONTAINER_STATES = new Set(["created", "running", "paused", "restarting", "removing", "exited", "dead"]);
+const SERVICE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+
+function validPort(value: unknown): boolean {
+	return value === undefined || value === null || (typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 65535);
+}
+
+function parseContainer(record: Record<string, unknown>): ContainerInfo | null {
+	const { Service: service, State: state, Health: health, ExitCode: exitCode, Publishers: publishers } = record;
+	// Service and State are what every decision rests on: without a usable value the output is not Compose's.
+	if (typeof service !== "string" || !SERVICE_PATTERN.test(service)) return null;
+	if (typeof state !== "string" || !CONTAINER_STATES.has(state.toLowerCase())) return null;
+	if (health !== undefined && health !== null && typeof health !== "string") return null;
+	if (exitCode !== undefined && exitCode !== null && !(typeof exitCode === "number" && Number.isInteger(exitCode))) return null;
+	if (publishers !== undefined && publishers !== null && !Array.isArray(publishers)) return null;
+	const ports: number[] = [];
+	for (const entry of publishers ?? []) {
+		const publisher = asRecord(entry);
+		if (!publisher || !validPort(publisher.PublishedPort) || !validPort(publisher.TargetPort)) return null;
+		if (typeof publisher.PublishedPort === "number" && publisher.PublishedPort > 0) ports.push(publisher.PublishedPort);
+	}
+	return {
+		service,
+		state: state.toLowerCase(),
+		health: typeof health === "string" ? health.toLowerCase() : "",
+		exitCode: typeof exitCode === "number" ? exitCode : 0,
+		publishedPorts: ports,
+	};
+}
+
+/**
+ * Containers of the stack, or null when the output is not Compose's JSON: any record without a
+ * usable Service and State (or with a field of the wrong type) rejects the whole inspection,
+ * so output of an unexpected shape can never read as "no containers".
+ */
 export function parseComposePs(stdout: string): ContainerInfo[] | null {
 	const records = parseJsonRecords(stdout);
 	if (!records) return null;
-	return records.map((record) => {
-		const publishers = Array.isArray(record.Publishers) ? record.Publishers : [];
-		return {
-			service: typeof record.Service === "string" ? record.Service : "",
-			state: typeof record.State === "string" ? record.State.toLowerCase() : "",
-			health: typeof record.Health === "string" ? record.Health.toLowerCase() : "",
-			exitCode: typeof record.ExitCode === "number" ? record.ExitCode : 0,
-			publishedPorts: publishers
-				.map((entry) => asRecord(entry)?.PublishedPort)
-				.filter((port): port is number => typeof port === "number" && port > 0),
-		};
-	});
+	const containers: ContainerInfo[] = [];
+	for (const record of records) {
+		const container = parseContainer(record);
+		if (!container) return null;
+		containers.push(container);
+	}
+	return containers;
 }
 
 export type ComposeProject = { name: string; status: string; configFiles: string[] };
 
-/** `docker compose ls --all --format json`. */
+/** `docker compose ls --all --format json`; null when a record has no usable Name or a field of the wrong type. */
 export function parseComposeList(stdout: string): ComposeProject[] | null {
 	const records = parseJsonRecords(stdout);
 	if (!records) return null;
-	return records.map((record) => ({
-		name: typeof record.Name === "string" ? record.Name : "",
-		status: typeof record.Status === "string" ? record.Status : "",
-		configFiles:
-			typeof record.ConfigFiles === "string"
-				? record.ConfigFiles.split(",").map((file) => file.trim()).filter(Boolean)
-				: [],
-	}));
+	const projects: ComposeProject[] = [];
+	for (const record of records) {
+		const { Name: name, Status: status, ConfigFiles: files } = record;
+		if (typeof name !== "string" || name === "") return null;
+		if (status !== undefined && status !== null && typeof status !== "string") return null;
+		if (files !== undefined && files !== null && typeof files !== "string") return null;
+		projects.push({
+			name,
+			status: typeof status === "string" ? status : "",
+			configFiles: typeof files === "string" ? files.split(",").map((file) => file.trim()).filter(Boolean) : [],
+		});
+	}
+	return projects;
 }
 
 /** The published host port of the web service, which Settings' URL should match. */

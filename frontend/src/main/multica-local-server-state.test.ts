@@ -133,11 +133,71 @@ describe("parseComposePs", () => {
 	});
 });
 
+describe("parseComposePs rejects output of an unexpected shape as a whole", () => {
+	const ok = '{"Service":"postgres","State":"running"}';
+
+	it("rejects valid JSON that is not a container record", () => {
+		for (const out of [
+			'[{"unexpected":"schema"}]',
+			'{"unexpected":"schema"}',
+			'[{}]',
+			`${ok}\n{"unexpected":"schema"}`,
+			`[${ok},{"Name":"x"}]`,
+			"[1]",
+			"[null]",
+			'["running"]',
+			"[[]]",
+			`${ok}\n[1]`,
+		]) {
+			expect(parseComposePs(out), out).toBeNull();
+		}
+	});
+
+	it("rejects a record without a usable Service or State", () => {
+		for (const record of [
+			'{"State":"running"}',
+			'{"Service":"postgres"}',
+			'{"Service":"","State":"running"}',
+			'{"Service":"postgres","State":""}',
+			'{"Service":1,"State":"running"}',
+			'{"Service":"postgres","State":true}',
+			'{"Service":"post gres","State":"running"}',
+			'{"Service":"postgres","State":"exploding"}',
+			'{"Service":null,"State":null}',
+			'{"Service":["postgres"],"State":"running"}',
+		]) {
+			expect(parseComposePs(record), record).toBeNull();
+			expect(parseComposePs(`[${ok},${record}]`), `array ${record}`).toBeNull();
+		}
+	});
+
+	it("rejects optional fields of the wrong type or value", () => {
+		for (const extra of ['"Health":5', '"Health":{}', '"ExitCode":"1"', '"ExitCode":1.5', '"Publishers":"x"', '"Publishers":{}', '"Publishers":[1]', '"Publishers":[{"PublishedPort":"80"}]', '"Publishers":[{"PublishedPort":70000}]', '"Publishers":[{"PublishedPort":-1}]', '"Publishers":[{"TargetPort":"x"}]']) {
+			expect(parseComposePs(`{"Service":"backend","State":"running",${extra}}`), extra).toBeNull();
+		}
+	});
+
+	it("still accepts what Compose really prints: extra fields, capitalized states, null and empty optional fields, an empty list", () => {
+		expect(parseComposePs('[{"Service":"backend","State":"Exited","Health":null,"ExitCode":137,"Publishers":null,"Name":"multica-backend-1","Image":"x"}]')).toEqual([
+			{ service: "backend", state: "exited", health: "", exitCode: 137, publishedPorts: [] },
+		]);
+		expect(parseComposePs('{"Service":"frontend","State":"running","Health":"","ExitCode":0,"Publishers":[{"URL":"127.0.0.1","TargetPort":3000,"PublishedPort":3000,"Protocol":"tcp"},{"TargetPort":3000,"PublishedPort":0}]}')).toEqual([
+			{ service: "frontend", state: "running", health: "", exitCode: 0, publishedPorts: [3000] },
+		]);
+		for (const state of ["created", "running", "paused", "restarting", "removing", "exited", "dead"]) expect(parseComposePs(`{"Service":"a","State":"${state}"}`)?.[0]?.state).toBe(state);
+		expect(parseComposePs("[]")).toEqual([]);
+		expect(parseComposePs("")).toEqual([]);
+	});
+});
+
 describe("parseComposeList", () => {
 	it("reads projects with their config files", () => {
 		const out = JSON.stringify([{ Name: "multica", Status: "running(3)", ConfigFiles: "/a/docker-compose.selfhost.yml, /a/override.yml" }]);
 		expect(parseComposeList(out)).toEqual([{ name: "multica", status: "running(3)", configFiles: ["/a/docker-compose.selfhost.yml", "/a/override.yml"] }]);
 		expect(parseComposeList("garbage")).toBeNull();
+		for (const bad of ['[{"unexpected":"schema"}]', '[{"Name":""}]', '[{"Name":5}]', '[{"Name":"multica","ConfigFiles":["a"]}]', '[{"Name":"multica","Status":5}]', "[1]", '[{"Name":"multica"},null]']) {
+			expect(parseComposeList(bad), bad).toBeNull();
+		}
 	});
 });
 

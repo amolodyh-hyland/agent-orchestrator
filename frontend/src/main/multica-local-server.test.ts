@@ -525,6 +525,22 @@ describe("a failed inspection is not a stopped stack", () => {
 		expect(probe).not.toHaveBeenCalled();
 	});
 
+	it("is unknown for valid JSON of an unexpected shape, never stopped, and does not probe", async () => {
+		for (const ps of ['[{"unexpected":"schema"}]', '{"unexpected":"schema"}', '[{"Service":"backend"}]', '[{"State":"running"}]', "[1]", '[{"Service":"backend","State":"exploding"}]']) {
+			const h = harness({ ps, probe: { ok: false, error: "unreachable" } });
+			const probe = vi.spyOn(h.options, "probe");
+			const status = await createMulticaLocalServer(h.options).getStatus();
+			expect(status.state, ps).toBe("unknown");
+			expect(status.error?.code, ps).toBe("inspect_failed");
+			expect(probe, ps).not.toHaveBeenCalled();
+		}
+	});
+
+	it("still reads an empty list as a stopped stack, and a normal one as before", async () => {
+		expect((await harness({ ps: "[]" }).server.getStatus()).state).toBe("stopped");
+		expect((await harness({ ps: "" }).server.getStatus()).state).toBe("stopped");
+	});
+
 	it("is unknown even when something answers at the address", async () => {
 		const h = harness({ handlers: { ps: () => denied }, probe: { ok: true, apiUrl: "" } });
 		expect((await h.server.getStatus()).state).toBe("unknown");
