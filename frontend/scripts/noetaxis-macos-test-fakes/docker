@@ -1,0 +1,13 @@
+#!/bin/bash
+. "${NOETAXIS_FAKES:?}/sim-lib.sh"
+sim_log "docker $*"
+case "$1" in
+	ps)
+		case "$*" in
+			*Status*) /usr/bin/sed 's/$/\tUp 2 hours/' "$SIM/docker_containers" ;;
+			*) cat "$SIM/docker_containers" ;;
+		esac
+		;;
+	restart) exit 0 ;;
+	*) exit 2 ;;
+esac

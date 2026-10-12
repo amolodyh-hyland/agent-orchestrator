@@ -1,0 +1,82 @@
+#!/bin/bash
+# Fake bundled ao CLI: behaves according to the simulation directory, never to the real daemon.
+. "${NOETAXIS_FAKES:?}/sim-lib.sh"
+APP="${0%/Contents/Resources/daemon/ao}"
+sim_log "ao[$APP] $* (AO_ vars in env: $(/usr/bin/env | /usr/bin/grep -c '^AO_'))"
+
+daemon_up() { sim_app_running_daemon "$APP"; }
+version() { /usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist"; }
+
+case "$1" in
+	version) printf 'dev\n' ;;
+	spawn)
+		if sim_has no_effort_flag; then printf '  --model string\n'; else printf '  --effort string\n'; fi
+		;;
+	project) printf '  --permission-fallback\n' ;;
+	status)
+		if daemon_up; then
+			state=ready
+			if /usr/bin/grep -qxF "$(version)" "$SIM/cfg/unhealthy_versions" 2>/dev/null; then state=not_ready; fi
+			max="$(sim_value "max_schema_$(version)")"
+			if [[ -n "$max" && "$(sim_schema)" -gt "$max" ]]; then state=not_ready; fi
+			printf '{"state":"%s","pid":4242,"port":3999,"executablePath":"%s/Contents/Resources/daemon/ao","runFile":"r","dataDir":"d"}\n' "$state" "$APP"
+		else
+			printf '{"state":"stopped","runFile":"r","dataDir":"d"}\n'
+		fi
+		;;
+	stop)
+		if ! sim_has stop_ineffective; then sim_stop_daemon "$APP"; fi
+		printf 'AO daemon stopped\n'
+		;;
+	multica)
+		daemon_up || { printf 'daemon is not running\n' >&2; exit 1; }
+		if [[ "$(cat "$SIM/hosting" 2>/dev/null)" == on ]]; then
+			printf '{"enabled":true,"state":"running","desired":"running","profile":"ao","healthPort":19514,"restarts":0}\n'
+		else
+			printf '{"enabled":false,"state":"disabled","desired":"","profile":"","healthPort":0,"restarts":0}\n'
+		fi
+		;;
+	session)
+		daemon_up || { printf 'AO daemon is not running\n' >&2; exit 1; }
+		case "$2" in
+			ls)
+				if sim_has sessions_ls_fails; then printf 'internal error\n' >&2; exit 1; fi
+				printf '{"data":['
+				first=1
+				while IFS='|' read -r id project role status activity terminated name; do
+					[[ -n "$id" ]] || continue
+					[[ "$first" -eq 1 ]] || printf ','
+					first=0
+					printf '{"id":"%s","projectId":"%s","role":"%s","displayName":"%s","status":"%s","activity":"%s","isTerminated":%s,"prs":[],"createdAt":"2026-10-01T00:00:00Z","updatedAt":"2026-10-01T00:00:00Z"}' "$id" "$project" "$role" "$(sim_json_escape "$name")" "$status" "$activity" "$terminated"
+				done < "$SIM/sessions"
+				printf '],"meta":{"hiddenTerminatedCount":0,"hiddenOrchestratorCount":0}}\n'
+				;;
+			kill)
+				# "ao session kill" tears the worktree down; update mode must never call it.
+				sim_log "FORBIDDEN session kill"
+				: > "$SIM/FORBIDDEN"
+				exit 1
+				;;
+			exit-agent)
+				id="$3"
+				if [[ -e "$SIM/cfg/exit_fail_$id" ]]; then printf 'could not stop the agent of %s\n' "$id" >&2; exit 1; fi
+				/usr/bin/awk -F '|' -v OFS='|' -v id="$id" '$1 == id { $5 = "exited" } { print }' "$SIM/sessions" > "$SIM/sessions.tmp"
+				/bin/mv "$SIM/sessions.tmp" "$SIM/sessions"
+				sim_remove_prefix "$APP/Contents/Resources/daemon/ao chat-host --session $id"
+				printf 'agent exited for session %s\n' "$id"
+				;;
+			restore)
+				id="$3"
+				if [[ -e "$SIM/cfg/restore_fail_$id" ]]; then printf 'cannot restore %s\n' "$id" >&2; exit 1; fi
+				if [[ ! -e "$SIM/cfg/restore_noop_$id" ]]; then
+					/usr/bin/awk -F '|' -v OFS='|' -v id="$id" '$1 == id { $5 = "active"; $6 = "false" } { print }' "$SIM/sessions" > "$SIM/sessions.tmp"
+					/bin/mv "$SIM/sessions.tmp" "$SIM/sessions"
+					sim_add_proc "$APP/Contents/Resources/daemon/ao chat-host --session $id" > /dev/null
+				fi
+				printf 'session %s restored\n' "$id"
+				;;
+			*) exit 2 ;;
+		esac
+		;;
+	*) exit 2 ;;
+esac

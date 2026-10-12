@@ -1,0 +1,23 @@
+#!/bin/bash
+# Fake osascript: only the scripted "Quit AO Completely" click is supported.
+. "${NOETAXIS_FAKES:?}/sim-lib.sh"
+script="$*"
+sim_log "osascript $script"
+case "$script" in
+	*"to quit"*|*"quit app"*) sim_log "FORBIDDEN plain AppleScript quit"; : > "$SIM/FORBIDDEN"; exit 1 ;;
+esac
+if sim_has tray_fail; then
+	printf 'osascript: not allowed assistive access\n' >&2
+	exit 1
+fi
+pid="${@: -1}"
+command="$(sim_command_of "$pid")"
+[[ -n "$command" ]] || { printf 'no process with unix id %s\n' "$pid" >&2; exit 1; }
+app="${command%%/Contents/*}"
+version="$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")"
+if /usr/bin/grep -qxF "$version" "$SIM/cfg/tray_fail_versions" 2>/dev/null; then
+	printf 'osascript: not allowed assistive access\n' >&2
+	exit 1
+fi
+sim_quit_bundle "$app"
+printf 'clicked\n'
