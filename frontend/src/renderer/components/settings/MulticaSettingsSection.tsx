@@ -11,6 +11,7 @@ import { aoBridge } from "../../lib/bridge";
 import type { MessageKey } from "../../i18n/messages";
 import { useMulticaSyncStore } from "../../stores/multica-sync-store";
 import { Button } from "../ui/button";
+import { MulticaLocalServerControls } from "./MulticaLocalServerControls";
 import { Switch } from "../ui/switch";
 import { SettingsInputRow, SettingsRow } from "./SettingsRow";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
@@ -189,6 +190,7 @@ export function MulticaSettingsSection() {
 				</p>
 			) : null}
 			{draft.mode === "local" ? <p className="px-3 pb-2 text-caption leading-4 text-muted-foreground">{t("multica.settings.selfHostNote")}</p> : null}
+			{saved.mode === "local" ? <MulticaLocalServerControls /> : null}
 			<SettingsRow label={t("multica.sync.settings.enabled")} description={t("multica.sync.settings.enabled.help")}>
 				<Switch
 					aria-label={t("multica.sync.settings.enabled")}

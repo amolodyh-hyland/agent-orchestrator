@@ -12,6 +12,7 @@ import {
 	MULTICA_LOCAL_SERVER_WATCH_CHANNEL,
 	EMPTY_LOCAL_SERVER_STATUS,
 } from "../shared/multica-local-server";
+import type { LocalServerLogsResult } from "../shared/multica-local-server";
 import { registerMulticaLocalServerIpc } from "./multica-local-server-ipc";
 
 type Handler = (event: { sender: { id: number } }, ...args: unknown[]) => unknown;
@@ -32,7 +33,7 @@ function setup() {
 		setup: vi.fn(async () => ({ ok: true }) as const),
 		chooseFolder: vi.fn(async () => ({ ok: true }) as const),
 		useDetectedFolder: vi.fn(async () => ({ ok: true }) as const),
-		getLogs: vi.fn(async () => ({ ok: true, lines: ["x"] }) as const),
+		getLogs: vi.fn(async (): Promise<LocalServerLogsResult> => ({ ok: true, lines: ["x"] })),
 	};
 	const registration = registerMulticaLocalServerIpc({ ipcMain: ipcMain as never, shellWebContents: { id: 7 }, server });
 	const shell = { sender: { id: 7 } };
