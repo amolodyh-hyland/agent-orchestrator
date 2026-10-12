@@ -1464,17 +1464,25 @@ test("mutation: unblocking before resetting the handlers (the swallowed-TERM rac
 // substitution that captured its stdout is closed at that moment. The copier is found through a traced
 // fork (perl CORE::GLOBAL override loaded through PERL5OPT): the first fork is the helper, the second the
 // copier. stderr is never read, so the copier blocks on it until it is ended.
-async function copierAtReturn(t, libPath, label, lifetime) {
+async function copierAtReturn(t, libPath, label, lifetime, copierDelay = 0) {
 	const root = await mkdtemp(path.join(os.tmpdir(), `noetaxis-copier-${label}-`));
 	t.after(async () => rm(root, { recursive: true, force: true }));
 	await writeFile(path.join(root, "Trace.pm"), `package Trace;
 BEGIN {
-	*CORE::GLOBAL::fork = sub { my $p = CORE::fork(); if (defined $p && $p) { open(my $f, ">>", $ENV{TRACE_LOG}); print $f "fork $p\\n"; close $f; } return $p; };
+	my $forks = 0;
+	*CORE::GLOBAL::fork = sub {
+		my $n = ++$forks;
+		my $p = CORE::fork();
+		if (defined $p && $p) { open(my $f, ">>", $ENV{TRACE_LOG}); print $f "fork $p\\n"; close $f; }
+		# The second fork is the copier: stall it BEFORE any of its own initialisation (handlers, alarm, unblock).
+		if (defined $p && !$p && $n == 2 && $ENV{TRACE_DELAY_COPIER}) { select(undef, undef, undef, $ENV{TRACE_DELAY_COPIER}); }
+		return $p;
+	};
 }
 1;
 `);
 	const trace = path.join(root, "trace.log");
-	const child = spawn("/bin/bash", ["-c", `. "${libPath}"; rc=0; out=$(noetaxis_bounded 5 /bin/sh -c 'head -c 1048576 /dev/zero >&2') || rc=$?; echo "rc=$rc"`], { env: { PATH: "/usr/bin:/bin", TMPDIR: root, TRACE_LOG: trace, PERL5OPT: `-I${root} -MTrace` }, stdio: ["ignore", "pipe", "pipe"] });
+	const child = spawn("/bin/bash", ["-c", `. "${libPath}"; rc=0; out=$(noetaxis_bounded 5 /bin/sh -c 'head -c 1048576 /dev/zero >&2') || rc=$?; echo "rc=$rc"`], { env: { PATH: "/usr/bin:/bin", TMPDIR: root, TRACE_LOG: trace, PERL5OPT: `-I${root} -MTrace`, TRACE_DELAY_COPIER: String(copierDelay) }, stdio: ["ignore", "pipe", "pipe"] });
 	let stdout = "";
 	child.stdout.on("data", (chunk) => { stdout += chunk; });
 	const started = Date.now();
@@ -1499,6 +1507,22 @@ test("the supervisor returns only after its copier is gone: the substitution pip
 	assert.ok(result.copier > 0, "the copier was forked");
 	assert.equal(result.alive, false, "the copier is gone when the call returns");
 	assert.ok(result.elapsed < 12_000, `returned after ${result.elapsed} ms`);
+});
+
+test("a copier stalled for 6 s before its own initialisation is still ended by the parent: the supervisor returns only after it is dead", darwin, async (t) => {
+	// No handler, no alarm and no unblock has happened in the copier yet: only the parent side can end it.
+	const result = await copierAtReturn(t, path.join(realScriptsDir, "common.sh"), "delayed", 30_000, 6);
+	assert.equal(result.outcome, "returned");
+	assert.match(result.stdout, /rc=145/);
+	assert.ok(result.copier > 0);
+	assert.equal(result.alive, false, "the stalled copier was killed and reaped before the call returned");
+	assert.ok(result.elapsed < 5_500, `returned after ${result.elapsed} ms: the 6 s stall must not be waited out`);
+});
+
+test("mutation: no parent-side end of a stalled copier is caught", darwin, async (t) => {
+	const mutant = await mutatedScripts(t, "common.sh", "end_group($copier, 0.2);\n", "");
+	const result = await copierAtReturn(t, path.join(mutant, "common.sh"), "delayed-mutant", 30_000, 6);
+	assert.ok(result.alive || result.outcome === "hung" || result.elapsed >= 5_500, `without the parent-side group KILL the stalled copier outlives the call or the stall is waited out (returned after ${result.elapsed} ms)`);
 });
 
 test("mutation: returning while the copier is still alive (no end of the copier) is caught", darwin, async (t) => {
