@@ -3,6 +3,7 @@ import type { Page } from "@playwright/test";
 import type { UpdateSettings, UpdateStatus } from "../../src/main/update-settings";
 import type { AoBridge } from "../../src/preload";
 import type { DaemonStatus } from "../../src/shared/daemon-status";
+import { EMPTY_LOCAL_SERVER_STATUS } from "../../src/shared/multica-local-server";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../src/shared/ui-locale";
 
 // The e2e suite runs the renderer under `dev:web` (VITE_NO_ELECTRON=1) with no
@@ -321,6 +322,19 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					getSettings: async () => ({ mode: "local", customUrl: "http://localhost:3000", apiUrl: "" }),
 					setSettings: async (request) => ({ ok: true, settings: { mode: request.mode, customUrl: request.customUrl, apiUrl: request.apiUrl ?? "" } }),
 					checkServer: async () => ({ ok: true, apiUrl: "" }),
+					localServer: {
+						getState: async () => ({ ...EMPTY_LOCAL_SERVER_STATUS }),
+						watch: async () => ({ ok: true }),
+						start: async () => ({ ok: true }),
+						stop: async () => ({ ok: true }),
+						restart: async () => ({ ok: true }),
+						cancel: async () => ({ ok: true }),
+						setup: async () => ({ ok: true }),
+						chooseFolder: async () => ({ ok: true }),
+						useDetectedFolder: async () => ({ ok: true }),
+						getLogs: async () => ({ ok: true, lines: [] }),
+						onStatus: () => unsubscribe,
+					},
 					onState: () => unsubscribe,
 					onToggleShortcut: () => unsubscribe,
 				},
@@ -1228,6 +1242,19 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					getSettings: async () => ({ mode: "local", customUrl: "http://localhost:3000", apiUrl: "" }),
 					setSettings: async (request) => ({ ok: true, settings: { mode: request.mode, customUrl: request.customUrl, apiUrl: request.apiUrl ?? "" } }),
 					checkServer: async () => ({ ok: true, apiUrl: "" }),
+					localServer: {
+						getState: async () => ({ ...EMPTY_LOCAL_SERVER_STATUS }),
+						watch: async () => ({ ok: true }),
+						start: async () => ({ ok: true }),
+						stop: async () => ({ ok: true }),
+						restart: async () => ({ ok: true }),
+						cancel: async () => ({ ok: true }),
+						setup: async () => ({ ok: true }),
+						chooseFolder: async () => ({ ok: true }),
+						useDetectedFolder: async () => ({ ok: true }),
+						getLogs: async () => ({ ok: true, lines: [] }),
+						onStatus: () => unsubscribe,
+					},
 					onState: () => unsubscribe,
 					onToggleShortcut: () => unsubscribe,
 				},

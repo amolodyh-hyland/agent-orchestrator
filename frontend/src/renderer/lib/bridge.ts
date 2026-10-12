@@ -1,6 +1,7 @@
 import type { AoBridge } from "../../preload";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
 import { DEFAULT_MULTICA_SETTINGS } from "../../shared/multica";
+import { EMPTY_LOCAL_SERVER_STATUS } from "../../shared/multica-local-server";
 import { EMPTY_MULTICA_SYNC_SNAPSHOT } from "../../shared/multica-status-sync";
 import { EMPTY_AWARENESS_STATE } from "../../shared/multica-awareness";
 export type { FeatureBuild } from "../../main/feature-builds";
@@ -315,6 +316,19 @@ export const aoBridge: AoBridge =
 			getSettings: async () => ({ ...DEFAULT_MULTICA_SETTINGS }),
 			setSettings: async (request) => ({ ok: true, settings: { mode: request.mode, customUrl: request.customUrl, apiUrl: request.apiUrl ?? "" } }),
 			checkServer: async () => ({ ok: true, apiUrl: "" }),
+			localServer: {
+				getState: async () => ({ ...EMPTY_LOCAL_SERVER_STATUS }),
+				watch: async () => ({ ok: true }),
+				start: async () => ({ ok: true }),
+				stop: async () => ({ ok: true }),
+				restart: async () => ({ ok: true }),
+				cancel: async () => ({ ok: true }),
+				setup: async () => ({ ok: true }),
+				chooseFolder: async () => ({ ok: true }),
+				useDetectedFolder: async () => ({ ok: true }),
+				getLogs: async () => ({ ok: true, lines: [] }),
+				onStatus: () => () => undefined,
+			},
 			onState: () => () => undefined,
 			onToggleShortcut: () => () => undefined,
 		},

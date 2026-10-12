@@ -10,6 +10,7 @@ import { useTerminalShellStore } from "../stores/terminal-shell-store";
 import { useUiStore } from "../stores/ui-store";
 import { useTelemetryPolicyStore } from "../stores/telemetry-policy-store";
 import { TOPBAR_TABS_STORAGE_KEYS, useTopbarTabsStore } from "../stores/topbar-tabs-store";
+import { EMPTY_LOCAL_SERVER_STATUS } from "../../shared/multica-local-server";
 import { TooltipProvider } from "./ui/tooltip";
 
 const { harnessSettingsSectionMock } = vi.hoisted(() => ({ harnessSettingsSectionMock: vi.fn() }));
@@ -121,6 +122,11 @@ vi.mock("../lib/bridge", () => ({
 			getSettings: async () => ({ mode: "local", customUrl: "", apiUrl: "" }),
 			setSettings: async () => ({ ok: true, settings: { mode: "local", customUrl: "", apiUrl: "" } }),
 			checkServer: async () => ({ ok: true, apiUrl: "" }),
+			localServer: {
+				getState: async () => ({ ...EMPTY_LOCAL_SERVER_STATUS }),
+				watch: async () => ({ ok: true }),
+				onStatus: () => () => undefined,
+			},
 		},
 		keybindings: {
 			get: getKeybindings,
