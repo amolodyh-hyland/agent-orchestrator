@@ -35,6 +35,7 @@ sim_app_running_daemon() {
 }
 
 sim_quit_bundle() {
+	if [[ -f "$SIM/cfg/foreign_after_quit" ]]; then /bin/cp "$SIM/cfg/foreign_after_quit" "$SIM/cfg/foreign_status_versions"; fi
 	sim_remove_prefix "$1/Contents/MacOS/"
 	sim_remove_prefix "$1/Contents/Frameworks/"
 	if ! sim_has daemon_stays; then

@@ -55,6 +55,7 @@ update_restore_failed=0
 update_rolled_back=0
 update_report_done=0
 update_app_started=0
+cap_identity_detail=""
 update_dry_run=0
 
 noetaxis_update_log() {
@@ -226,6 +227,39 @@ noetaxis_signal_own_pid() {
 # State capture (read only)
 # ---------------------------------------------------------------------------
 
+# Identity of the daemon that `ao status --json` describes. Returns 0 when there is no live daemon
+# or it is this bundle's own (its pid is one of the bundle's `ao daemon` processes and, when it
+# reports one, its binary is the bundle's ao); 1 with noetaxis_update_identity_detail otherwise.
+noetaxis_update_identity_detail=""
+noetaxis_update_status_identity() {
+	local app_path="$1" json="$2" state pid executable expected
+	noetaxis_update_identity_detail=""
+	state="$(printf '%s' "$json" | /usr/bin/plutil -extract state raw -o - - 2>/dev/null || true)"
+	case "$state" in
+		stopped|stale) return 0 ;;
+	esac
+	pid="$(printf '%s' "$json" | /usr/bin/plutil -extract pid raw -o - - 2>/dev/null || true)"
+	executable="$(printf '%s' "$json" | /usr/bin/plutil -extract executablePath raw -o - - 2>/dev/null || true)"
+	expected="$app_path/Contents/Resources/daemon/ao"
+	if [[ -n "$executable" && "$(noetaxis_physical_file "$executable")" != "$(noetaxis_physical_file "$expected")" ]]; then
+		noetaxis_update_identity_detail="the daemon that owns the shared run file (pid ${pid:-unknown}) runs ${executable}, not $expected"
+		return 1
+	fi
+	if [[ ! "$pid" =~ ^[0-9]+$ ]] || ! noetaxis_own_pids_of_kind "$app_path" daemon | /usr/bin/awk -F '\t' -v pid="$pid" '$1 == pid { found = 1 } END { exit !found }'; then
+		noetaxis_update_identity_detail="the daemon that owns the shared run file has pid ${pid:-unknown}, which is not a daemon process of $app_path"
+		return 1
+	fi
+	return 0
+}
+
+# Fresh check right before a call that acts on the daemon. Returns 0 or 1 (detail set); an
+# unreadable status is also 1.
+noetaxis_update_verify_daemon() {
+	local app_path="$1" json
+	json="$(noetaxis_bounded 15 "$app_path/Contents/Resources/daemon/ao" status --json 2>/dev/null)" || { noetaxis_update_identity_detail="ao status could not be read, so the daemon's identity cannot be verified"; return 1; }
+	noetaxis_update_status_identity "$app_path" "$json"
+}
+
 noetaxis_update_list_sessions_json() {
 	# noetaxis_update_list_sessions_json <output file>
 	noetaxis_bounded 30 "$cap_cli" session ls --all --include-terminated --json > "$1" 2>"$1.err"
@@ -302,17 +336,28 @@ noetaxis_update_capture_state() {
 		fi
 	fi
 
+	# The bundled ao talks to whichever daemon owns the shared run file under ~/.ao. Until that daemon
+	# is shown to be THIS bundle's own, nothing else is read from it or asked of it.
+	cap_identity_detail=""
+	if [[ "$cap_daemon_state" == unknown ]]; then
+		cap_identity_detail="ao status could not be read, so the daemon's identity cannot be verified"
+	elif [[ "$cap_daemon_state" != none ]]; then
+		noetaxis_update_status_identity "$app_path" "$(/bin/cat "$dir/ao-status.json")" || cap_identity_detail="$noetaxis_update_identity_detail"
+	fi
+
 	cap_sessions_status="skipped"
 	cap_live_count=0
-	case "$cap_daemon_state" in
-		ready|unhealthy|not_ready|unknown)
-			noetaxis_update_capture_sessions || true
-			;;
-	esac
+	if [[ -z "$cap_identity_detail" ]]; then
+		case "$cap_daemon_state" in
+			ready|unhealthy|not_ready)
+				noetaxis_update_capture_sessions || true
+				;;
+		esac
+	fi
 
 	cap_hosted="unknown"
 	cap_hosted_state=""
-	if [[ "$cap_daemon_state" == ready ]] && noetaxis_bounded 20 "$cap_cli" multica status --json > "$dir/multica-status.json" 2>"$dir/multica-status.err"; then
+	if [[ "$cap_daemon_state" == ready && -z "$cap_identity_detail" ]] && noetaxis_bounded 20 "$cap_cli" multica status --json > "$dir/multica-status.json" 2>"$dir/multica-status.err"; then
 		cap_hosted_state="$(noetaxis_json_get "$dir/multica-status.json" state || true)"
 		case "$(noetaxis_json_get "$dir/multica-status.json" enabled || true)" in
 			true) cap_hosted="yes" ;;
@@ -481,6 +526,10 @@ noetaxis_update_preflight_refusals() {
 		printf '%s\n' "$foreign" | noetaxis_describe_processes >&2
 		return 21
 	fi
+	if [[ -n "$cap_identity_detail" ]]; then
+		noetaxis_error "Refusing to act on a daemon that is not this bundle's: $cap_identity_detail. The bundled ao controls whichever AO daemon owns ~/.ao's run file, so ending sessions or stopping it here would hit that other copy. Nothing was stopped. Quit the other AO copy (or fix the daemon), then rerun."
+		return 57
+	fi
 	if [[ "$cap_sessions_status" == failed && "$update_force" -ne 1 ]]; then
 		noetaxis_error "The AO daemon is running (state: $cap_daemon_state) but its session list could not be read (see $cap_dir/sessions.json.err), so live sessions cannot be identified. Nothing was stopped. Fix the daemon or rerun with --force to continue without the list (--force may SIGTERM chat hosts of this bundle afterwards)."
 		return 52
@@ -622,7 +671,7 @@ noetaxis_update_quit_app() {
 }
 
 noetaxis_update_stop_daemon() {
-	local app_path="$1" cli pid command_line output status_code=0
+	local app_path="$1" cli pid command_line output status_code=0 skip_ao_stop
 	cli="$app_path/Contents/Resources/daemon/ao"
 	if noetaxis_none_running_of_kind "$app_path" daemon; then
 		return 0
@@ -633,12 +682,25 @@ noetaxis_update_stop_daemon() {
 		noetaxis_update_append noetaxis_update_summary_stopped "AO daemon stopped itself after the app quit"
 		return 0
 	fi
-	noetaxis_update_say "the daemon is still running; asking it to stop with \"ao stop\""
-	output="$(noetaxis_bounded 40 "$cli" stop --timeout 20s 2>&1)" || status_code=$?
-	noetaxis_update_say "ao stop: ${output:-exit $status_code}"
-	if noetaxis_wait_until "the daemon to exit after ao stop" "$update_stop_timeout" noetaxis_none_running_of_kind "$app_path" daemon; then
-		noetaxis_update_append noetaxis_update_summary_stopped "AO daemon stopped (ao stop)"
-		return 0
+	skip_ao_stop=0
+	if ! noetaxis_update_verify_daemon "$app_path"; then
+		noetaxis_error "Not running \"ao stop\": $noetaxis_update_identity_detail. It would shut down whichever daemon owns ~/.ao's run file, and that is not this bundle's. The daemon process of this bundle is still running:"
+		noetaxis_own_pids_of_kind "$app_path" daemon | noetaxis_describe_processes >&2
+		if [[ "$update_force" -ne 1 ]]; then
+			printf 'Nothing was installed. Quit the other AO copy or stop this daemon yourself, then rerun (--force would send SIGTERM to this bundle'"'"'s own daemon process only). No process was force-killed.\n' >&2
+			return 55
+		fi
+		noetaxis_update_say "--force: skipping ao stop; this bundle's own daemon process gets SIGTERM instead"
+		skip_ao_stop=1
+	fi
+	if [[ "$skip_ao_stop" -eq 0 ]]; then
+		noetaxis_update_say "the daemon is still running; asking it to stop with \"ao stop\""
+		output="$(noetaxis_bounded 40 "$cli" stop --timeout 20s 2>&1)" || status_code=$?
+		noetaxis_update_say "ao stop: ${output:-exit $status_code}"
+		if noetaxis_wait_until "the daemon to exit after ao stop" "$update_stop_timeout" noetaxis_none_running_of_kind "$app_path" daemon; then
+			noetaxis_update_append noetaxis_update_summary_stopped "AO daemon stopped (ao stop)"
+			return 0
+		fi
 	fi
 	if [[ "$update_force" -eq 1 ]]; then
 		while IFS=$'\t' read -r pid command_line; do
@@ -700,6 +762,10 @@ noetaxis_update_stop_all() {
 		# the plan listed (and the user confirmed) may be ended: re-read the list, and refuse if a
 		# session appeared since, so the user sees and confirms it in a new plan.
 		if [[ "$cap_sessions_status" == ok ]]; then
+			if ! noetaxis_update_verify_daemon "$app_path"; then
+				noetaxis_error "Refusing to act on a daemon that is not this bundle's: $noetaxis_update_identity_detail. Nothing was stopped."
+				return 57
+			fi
 			/bin/cp "$cap_live_file" "$confirmed"
 			noetaxis_update_capture_sessions || { noetaxis_error "The session list could not be read again; nothing was stopped."; return 52; }
 			additions="$(noetaxis_update_sessions_not_in "$confirmed")"
@@ -1038,6 +1104,7 @@ noetaxis_update_exit_report() {
 		53) meaning="a session could not be ended" ;;
 		54) meaning="the desktop app did not quit" ;;
 		55) meaning="the daemon did not stop" ;;
+		57) meaning="refused: the daemon on the shared run file is not this bundle's" ;;
 		56) meaning="chat hosts or helpers are still running" ;;
 		60) meaning="new app unhealthy; previous app restored and healthy" ;;
 		61) meaning="new app unhealthy; rollback needs your attention" ;;

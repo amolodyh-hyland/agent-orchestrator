@@ -72,7 +72,8 @@ automatically if the new app is not healthy. The app argument defaults to
 Update exit codes: 0 ok; 20 inside an AO session (use --detached); 21 other
 processes block; 22 ShipIt; 50 cancelled; 51 live sessions; 52 session list
 unavailable; 53 a session could not be ended; 54 app did not quit; 55 daemon did
-not stop; 56 chat hosts/helpers remain; 60 rolled back and healthy; 61 rollback
+not stop; 56 chat hosts/helpers remain; 57 the daemon on ~/.ao is not this
+bundle's; 60 rolled back and healthy; 61 rollback
 needs you; 62 healthy but post-install checks warn; 63 healthy but a session did
 not come back. Other codes as in the default mode.
 EOF

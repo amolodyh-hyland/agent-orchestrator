@@ -112,6 +112,7 @@ An update run inside an AO session would end that session in the middle (it quit
 | 54 | The app did not quit. |
 | 55 | The daemon did not stop. |
 | 56 | Chat hosts or helpers of this bundle are still running. |
+| 57 | The daemon that owns `~/.ao`'s run file is not this bundle's (another AO copy). The bundled `ao` controls whichever daemon owns that file, so the run refuses before listing, ending or stopping anything through it; `ao stop` is also skipped if that turns up later (with `--force` only this bundle's own daemon process gets SIGTERM). |
 | 60 | New app unhealthy; the previous app was restored and is healthy. |
 | 61 | New app unhealthy and the rollback needs you (instructions printed). |
 | 62 | Updated and healthy, but a post-install check warns. |

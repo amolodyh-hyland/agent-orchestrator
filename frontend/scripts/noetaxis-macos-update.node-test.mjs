@@ -352,7 +352,7 @@ test("survivors after the stop are listed and refused (56) without --force", dar
 test("a ShipIt that finishes is waited for; one that stays blocks (22) and is never touched", darwin, async (t) => {
 	const finishing = await makeWorld(t, "shipit-ends", { extraProcs: ["/x/ShipIt"] });
 	await finishing.addTimer(40, "sim_remove_prefix '/x/ShipIt'");
-	let result = finishing.update(["--yes"]);
+	let result = finishing.update(["--yes", "--stop-timeout", "40"]);
 	assert.equal(result.status, 0, result.stdout + result.stderr);
 	assert.match(result.stdout, /Waiting for ShipIt/);
 
@@ -768,6 +768,56 @@ test("the automatic rollback inside an update runs under the update's own lock",
 	assert.equal(existsSync(path.join(world.home, ".ao-install.lock")), false);
 });
 
+test("a daemon on the shared run file that is not this bundle's is refused before any session is ended or anything is stopped (57)", darwin, async (t) => {
+	// The bundled ao would talk to whichever daemon owns ~/.ao: here a status that belongs to another copy.
+	const foreignExe = "/Users/x/Other/Agent Orchestrator.app/Contents/Resources/daemon/ao";
+	const world = await makeWorld(t, "foreign-daemon", { sessions: [liveSession("s1")], cfg: { foreign_status_versions: `${oldVersion}\n`, foreign_status_exe: foreignExe, foreign_status_pid: "4242" } });
+	const before = JSON.stringify(await world.procs());
+	const result = world.update(["--yes", "--end-sessions", "--force"]);
+	assert.equal(result.status, 57, result.stdout + result.stderr);
+	assert.match(result.stderr, /Refusing to act on a daemon that is not this bundle's/);
+	assert.match(result.stderr, /Other\/Agent Orchestrator\.app/);
+	const calls = await world.calls();
+	assert.equal(callIndex(calls, /session (ls|exit-agent|kill)/), -1, "no session was listed or ended through the foreign daemon");
+	assert.equal(callIndex(calls, /\] stop /), -1);
+	assert.equal(callIndex(calls, /^osascript/), -1);
+	assert.equal(matching(calls, /^kill /).length, 0);
+	assert.equal(JSON.stringify(await world.procs()), before);
+	assert.equal(existsSync(path.join(world.sim, "FORBIDDEN")), false);
+	// The right binary with a pid that is none of this bundle's daemon processes is refused too.
+	const wrongPid = await makeWorld(t, "foreign-pid", { sessions: [liveSession("s1")], cfg: { foreign_status_versions: `${oldVersion}\n`, foreign_status_pid: "31337" } });
+	await wrongPid.setCfg("foreign_status_exe", `${wrongPid.targetApp}/Contents/Resources/daemon/ao`);
+	const second = wrongPid.update(["--yes", "--end-sessions"]);
+	assert.equal(second.status, 57);
+	assert.equal(callIndex(await wrongPid.calls(), /session exit-agent/), -1);
+});
+
+test("ao stop is not run when the daemon on the shared run file turns out not to be this bundle's; --force signals only the bundle's own daemon", darwin, async (t) => {
+	const foreign = { foreign_after_quit: `${oldVersion}\n`, foreign_status_exe: "/Users/x/Other/Agent Orchestrator.app/Contents/Resources/daemon/ao", foreign_status_pid: "4242", daemon_stays: true };
+	const refused = await makeWorld(t, "stop-foreign", { cfg: foreign });
+	let result = refused.update(["--yes"]);
+	assert.equal(result.status, 55, result.stdout + result.stderr);
+	assert.match(result.stderr, /Not running "ao stop"/);
+	assert.equal(callIndex(await refused.calls(), /\] stop /), -1);
+	assert.equal(matching(await refused.calls(), /^kill /).length, 0);
+	const forced = await makeWorld(t, "stop-foreign-force", { cfg: foreign });
+	result = forced.update(["--yes", "--force"]);
+	assert.equal(result.status, 0, result.stdout + result.stderr);
+	assert.equal(callIndex(await forced.calls(), /\] stop /), -1, "ao stop was skipped");
+	const kills = matching(await forced.calls(), /^kill /);
+	assert.equal(kills.length, 1);
+	assert.match(kills[0], /^kill -TERM \d+$/);
+});
+
+test("mutation: acting on a daemon without checking whose it is is caught", darwin, async (t) => {
+	const mutant = await mutatedScripts(t, "update-lib.sh", 'noetaxis_update_status_identity "$app_path" "$(/bin/cat "$dir/ao-status.json")" || cap_identity_detail="$noetaxis_update_identity_detail"', ":");
+	const world = await makeWorld(t, "foreign-mutant", { sessions: [liveSession("s1")], cfg: { foreign_status_versions: `${oldVersion}\n`, foreign_status_exe: "/Users/x/Other/Agent Orchestrator.app/Contents/Resources/daemon/ao", foreign_status_pid: "4242" } });
+	const text = await readFile(path.join(mutant, "update-lib.sh"), "utf8");
+	await writeFile(path.join(mutant, "update-lib.sh"), text.replace('if ! noetaxis_update_verify_daemon "$app_path"; then\n				noetaxis_error "Refusing', 'if false; then\n				noetaxis_error "Refusing'));
+	world.update(["--yes", "--end-sessions"], { scriptsDir: mutant });
+	assert.ok(callIndex(await world.calls(), /session exit-agent s1/) >= 0, "the mutant ends a session through the foreign daemon");
+});
+
 test("a ready daemon of another binary, or with a pid that is not this bundle's daemon, is not healthy: the update rolls back", darwin, async (t) => {
 	// The new app starts only its desktop process; a foreign daemon answers ready on the port.
 	const foreign = await makeWorld(t, "health-foreign", { cfg: { open_mode: "app-only", foreign_status_versions: `${newVersion}\n`, foreign_status_exe: "/Users/x/Old/Agent Orchestrator.app/Contents/Resources/daemon/ao", foreign_status_pid: "4242" } });
@@ -787,7 +837,9 @@ test("mutation: accepting a ready daemon without checking its identity is caught
 	let dir = await mutatedScripts(t, "update-lib.sh", 'if [[ -z "$executable" || "$(noetaxis_physical_file "$executable")" != "$(noetaxis_physical_file "$expected")" ]]; then', "if false; then");
 	const file = path.join(dir, "update-lib.sh");
 	const text = await readFile(file, "utf8");
-	const loosened = text.replace('if [[ ! "$pid" =~ ^[0-9]+$ ]] ||', "if false &&");
+	// Only the health gate's pid check (the identity helper for the shared run file has the same line earlier in the file).
+	const gate = text.indexOf("noetaxis_update_daemon_healthy() {");
+	const loosened = text.slice(0, gate) + text.slice(gate).replace('if [[ ! "$pid" =~ ^[0-9]+$ ]] ||', "if false &&");
 	assert.notEqual(loosened, text);
 	await writeFile(file, loosened);
 	const world = await makeWorld(t, "health-mutant", { cfg: { open_mode: "app-only", foreign_status_versions: `${newVersion}\n`, foreign_status_exe: "/Users/x/Old/Agent Orchestrator.app/Contents/Resources/daemon/ao", foreign_status_pid: "4242" } });
