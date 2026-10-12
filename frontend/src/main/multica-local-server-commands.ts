@@ -31,6 +31,8 @@ export type CommandSpec = {
 	readonly file: string;
 	readonly args: readonly string[];
 	readonly timeoutMs: number;
+	/** Talks to the Docker engine, so it may only run against the pinned local endpoint. */
+	readonly engine: boolean;
 };
 
 export type StackPaths = {
@@ -44,8 +46,8 @@ export type StackPaths = {
 // so a hand-built object (or one spread from a built spec) is refused.
 const issued = new WeakSet<CommandSpec>();
 
-function issue(name: CommandName, file: string, args: string[], timeoutMs: number): CommandSpec {
-	const spec: CommandSpec = Object.freeze({ name, file, args: Object.freeze(args), timeoutMs });
+function issue(name: CommandName, file: string, args: string[], timeoutMs: number, engine = true): CommandSpec {
+	const spec: CommandSpec = Object.freeze({ name, file, args: Object.freeze(args), timeoutMs, engine });
 	issued.add(spec);
 	return spec;
 }
@@ -75,7 +77,7 @@ export const dockerVersionCommand = (docker: string): CommandSpec => {
 
 export const composeVersionCommand = (docker: string): CommandSpec => {
 	assertAbsolute(docker, "docker binary");
-	return issue("composeVersion", docker, ["compose", "version", "--short"], TIMEOUT_MS.version);
+	return issue("composeVersion", docker, ["compose", "version", "--short"], TIMEOUT_MS.version, false);
 };
 
 export const composeListCommand = (docker: string): CommandSpec => {
@@ -102,7 +104,7 @@ export function logsCommand(docker: string, stack: StackPaths, service: LocalSer
 }
 
 /** Starts Docker Desktop (macOS only; the caller checks the platform). */
-export const openDockerCommand = (): CommandSpec => issue("openDocker", OPEN_BINARY, ["-a", "Docker"], TIMEOUT_MS.open);
+export const openDockerCommand = (): CommandSpec => issue("openDocker", OPEN_BINARY, ["-a", "Docker"], TIMEOUT_MS.open, false);
 
 /** Directories a GUI-launched app does not have on PATH. */
 function dockerFallbackDirs(home: string, platform: NodeJS.Platform): string[] {
@@ -141,18 +143,85 @@ export function findDockerBinary(options: FindDockerOptions): string | null {
 	return null;
 }
 
-const PASS_THROUGH_ENV = ["HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "DOCKER_CONFIG", "SystemRoot", "USERPROFILE", "APPDATA"] as const;
+// DOCKER_CONFIG is not passed: Docker's configuration directory (and the current context
+// it names) is the user's, and an AO environment variable must not swap it for another.
+const PASS_THROUGH_ENV = ["HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "SystemRoot", "USERPROFILE", "APPDATA"] as const;
+
+const WINDOWS_ENGINE_PIPE = "npipe:////./pipe/docker_engine";
+
+/** Sockets a Docker engine on this computer listens on, in order of preference. */
+function localSocketCandidates(home: string, platform: NodeJS.Platform, uid: number | undefined): string[] {
+	if (platform === "darwin") {
+		return [
+			path.join(home, ".docker", "run", "docker.sock"),
+			"/var/run/docker.sock",
+			path.join(home, ".orbstack", "run", "docker.sock"),
+			path.join(home, ".colima", "default", "docker.sock"),
+			path.join(home, ".rd", "docker.sock"),
+		];
+	}
+	if (platform === "win32") return [];
+	return [
+		"/var/run/docker.sock",
+		...(uid === undefined ? [] : [`/run/user/${uid}/docker.sock`]),
+		path.join(home, ".docker", "desktop", "docker.sock"),
+		path.join(home, ".colima", "default", "docker.sock"),
+	];
+}
+
+function isSocketFile(file: string): boolean {
+	try {
+		return statSync(file).isSocket();
+	} catch {
+		return false;
+	}
+}
+
+export type FindEndpointOptions = {
+	home: string;
+	platform: NodeJS.Platform;
+	uid?: number | undefined;
+	isSocket?: (file: string) => boolean;
+};
 
 /**
- * The child's environment: a short allow-list plus a PATH that finds Docker's helpers.
- * COMPOSE_* and DOCKER_HOST are deliberately dropped so AO's own environment cannot
- * point a "local" stack at another project or another machine.
+ * The Docker endpoint on THIS computer: the first existing socket from a fixed list (or
+ * the Windows engine pipe), as a `unix://` / `npipe://` address, or null when no local
+ * engine is listening. Never read from AO's environment or from Docker's contexts, so a
+ * remote context or DOCKER_HOST cannot redirect the controls to another machine.
  */
-export function localServerChildEnv(env: NodeJS.ProcessEnv, home: string, platform: NodeJS.Platform): NodeJS.ProcessEnv {
+export function findLocalDockerEndpoint(options: FindEndpointOptions): string | null {
+	if (options.platform === "win32") return WINDOWS_ENGINE_PIPE;
+	const isSocket = options.isSocket ?? isSocketFile;
+	for (const candidate of localSocketCandidates(options.home, options.platform, options.uid)) {
+		if (path.isAbsolute(candidate) && !/[\u0000-\u001f]/.test(candidate) && isSocket(candidate)) return `unix://${candidate}`;
+	}
+	return null;
+}
+
+/** True only for an address on this computer: a unix socket path or the Windows engine pipe. */
+export function isLocalDockerEndpoint(value: string | undefined): boolean {
+	if (!value) return false;
+	if (value === WINDOWS_ENGINE_PIPE) return true;
+	return value.startsWith("unix:///") && !/[\u0000-\u001f]/.test(value) && !value.includes("..");
+}
+
+/**
+ * The child's environment: a short allow-list, a PATH that finds Docker's helpers, and
+ * DOCKER_HOST pinned to the local engine endpoint when there is one. With DOCKER_HOST set
+ * the Docker CLI ignores the context named in its configuration, so a remote
+ * `currentContext` cannot take over. COMPOSE_*, DOCKER_CONTEXT, DOCKER_CONFIG and the TLS
+ * variables from AO's own environment are not passed.
+ */
+export function localServerChildEnv(env: NodeJS.ProcessEnv, home: string, platform: NodeJS.Platform, endpoint: string | null = null): NodeJS.ProcessEnv {
 	const next: NodeJS.ProcessEnv = {};
 	for (const key of PASS_THROUGH_ENV) if (env[key] !== undefined) next[key] = env[key];
 	const dirs = [...(env.PATH ?? "").split(path.delimiter), ...dockerFallbackDirs(home, platform), "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
 	next.PATH = [...new Set(dirs.filter((dir) => dir && path.isAbsolute(dir)))].join(path.delimiter);
+	if (endpoint !== null) {
+		if (!isLocalDockerEndpoint(endpoint)) throw new Error("Docker endpoint must be a local socket");
+		next.DOCKER_HOST = endpoint;
+	}
 	return next;
 }
 
@@ -190,6 +259,7 @@ export function runLocalServerCommand(
 	signal?: AbortSignal,
 ): Promise<CommandResult> {
 	if (!isIssuedCommand(spec)) return Promise.reject(new Error("command is not on the local server allow-list"));
+	if (spec.engine && !isLocalDockerEndpoint(env.DOCKER_HOST)) return Promise.reject(new Error("Docker commands only run against the local engine endpoint"));
 	if (signal?.aborted) {
 		const error = Object.assign(new Error("aborted"), { name: "AbortError", code: "ABORT_ERR" });
 		return Promise.resolve({ error, stdout: "", stderr: "" });

@@ -4,7 +4,9 @@ import {
 	composeVersionCommand,
 	dockerVersionCommand,
 	findDockerBinary,
+	findLocalDockerEndpoint,
 	isIssuedCommand,
+	isLocalDockerEndpoint,
 	localServerChildEnv,
 	logsCommand,
 	openDockerCommand,
@@ -75,7 +77,7 @@ describe("local server commands", () => {
 });
 
 describe("runLocalServerCommand", () => {
-	const env = { PATH: "/usr/bin" };
+	const env = { PATH: "/usr/bin", DOCKER_HOST: "unix:///Users/me/.docker/run/docker.sock" };
 
 	it("runs an issued command through execFile with timeout, buffer cap, hidden window and the given environment", async () => {
 		const exec = vi.fn<ExecFileLike>((_file, _args, _options, callback) => callback(null, "ok", ""));
@@ -88,13 +90,30 @@ describe("runLocalServerCommand", () => {
 
 	it("refuses a command that was not built by this module, including a copy of a built one", async () => {
 		const exec = vi.fn<ExecFileLike>();
-		const forged: CommandSpec = { name: "up", file: DOCKER, args: ["compose", "down", "-v"], timeoutMs: 1000 };
+		const forged: CommandSpec = { name: "up", file: DOCKER, args: ["compose", "down", "-v"], timeoutMs: 1000, engine: true };
 		const copied: CommandSpec = { ...upCommand(DOCKER, STACK) };
 
 		await expect(runLocalServerCommand(exec, forged, env)).rejects.toThrow(/allow-list/);
 		await expect(runLocalServerCommand(exec, copied, env)).rejects.toThrow(/allow-list/);
 		expect(isIssuedCommand(forged)).toBe(false);
 		expect(exec).not.toHaveBeenCalled();
+	});
+
+	it("refuses an engine command without a local endpoint, whatever the environment says", async () => {
+		const exec = vi.fn<ExecFileLike>();
+		for (const bad of [{ PATH: "/usr/bin" }, { DOCKER_HOST: "tcp://10.0.0.5:2375" }, { DOCKER_HOST: "ssh://me@box" }]) {
+			for (const spec of [dockerVersionCommand(DOCKER), composeListCommand(DOCKER), psCommand(DOCKER, STACK), upCommand(DOCKER, STACK), stopCommand(DOCKER, STACK), restartCommand(DOCKER, STACK), logsCommand(DOCKER, STACK, "backend", 5)]) {
+				await expect(runLocalServerCommand(exec, spec, bad)).rejects.toThrow(/local engine/);
+			}
+		}
+		expect(exec).not.toHaveBeenCalled();
+	});
+
+	it("lets the commands that never contact the engine run without an endpoint", async () => {
+		const exec = vi.fn<ExecFileLike>((_f, _a, _o, callback) => callback(null, "", ""));
+		await runLocalServerCommand(exec, composeVersionCommand(DOCKER), { PATH: "/usr/bin" });
+		await runLocalServerCommand(exec, openDockerCommand(), { PATH: "/usr/bin" });
+		expect(exec).toHaveBeenCalledTimes(2);
 	});
 
 	it("does not start a process when already cancelled, and passes the abort signal through", async () => {
@@ -120,14 +139,19 @@ describe("runLocalServerCommand", () => {
 });
 
 describe("localServerChildEnv", () => {
-	it("keeps a short allow-list and drops secrets, COMPOSE_* and DOCKER_HOST", () => {
+	const SOCKET = "unix:///Users/me/.docker/run/docker.sock";
+
+	it("keeps a short allow-list and drops secrets, COMPOSE_*, DOCKER_CONFIG, DOCKER_CONTEXT and remote engine settings", () => {
 		const env = localServerChildEnv(
 			{
 				PATH: "/usr/bin:relative/bin",
 				HOME: "/Users/me",
 				LANG: "en_US.UTF-8",
-				DOCKER_CONFIG: "/Users/me/.docker",
+				DOCKER_CONFIG: "/Users/me/other-docker-config",
 				DOCKER_HOST: "tcp://evil:2375",
+				DOCKER_CONTEXT: "remote",
+				DOCKER_TLS_VERIFY: "1",
+				DOCKER_CERT_PATH: "/x",
 				COMPOSE_PROJECT_NAME: "other",
 				COMPOSE_FILE: "/tmp/x.yml",
 				JWT_SECRET: "s3cret",
@@ -136,11 +160,54 @@ describe("localServerChildEnv", () => {
 			},
 			"/Users/me",
 			"darwin",
+			SOCKET,
 		);
 
-		expect(Object.keys(env).sort()).toEqual(["DOCKER_CONFIG", "HOME", "LANG", "PATH"]);
+		expect(Object.keys(env).sort()).toEqual(["DOCKER_HOST", "HOME", "LANG", "PATH"]);
+		expect(env.DOCKER_HOST).toBe(SOCKET);
 		expect(env.PATH).toContain("/Applications/Docker.app/Contents/Resources/bin");
 		expect(env.PATH?.split(":")).not.toContain("relative/bin");
+	});
+
+	it("sets no DOCKER_HOST when there is no local endpoint, and never copies one from the environment", () => {
+		expect(localServerChildEnv({ DOCKER_HOST: "tcp://evil:2375", HOME: "/Users/me" }, "/Users/me", "darwin").DOCKER_HOST).toBeUndefined();
+	});
+
+	it("refuses an endpoint that is not a local socket", () => {
+		for (const endpoint of ["tcp://10.0.0.5:2375", "ssh://user@host", "unix://host/var/run/docker.sock", "http://localhost:2375", "", "unix:///a/../etc/docker.sock"]) {
+			expect(() => localServerChildEnv({}, "/Users/me", "darwin", endpoint), endpoint).toThrow();
+		}
+	});
+});
+
+describe("findLocalDockerEndpoint", () => {
+	const only = (target: string) => (file: string) => file === target;
+
+	it("finds Docker Desktop's socket first, then the classic one", () => {
+		const both = (file: string) => file === "/Users/me/.docker/run/docker.sock" || file === "/var/run/docker.sock";
+		expect(findLocalDockerEndpoint({ home: "/Users/me", platform: "darwin", isSocket: both })).toBe("unix:///Users/me/.docker/run/docker.sock");
+		expect(findLocalDockerEndpoint({ home: "/Users/me", platform: "darwin", isSocket: only("/var/run/docker.sock") })).toBe("unix:///var/run/docker.sock");
+		expect(findLocalDockerEndpoint({ home: "/Users/me", platform: "darwin", isSocket: only("/Users/me/.colima/default/docker.sock") })).toBe("unix:///Users/me/.colima/default/docker.sock");
+	});
+
+	it("finds a rootless Linux engine for the current user", () => {
+		expect(findLocalDockerEndpoint({ home: "/home/me", platform: "linux", uid: 1000, isSocket: only("/run/user/1000/docker.sock") })).toBe("unix:///run/user/1000/docker.sock");
+	});
+
+	it("is null when no engine socket exists, so nothing else can be reached", () => {
+		expect(findLocalDockerEndpoint({ home: "/Users/me", platform: "darwin", isSocket: () => false })).toBeNull();
+	});
+
+	it("uses the local engine pipe on Windows", () => {
+		expect(findLocalDockerEndpoint({ home: "C:\\Users\\me", platform: "win32" })).toBe("npipe:////./pipe/docker_engine");
+	});
+});
+
+describe("isLocalDockerEndpoint", () => {
+	it("accepts only a unix socket path or the Windows engine pipe", () => {
+		expect(isLocalDockerEndpoint("unix:///var/run/docker.sock")).toBe(true);
+		expect(isLocalDockerEndpoint("npipe:////./pipe/docker_engine")).toBe(true);
+		for (const bad of [undefined, "", "tcp://127.0.0.1:2375", "tcp://remote:2376", "ssh://me@box", "unix://remote/sock", "fd://", "unix:///a\nb"]) expect(isLocalDockerEndpoint(bad), String(bad)).toBe(false);
 	});
 });
 

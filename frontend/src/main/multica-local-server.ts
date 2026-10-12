@@ -17,6 +17,7 @@ import {
 	composeVersionCommand,
 	dockerVersionCommand,
 	findDockerBinary,
+	findLocalDockerEndpoint,
 	localServerChildEnv,
 	logsCommand,
 	openDockerCommand,
@@ -91,6 +92,8 @@ export type MulticaLocalServerOptions = {
 	env: NodeJS.ProcessEnv;
 	platform: NodeJS.Platform;
 	findDocker?: () => string | null;
+	/** The local engine's address (`unix://…`); defaults to a search of the usual local sockets. */
+	findEndpoint?: () => string | null;
 	now?: () => number;
 	sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
 	pollMs?: number;
@@ -119,7 +122,8 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 	const clock = options.now ?? Date.now;
 	const sleep = options.sleep ?? defaultSleep;
 	const canLaunchDocker = options.platform === "darwin";
-	const childEnv = localServerChildEnv(options.env, options.home, options.platform);
+	const findEndpoint =
+		options.findEndpoint ?? (() => findLocalDockerEndpoint({ home: options.home, platform: options.platform, uid: typeof process.getuid === "function" ? process.getuid() : undefined }));
 	const findDocker = options.findDocker ?? (() => findDockerBinary({ pathEnv: options.env.PATH, home: options.home, platform: options.platform }));
 
 	let disposed = false;
@@ -134,7 +138,15 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 	let lastStatus: LocalServerStatus = { ...EMPTY_LOCAL_SERVER_STATUS, canLaunchDocker };
 	let lastKey = "";
 
-	const run = (spec: CommandSpec, signal?: AbortSignal): Promise<CommandResult> => runLocalServerCommand(options.exec, spec, childEnv, signal);
+	// Every engine command runs against the local endpoint found now, or not at all: with no
+	// local engine listening it reports "not running" instead of reaching for any other one.
+	const run = async (spec: CommandSpec, signal?: AbortSignal): Promise<CommandResult> => {
+		const endpoint = findEndpoint();
+		if (spec.engine && endpoint === null) {
+			return { error: Object.assign(new Error("no local Docker engine endpoint"), { code: "NO_LOCAL_ENGINE" }), stdout: "", stderr: "" };
+		}
+		return runLocalServerCommand(options.exec, spec, localServerChildEnv(options.env, options.home, options.platform, endpoint), signal);
+	};
 
 	const publish = (status: LocalServerStatus): void => {
 		lastStatus = status;

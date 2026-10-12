@@ -10,6 +10,7 @@ const DOCKER = "/usr/local/bin/docker";
 const HOME = "/Users/me";
 const DIR = "/Users/me/.multica/server";
 const FILE = `${DIR}/docker-compose.selfhost.yml`;
+const SOCKET = "unix:///Users/me/.docker/run/docker.sock";
 const LOCAL: MulticaSettings = { mode: "local", customUrl: "http://localhost:3000", apiUrl: "" };
 
 type Reply = { error?: Partial<ExecError> & { message?: string }; stdout?: string; stderr?: string };
@@ -38,6 +39,8 @@ type Fake = {
 	now: number;
 	setupOutcome: SetupOutcome;
 	chosen: string | null;
+	endpoint: string | null;
+	env: NodeJS.ProcessEnv;
 };
 
 function harness(patch: Partial<Fake> = {}) {
@@ -57,9 +60,11 @@ function harness(patch: Partial<Fake> = {}) {
 		now: 1_000_000,
 		setupOutcome: "created",
 		chosen: null,
+		endpoint: SOCKET,
+		env: { PATH: "/usr/bin", HOME },
 		...patch,
 	};
-	const calls: Array<{ file: string; args: string[] }> = [];
+	const calls: Array<{ file: string; args: string[]; env: NodeJS.ProcessEnv }> = [];
 	const emitted: LocalServerStatus[] = [];
 	const writes: unknown[] = [];
 
@@ -72,7 +77,7 @@ function harness(patch: Partial<Fake> = {}) {
 	};
 
 	const exec: ExecFileLike = (file, args, options, callback) => {
-		calls.push({ file, args });
+		calls.push({ file, args, env: options.env });
 		const verb = verbOf(args);
 		const finish = (reply: Reply) => {
 			const error = reply.error ? Object.assign(new Error(reply.error.message ?? "command failed"), reply.error) : null;
@@ -117,9 +122,10 @@ function harness(patch: Partial<Fake> = {}) {
 		exec,
 		emit: (status) => emitted.push(status),
 		home: HOME,
-		env: { PATH: "/usr/bin", HOME },
+		env: fake.env,
 		platform: fake.platform,
 		findDocker: () => fake.docker,
+		findEndpoint: () => fake.endpoint,
 		now: () => fake.now,
 		sleep: async (ms) => {
 			fake.now += ms;
@@ -265,7 +271,7 @@ describe("start, stop and restart", () => {
 		const h = harness();
 		expect(await h.server.start()).toEqual({ ok: true });
 		const up = h.calls.find((call) => call.args.includes("up"));
-		expect(up).toEqual({ file: DOCKER, args: ["compose", "-f", FILE, "--project-directory", DIR, "up", "-d"] });
+		expect(up).toMatchObject({ file: DOCKER, args: ["compose", "-f", FILE, "--project-directory", DIR, "up", "-d"] });
 	});
 
 	it("stops and restarts with their commands", async () => {
@@ -375,6 +381,70 @@ describe("start, stop and restart", () => {
 	it("maps a command that hit its timeout to a timeout error", async () => {
 		const h = harness({ handlers: { up: () => ({ error: { killed: true, code: null } }) } });
 		expect(await h.server.start()).toEqual({ ok: false, code: "timeout" });
+	});
+});
+
+describe("the local Docker engine", () => {
+	const HOSTILE_ENV = {
+		PATH: "/usr/bin",
+		HOME,
+		DOCKER_HOST: "tcp://10.0.0.5:2375",
+		DOCKER_CONTEXT: "remote",
+		DOCKER_CONFIG: "/Users/me/remote-config",
+		DOCKER_TLS_VERIFY: "1",
+		COMPOSE_PROJECT_NAME: "other",
+	};
+
+	it("runs every engine command against the pinned local socket, whatever AO's environment or Docker's context says", async () => {
+		const h = harness({ env: HOSTILE_ENV, ps: ALL_UP, probe: { ok: true, apiUrl: "" } });
+
+		await h.server.getStatus();
+		await h.server.start();
+		await h.server.stop();
+		await h.server.restart();
+		await h.server.getLogs("backend", 5);
+
+		const engineCalls = h.calls.filter((call) => call.file === DOCKER && call.args[1] !== "version");
+		expect(engineCalls.length).toBeGreaterThan(6);
+		for (const call of h.calls.filter((c) => c.file === DOCKER)) {
+			if (call.args[0] === "compose" && call.args[1] === "version") continue;
+			expect(call.env.DOCKER_HOST, call.args.join(" ")).toBe(SOCKET);
+		}
+		for (const call of h.calls) {
+			for (const name of ["DOCKER_CONTEXT", "DOCKER_CONFIG", "DOCKER_TLS_VERIFY", "COMPOSE_PROJECT_NAME"]) expect(call.env[name]).toBeUndefined();
+		}
+	});
+
+	it("never asks Docker anything when no local engine socket exists, and reports it as not running", async () => {
+		const h = harness({ endpoint: null, env: HOSTILE_ENV });
+
+		expect((await h.server.getStatus()).state).toBe("docker_not_running");
+		expect(await h.server.stop()).toEqual({ ok: false, code: "docker_not_running" });
+		expect(await h.server.restart()).toEqual({ ok: false, code: "docker_not_running" });
+		expect(await h.server.getLogs("backend", 5)).toEqual({ ok: false, code: "docker_not_running" });
+
+		const engine = h.calls.filter((call) => call.file === DOCKER && !(call.args[0] === "compose" && call.args[1] === "version"));
+		expect(engine).toEqual([]);
+	});
+
+	it("starts Docker Desktop and then follows its socket once it appears", async () => {
+		const h = harness({ endpoint: null });
+		h.fake.handlers["open"] = () => {
+			h.fake.endpoint = SOCKET;
+			return {};
+		};
+
+		expect(await h.server.start()).toEqual({ ok: true });
+
+		const up = h.calls.find((call) => call.args.includes("up"));
+		expect(up?.env.DOCKER_HOST).toBe(SOCKET);
+		expect(h.calls.find((call) => call.file === "/usr/bin/open")?.env.DOCKER_HOST).toBeUndefined();
+	});
+
+	it("never starts the stack on a remote engine even if the endpoint lookup is wrong", async () => {
+		const h = harness({ endpoint: "tcp://10.0.0.5:2375" });
+		expect(await h.server.start()).toEqual({ ok: false, code: "command_failed" });
+		expect(h.calls.some((call) => call.args.includes("up"))).toBe(false);
 	});
 });
 
