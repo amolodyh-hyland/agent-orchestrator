@@ -642,6 +642,114 @@ describe("Docker's home and plugins are AO's own", () => {
 	});
 });
 
+describe("no Compose command runs without a trusted plugin, anywhere", () => {
+	const composeCalls = (h: ReturnType<typeof harness>) => h.calls.filter((call) => call.args[0] === "compose" && call.args[1] !== undefined);
+
+	it("logs and detected-folder adoption are refused up front, with the reason, and run nothing", async () => {
+		for (const [composeUntrusted, code] of [[true, "docker_untrusted"], [false, "compose_missing"]] as const) {
+			const h = harness({ plugin: null, composeUntrusted });
+			expect(await h.server.getLogs("backend", 5), code).toEqual({ ok: false, code });
+			expect(await h.server.useDetectedFolder(), code).toEqual({ ok: false, code });
+			expect(composeCalls(h), code).toEqual([]);
+		}
+	});
+
+	it("never executes a compose command when the plugin is untrusted, through any entry point", async () => {
+		const h = harness({ plugin: null, composeUntrusted: true, ps: ALL_UP, validDirs: new Set([DIR, "/Users/me/code/multica"]) });
+
+		await h.server.getStatus();
+		await h.server.start();
+		await h.server.stop();
+		await h.server.restart();
+		await h.server.getLogs("backend", 5);
+		await h.server.useDetectedFolder();
+		await h.server.setup();
+
+		expect(composeCalls(h)).toEqual([]);
+		expect(h.verbs()).not.toEqual(expect.arrayContaining(["ps", "up", "stop", "restart", "logs", "compose-ls", "compose-version"]));
+	});
+
+	it("refuses a Compose command when the plugin disappears after the earlier checks passed", async () => {
+		let lookups = 0;
+		const h = harness();
+		// The plugin is there for the first few lookups (status checks, preparation), then gone.
+		h.options.findComposePlugin = () => (++lookups <= 3 ? PLUGIN : null);
+		const server = createMulticaLocalServer(h.options);
+
+		const result = await server.start();
+
+		expect(result).toEqual({ ok: false, code: "compose_missing" });
+		expect(h.verbs()).not.toContain("up");
+	});
+
+	it("reports the right reason when the plugin vanishes during a log read", async () => {
+		const h = harness({ ps: ALL_UP });
+		let lookups = 0;
+		h.options.findComposePlugin = () => (++lookups <= 2 ? PLUGIN : null);
+		h.options.isComposeUntrusted = () => true;
+		const server = createMulticaLocalServer(h.options);
+		const result = await server.getLogs("backend", 5);
+		expect(result).toEqual({ ok: false, code: "docker_untrusted" });
+		expect(h.verbs()).not.toContain("logs");
+	});
+
+	// Every Compose command, through its own entry point, with the plugin disappearing at every possible moment:
+	// whenever a compose command runs, the plugin lookup right before it must have found a trusted plugin.
+	const ENTRY_POINTS: Array<[string, string, (server: MulticaLocalServer) => Promise<unknown>, Partial<Fake>]> = [
+		["up", "start", (server) => server.start(), {}],
+		["stop", "stop", (server) => server.stop(), { ps: ALL_UP }],
+		["restart", "restart", (server) => server.restart(), { ps: ALL_UP }],
+		["ps", "status", (server) => server.getStatus(), { ps: ALL_UP }],
+		["logs", "logs", (server) => server.getLogs("backend", 5), { ps: ALL_UP, handlers: { logs: () => ({ stdout: "line\n" }) } }],
+		["ls", "adoption", (server) => server.useDetectedFolder(), { validDirs: new Set([DIR, "/Users/me/code/multica"]), composeList: JSON.stringify([{ Name: "multica", Status: "running", ConfigFiles: "/Users/me/code/multica/docker-compose.selfhost.yml" }]) }],
+		["ls", "status without a folder", (server) => server.getStatus(), { validDirs: new Set(), composeList: "[]" }],
+	];
+
+	for (const [command, entry, call, patch] of ENTRY_POINTS) {
+		it(`${command} (${entry}): never runs when no trusted plugin is found, wherever in the sequence it disappears`, async () => {
+			let ranWithoutPlugin = 0;
+			let ranWithPlugin = 0;
+			for (let present = 0; present <= 14; present += 1) {
+				const h = harness(patch);
+				let lookups = 0;
+				let lastLookupFound = false;
+				h.options.findComposePlugin = () => {
+					lookups += 1;
+					lastLookupFound = lookups <= present;
+					return lastLookupFound ? PLUGIN : null;
+				};
+				h.options.isComposeUntrusted = () => true;
+				const inner = h.options.exec;
+				h.options.exec = (file, args, options, callback) => {
+					if (args[0] === "compose" && args[1] !== undefined) {
+						if (lastLookupFound) ranWithPlugin += 1;
+						else ranWithoutPlugin += 1;
+					}
+					return inner(file, args, options, callback);
+				};
+				await call(createMulticaLocalServer(h.options));
+			}
+			expect(ranWithoutPlugin, `${command} ran without a trusted plugin`).toBe(0);
+			expect(ranWithPlugin, `${command} must run when the plugin is there`).toBeGreaterThan(0);
+		});
+	}
+
+	it("a plugin that is never found leaves every entry point without a single compose command", async () => {
+		for (const [command, entry, call, patch] of ENTRY_POINTS) {
+			const h = harness({ ...patch, plugin: null, composeUntrusted: true });
+			await call(h.server);
+			expect(h.calls.filter((c) => c.args[0] === "compose"), `${command} (${entry})`).toEqual([]);
+		}
+	});
+
+	it("gives Docker a config that lists no plugin directory when none is trusted, and runs only non-Compose commands", async () => {
+		const h = harness({ plugin: null, composeUntrusted: true });
+		await h.server.getStatus();
+		for (const dir of h.ensured) expect(dir).toBeNull();
+		for (const call of h.calls) expect(call.args[0], call.args.join(" ")).not.toBe("compose");
+	});
+});
+
 describe("a docker or Compose plugin at a location others can modify", () => {
 	it("is reported as such, not as not installed, and nothing runs", async () => {
 		const h = harness({ docker: null, dockerUntrusted: true });

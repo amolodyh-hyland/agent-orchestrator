@@ -173,11 +173,15 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 		}
 		// HOME and DOCKER_CONFIG are AO's own, listing only the Compose plugin validated just now.
 		const plugin = locateComposePlugin();
+		// Every Compose command is refused here when no trusted plugin is found right now (Docker would fall back to its system plugin directories).
+		if (spec.compose && plugin === null) {
+			return { error: Object.assign(new Error("no trusted Docker Compose plugin"), { code: "NO_TRUSTED_COMPOSE" }), stdout: "", stderr: "" };
+		}
 		const config = spec.docker ? await ensureDockerConfig(plugin === null ? null : path.dirname(plugin)) : null;
 		if (config !== null && !config.ok) {
 			return { error: Object.assign(new Error("AO's Docker settings folder is not safe to use"), { code: "UNTRUSTED_DOCKER_CONFIG" }), stdout: "", stderr: "AO's Docker settings folder is not safe to use" };
 		}
-		return runLocalServerCommand(options.exec, spec, localServerChildEnv(options.env, options.home, options.platform, endpoint, findPathDirs(), config === null ? null : config.home), signal);
+		return runLocalServerCommand(options.exec, spec, localServerChildEnv(options.env, options.home, options.platform, endpoint, findPathDirs(), config === null ? null : config.home, plugin !== null), signal);
 	};
 
 	const publish = (status: LocalServerStatus): void => {
@@ -360,9 +364,15 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 		return { ok: true, stack: folder.stack, docker };
 	}
 
+	/** The reason no Compose command can run right now, or null when a trusted plugin is there. */
+	function composeProblem(): LocalServerErrorCode | null {
+		return locateComposePlugin() !== null ? null : composeUntrusted() ? "docker_untrusted" : "compose_missing";
+	}
+
 	function outcome(result: CommandResult, signal: AbortSignal): LocalServerResult {
 		if (!result.error) return { ok: true };
 		if (signal.aborted) return { ok: false, code: "cancelled" };
+		if (result.error.code === "NO_TRUSTED_COMPOSE") return { ok: false, code: composeProblem() ?? "compose_missing" };
 		if (result.error.killed) return { ok: false, code: "timeout" };
 		const text = result.stderr || result.error.message;
 		if (isPortConflict(text)) {
@@ -496,6 +506,8 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 			if (!localServerAvailability(await readSettings()).available) return { ok: false, code: "unavailable" };
 			const docker = findDocker();
 			if (!docker) return { ok: false, code: dockerUntrusted() ? "docker_untrusted" : "docker_not_installed" };
+			const problem = composeProblem();
+			if (problem) return { ok: false, code: problem };
 			const folder = await resolveFolder();
 			const detected = await detectFolder(docker, folder.kind === "ok" ? folder.stack.dir : folder.kind === "invalid" ? folder.dir : null);
 			if (!detected) return { ok: false, code: "no_detected_folder" };
@@ -507,8 +519,11 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 			const engine = await inspectEngine(prepared.docker);
 			if (engine.state === "unknown") return { ok: false, code: "inspect_failed", ...(engine.detail ? { detail: engine.detail } : {}) };
 			if (engine.state !== "ok") return { ok: false, code: "docker_not_running" };
+			const problem = composeProblem();
+			if (problem) return { ok: false, code: problem };
 			const result = await run(logsCommand(prepared.docker, prepared.stack, service, tail));
 			if (result.error) {
+				if (result.error.code === "NO_TRUSTED_COMPOSE") return { ok: false, code: composeProblem() ?? "compose_missing" };
 				if (result.error.killed) return { ok: false, code: "timeout" };
 				return { ok: false, code: "command_failed", detail: redactCommandText(result.stderr || result.error.message) };
 			}

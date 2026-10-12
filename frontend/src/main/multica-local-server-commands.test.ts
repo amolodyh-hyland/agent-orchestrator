@@ -18,6 +18,7 @@ import {
 	inspectComposePlugin,
 	inspectDockerBinary,
 	hasPinnedDockerHome,
+	hasTrustedComposePlugin,
 	isIssuedCommand,
 	isLocalDockerEndpoint,
 	isTrustedExecutable,
@@ -42,7 +43,7 @@ const STACK: StackPaths = { dir: "/Users/me/.multica/server", file: "/Users/me/.
 const AO_HOME = "/ao/docker-home";
 const LOCAL_SOCKET = "unix:///Users/me/.docker/run/docker.sock";
 /** An environment as the service builds it: AO's Docker home, trusted PATH, local endpoint. */
-const pinnedEnv = (endpoint: string | null = LOCAL_SOCKET) => localServerChildEnv({}, "/Users/me", "darwin", endpoint, ["/usr/bin"], AO_HOME);
+const pinnedEnv = (endpoint: string | null = LOCAL_SOCKET, composePlugin = true) => localServerChildEnv({}, "/Users/me", "darwin", endpoint, ["/usr/bin"], AO_HOME, composePlugin);
 const BASE = ["compose", "-f", STACK.file, "--project-directory", STACK.dir, "-p", "multica"];
 
 describe("local server commands", () => {
@@ -121,7 +122,7 @@ describe("runLocalServerCommand", () => {
 
 	it("refuses a command that was not built by this module, including a copy of a built one", async () => {
 		const exec = vi.fn<ExecFileLike>();
-		const forged: CommandSpec = { name: "up", file: DOCKER, args: ["compose", "down", "-v"], timeoutMs: 1000, engine: true, docker: true };
+		const forged: CommandSpec = { name: "up", file: DOCKER, args: ["compose", "down", "-v"], timeoutMs: 1000, engine: true, docker: true, compose: true };
 		const copied: CommandSpec = { ...upCommand(DOCKER, STACK) };
 
 		await expect(runLocalServerCommand(exec, forged, env)).rejects.toThrow(/allow-list/);
@@ -387,6 +388,41 @@ describe("hasPinnedDockerHome and the runner guard", () => {
 	});
 });
 
+describe("Compose commands need a trusted Compose plugin for the run", () => {
+	const COMPOSE_SPECS = () => [composeVersionCommand(DOCKER), composeListCommand(DOCKER), psCommand(DOCKER, STACK), upCommand(DOCKER, STACK), stopCommand(DOCKER, STACK), restartCommand(DOCKER, STACK), logsCommand(DOCKER, STACK, "backend", 5)];
+
+	it("marks exactly the docker compose commands as Compose commands", () => {
+		for (const spec of COMPOSE_SPECS()) expect(spec.compose, spec.name).toBe(true);
+		expect(dockerVersionCommand(DOCKER).compose).toBe(false);
+		expect(openDockerCommand().compose).toBe(false);
+	});
+
+	it("refuses every Compose command when the environment was built without a trusted plugin, and runs docker version", async () => {
+		const exec = vi.fn<ExecFileLike>((_f, _a, _o, callback) => callback(null, "", ""));
+		const noPlugin = pinnedEnv(LOCAL_SOCKET, false);
+		for (const spec of COMPOSE_SPECS()) await expect(runLocalServerCommand(exec, spec, noPlugin), spec.name).rejects.toThrow(/trusted Compose plugin/);
+		expect(exec).not.toHaveBeenCalled();
+		await runLocalServerCommand(exec, dockerVersionCommand(DOCKER), noPlugin);
+		expect(exec).toHaveBeenCalledOnce();
+	});
+
+	it("runs them with an environment that has one, and refuses a copy of it", async () => {
+		const exec = vi.fn<ExecFileLike>((_f, _a, _o, callback) => callback(null, "", ""));
+		for (const spec of COMPOSE_SPECS()) await runLocalServerCommand(exec, spec, pinnedEnv(LOCAL_SOCKET, true));
+		expect(exec).toHaveBeenCalledTimes(7);
+		await expect(runLocalServerCommand(exec, upCommand(DOCKER, STACK), { ...pinnedEnv() })).rejects.toThrow();
+	});
+
+	it("an environment that was built without the plugin cannot be upgraded afterwards", async () => {
+		const exec = vi.fn<ExecFileLike>();
+		const env = pinnedEnv(LOCAL_SOCKET, false);
+		env.COMPOSE_PLUGIN = "1";
+		await expect(runLocalServerCommand(exec, psCommand(DOCKER, STACK), env)).rejects.toThrow();
+		expect(hasTrustedComposePlugin(env)).toBe(false);
+		expect(hasTrustedComposePlugin(pinnedEnv(LOCAL_SOCKET, true))).toBe(true);
+	});
+});
+
 describe("findDockerBinary", () => {
 	const only = (target: string) => (file: string) => file === target;
 	const ever = () => true;
@@ -648,7 +684,7 @@ describe("the production adapter (nodeExec) with a mocked child_process", () => 
 	});
 
 	it("does not reach execFile for a command the module did not issue or without a local endpoint", async () => {
-		const forged: CommandSpec = { name: "up", file: "/bin/sh", args: ["-c", "echo hi"], timeoutMs: 1000, engine: false, docker: false };
+		const forged: CommandSpec = { name: "up", file: "/bin/sh", args: ["-c", "echo hi"], timeoutMs: 1000, engine: false, docker: false, compose: false };
 		await expect(runLocalServerCommand(nodeExec, forged, ENV)).rejects.toThrow();
 		await expect(runLocalServerCommand(nodeExec, upCommand(DOCKER, STACK), pinnedEnv(null))).rejects.toThrow();
 		expect(childProcess.execFile).not.toHaveBeenCalled();

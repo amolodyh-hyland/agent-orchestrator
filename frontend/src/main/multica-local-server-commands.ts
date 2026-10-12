@@ -37,6 +37,8 @@ export type CommandSpec = {
 	readonly engine: boolean;
 	/** Runs the docker CLI, so it may only run with AO's own HOME and DOCKER_CONFIG. */
 	readonly docker: boolean;
+	/** Runs `docker compose`, so it may only run when a trusted Compose plugin was found for this very run. */
+	readonly compose: boolean;
 };
 
 export type StackPaths = {
@@ -51,7 +53,7 @@ export type StackPaths = {
 const issued = new WeakSet<CommandSpec>();
 
 function issue(name: CommandName, file: string, args: string[], timeoutMs: number, engine = true): CommandSpec {
-	const spec: CommandSpec = Object.freeze({ name, file, args: Object.freeze(args), timeoutMs, engine, docker: file !== OPEN_BINARY });
+	const spec: CommandSpec = Object.freeze({ name, file, args: Object.freeze(args), timeoutMs, engine, docker: file !== OPEN_BINARY, compose: file !== OPEN_BINARY && args[0] === "compose" });
 	issued.add(spec);
 	return spec;
 }
@@ -313,6 +315,11 @@ export function findComposePlugin(options: FindComposePluginOptions): string | n
 	return inspectComposePlugin(options).path;
 }
 
+/** True only for an environment built with AO's Docker home AND a trusted Compose plugin for this run. */
+export function hasTrustedComposePlugin(env: NodeJS.ProcessEnv): boolean {
+	return hasPinnedDockerHome(env) && pinnedEnvs.get(env)?.composePlugin === true;
+}
+
 /** True only for an environment localServerChildEnv built with AO's Docker home (a copy or a hand-made one is not). */
 export function hasPinnedDockerHome(env: NodeJS.ProcessEnv): boolean {
 	const home = env.HOME;
@@ -391,7 +398,7 @@ export function isLocalDockerEndpoint(value: string | undefined): boolean {
  * variables from AO's own environment are not passed.
  */
 // Environments built by localServerChildEnv with AO's Docker home: the runner only runs docker with these.
-const pinnedEnvs = new WeakSet<NodeJS.ProcessEnv>();
+const pinnedEnvs = new WeakMap<NodeJS.ProcessEnv, { composePlugin: boolean }>();
 
 export function localServerChildEnv(
 	env: NodeJS.ProcessEnv,
@@ -400,6 +407,8 @@ export function localServerChildEnv(
 	endpoint: string | null = null,
 	pathDirs: readonly string[] = [],
 	dockerHome: string | null = null,
+	/** Whether a trusted Compose plugin was found for this run; without one no `docker compose` command may run with this environment. */
+	composePlugin = false,
 ): NodeJS.ProcessEnv {
 	const next: NodeJS.ProcessEnv = {};
 	if (dockerHome !== null) {
@@ -415,7 +424,7 @@ export function localServerChildEnv(
 		if (!isLocalDockerEndpoint(endpoint)) throw new Error("Docker endpoint must be a local socket");
 		next.DOCKER_HOST = endpoint;
 	}
-	if (dockerHome !== null) pinnedEnvs.add(next);
+	if (dockerHome !== null) pinnedEnvs.set(next, { composePlugin });
 	return next;
 }
 
@@ -455,6 +464,7 @@ export function runLocalServerCommand(
 	if (!isIssuedCommand(spec)) return Promise.reject(new Error("command is not on the local server allow-list"));
 	if (spec.engine && !isLocalDockerEndpoint(env.DOCKER_HOST)) return Promise.reject(new Error("Docker commands only run against the local engine endpoint"));
 	if (spec.docker && !hasPinnedDockerHome(env)) return Promise.reject(new Error("Docker commands only run with AO's own HOME and DOCKER_CONFIG"));
+	if (spec.compose && !hasTrustedComposePlugin(env)) return Promise.reject(new Error("Docker Compose commands only run with a trusted Compose plugin"));
 	if (signal?.aborted) {
 		const error = Object.assign(new Error("aborted"), { name: "AbortError", code: "ABORT_ERR" });
 		return Promise.resolve({ error, stdout: "", stderr: "" });
