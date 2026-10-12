@@ -270,6 +270,22 @@ describe("MulticaLocalServerControls", () => {
 
 			expect(screen.queryByText("secret-looking line")).not.toBeInTheDocument();
 		});
+
+		it("does not show old lines when the log is opened again later", async () => {
+			fake.getLogs.mockResolvedValueOnce({ ok: true, lines: ["old sign-in line 111111"] });
+			await open("healthy");
+			await userEvent.click(button("Show log"));
+			await screen.findByText("old sign-in line 111111");
+			await userEvent.click(button("Hide log"));
+			act(() => listener?.(status("needs_setup")));
+			fake.getLogs.mockReturnValue(new Promise(() => undefined));
+			act(() => listener?.(status("healthy")));
+
+			await userEvent.click(button("Show log"));
+
+			expect(screen.queryByText("old sign-in line 111111")).not.toBeInTheDocument();
+			expect(screen.getByText("No log lines yet.")).toBeInTheDocument();
+		});
 	});
 });
 

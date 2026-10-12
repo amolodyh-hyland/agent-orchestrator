@@ -227,6 +227,28 @@ describe("status", () => {
 		}
 	});
 
+	it("resumes polling when watched again after being stopped", async () => {
+		vi.useFakeTimers();
+		try {
+			const h = harness();
+			h.server.watch(true);
+			await vi.advanceTimersByTimeAsync(0);
+			h.server.watch(false);
+			await vi.advanceTimersByTimeAsync(10_000);
+			const stopped = h.calls.length;
+
+			h.server.watch(true);
+			await vi.advanceTimersByTimeAsync(0);
+			const resumed = h.calls.length;
+			expect(resumed).toBeGreaterThan(stopped);
+			await vi.advanceTimersByTimeAsync(5_000);
+
+			expect(h.calls.length).toBeGreaterThan(resumed);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("pushes a status only when it changes", async () => {
 		const h = harness();
 		await h.server.getStatus();
