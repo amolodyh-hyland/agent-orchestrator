@@ -1,0 +1,31 @@
+#!/bin/bash
+. "${NOETAXIS_FAKES:?}/sim-lib.sh"
+sim_log "open $*"
+[[ "$1" == -a ]] || exit 1
+app="$2"
+# Evidence for the ordering tests: what existed on disk the moment the app was launched.
+backup_state=no
+for record in "$HOME"/ao-backups/*/BACKUP_COMPLETE; do
+	[[ -f "$record" ]] && backup_state=yes
+done
+sim_log "open-saw-backup-complete=$backup_state"
+if sim_has open_fail; then exit 1; fi
+mode="$(sim_value open_mode)"
+mode="${mode:-healthy}"
+version="$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")"
+if /usr/bin/grep -qxF "$version" "$SIM/cfg/no_start_versions" 2>/dev/null; then mode=no-start; fi
+case "$mode" in
+	healthy)
+		sim_add_proc "$app/Contents/MacOS/Agent Orchestrator" > /dev/null
+		sim_add_proc "$app/Contents/Frameworks/Agent Orchestrator Helper.app/Contents/MacOS/Agent Orchestrator Helper --type=gpu-process" > /dev/null
+		sim_add_proc "$app/Contents/Resources/daemon/ao daemon" > /dev/null
+		;;
+	no-start) ;;
+	app-only) sim_add_proc "$app/Contents/MacOS/Agent Orchestrator" > /dev/null ;;
+esac
+if [[ -f "$SIM/cfg/migrate_$version" ]]; then
+	/usr/bin/sqlite3 "$HOME/.ao/data/ao.db" "insert into goose_db_version(version_id, is_applied) values ($(cat "$SIM/cfg/migrate_$version"), 1);"
+fi
+if [[ -f "$SIM/cfg/hosting_after_open" ]]; then
+	/bin/cp "$SIM/cfg/hosting_after_open" "$SIM/hosting"
+fi

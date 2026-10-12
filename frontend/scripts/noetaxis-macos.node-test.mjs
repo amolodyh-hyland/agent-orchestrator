@@ -370,7 +370,13 @@ test("the install tooling never runs kill, pkill, killall or the bundled ao stop
 	for (const file of files) {
 		const lines = (await readFile(path.join(scriptDir, "noetaxis-macos", file), "utf8")).split("\n");
 		let inHeredoc = false;
+		// noetaxis_bounded is the one documented exception: the watchdog of the script's own helper
+		// commands (see noetaxis-macos-update.node-test.mjs, which pins exactly what it may signal).
+		let inWatchdog = false;
 		lines.forEach((line, index) => {
+			if (/^noetaxis_bounded\(\) \{/.test(line)) inWatchdog = true;
+			else if (inWatchdog && line === "}") { inWatchdog = false; return; }
+			if (inWatchdog) return;
 			if (/<<'?EOF'?$/.test(line)) inHeredoc = true;
 			else if (line === "EOF") inHeredoc = false;
 			const code = line.trim();
