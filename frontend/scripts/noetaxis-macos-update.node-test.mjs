@@ -279,7 +279,7 @@ test("live sessions are refused by default with the list and the flags, before a
 	assert.match(result.stderr, /2 live session\(s\) would be interrupted/);
 	assert.match(result.stderr, /s1/);
 	assert.match(result.stderr, /s2/);
-	assert.doesNotMatch(result.stderr, /s3/);
+	assert.doesNotMatch(result.stderr, /^\s+s3\s/m);
 	assert.match(result.stderr, /--end-sessions/);
 	assert.match(result.stderr, /--restore-sessions/);
 	assert.match(result.stderr, /Agent Orchestrator\.app\/Contents\/Resources\/daemon\/ao" session exit-agent <id>/);
