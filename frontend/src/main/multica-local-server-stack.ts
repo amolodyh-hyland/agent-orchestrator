@@ -1,4 +1,5 @@
 import { mkdir, lstat, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
+import { load } from "js-yaml";
 import path from "node:path";
 import { COMPOSE_FILE_NAME, ownedAndNotWritableByOthers, type StackPaths, type TrustStat } from "./multica-local-server-commands";
 
@@ -54,59 +55,126 @@ function currentGid(): number | undefined {
 	return typeof process.getgid === "function" ? process.getgid() : undefined;
 }
 
-// Keys that give a service the host (or other files, or other projects): none is in Multica's own file.
-const FORBIDDEN_COMPOSE_KEYS = [
-	"include",
-	"extends",
-	"env_file",
-	"privileged",
-	"pid",
-	"ipc",
-	"uts",
-	"userns_mode",
-	"cgroup_parent",
-	"cgroup",
-	"devices",
-	"cap_add",
-	"security_opt",
-	"network_mode",
-	"volumes_from",
-	"sysctls",
-	"build",
-	"configs",
-	"secrets",
-	"develop",
-	"runtime",
-	"gpus",
-	"group_add",
-	"post_start",
-	"pre_stop",
-	"label_file",
-];
-const FORBIDDEN_KEY_PATTERN = new RegExp(`(^|[\\s{,\\[])(${FORBIDDEN_COMPOSE_KEYS.join("|")})\\s*:`, "m");
-const NAMED_VOLUME_ITEM = /^[A-Za-z0-9_][A-Za-z0-9_.-]*:\//;
-const LOOPBACK_PORT_ITEM = /^(127\.0\.0\.1|\[::1\]|localhost):/;
+const ALLOWED_TOP_LEVEL = new Set(["name", "services", "volumes"]);
+const ALLOWED_SERVICE_KEYS = new Set(["image", "environment", "volumes", "ports", "restart", "depends_on", "healthcheck"]);
+const ALLOWED_HEALTHCHECK_KEYS = new Set(["test", "interval", "timeout", "retries", "start_period", "start_interval", "disable"]);
+const ALLOWED_DEPENDS_CONDITIONS = new Set(["service_started", "service_healthy", "service_completed_successfully"]);
+const RESTART_POLICIES = new Set(["no", "always", "unless-stopped", "on-failure"]);
+const SERVICE_NAME = /^[a-z][a-z0-9_-]{0,62}$/;
+const VOLUME_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/;
+// <named volume>:<absolute container path>[:ro|rw]; a host path, ./relative or ~ cannot match a bare volume name.
+const VOLUME_ITEM = /^([A-Za-z0-9][A-Za-z0-9_.-]{0,62}):(\/[^:\s]*)(?::(?:ro|rw))?$/;
+// Loopback only: <127.0.0.1|[::1]>:<host port or ${interpolation}>:<container port>[/tcp].
+// ${...} groups are collapsed to X first (innermost out), so an interpolation can only stand for the host port.
+const PORT_ITEM = /^(?:127\.0\.0\.1|\[::1\]):(?:\d{1,5}|X):\d{1,5}(?:\/tcp)?$/;
+
+function collapseInterpolations(value: string): string {
+	let current = value;
+	for (let guard = 0; guard < 32; guard += 1) {
+		const next = current.replace(/\$\{[^${}]*\}/g, "X");
+		if (next === current) break;
+		current = next;
+	}
+	return current;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isScalar(value: unknown): boolean {
+	return value === null || ["string", "number", "boolean"].includes(typeof value);
+}
 
 /**
- * A conservative text check that the compose file hands out nothing beyond named volumes and
- * loopback ports: no include/extends/env_file/privileged/host namespaces/devices/build,
- * no bind mounts (a list item `source:target` must have a plain volume name as its source),
- * no port published beyond loopback, and no flow-style `volumes:`/`ports:` that would hide
- * either. Multica's own file passes; an unusual one is refused rather than guessed at. This
- * is a guard against tampering and mistakes, not a sandbox: the image still comes from the
- * `.env` file the user controls, and Compose runs whatever the file legitimately says.
+ * Parses the compose file and accepts only the structure Multica's self-hosting stack
+ * uses, by an allow-list over the DECODED document (so quoting, flow style, anchors and
+ * key order cannot hide anything): top level `name: multica`, `services`, and `volumes`
+ * whose entries are bare named volumes; per service only image, environment, restart,
+ * depends_on, healthcheck, ports bound to loopback, and volumes that mount a declared
+ * named volume at an absolute container path. Everything else (including `include`,
+ * `privileged`, bind or `driver_opts` volumes, other published ports, `build`, `extends`,
+ * extension fields) refuses the file. A file that does not parse, repeats a key, or is
+ Returns null when accepted, else a short reason.
+ * This is a guard against tampering, not a sandbox: the image still comes from the `.env`.
  */
 export function unsafeComposeReason(text: string): string | null {
-	if (FORBIDDEN_KEY_PATTERN.test(text)) return "forbidden_key";
-	if (/\btype\s*:\s*["']?bind\b/.test(text)) return "bind_mount";
-	if (/^[ \t]*(volumes|ports)[ \t]*:[ \t]*[^\s#]/m.test(text)) return "flow_style";
-	for (const line of text.split("\n")) {
-		const item = /^\s*-\s+(.*?)\s*$/.exec(line);
-		if (!item) continue;
-		const value = (item[1] ?? "").replace(/^["']|["']$/g, "");
-		if (!value.includes(":")) continue;
-		if (NAMED_VOLUME_ITEM.test(value) || LOOPBACK_PORT_ITEM.test(value)) continue;
-		return "host_path_or_port";
+	let document: unknown;
+	try {
+		document = load(text);
+	} catch {
+		return "unparseable";
+	}
+	if (!isPlainObject(document)) return "not_a_mapping";
+	for (const key of Object.keys(document)) if (!ALLOWED_TOP_LEVEL.has(key)) return `top_level_${key}`;
+	if (document.name !== "multica") return "name";
+
+	const declared = new Set<string>();
+	if (document.volumes !== undefined && document.volumes !== null) {
+		if (!isPlainObject(document.volumes)) return "volumes_shape";
+		for (const [name, definition] of Object.entries(document.volumes)) {
+			if (!VOLUME_NAME.test(name)) return "volume_name";
+			// A bare declaration only: driver, driver_opts (a bind in disguise), external, name... are not allowed.
+			if (definition !== null && !(isPlainObject(definition) && Object.keys(definition).length === 0)) return "volume_definition";
+			declared.add(name);
+		}
+	}
+
+	if (!isPlainObject(document.services)) return "services";
+	const serviceNames = new Set(Object.keys(document.services));
+	for (const [name, rawService] of Object.entries(document.services)) {
+		if (!SERVICE_NAME.test(name) || !isPlainObject(rawService)) return "service_shape";
+		for (const key of Object.keys(rawService)) if (!ALLOWED_SERVICE_KEYS.has(key)) return `service_key_${key}`;
+		const service = rawService;
+		if (typeof service.image !== "string" || service.image === "") return "image";
+		if (service.restart !== undefined && !(typeof service.restart === "string" && RESTART_POLICIES.has(service.restart.split(":")[0] ?? ""))) return "restart";
+
+		const env = service.environment;
+		if (env !== undefined && env !== null) {
+			if (Array.isArray(env)) {
+				if (!env.every((item) => typeof item === "string")) return "environment";
+			} else if (!isPlainObject(env) || !Object.values(env).every(isScalar)) return "environment";
+		}
+
+		const volumes = service.volumes;
+		if (volumes !== undefined) {
+			if (!Array.isArray(volumes)) return "service_volumes";
+			for (const item of volumes) {
+				const match = typeof item === "string" ? VOLUME_ITEM.exec(item) : null;
+				if (!match || !declared.has(match[1] as string)) return "service_volume_item";
+			}
+		}
+
+		const ports = service.ports;
+		if (ports !== undefined) {
+			if (!Array.isArray(ports)) return "ports";
+			for (const item of ports) if (typeof item !== "string" || !PORT_ITEM.test(collapseInterpolations(item))) return "port_item";
+		}
+
+		const dependsOn = service.depends_on;
+		if (dependsOn !== undefined) {
+			if (Array.isArray(dependsOn)) {
+				if (!dependsOn.every((item) => typeof item === "string" && serviceNames.has(item))) return "depends_on";
+			} else if (isPlainObject(dependsOn)) {
+				for (const [dependency, options] of Object.entries(dependsOn)) {
+					if (!serviceNames.has(dependency) || !isPlainObject(options)) return "depends_on";
+					for (const [key, value] of Object.entries(options)) {
+						if (key === "condition" && typeof value === "string" && ALLOWED_DEPENDS_CONDITIONS.has(value)) continue;
+						if (key === "restart" && typeof value === "boolean") continue;
+						return "depends_on";
+					}
+				}
+			} else return "depends_on";
+		}
+
+		const healthcheck = service.healthcheck;
+		if (healthcheck !== undefined) {
+			if (!isPlainObject(healthcheck)) return "healthcheck";
+			for (const [key, value] of Object.entries(healthcheck)) {
+				if (!ALLOWED_HEALTHCHECK_KEYS.has(key)) return "healthcheck";
+				if (key === "test" ? !(typeof value === "string" || (Array.isArray(value) && value.every((item) => typeof item === "string"))) : !isScalar(value)) return "healthcheck";
+			}
+		}
 	}
 	return null;
 }
