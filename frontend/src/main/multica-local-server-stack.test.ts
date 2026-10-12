@@ -121,9 +121,19 @@ describe("validateStackDir", () => {
 		await expect(validate(tree({ "/Users/me": dir(0o775, 501, 1234) }))).resolves.toEqual({ ok: false, error: "unsafe_directory" });
 	});
 
-	it("accepts a group-writable ancestor only for an administrator group or the user's own", async () => {
+	it("accepts a group-writable ancestor only for root/wheel and the administrator group", async () => {
 		await expect(validate(tree({ "/Users/me": dir(0o775, 501, 80) }))).resolves.toMatchObject({ ok: true });
-		await expect(validate(tree({ "/Users/me": dir(0o775, 501, 20) }))).resolves.toMatchObject({ ok: true });
+		await expect(validate(tree({ "/Users/me": dir(0o775, 501, 0) }))).resolves.toMatchObject({ ok: true });
+	});
+
+	it("rejects a group-writable ancestor, folder or compose file for staff, the user's own group or any shared group", async () => {
+		for (const gid of [20, 50, 1234]) {
+			await expect(validate(tree({ "/Users/me": dir(0o775, 501, gid) })), `ancestor ${gid}`).resolves.toEqual({ ok: false, error: "unsafe_directory" });
+			await expect(validate(tree({ [D]: dir(0o775, 501, gid) })), `folder ${gid}`).resolves.toEqual({ ok: false, error: "unsafe_directory" });
+			await expect(validate(tree({ [F]: file(COMPOSE, 0o664, 501, gid) })), `compose ${gid}`).resolves.toEqual({ ok: false, error: "unsafe_compose_file" });
+		}
+		// ME has primary group 20: that is not exclusive ownership either.
+		await expect(validate(tree({ [F]: file(COMPOSE, 0o664, 501, 20) }), D, { uid: 501, gid: 20 })).resolves.toEqual({ ok: false, error: "unsafe_compose_file" });
 	});
 
 	it("rejects a folder, ancestor or compose file owned by another user", async () => {

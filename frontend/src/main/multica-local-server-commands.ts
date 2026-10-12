@@ -123,8 +123,13 @@ function trustedInstallDirs(home: string, platform: NodeJS.Platform): string[] {
 
 const SYSTEM_DIRS = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
 
-/** Group ids whose members may write where an administrator would: root/wheel, macOS admin and staff. */
-const TRUSTED_GROUP_IDS = new Set([0, 20, 50, 80]);
+/**
+ * The only groups whose write access is accepted: root/wheel (0) and the macOS `admin` group
+ * (80), whose members are administrators anyway. Shared groups such as `staff` (every ordinary
+ * macOS user, and Debian's staff) and the user's own primary group are not: another member
+ * could rewrite the file or directory without changing its owner.
+ */
+const TRUSTED_GROUP_IDS = new Set([0, 80]);
 
 export type TrustStat = { isFile: () => boolean; isDirectory: () => boolean; mode: number; uid: number; gid: number };
 export type TrustFs = {
@@ -150,7 +155,7 @@ export function ownedAndNotWritableByOthers(info: TrustStat, context: TrustConte
 	if (context.uid === undefined) return true;
 	if (info.uid !== 0 && info.uid !== context.uid) return false;
 	if ((info.mode & 0o002) !== 0) return false;
-	return (info.mode & 0o020) === 0 || TRUSTED_GROUP_IDS.has(info.gid) || info.gid === context.gid;
+	return (info.mode & 0o020) === 0 || TRUSTED_GROUP_IDS.has(info.gid);
 }
 
 function directoryChainTrusted(start: string, context: TrustContext): boolean {

@@ -334,11 +334,29 @@ describe("isTrustedExecutable", () => {
 		}
 	});
 
-	it("rejects a group-writable directory unless the group is an administrator group or the user's own", () => {
+	it("accepts group write only for root/wheel and the administrator group", () => {
 		const withGroup = (gid: number, uid = 0) => ({ ...base, "/usr/local/bin": dir(0o775, uid, gid) });
-		expect(trusted(withGroup(1234))).toBe(false);
+		expect(trusted(withGroup(0))).toBe(true);
 		expect(trusted(withGroup(80))).toBe(true);
-		expect(trusted(withGroup(20, 501))).toBe(true);
+		expect(trusted(withGroup(80, 501))).toBe(true);
+	});
+
+	it("rejects group write for shared groups: staff, the user's own primary group, and any other", () => {
+		const dirWith = (gid: number, uid = 0) => ({ ...base, "/usr/local/bin": dir(0o775, uid, gid) });
+		for (const gid of [20, 50, 1234]) {
+			expect(trusted(dirWith(gid)), `dir gid ${gid}`).toBe(false);
+			expect(trusted(dirWith(gid, 501)), `user-owned dir gid ${gid}`).toBe(false);
+		}
+		// The user's own primary group is not exclusive: other members can write too.
+		expect(trusted(dirWith(20, 501), "/usr/local/bin/docker", { uid: 501, gid: 20 })).toBe(false);
+		expect(trusted(dirWith(777, 501), "/usr/local/bin/docker", { uid: 501, gid: 777 })).toBe(false);
+	});
+
+	it("rejects a current-user docker binary that is group-writable by a shared group (0775:staff)", () => {
+		for (const gid of [20, 50, 1234]) {
+			expect(trusted({ ...base, "/usr/local/bin/docker": file(0o775, 501, gid) }), String(gid)).toBe(false);
+		}
+		expect(trusted({ ...base, "/usr/local/bin/docker": file(0o775, 501, 80) })).toBe(true);
 	});
 
 	it("rejects files or directories owned by another user", () => {
