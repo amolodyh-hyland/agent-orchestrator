@@ -114,7 +114,7 @@ An update run inside an AO session would end that session in the middle (it quit
 | 20 | Inside an AO session (use `--detached`). |
 | 21 / 22 | Other processes block / ShipIt is running. |
 | 23-35 | As in the default install (metadata, manifest, space, backup, privilege, staging, swap). |
-| 36 | Another install, update or rollback holds the lock (`~/.ao-install.lock`, owner pid in `pid`); a dead owner's lock is taken over, but only when `ps` ran and said the owner is gone (if `ps` cannot run, the owner is assumed alive). Install, update and rollback all take it, so two swaps cannot overlap. A dry run does not take it. |
+| 36 | Another install, update or rollback holds the lock (`~/.ao-install.lock`, owner pid in `pid`), or an earlier run left it behind. The lock is **never taken over or removed by the scripts**: a normal exit, INT, TERM and HUP release it, but a run killed with SIGKILL (or a power loss) leaves it, and then the message tells you to check that nothing is running and remove it with `rm -rf ~/.ao-install.lock`. Install, update and rollback all take it, so two swaps cannot overlap. A dry run does not take it. |
 | 50 | You answered anything but `yes`; nothing changed. |
 | 51 | Live sessions and no `--end-sessions`; nothing stopped. |
 | 52 | The daemon runs but its session list could not be read; nothing stopped. |

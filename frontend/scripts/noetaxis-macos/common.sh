@@ -569,8 +569,7 @@ noetaxis_print_post_install_checks() {
 
 # One install, update or rollback at a time: two of them swapping the same app, or one
 # restoring a backup under another's stop, would corrupt both. The lock is a directory
-# (mkdir is atomic) holding the owner's pid at <home>/.ao-install.lock. A dead owner's lock is
-# taken over by renaming it away first, and a live owner (by ps) is never displaced.
+# (mkdir is atomic) holding the owner's pid at <home>/.ao-install.lock. It is never taken over.
 # A rollback.sh started by install.sh --update inherits the lock through NOETAXIS_LOCK_HELD_BY.
 noetaxis_lock_held=0
 
@@ -591,8 +590,12 @@ noetaxis_pid_may_be_alive() {
 	return 0
 }
 
+# The lock is never taken over. A lock whose owner is gone (a run killed with SIGKILL, or a power
+# loss) stays until a person removes it: reclaiming it automatically would need a compare-and-delete
+# that the filesystem does not offer, and every attempt races with a live run that publishes its own
+# lock in the meantime. A normal exit, INT, TERM or HUP releases the lock through the EXIT trap.
 noetaxis_acquire_lock() {
-	local user_home="$1" lock holder stale
+	local user_home="$1" lock holder
 	lock="$user_home/.ao-install.lock"
 	if [[ -n "${NOETAXIS_LOCK_HELD_BY:-}" && "$(/bin/cat "$lock/pid" 2>/dev/null || true)" == "$NOETAXIS_LOCK_HELD_BY" ]]; then
 		return 0
@@ -607,26 +610,11 @@ noetaxis_acquire_lock() {
 			holder="$(/bin/cat "$lock/pid" 2>/dev/null || true)"
 		done
 		if noetaxis_pid_may_be_alive "$holder"; then
-			noetaxis_error "Another install, update or rollback is running (pid ${holder:-unknown}, lock $lock). Wait for it to finish; two at once could corrupt the app or the backup."
-			return 36
+			noetaxis_error "Another install, update or rollback is running (pid ${holder:-unknown}, lock $lock). Wait for it to finish; two at once could corrupt the app or the backup. If you are sure no run is active (the lock has no readable owner), remove the lock yourself: rm -rf \"$lock\""
+		else
+			noetaxis_error "A previous install, update or rollback (pid $holder) left its lock behind and is no longer running (it was killed or the machine lost power). This command never removes a lock by itself. Check that no install is running, then remove it and rerun: rm -rf \"$lock\""
 		fi
-		stale="$lock.stale-$$"
-		if ! /bin/mv "$lock" "$stale" 2>/dev/null; then
-			noetaxis_error "Another install, update or rollback just took the lock ($lock). Wait for it to finish."
-			return 36
-		fi
-		# The directory moved may be a live owner's lock created after the check above.
-		holder="$(/bin/cat "$stale/pid" 2>/dev/null || true)"
-		if noetaxis_pid_may_be_alive "$holder"; then
-			/bin/mv "$stale" "$lock" 2>/dev/null || true
-			noetaxis_error "Another install, update or rollback is running (pid $holder, lock $lock)."
-			return 36
-		fi
-		/bin/rm -rf "$stale"
-		if ! /bin/mkdir "$lock" 2>/dev/null; then
-			noetaxis_error "Another install, update or rollback just took the lock ($lock). Wait for it to finish."
-			return 36
-		fi
+		return 36
 	fi
 	printf '%s' "$$" > "$lock/pid"
 	noetaxis_lock_held="$lock"

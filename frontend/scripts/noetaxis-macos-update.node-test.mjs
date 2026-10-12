@@ -7,7 +7,7 @@ import { spawn, spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import os from "node:os";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { execute, fakesDir, makeWorld, mutatedScripts, newVersion, oldVersion, realScriptsDir } from "./noetaxis-macos-update-world.mjs";
 
@@ -804,7 +804,7 @@ test("mutation: ending a session that was not in the confirmed plan is caught", 
 	assert.ok(matching(await world.calls(), /session exit-agent s9/).length > 0 || result.status !== 51, "the mutant must end the unconfirmed session");
 });
 
-test("only one install, update or rollback runs at a time (exit 36); a dead owner's lock is taken over; a dry run ignores it", darwin, async (t) => {
+test("only one install, update or rollback runs at a time (exit 36); a dry run ignores the lock", darwin, async (t) => {
 	const world = await makeWorld(t, "lock");
 	const lock = path.join(world.home, ".ao-install.lock");
 	await mkdir(lock, { recursive: true });
@@ -818,16 +818,29 @@ test("only one install, update or rollback runs at a time (exit 36); a dead owne
 	await mkdir(path.join(idle.home, ".ao-install.lock"), { recursive: true });
 	await writeFile(path.join(idle.home, ".ao-install.lock/pid"), String(process.pid));
 	assert.equal(idle.run([idle.newApp]).status, 36, "the default install takes the lock too");
-	const rollback = world.run([], { script: "rollback.sh" });
-	assert.equal(rollback.status, 36);
+	assert.equal(world.run([], { script: "rollback.sh" }).status, 36);
 	assert.equal(world.update(["--dry-run"]).status, 0, "a dry run changes nothing and takes no lock");
-	// A lock whose owner is gone is stale.
+	assert.equal(existsSync(lock), true, "nobody else's lock was touched");
+});
+
+test("a lock left by a dead owner is never taken over: the message gives the exact removal command, and the lock stays until a person removes it", darwin, async (t) => {
+	const world = await makeWorld(t, "lock-stale");
+	const lock = path.join(world.home, ".ao-install.lock");
 	const dead = execute("/bin/sh", ["-c", "echo $$"]).stdout.trim();
+	await mkdir(lock, { recursive: true });
 	await writeFile(path.join(lock, "pid"), dead);
 	const result = world.update(["--yes"]);
-	assert.equal(result.status, 0, result.stdout + result.stderr);
-	assert.equal(existsSync(lock), false, "the lock is released at exit");
-	assert.equal(readdirSync(world.home).filter((name) => name.startsWith(".ao-install.lock")).length, 0);
+	assert.equal(result.status, 36, result.stdout + result.stderr);
+	assert.match(result.stderr, new RegExp(`left its lock behind and is no longer running`));
+	assert.ok(result.stderr.includes(`rm -rf "${lock}"`), "the exact command is printed");
+	assert.equal(existsSync(lock), true, "the lock was not removed");
+	assert.equal(readFileSync(path.join(lock, "pid"), "utf8"), dead, "and not replaced");
+	assert.deepEqual(readdirSync(world.home).filter((name) => name.includes("stale")), [], "nothing is renamed or nested");
+	assert.equal(callIndex(await world.calls(), /^osascript/), -1);
+	// After the person removes it, the update runs.
+	await rm(lock, { recursive: true });
+	assert.equal(world.update(["--yes"]).status, 0);
+	assert.equal(existsSync(lock), false, "released at exit");
 });
 
 test("a second install cannot swap while the first is paused mid-swap; the first still ends with an intact bundle", darwin, async (t) => {
@@ -926,6 +939,15 @@ test("the lock is released last: it still stands while the cleanup restores the 
 	assert.equal(world.update(["--yes"]).status, 36);
 	assert.equal(await exited, 143);
 	assert.equal(existsSync(path.join(world.home, ".ao-install.lock")), false);
+});
+
+test("the lock code never renames or removes a lock it did not create (no takeover, nothing to race)", async () => {
+	const text = await readFile(path.join(realScriptsDir, "common.sh"), "utf8");
+	const body = text.slice(text.indexOf("noetaxis_acquire_lock() {"), text.indexOf("noetaxis_release_lock() {"));
+	const code = body.split("\n").filter((line) => !/^\s*(#|noetaxis_error)/.test(line)).join("\n");
+	assert.doesNotMatch(code, /\/bin\/mv|\/bin\/rm|\brm\b|\bmv\b/);
+	const release = text.slice(text.indexOf("noetaxis_release_lock() {"));
+	assert.match(release.split("\n}\n")[0], /\$\(\/bin\/cat "\$noetaxis_lock_held\/pid".*== "\$\$"/s, "it only removes a lock whose pid file is its own");
 });
 
 test("the automatic rollback inside an update runs under the update's own lock", darwin, async (t) => {
