@@ -135,6 +135,8 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 	let lastError: LocalServerStatus["error"] = null;
 	let portFailure = false;
 	let unreadyAt: number | null = null;
+	// True while .env is being created: past that point the operation is not cancellable.
+	let setupWriting = false;
 	let lastStatus: LocalServerStatus = { ...EMPTY_LOCAL_SERVER_STATUS, canLaunchDocker };
 	let lastKey = "";
 
@@ -351,6 +353,8 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 	/** Makes sure Docker's engine answers; on macOS a stopped Docker Desktop is started and waited for. */
 	async function ensureEngine(docker: string, signal: AbortSignal, mayLaunch: boolean): Promise<LocalServerResult> {
 		const inspected = await inspectEngine(docker, signal);
+		// Cancelled while Docker was being asked: do not go on to launch Docker Desktop.
+		if (signal.aborted) return { ok: false, code: "cancelled" };
 		if (inspected.state === "ok") return { ok: true };
 		if (inspected.state === "unknown") return { ok: false, code: "inspect_failed", ...(inspected.detail ? { detail: inspected.detail } : {}) };
 		if (!mayLaunch || !canLaunchDocker) return { ok: false, code: "docker_not_running" };
@@ -370,10 +374,13 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 	): Promise<LocalServerResult> {
 		return operate(state, async (signal) => {
 			const prepared = await prepare();
+			if (signal.aborted) return { ok: false, code: "cancelled" };
 			if (!prepared.ok) return prepared;
 			const engine = await ensureEngine(prepared.docker, signal, mayLaunchDocker);
 			if (!engine.ok) return engine;
-			if (!(await composeInstalled(prepared.docker))) return { ok: false, code: "compose_missing" };
+			const installed = await composeInstalled(prepared.docker);
+			if (signal.aborted) return { ok: false, code: "cancelled" };
+			if (!installed) return { ok: false, code: "compose_missing" };
 			setOp(state);
 			const result = outcome(await run(build(prepared.docker, prepared.stack), signal), signal);
 			if (result.ok) portFailure = false;
@@ -413,20 +420,32 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 		stop: () => stackCommand("stopping", stopCommand, false),
 		restart: () => stackCommand("restarting", restartCommand, false),
 		cancel: () => {
+			// Creating .env is one quick write that cannot be taken back half-way: once it has started, cancel says so.
+			if (setupWriting) return { ok: false, code: "busy" };
 			controller?.abort();
 			return { ok: true };
 		},
 		setup: () =>
-			operate("setting_up", async () => {
+			operate("setting_up", async (signal) => {
 				const availability = localServerAvailability(await readSettings());
+				if (signal.aborted) return { ok: false, code: "cancelled" };
 				if (!availability.available) return { ok: false, code: "unavailable" };
 				const folder = await resolveFolder();
+				if (signal.aborted) return { ok: false, code: "cancelled" };
 				if (folder.kind === "none") return { ok: false, code: "no_folder" };
 				if (folder.kind === "invalid") return { ok: false, code: "invalid_folder" };
-				if (await options.fileExists(path.join(folder.stack.dir, ENV_FILE_NAME))) return { ok: false, code: "already_set_up" };
-				const created = await options.setupEnv(folder.stack);
-				if (created === "created") return { ok: true };
-				return { ok: false, code: created === "already_set_up" ? "already_set_up" : "setup_failed" };
+				const exists = await options.fileExists(path.join(folder.stack.dir, ENV_FILE_NAME));
+				if (signal.aborted) return { ok: false, code: "cancelled" };
+				if (exists) return { ok: false, code: "already_set_up" };
+				// Last chance to cancel: from here the file is written (exclusively, in one step) or not at all.
+				setupWriting = true;
+				try {
+					const created = await options.setupEnv(folder.stack);
+					if (created === "created") return { ok: true };
+					return { ok: false, code: created === "already_set_up" ? "already_set_up" : "setup_failed" };
+				} finally {
+					setupWriting = false;
+				}
 			}),
 		chooseFolder: async () => {
 			if (operationBusy) return { ok: false, code: "busy" };

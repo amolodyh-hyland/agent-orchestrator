@@ -134,12 +134,18 @@ describe("MulticaLocalServerControls", () => {
 		expect(screen.getByText(/Start opens Docker Desktop/)).toBeInTheDocument();
 	});
 
-	it.each<LocalServerState>(["starting_server", "stopping", "restarting", "setting_up", "docker_starting"])("%s: disables everything but Cancel and Cancel calls the main process", async (state) => {
+	it.each<LocalServerState>(["starting_server", "stopping", "restarting", "docker_starting"])("%s: disables everything but Cancel and Cancel calls the main process", async (state) => {
 		await open(state);
 
 		for (const name of ["Start", "Stop", "Restart", "Choose folder…"]) expect(button(name).hasAttribute("disabled")).toBe(true);
 		await userEvent.click(button("Cancel"));
 		expect(fake.cancel).toHaveBeenCalledOnce();
+	});
+
+	it("does not offer Cancel while setting up, but still disables everything else", async () => {
+		await open("setting_up");
+		expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+		for (const name of ["Start", "Stop", "Restart", "Choose folder…"]) expect(button(name).hasAttribute("disabled")).toBe(true);
 	});
 
 	it("offers Cancel only while something runs", async () => {

@@ -743,6 +743,105 @@ describe("cancel", () => {
 		expect(h.verbs()).not.toContain("up");
 	});
 
+	it("does not create .env when cancelled while the settings are still being read", async () => {
+		const h = harness({ hasEnv: false });
+		const gate = hang();
+		h.options.readServerSettings = async () => {
+			await gate.promise;
+			return h.fake.settings;
+		};
+		const setupEnv = vi.spyOn(h.options, "setupEnv");
+		const server = createMulticaLocalServer(h.options);
+
+		const setup = server.setup();
+		await vi.waitFor(() => expect(h.emitted.map((s) => s.state)).toContain("setting_up"));
+		expect(server.cancel()).toEqual({ ok: true });
+		gate.release();
+
+		expect(await setup).toEqual({ ok: false, code: "cancelled" });
+		expect(setupEnv).not.toHaveBeenCalled();
+		expect(h.fake.hasEnv).toBe(false);
+	});
+
+	it("does not create .env when cancelled while the folder or .env check is pending", async () => {
+		for (const stage of ["validate", "fileExists"] as const) {
+			const h = harness({ hasEnv: false });
+			const gate = hang();
+			const original = h.options[stage] as (...args: never[]) => Promise<unknown>;
+			(h.options as Record<string, unknown>)[stage] = async (...args: never[]) => {
+				await gate.promise;
+				return original(...args);
+			};
+			const setupEnv = vi.spyOn(h.options, "setupEnv");
+			const server = createMulticaLocalServer(h.options);
+
+			const setup = server.setup();
+			await vi.waitFor(() => expect(h.emitted.map((s) => s.state)).toContain("setting_up"));
+			server.cancel();
+			gate.release();
+
+			expect(await setup, stage).toEqual({ ok: false, code: "cancelled" });
+			expect(setupEnv, stage).not.toHaveBeenCalled();
+		}
+	});
+
+	it("says cancel is too late once .env is being written, and the write completes", async () => {
+		const h = harness({ hasEnv: false });
+		const gate = hang();
+		h.options.setupEnv = async () => {
+			await gate.promise;
+			h.fake.hasEnv = true;
+			return "created";
+		};
+		const server = createMulticaLocalServer(h.options);
+
+		const setup = server.setup();
+		await vi.waitFor(() => expect(h.fake.hasEnv).toBe(false));
+		await vi.waitFor(() => expect(h.emitted.map((s) => s.state)).toContain("setting_up"));
+		await new Promise((resolve) => setTimeout(resolve, 5));
+
+		expect(server.cancel()).toEqual({ ok: false, code: "busy" });
+		gate.release();
+
+		expect(await setup).toEqual({ ok: true });
+		expect(h.fake.hasEnv).toBe(true);
+		expect(server.cancel()).toEqual({ ok: true });
+	});
+
+	it("starts nothing, and launches no Docker Desktop, when cancelled while the stack is being prepared", async () => {
+		const h = harness({ engine: "down" });
+		const gate = hang();
+		h.options.readServerSettings = async () => {
+			await gate.promise;
+			return h.fake.settings;
+		};
+		const server = createMulticaLocalServer(h.options);
+
+		const started = server.start();
+		await vi.waitFor(() => expect(h.emitted.map((s) => s.state)).toContain("starting_server"));
+		server.cancel();
+		gate.release();
+
+		expect(await started).toEqual({ ok: false, code: "cancelled" });
+		expect(h.calls.some((call) => call.file === "/usr/bin/open")).toBe(false);
+		expect(h.verbs()).not.toContain("up");
+	});
+
+	it("does not launch Docker Desktop when cancelled while Docker was being asked", async () => {
+		const h = harness({ engine: "down" });
+		const gate = hang();
+		h.fake.handlers["docker-version"] = () => gate.promise;
+		const server = createMulticaLocalServer(h.options);
+
+		const started = server.start();
+		await vi.waitFor(() => expect(h.verbs()).toContain("docker-version"));
+		server.cancel();
+		gate.release({ error: { code: 1 }, stderr: "Cannot connect to the Docker daemon" });
+
+		expect(await started).toEqual({ ok: false, code: "cancelled" });
+		expect(h.calls.some((call) => call.file === "/usr/bin/open")).toBe(false);
+	});
+
 	it("does nothing when nothing runs", () => {
 		expect(harness().server.cancel()).toEqual({ ok: true });
 	});

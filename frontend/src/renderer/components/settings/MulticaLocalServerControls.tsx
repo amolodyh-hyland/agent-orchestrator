@@ -8,6 +8,7 @@ import { SettingsRow } from "./SettingsRow";
 
 const LOG_REFRESH_MS = 3000;
 
+// Setting up is one quick local write, so it is not offered a Cancel button.
 const BUSY_STATES: ReadonlySet<LocalServerState> = new Set(["setting_up", "docker_starting", "starting_server", "stopping", "restarting"]);
 const START_STATES: ReadonlySet<LocalServerState> = new Set(["stopped", "unhealthy", "docker_not_running"]);
 const STOP_STATES: ReadonlySet<LocalServerState> = new Set(["starting", "healthy", "unhealthy"]);
@@ -211,7 +212,7 @@ export function MulticaLocalServerControls() {
 				<Button size="sm" type="button" variant="outline" disabled={!canStopRestart} onClick={() => void act(() => server.restart())}>
 					{t("multica.localServer.restart")}
 				</Button>
-				{busy ? (
+				{busy && status.state !== "setting_up" ? (
 					<Button size="sm" type="button" variant="ghost" onClick={() => void server.cancel()}>
 						{t("multica.localServer.cancel")}
 					</Button>
