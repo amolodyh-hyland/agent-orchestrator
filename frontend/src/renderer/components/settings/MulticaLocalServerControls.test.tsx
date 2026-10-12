@@ -312,6 +312,27 @@ describe("MulticaLocalServerControls", () => {
 			}
 		});
 
+		it("forgets the lines as soon as the log is hidden, and drops a read that was still in flight", async () => {
+			fake.getLogs.mockResolvedValueOnce({ ok: true, lines: ["hidden-line 515151"] });
+			await open("healthy");
+			await userEvent.click(button("Show log"));
+			await screen.findByText("hidden-line 515151");
+
+			let finish: (value: LocalServerLogsResult) => void = () => undefined;
+			fake.getLogs.mockReturnValue(new Promise<LocalServerLogsResult>((resolve) => { finish = resolve; }));
+			await userEvent.click(button("Hide log"));
+			await userEvent.click(button("Show log"));
+			expect(screen.queryByText("hidden-line 515151")).not.toBeInTheDocument();
+			expect(screen.getByText("No log lines yet.")).toBeInTheDocument();
+
+			await userEvent.click(button("Hide log"));
+			await act(async () => finish({ ok: true, lines: ["late-line 626262"] }));
+			// A new read is what Show log starts; it has not answered yet.
+			fake.getLogs.mockReturnValue(new Promise(() => undefined));
+			await userEvent.click(button("Show log"));
+			expect(screen.queryByText("late-line 626262")).not.toBeInTheDocument();
+		});
+
 		it("does not show old lines when the log is opened again later", async () => {
 			fake.getLogs.mockResolvedValueOnce({ ok: true, lines: ["old sign-in line 111111"] });
 			await open("healthy");

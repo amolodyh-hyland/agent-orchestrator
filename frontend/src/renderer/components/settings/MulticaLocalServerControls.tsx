@@ -85,6 +85,7 @@ export function MulticaLocalServerControls() {
 	const [logLines, setLogLines] = useState<string[] | null>(null);
 	const [logFailure, setLogFailure] = useState<Failure | null>(null);
 	const mounted = useRef(true);
+	const logShown = useRef(false);
 
 	useEffect(() => {
 		mounted.current = true;
@@ -108,7 +109,7 @@ export function MulticaLocalServerControls() {
 
 	const refreshLog = useCallback(async () => {
 		const result = await aoBridge.multica.localServer.getLogs("backend");
-		if (!mounted.current) return;
+		if (!mounted.current || !logShown.current) return;
 		if (result.ok) {
 			setLogLines(result.lines);
 			setLogFailure(null);
@@ -126,12 +127,15 @@ export function MulticaLocalServerControls() {
 		return () => clearInterval(timer);
 	}, [logOpen, logAvailable, refreshLog]);
 
+	// Closing the log, or the server going away, forgets the lines (and a read still in flight is dropped).
 	useEffect(() => {
-		if (!logAvailable) {
-			setLogOpen(false);
+		logShown.current = logOpen && logAvailable;
+		if (!logAvailable) setLogOpen(false);
+		if (!logOpen || !logAvailable) {
 			setLogLines(null);
+			setLogFailure(null);
 		}
-	}, [logAvailable]);
+	}, [logOpen, logAvailable]);
 
 	if (!status || status.state === "unavailable") return null;
 
