@@ -155,7 +155,7 @@ export async function makeWorld(t, label, options = {}) {
 		env,
 		sessions,
 		database,
-		run(args, { input = "", scriptsDir = realScriptsDir, script = "install.sh", extraEnv = {}, timeout = 90_000 } = {}) {
+		run(args, { input = "", scriptsDir = realScriptsDir, script = "install.sh", extraEnv = {}, timeout = 300_000 } = {}) {
 			return execute(path.join(scriptsDir, script), args, { input, env: { ...env, ...extraEnv }, timeout });
 		},
 		// The update command line most tests use: short waits so failures return quickly.

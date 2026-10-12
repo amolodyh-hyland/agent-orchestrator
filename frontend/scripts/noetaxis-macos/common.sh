@@ -279,8 +279,8 @@ noetaxis_remove_stale_staging() {
 		name="${candidate##*/}"
 		owner="${name%.app}"
 		owner="${owner##*-}"
-		# ps, not kill -0: kill reports EPERM for a live pid owned by another user (root).
-		if [[ "$owner" =~ ^[0-9]+$ ]] && ! /bin/ps -p "$owner" >/dev/null 2>&1; then
+		# Dead only when ps ran and said so (ps sees pids of other users).
+		if [[ "$owner" =~ ^[0-9]+$ ]] && ! noetaxis_pid_may_be_alive "$owner"; then
 			noetaxis_run_privileged /bin/rm -rf "$candidate" || true
 		fi
 	done
@@ -527,6 +527,21 @@ noetaxis_print_post_install_checks() {
 # A rollback.sh started by install.sh --update inherits the lock through NOETAXIS_LOCK_HELD_BY.
 noetaxis_lock_held=0
 
+# 0 when the pid may be alive. A pid is only declared dead when ps ran and said so: if ps cannot
+# run or is refused (a sandbox, a missing binary), the owner is assumed alive and the lock stands.
+noetaxis_pid_may_be_alive() {
+	local pid="$1" output status=0
+	[[ "$pid" =~ ^[0-9]+$ ]] || return 1
+	output="$("${NOETAXIS_PS:-/bin/ps}" -p "$pid" 2>&1)" || status=$?
+	if [[ "$status" -eq 0 ]]; then
+		return 0
+	fi
+	if [[ "$status" -eq 1 && "$output" != *[Dd]enied* && "$output" != *"not permitted"* && "$output" != *"not found"* && "$output" != *rror* ]]; then
+		return 1
+	fi
+	return 0
+}
+
 noetaxis_acquire_lock() {
 	local user_home="$1" lock holder stale
 	lock="$user_home/.ao-install.lock"
@@ -535,8 +550,8 @@ noetaxis_acquire_lock() {
 	fi
 	if ! /bin/mkdir "$lock" 2>/dev/null; then
 		holder="$(/bin/cat "$lock/pid" 2>/dev/null || true)"
-		if [[ "$holder" =~ ^[0-9]+$ ]] && /bin/ps -p "$holder" >/dev/null 2>&1; then
-			noetaxis_error "Another install, update or rollback is running (pid $holder, lock $lock). Wait for it to finish; two at once could corrupt the app or the backup."
+		if noetaxis_pid_may_be_alive "$holder"; then
+			noetaxis_error "Another install, update or rollback is running (pid ${holder:-unknown}, lock $lock). Wait for it to finish; two at once could corrupt the app or the backup."
 			return 36
 		fi
 		stale="$lock.stale-$$"
@@ -546,7 +561,7 @@ noetaxis_acquire_lock() {
 		fi
 		# The directory moved may be a live owner's lock created after the check above.
 		holder="$(/bin/cat "$stale/pid" 2>/dev/null || true)"
-		if [[ "$holder" =~ ^[0-9]+$ ]] && /bin/ps -p "$holder" >/dev/null 2>&1; then
+		if noetaxis_pid_may_be_alive "$holder"; then
 			/bin/mv "$stale" "$lock" 2>/dev/null || true
 			noetaxis_error "Another install, update or rollback is running (pid $holder, lock $lock)."
 			return 36

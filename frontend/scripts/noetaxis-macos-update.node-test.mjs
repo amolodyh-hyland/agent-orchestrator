@@ -5,10 +5,10 @@
 import test from "node:test";
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
-import { cp, mkdir, readFile, readdir, stat, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { execute, makeWorld, mutatedScripts, newVersion, oldVersion, realScriptsDir } from "./noetaxis-macos-update-world.mjs";
+import { execute, fakesDir, makeWorld, mutatedScripts, newVersion, oldVersion, realScriptsDir } from "./noetaxis-macos-update-world.mjs";
 
 const darwin = { skip: process.platform !== "darwin" };
 
@@ -722,6 +722,45 @@ test("only one install, update or rollback runs at a time (exit 36); a dead owne
 	assert.equal(readdirSync(world.home).filter((name) => name.startsWith(".ao-install.lock")).length, 0);
 });
 
+test("a second install cannot swap while the first is paused mid-swap; the first still ends with an intact bundle", darwin, async (t) => {
+	const world = await makeWorld(t, "lock-swap", { running: false });
+	const marker = path.join(world.root, "paused");
+	const first = spawn(path.join(realScriptsDir, "install.sh"), [world.newApp], {
+		env: { ...world.env, NOETAXIS_TEST_PAUSE_AT: "after-old-moved", NOETAXIS_TEST_PAUSE_MARKER: marker },
+		stdio: "ignore",
+	});
+	const exited = new Promise((resolve) => first.on("exit", (code) => resolve(code)));
+	for (let attempt = 0; attempt < 300 && !existsSync(marker); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+	assert.ok(existsSync(marker), "the first install never reached the pause");
+	// The old app is moved away and the new one is not in place yet: a second run must not touch anything.
+	assert.equal(world.run([world.newApp]).status, 36);
+	assert.equal(world.update(["--yes"]).status, 36);
+	assert.equal(world.run([], { script: "rollback.sh" }).status, 36);
+	assert.equal(await exited, 0);
+	assert.equal(world.installedVersion(), newVersion);
+	assert.deepEqual((await readdir(world.targetApp)).sort(), ["Contents"], "nothing was nested inside the installed bundle");
+	assert.equal(existsSync(path.join(world.home, ".ao-install.lock")), false);
+});
+
+test("if ps cannot run, an owner is assumed alive: the lock and another run's staging directory stand", darwin, async (t) => {
+	const world = await makeWorld(t, "lock-ps-denied", { running: false });
+	const dead = execute("/bin/sh", ["-c", "echo $$"]).stdout.trim();
+	const lock = path.join(world.home, ".ao-install.lock");
+	await mkdir(lock, { recursive: true });
+	await writeFile(path.join(lock, "pid"), dead);
+	const deniedPs = path.join(fakesDir, "ps-denied");
+	const blocked = world.run([world.newApp], { extraEnv: { NOETAXIS_PS: deniedPs } });
+	assert.equal(blocked.status, 36, blocked.stdout + blocked.stderr);
+	assert.equal(existsSync(lock), true, "the lock was not taken over");
+	// Staging directories of an owner that cannot be shown dead are left alone as well.
+	await rm(lock, { recursive: true });
+	const staging = path.join(world.appsDir, `.Agent-Orchestrator-installing-20260101-000000-${dead}.app`);
+	await mkdir(staging, { recursive: true });
+	const result = world.run([world.newApp], { extraEnv: { NOETAXIS_PS: deniedPs } });
+	assert.equal(result.status, 0, result.stdout + result.stderr);
+	assert.equal(existsSync(staging), true, "another updater's staging copy survives when its owner cannot be checked");
+});
+
 test("the automatic rollback inside an update runs under the update's own lock", darwin, async (t) => {
 	const world = await makeWorld(t, "lock-rollback", { cfg: { unhealthy_versions: `${newVersion}\n` } });
 	const result = world.update(["--yes"]);
@@ -755,6 +794,18 @@ test("mutation: accepting a ready daemon without checking its identity is caught
 	const result = world.update(["--yes"], { scriptsDir: dir });
 	assert.equal(world.installedVersion(), newVersion, "the mutant keeps an app whose own daemon never started");
 	assert.notEqual(result.status, 60);
+});
+
+test("mutation: removing the lock is caught by the paused-swap scenario", darwin, async (t) => {
+	const mutant = await mutatedScripts(t, "common.sh", "noetaxis_acquire_lock() {\n", "noetaxis_acquire_lock() {\n\treturn 0\n");
+	const world = await makeWorld(t, "lock-mutant", { running: false });
+	const marker = path.join(world.root, "paused");
+	const first = spawn(path.join(mutant, "install.sh"), [world.newApp], { env: { ...world.env, NOETAXIS_TEST_PAUSE_AT: "after-old-moved", NOETAXIS_TEST_PAUSE_MARKER: marker }, stdio: "ignore" });
+	const exited = new Promise((resolve) => first.on("exit", (code) => resolve(code)));
+	for (let attempt = 0; attempt < 300 && !existsSync(marker); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+	const second = world.run([world.newApp], { scriptsDir: mutant });
+	await exited;
+	assert.notEqual(second.status, 36, "without a lock the second run is not refused");
 });
 
 test("a symlinked Applications folder does not make the right daemon look foreign", darwin, async (t) => {
