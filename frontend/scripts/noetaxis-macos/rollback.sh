@@ -62,6 +62,12 @@ apps_dir="$(noetaxis_apps_dir)"
 target_app="$apps_dir/$NOETAXIS_APP_NAME"
 user_home="$(noetaxis_user_home)"
 noetaxis_require_human_user
+lock_status=0
+noetaxis_acquire_lock "$user_home" || lock_status=$?
+if [[ "$lock_status" -ne 0 ]]; then
+	exit "$lock_status"
+fi
+trap noetaxis_release_lock EXIT
 ao_home="$(noetaxis_ao_home)"
 backup_root="$user_home/ao-backups"
 if [[ -z "$backup_dir" ]]; then

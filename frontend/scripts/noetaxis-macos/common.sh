@@ -5,6 +5,169 @@ NOETAXIS_APP_NAME="Agent Orchestrator.app"
 NOETAXIS_BUNDLE_ID="dev.agent-orchestrator.desktop"
 NOETAXIS_LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
+# Run one of this script's OWN helper commands (ao, osascript, lsof, docker, multica, open ...) with a
+# time limit. A SIGALRM alone does not bound a Go program (the Go runtime catches and ignores it, and
+# the bundled ao is one), so the helper runs as a child of a small perl supervisor, in a process
+# group of its own. At the deadline the supervisor sends that group SIGTERM, waits one second,
+# then SIGKILL (also to descendants that outlive a leader that exited on TERM; the group id stays reserved because the leader is reaped only after the last signal), copies the helper's output (it wrote to private files) and prints "timed out" on stderr and exits 142 (143 when the script itself is
+# interrupted). This is the ONLY place in the installer that can send SIGKILL, and it can only
+# reach the process group of the helper command it started itself. It never touches AO's own
+# processes (the app, daemon, chat hosts, agents), which are only ever sent SIGTERM, only by
+# noetaxis_signal_own_pid in update-lib.sh, and only with --force.
+noetaxis_bounded() {
+	local seconds="$1"
+	shift
+	# Tests shorten every helper deadline with NOETAXIS_HELPER_TIMEOUT_MAX; it can only lower a limit.
+	if [[ "${NOETAXIS_HELPER_TIMEOUT_MAX:-}" =~ ^[0-9]+$ && "$NOETAXIS_HELPER_TIMEOUT_MAX" -lt "$seconds" ]]; then
+		seconds="$NOETAXIS_HELPER_TIMEOUT_MAX"
+	fi
+	# The helper's output is capped in size too: ulimit -f stops a runaway writer at twice the cap, the
+	# supervisor stops it at the cap, and at most the cap is copied out (and said to be truncated).
+	local max_bytes="${NOETAXIS_HELPER_OUTPUT_MAX:-4194304}"
+	( ulimit -f "$(( max_bytes * 2 / 512 + 8 ))" 2>/dev/null; exec /usr/bin/perl -e '
+		use Fcntl;
+		use POSIX qw(:signal_h :sys_wait_h);
+		my $blocked = POSIX::SigSet->new(SIGALRM, SIGTERM, SIGINT, SIGHUP);
+		my $limit = shift @ARGV;
+		my $max = shift @ARGV;
+		# The helper writes into private files (mode 0600, unlinked at once), never into this
+		# script'"'"'s pipes: a descendant that outlives the helper or ignores signals can then not hold
+		# the caller'"'"'s command substitution open. The output is copied out after the helper is gone.
+		my $dir = $ENV{TMPDIR} || "/tmp";
+		sub private_file {
+			my $path = sprintf("%s/noetaxis-helper.%d.%d.%d", $dir, $$, time, int(rand(1000000000)));
+			sysopen(my $fh, $path, O_RDWR | O_CREAT | O_EXCL, 0600) or exit 127;
+			unlink $path;
+			return $fh;
+		}
+		my $out = private_file();
+		my $err = private_file();
+		my $child = fork();
+		exit 127 unless defined $child;
+		# The helper leads a process group of its own. It is set on BOTH sides of the fork, so the group
+		# exists (and can be signalled) from the moment the fork returns in the parent, even if the child
+		# has not run a single instruction yet; after the exec only the parent'"'"'s call could not succeed,
+		# and then the child'"'"'s own call has long since happened.
+		setpgrp($child, $child) if $child;
+		if (!$child) {
+			setpgrp(0, 0);
+			open(STDIN, "<", "/dev/null");
+			open(STDOUT, ">&", $out) or exit 127;
+			open(STDERR, ">&", $err) or exit 127;
+			exec @ARGV;
+			exit 127;
+		}
+		# The captured output is read from the private files (at most $max bytes each) and handed to the
+		# caller by a short-lived COPIER child that makes ordinary blocking writes on the inherited
+		# descriptors. This process never changes the flags of the descriptors it inherited (O_NONBLOCK belongs
+		# to the open file description, which the caller shares), and a caller that does not drain its
+		# pipe only blocks the copier: after two seconds the copier is terminated and the call fails (145).
+		sub gather {
+			my $cut = 0;
+			my @data;
+			for my $file ($out, $err) {
+				$cut = 1 if (-s $file) > $max;
+				seek($file, 0, 0);
+				my $data = "";
+				read($file, $data, $max);
+				push @data, $data;
+			}
+			return ($cut, @data);
+		}
+		# The ONE TERM-then-KILL sequence of the installer. It is only ever aimed at a process group this
+		# supervisor started itself (the helper, or the output copier) and whose leader it has NOT reaped,
+		# so the group id is still reserved; the caller reaps only after this returned.
+		sub end_group {
+			my ($pgid, $grace) = @_;
+			kill "TERM", -$pgid;
+			select(undef, undef, undef, $grace);
+			kill "KILL", -$pgid;
+		}
+		# Returns 0 when everything was written, 1 when the caller did not take it in time.
+		sub deliver {
+			my ($outdata, $errdata) = @_;
+			my $copier = fork();
+			return 1 unless defined $copier;
+			# The copier leads a process group of its own (set on both sides of the fork, so there is no
+			# window in which it still shares the supervisor group).
+			setpgrp($copier, $copier) if $copier;
+			if (!$copier) {
+				setpgrp(0, 0);
+				# The copier must be terminable and must end by itself. The inherited handlers only record a
+				# flag, so they are reset to the default action WHILE the signals are still blocked, then the
+				# signals are unblocked (a TERM that arrives in between stays pending and terminates it), and
+				# an alarm ends it at the copy deadline even if no signal is ever sent to it.
+				$SIG{TERM} = $SIG{ALRM} = $SIG{INT} = $SIG{HUP} = "DEFAULT";
+				alarm 2;
+				sigprocmask(SIG_UNBLOCK, $blocked);
+				for my $pair ([\*STDOUT, $outdata], [\*STDERR, $errdata]) {
+					my ($fh, $data) = @$pair;
+					my $offset = 0;
+					while ($offset < length($data)) {
+						my $written = syswrite($fh, $data, length($data) - $offset, $offset);
+						POSIX::_exit(1) unless defined $written;
+						$offset += $written;
+					}
+				}
+				POSIX::_exit(0);
+			}
+			my $until = time + 2;
+			while (time < $until) {
+				if (waitpid($copier, WNOHANG) == $copier) { return $? == 0 ? 0 : 1; }
+				select(undef, undef, undef, 0.05);
+			}
+			# Not taken in time: end the copier (TERM, then KILL through the one sequence above), and only then
+			# reap it, so this call never returns while the copier can still hold the pipe of the caller.
+			end_group($copier, 0.2);
+			for (1 .. 60) { last if waitpid($copier, WNOHANG) == $copier; select(undef, undef, undef, 0.05); }
+			return 1;
+		}
+		# Group ownership: the helper'"'"'s process id (and so its group id) stays reserved for as long as
+		# its leader is unreaped, so every signal below can only reach this helper'"'"'s own group. The
+		# leader is therefore reaped ONLY (a) when it exits on its own before any deadline or
+		# interruption, after which nothing is ever signalled, or (b) after the last signal was sent.
+		# The signals that could start the stop sequence are blocked while the leader is polled and
+		# reaped, so a handler can never run between a reap and a kill.
+		my $fired = 0;
+		$SIG{ALRM} = sub { $fired ||= 142; };
+		$SIG{TERM} = $SIG{INT} = $SIG{HUP} = sub { $fired ||= 143; };
+		alarm $limit;
+		while (1) {
+			sigprocmask(SIG_BLOCK, $blocked);
+			unless ($fired) {
+				if (waitpid($child, WNOHANG) == $child) {
+					my $status = $?;
+					alarm 0;
+					my ($cut, $outdata, $errdata) = gather();
+					$errdata .= "noetaxis: helper output exceeded $max bytes and was truncated: @ARGV\n" if $cut;
+					exit 145 if deliver($outdata, $errdata);
+					exit 144 if $cut;
+					exit(($status & 127) ? 128 + ($status & 127) : ($status >> 8));
+				}
+				$fired = 144 if (-s $out) > $max || (-s $err) > $max;
+			}
+			last if $fired;
+			sigprocmask(SIG_UNBLOCK, $blocked);
+			select(undef, undef, undef, 0.05);
+		}
+		# Stop sequence, with the signals still blocked and the leader still unreaped.
+		# Whoever is in the group after the grace (a hung leader, or descendants that outlived a leader that
+		# exited on TERM) gets KILL; the leader is a zombie at worst, so the group id is ours.
+		end_group($child, 1);
+		for (1 .. 60) { last if waitpid($child, WNOHANG) == $child; select(undef, undef, undef, 0.05); }
+		my ($cut, $outdata, $errdata) = gather();
+		$errdata .= "noetaxis: helper command timed out after ${limit}s: @ARGV\n" if $fired == 142;
+		$errdata .= "noetaxis: helper output exceeded $max bytes and was truncated: @ARGV\n" if $fired == 144 || $cut;
+		deliver($outdata, $errdata);
+		exit $fired;
+	' "$seconds" "$max_bytes" "$@" )
+}
+
+# Start time of a process ("Mon Oct 12 04:33:21 2026"); with the pid it identifies one process.
+noetaxis_process_start() {
+	ps -ww -o lstart= -p "$1" 2>/dev/null | /usr/bin/tr -s ' ' | /usr/bin/sed 's/^ //; s/ $//' || true
+}
+
 noetaxis_error() {
 	printf 'Error: %s\n' "$1" >&2
 }
@@ -208,7 +371,7 @@ noetaxis_assert_idle() {
 noetaxis_port_listener_pids() {
 	local lsof_bin="${NOETAXIS_LSOF:-/usr/sbin/lsof}" port="${NOETAXIS_AO_PORT:-3001}" listener
 	[[ -x "$lsof_bin" ]] || return 0
-	listener="$("$lsof_bin" -nP -iTCP:"$port" -sTCP:LISTEN -Fp 2>/dev/null | /usr/bin/sed -n 's/^p//p' | /usr/bin/tr '\n' ' ')" || true
+	listener="$(noetaxis_bounded 15 "$lsof_bin" -nP -iTCP:"$port" -sTCP:LISTEN -Fp 2>/dev/null | /usr/bin/sed -n 's/^p//p' | /usr/bin/tr '\n' ' ')" || true
 	printf '%s' "${listener% }"
 }
 
@@ -264,9 +427,12 @@ noetaxis_verify_signature() {
 # Inert unless NOETAXIS_TEST_PAUSE_AT names this point: lets tests deliver a signal
 # at an exact step of the swap (marker file, then a wait that a signal interrupts).
 noetaxis_test_pause() {
-	[[ -n "${NOETAXIS_TEST_PAUSE_AT:-}" && "$NOETAXIS_TEST_PAUSE_AT" == "$1" ]] || return 0
-	/usr/bin/touch "${NOETAXIS_TEST_PAUSE_MARKER:?}"
-	/bin/sleep 20 &
+	local marker="${NOETAXIS_TEST_PAUSE_MARKER:-}"
+	[[ -n "${NOETAXIS_TEST_PAUSE_AT:-}" && " $NOETAXIS_TEST_PAUSE_AT " == *" $1 "* ]] || return 0
+	# The cleanup pause has its own marker so a test can tell the two pauses apart.
+	[[ "$1" != cleanup-end ]] || marker="${marker:?}.cleanup"
+	/usr/bin/touch "${marker:?}"
+	/bin/sleep "${NOETAXIS_TEST_PAUSE_SECONDS:-20}" &
 	wait $! || true
 }
 
@@ -279,8 +445,8 @@ noetaxis_remove_stale_staging() {
 		name="${candidate##*/}"
 		owner="${name%.app}"
 		owner="${owner##*-}"
-		# ps, not kill -0: kill reports EPERM for a live pid owned by another user (root).
-		if [[ "$owner" =~ ^[0-9]+$ ]] && ! /bin/ps -p "$owner" >/dev/null 2>&1; then
+		# Dead only when ps ran and said so (ps sees pids of other users).
+		if [[ "$owner" =~ ^[0-9]+$ ]] && ! noetaxis_pid_may_be_alive "$owner"; then
 			noetaxis_run_privileged /bin/rm -rf "$candidate" || true
 		fi
 	done
@@ -427,7 +593,7 @@ noetaxis_clear_quarantine() {
 }
 
 noetaxis_write_backup_record() {
-	local backup_dir="$1" app_backup="$2" app_version="$3" allow_background="${4:-0}" temporary_record
+	local backup_dir="$1" app_backup="$2" app_version="$3" allow_background="${4:-0}" extra_lines="${5:-}" temporary_record
 	temporary_record="$backup_dir/.BACKUP_COMPLETE-$$"
 	if ! {
 		printf 'created_at=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -436,6 +602,10 @@ noetaxis_write_backup_record() {
 		# Audit trail: this install went ahead with AO background processes still running.
 		if [[ "$allow_background" -eq 1 ]]; then
 			printf 'allow_background_processes=1\n'
+		fi
+		# Update mode records its mode and the schema it saw before the swap.
+		if [[ -n "$extra_lines" ]]; then
+			printf '%s\n' "$extra_lines"
 		fi
 	} > "$temporary_record"; then
 		/bin/rm -f "$temporary_record"
@@ -462,11 +632,12 @@ noetaxis_schema_query() {
 # A WAL-mode database with no -wal/-shm files (the daemon is not running) cannot
 # be opened with -readonly: SQLite would need to create the -shm file. Read a
 # temporary copy in that case so the real data directory is never written.
-# The check is informational and never fails the install.
-noetaxis_print_schema_version() {
+# Prints the version and returns 0 (read directly), 2 (read from a temporary copy)
+# or 1 (unreadable, nothing printed). Never fails the install.
+noetaxis_read_schema_version() {
 	local database="$1" version copy_dir
 	if version="$(noetaxis_schema_query "$database" -readonly 2>/dev/null)"; then
-		printf 'SQLite schema version: %s\n' "$version"
+		printf '%s' "$version"
 		return 0
 	fi
 	copy_dir="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/noetaxis-schema.XXXXXX")" || copy_dir=""
@@ -476,11 +647,22 @@ noetaxis_print_schema_version() {
 		version="$(noetaxis_schema_query "$copy_dir/ao.db" 2>/dev/null)" || version=""
 		/bin/rm -rf "$copy_dir"
 		if [[ -n "$version" ]]; then
-			printf 'SQLite schema version: %s (read from a temporary copy; the daemon is not running)\n' "$version"
-			return 0
+			printf '%s' "$version"
+			return 2
 		fi
 	fi
-	printf 'SQLite schema version: could not be read from %s (non-fatal check; run the sqlite3 command from the README after opening the app).\n' "$database"
+	return 1
+}
+
+# The check is informational and never fails the install.
+noetaxis_print_schema_version() {
+	local database="$1" version status=0
+	version="$(noetaxis_read_schema_version "$database")" || status=$?
+	case "$status" in
+		0) printf 'SQLite schema version: %s\n' "$version" ;;
+		2) printf 'SQLite schema version: %s (read from a temporary copy; the daemon is not running)\n' "$version" ;;
+		*) printf 'SQLite schema version: could not be read from %s (non-fatal check; run the sqlite3 command from the README after opening the app).\n' "$database" ;;
+	esac
 }
 
 noetaxis_print_post_install_checks() {
@@ -502,4 +684,64 @@ noetaxis_print_post_install_checks() {
 		printf 'SQLite schema check skipped until the app has created %s.\n' "$database"
 	fi
 	printf '\nAfter opening the app from Finder, run:\n  "%s" status\n' "$cli"
+}
+
+# One install, update or rollback at a time: two of them swapping the same app, or one
+# restoring a backup under another's stop, would corrupt both. The lock is a directory
+# (mkdir is atomic) holding the owner's pid at <home>/.ao-install.lock. It is never taken over.
+# A rollback.sh started by install.sh --update inherits the lock through NOETAXIS_LOCK_HELD_BY.
+noetaxis_lock_held=0
+
+# 0 when the pid may be alive. A pid is only declared dead when ps ran and said so: if ps cannot
+# run or is refused (a sandbox, a missing binary), the owner is assumed alive and the lock stands.
+noetaxis_pid_may_be_alive() {
+	local pid="$1" output status=0
+	# No readable pid (the creator has not written it yet, or the file is damaged) is unknown, and
+	# unknown fails closed: the owner may be alive.
+	[[ "$pid" =~ ^[0-9]+$ ]] || return 0
+	output="$("${NOETAXIS_PS:-/bin/ps}" -p "$pid" 2>&1)" || status=$?
+	if [[ "$status" -eq 0 ]]; then
+		return 0
+	fi
+	if [[ "$status" -eq 1 && "$output" != *[Dd]enied* && "$output" != *"not permitted"* && "$output" != *"not found"* && "$output" != *rror* ]]; then
+		return 1
+	fi
+	return 0
+}
+
+# The lock is never taken over. A lock whose owner is gone (a run killed with SIGKILL, or a power
+# loss) stays until a person removes it: reclaiming it automatically would need a compare-and-delete
+# that the filesystem does not offer, and every attempt races with a live run that publishes its own
+# lock in the meantime. A normal exit, INT, TERM or HUP releases the lock through the EXIT trap.
+noetaxis_acquire_lock() {
+	local user_home="$1" lock holder
+	lock="$user_home/.ao-install.lock"
+	if [[ -n "${NOETAXIS_LOCK_HELD_BY:-}" && "$(/bin/cat "$lock/pid" 2>/dev/null || true)" == "$NOETAXIS_LOCK_HELD_BY" ]]; then
+		return 0
+	fi
+	if ! /bin/mkdir "$lock" 2>/dev/null; then
+		holder="$(/bin/cat "$lock/pid" 2>/dev/null || true)"
+		# The creator makes the directory and writes its pid a moment later: give it time.
+		local waited=0
+		while [[ ! "$holder" =~ ^[0-9]+$ && "$waited" -lt 20 ]]; do
+			/bin/sleep 0.1
+			waited=$((waited + 1))
+			holder="$(/bin/cat "$lock/pid" 2>/dev/null || true)"
+		done
+		if noetaxis_pid_may_be_alive "$holder"; then
+			noetaxis_error "Another install, update or rollback is running (pid ${holder:-unknown}, lock $lock). Wait for it to finish; two at once could corrupt the app or the backup. If you are sure no run is active (the lock has no readable owner), remove the lock yourself: rm -rf \"$lock\""
+		else
+			noetaxis_error "A previous install, update or rollback (pid $holder) left its lock behind and is no longer running (it was killed or the machine lost power). This command never removes a lock by itself. Check that no install is running, then remove it and rerun: rm -rf \"$lock\""
+		fi
+		return 36
+	fi
+	printf '%s' "$$" > "$lock/pid"
+	noetaxis_lock_held="$lock"
+}
+
+noetaxis_release_lock() {
+	if [[ "$noetaxis_lock_held" != 0 && -d "$noetaxis_lock_held" && "$(/bin/cat "$noetaxis_lock_held/pid" 2>/dev/null || true)" == "$$" ]]; then
+		/bin/rm -rf "$noetaxis_lock_held"
+	fi
+	noetaxis_lock_held=0
 }
