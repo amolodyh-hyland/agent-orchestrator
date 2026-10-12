@@ -16,6 +16,7 @@ import {
 	composeListCommand,
 	composeVersionCommand,
 	dockerVersionCommand,
+	findComposePlugin,
 	findDockerBinary,
 	findLocalDockerEndpoint,
 	localServerChildEnv,
@@ -32,6 +33,7 @@ import {
 	type ExecFileLike,
 	type StackPaths,
 } from "./multica-local-server-commands";
+import { ensureLocalDockerConfig, type DockerConfigResult } from "./multica-local-server-docker-config";
 import { ENV_FILE_NAME, type LocalServerSettings, type SetupOutcome, type StackCheck } from "./multica-local-server-stack";
 import {
 	classifyDockerError,
@@ -95,6 +97,12 @@ export type MulticaLocalServerOptions = {
 	findDocker?: () => string | null;
 	/** Trusted directories for the child's PATH; defaults to the verified install roots. */
 	findPathDirs?: () => string[];
+	/** AO's own folder used as HOME (and DOCKER_CONFIG's parent) for every Docker command, under its state dir. */
+	dockerHomeDir: string;
+	/** The Compose plugin binary in a trusted location; defaults to a search of the usual install paths. */
+	findComposePlugin?: () => string | null;
+	/** Prepares AO's Docker home so Docker only loads the validated Compose plugin; defaults to the file-system implementation. */
+	ensureDockerConfig?: (pluginDir: string | null) => Promise<DockerConfigResult>;
 	/** The local engine's address (`unix://…`); defaults to a search of the usual local sockets. */
 	findEndpoint?: () => string | null;
 	now?: () => number;
@@ -130,6 +138,8 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 	const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
 	const gid = typeof process.getgid === "function" ? process.getgid() : undefined;
 	const findDocker = options.findDocker ?? (() => findDockerBinary({ home: options.home, platform: options.platform, uid, gid }));
+	const locateComposePlugin = options.findComposePlugin ?? (() => findComposePlugin({ home: options.home, platform: options.platform, uid, gid }));
+	const ensureDockerConfig = options.ensureDockerConfig ?? ((pluginDir: string | null) => ensureLocalDockerConfig({ root: options.dockerHomeDir, pluginDir, uid }));
 	const findPathDirs = options.findPathDirs ?? (() => trustedPathDirs({ home: options.home, platform: options.platform, uid, gid }));
 
 	let disposed = false;
@@ -153,7 +163,13 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 		if (spec.engine && endpoint === null) {
 			return { error: Object.assign(new Error("no local Docker engine endpoint"), { code: "NO_LOCAL_ENGINE" }), stdout: "", stderr: "" };
 		}
-		return runLocalServerCommand(options.exec, spec, localServerChildEnv(options.env, options.home, options.platform, endpoint, findPathDirs()), signal);
+		// HOME and DOCKER_CONFIG are AO's own, listing only the Compose plugin validated just now.
+		const plugin = locateComposePlugin();
+		const config = spec.docker ? await ensureDockerConfig(plugin === null ? null : path.dirname(plugin)) : null;
+		if (config !== null && !config.ok) {
+			return { error: Object.assign(new Error("AO's Docker settings folder is not safe to use"), { code: "UNTRUSTED_DOCKER_CONFIG" }), stdout: "", stderr: "AO's Docker settings folder is not safe to use" };
+		}
+		return runLocalServerCommand(options.exec, spec, localServerChildEnv(options.env, options.home, options.platform, endpoint, findPathDirs(), config === null ? null : config.home), signal);
 	};
 
 	const publish = (status: LocalServerStatus): void => {
@@ -185,6 +201,8 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 	const engineState = async (docker: string | null, signal?: AbortSignal): Promise<DockerProbe> => (await inspectEngine(docker, signal)).state;
 
 	async function composeInstalled(docker: string): Promise<boolean> {
+		// No Compose plugin in a trusted location counts as no Compose: nothing else is ever loaded.
+		if (locateComposePlugin() === null) return false;
 		const result = await run(composeVersionCommand(docker));
 		return !(result.error && isComposeMissing(result.stderr));
 	}

@@ -12,8 +12,10 @@ import {
 	composeListCommand,
 	composeVersionCommand,
 	dockerVersionCommand,
+	findComposePlugin,
 	findDockerBinary,
 	findLocalDockerEndpoint,
+	hasPinnedDockerHome,
 	isIssuedCommand,
 	isLocalDockerEndpoint,
 	isTrustedExecutable,
@@ -35,6 +37,10 @@ import {
 
 const DOCKER = "/usr/local/bin/docker";
 const STACK: StackPaths = { dir: "/Users/me/.multica/server", file: "/Users/me/.multica/server/docker-compose.selfhost.yml" };
+const AO_HOME = "/ao/docker-home";
+const LOCAL_SOCKET = "unix:///Users/me/.docker/run/docker.sock";
+/** An environment as the service builds it: AO's Docker home, trusted PATH, local endpoint. */
+const pinnedEnv = (endpoint: string | null = LOCAL_SOCKET) => localServerChildEnv({}, "/Users/me", "darwin", endpoint, ["/usr/bin"], AO_HOME);
 const BASE = ["compose", "-f", STACK.file, "--project-directory", STACK.dir, "-p", "multica"];
 
 describe("local server commands", () => {
@@ -100,7 +106,7 @@ describe("local server commands", () => {
 });
 
 describe("runLocalServerCommand", () => {
-	const env = { PATH: "/usr/bin", DOCKER_HOST: "unix:///Users/me/.docker/run/docker.sock" };
+	const env = pinnedEnv();
 
 	it("runs an issued command through execFile with timeout, buffer cap, hidden window and the given environment", async () => {
 		const exec = vi.fn<ExecFileLike>((_file, _args, _options, callback) => callback(null, "ok", ""));
@@ -113,7 +119,7 @@ describe("runLocalServerCommand", () => {
 
 	it("refuses a command that was not built by this module, including a copy of a built one", async () => {
 		const exec = vi.fn<ExecFileLike>();
-		const forged: CommandSpec = { name: "up", file: DOCKER, args: ["compose", "down", "-v"], timeoutMs: 1000, engine: true };
+		const forged: CommandSpec = { name: "up", file: DOCKER, args: ["compose", "down", "-v"], timeoutMs: 1000, engine: true, docker: true };
 		const copied: CommandSpec = { ...upCommand(DOCKER, STACK) };
 
 		await expect(runLocalServerCommand(exec, forged, env)).rejects.toThrow(/allow-list/);
@@ -124,7 +130,12 @@ describe("runLocalServerCommand", () => {
 
 	it("refuses an engine command without a local endpoint, whatever the environment says", async () => {
 		const exec = vi.fn<ExecFileLike>();
-		for (const bad of [{ PATH: "/usr/bin" }, { DOCKER_HOST: "tcp://10.0.0.5:2375" }, { DOCKER_HOST: "ssh://me@box" }]) {
+		const remote = (host: string) => {
+			const pinned = pinnedEnv();
+			pinned.DOCKER_HOST = host;
+			return pinned;
+		};
+		for (const bad of [pinnedEnv(null), remote("tcp://10.0.0.5:2375"), remote("ssh://me@box")]) {
 			for (const spec of [dockerVersionCommand(DOCKER), composeListCommand(DOCKER), psCommand(DOCKER, STACK), upCommand(DOCKER, STACK), stopCommand(DOCKER, STACK), restartCommand(DOCKER, STACK), logsCommand(DOCKER, STACK, "backend", 5)]) {
 				await expect(runLocalServerCommand(exec, spec, bad)).rejects.toThrow(/local engine/);
 			}
@@ -134,7 +145,7 @@ describe("runLocalServerCommand", () => {
 
 	it("lets the commands that never contact the engine run without an endpoint", async () => {
 		const exec = vi.fn<ExecFileLike>((_f, _a, _o, callback) => callback(null, "", ""));
-		await runLocalServerCommand(exec, composeVersionCommand(DOCKER), { PATH: "/usr/bin" });
+		await runLocalServerCommand(exec, composeVersionCommand(DOCKER), pinnedEnv(null));
 		await runLocalServerCommand(exec, openDockerCommand(), { PATH: "/usr/bin" });
 		expect(exec).toHaveBeenCalledTimes(2);
 	});
@@ -164,11 +175,13 @@ describe("runLocalServerCommand", () => {
 describe("localServerChildEnv", () => {
 	const SOCKET = "unix:///Users/me/.docker/run/docker.sock";
 
-	it("keeps a short allow-list and drops secrets, COMPOSE_*, DOCKER_CONFIG, DOCKER_CONTEXT and remote engine settings", () => {
+	it("keeps a short allow-list and drops secrets, COMPOSE_*, DOCKER_CONTEXT, remote engine settings and the inherited HOME and DOCKER_CONFIG", () => {
 		const env = localServerChildEnv(
 			{
 				PATH: "/usr/bin:relative/bin",
-				HOME: "/Users/me",
+				HOME: "/tmp/evil-home",
+				USERPROFILE: "C:\\evil",
+				APPDATA: "C:\\evil\\appdata",
 				LANG: "en_US.UTF-8",
 				DOCKER_CONFIG: "/Users/me/other-docker-config",
 				DOCKER_HOST: "tcp://evil:2375",
@@ -185,11 +198,25 @@ describe("localServerChildEnv", () => {
 			"darwin",
 			SOCKET,
 			["/usr/local/bin", "/Applications/Docker.app/Contents/Resources/bin", "relative/bin"],
+			"/Users/me/.ao/local-server-docker",
 		);
 
-		expect(Object.keys(env).sort()).toEqual(["DOCKER_HOST", "HOME", "LANG", "PATH"]);
+		expect(Object.keys(env).sort()).toEqual(["DOCKER_CONFIG", "DOCKER_HOST", "HOME", "LANG", "PATH"]);
 		expect(env.DOCKER_HOST).toBe(SOCKET);
+		expect(env.HOME).toBe("/Users/me/.ao/local-server-docker");
+		expect(env.DOCKER_CONFIG).toBe("/Users/me/.ao/local-server-docker/.docker");
 		expect(env.PATH).toBe("/usr/local/bin:/Applications/Docker.app/Contents/Resources/bin");
+	});
+
+	it("gives no HOME or DOCKER_CONFIG at all when AO's Docker home is not given, never the inherited ones", () => {
+		const env = localServerChildEnv({ HOME: "/tmp/evil-home", DOCKER_CONFIG: "/tmp/evil-config" }, "/Users/me", "darwin", SOCKET, ["/usr/bin"]);
+		expect(env.HOME).toBeUndefined();
+		expect(env.DOCKER_CONFIG).toBeUndefined();
+	});
+
+	it("refuses a Docker home that is not an absolute path, and sets USERPROFILE with it on Windows", () => {
+		expect(() => localServerChildEnv({}, "/Users/me", "darwin", null, [], "relative/home")).toThrow();
+		expect(localServerChildEnv({}, "C:\\Users\\me", "win32", null, [], "/ao/home").USERPROFILE).toBe("/ao/home");
 	});
 
 	it("builds PATH only from the trusted directories given, never from AO's own PATH", () => {
@@ -237,6 +264,90 @@ describe("isLocalDockerEndpoint", () => {
 		expect(isLocalDockerEndpoint("unix:///var/run/docker.sock")).toBe(true);
 		expect(isLocalDockerEndpoint("npipe:////./pipe/docker_engine")).toBe(true);
 		for (const bad of [undefined, "", "tcp://127.0.0.1:2375", "tcp://remote:2376", "ssh://me@box", "unix://remote/sock", "fd://", "unix:///a\nb"]) expect(isLocalDockerEndpoint(bad), String(bad)).toBe(false);
+	});
+});
+
+describe("findComposePlugin", () => {
+	const only = (target: string) => (file: string) => file === target;
+	const ever = () => true;
+
+	it("finds the plugin in Docker Desktop's bundle or a system plugin directory, never in an inherited location", () => {
+		expect(findComposePlugin({ home: "/Users/me", platform: "darwin", isExecutable: only("/Applications/Docker.app/Contents/Resources/cli-plugins/docker-compose"), isTrusted: ever })).toBe(
+			"/Applications/Docker.app/Contents/Resources/cli-plugins/docker-compose",
+		);
+		expect(findComposePlugin({ home: "/home/me", platform: "linux", isExecutable: only("/usr/libexec/docker/cli-plugins/docker-compose"), isTrusted: ever })).toBe("/usr/libexec/docker/cli-plugins/docker-compose");
+		expect(findComposePlugin({ home: "/Users/me", platform: "darwin", isExecutable: only("/tmp/evil/cli-plugins/docker-compose"), isTrusted: ever })).toBeNull();
+	});
+
+	it("looks in the user's own ~/.docker/cli-plugins only after the system locations, and only if it is trusted", () => {
+		const user = "/Users/me/.docker/cli-plugins/docker-compose";
+		expect(findComposePlugin({ home: "/Users/me", platform: "darwin", isExecutable: only(user), isTrusted: ever })).toBe(user);
+		expect(findComposePlugin({ home: "/Users/me", platform: "darwin", isExecutable: only(user), isTrusted: () => false })).toBeNull();
+	});
+
+	it("skips a plugin that fails the ownership and permission check and takes the next trusted one", () => {
+		const executable = (file: string) => file.endsWith("/docker-compose");
+		const found = findComposePlugin({ home: "/Users/me", platform: "darwin", isExecutable: executable, isTrusted: (file) => file.startsWith("/opt/homebrew/") });
+		expect(found).toBe("/opt/homebrew/lib/docker/cli-plugins/docker-compose");
+	});
+
+	it("only ever considers the fixed install locations, whatever PATH or HOME says", () => {
+		const allowed: Record<string, string[]> = {
+			darwin: ["/Applications/Docker.app/Contents/Resources/cli-plugins/", "/usr/local/lib/docker/cli-plugins/", "/usr/local/libexec/docker/cli-plugins/", "/opt/homebrew/lib/docker/cli-plugins/", "/Users/me/.docker/cli-plugins/"],
+			linux: ["/usr/libexec/docker/cli-plugins/", "/usr/lib/docker/cli-plugins/", "/usr/local/libexec/docker/cli-plugins/", "/usr/local/lib/docker/cli-plugins/", "/home/me/.docker/cli-plugins/"],
+		};
+		for (const platform of ["darwin", "linux"] as const) {
+			const probed: string[] = [];
+			const home = platform === "darwin" ? "/Users/me" : "/home/me";
+			findComposePlugin({ home, platform, isExecutable: (file) => (probed.push(file), false), isTrusted: () => true });
+			expect(probed.length, platform).toBeGreaterThan(3);
+			for (const file of probed) {
+				expect(allowed[platform]?.some((prefix) => file === `${prefix}docker-compose`), file).toBe(true);
+			}
+		}
+	});
+
+	it("is null when nothing is trusted", () => {
+		expect(findComposePlugin({ home: "/Users/me", platform: "darwin", isExecutable: () => true, isTrusted: () => false })).toBeNull();
+	});
+});
+
+describe("hasPinnedDockerHome and the runner guard", () => {
+	it("recognizes only an environment built with AO's Docker home", () => {
+		expect(hasPinnedDockerHome(pinnedEnv())).toBe(true);
+		expect(hasPinnedDockerHome(pinnedEnv(null))).toBe(true);
+		const handMade = { HOME: AO_HOME, DOCKER_CONFIG: `${AO_HOME}/.docker`, DOCKER_HOST: LOCAL_SOCKET };
+		expect(hasPinnedDockerHome(handMade)).toBe(false);
+		expect(hasPinnedDockerHome({ ...pinnedEnv() })).toBe(false);
+		expect(hasPinnedDockerHome({})).toBe(false);
+		expect(hasPinnedDockerHome(localServerChildEnv({ HOME: "/Users/me", DOCKER_CONFIG: "/Users/me/.docker" }, "/Users/me", "darwin", LOCAL_SOCKET, ["/usr/bin"]))).toBe(false);
+	});
+
+	it("an environment that was changed after it was built is no longer AO's", () => {
+		const env = pinnedEnv();
+		env.HOME = "/Users/me";
+		expect(hasPinnedDockerHome(env)).toBe(false);
+		const config = pinnedEnv();
+		config.DOCKER_CONFIG = "/Users/me/.docker";
+		expect(hasPinnedDockerHome(config)).toBe(false);
+	});
+
+	it("refuses every docker command whose environment is not AO's own, even with the user's real HOME/.docker and a local endpoint", async () => {
+		const exec = vi.fn<ExecFileLike>((_f, _a, _o, callback) => callback(null, "", ""));
+		const real = localServerChildEnv({ HOME: "/Users/me" }, "/Users/me", "darwin", LOCAL_SOCKET, ["/usr/bin"]);
+		for (const bad of [
+			{ ...real, HOME: "/Users/me", DOCKER_CONFIG: "/Users/me/.docker" },
+			{ ...pinnedEnv() },
+			{ PATH: "/usr/bin", DOCKER_HOST: LOCAL_SOCKET },
+			{ PATH: "/usr/bin", DOCKER_HOST: LOCAL_SOCKET, HOME: "/tmp/evil", DOCKER_CONFIG: "/tmp/evil/.docker" },
+		]) {
+			for (const spec of [dockerVersionCommand(DOCKER), composeVersionCommand(DOCKER), composeListCommand(DOCKER), psCommand(DOCKER, STACK), upCommand(DOCKER, STACK), logsCommand(DOCKER, STACK, "backend", 5)]) {
+				await expect(runLocalServerCommand(exec, spec, bad), spec.name).rejects.toThrow(/HOME and DOCKER_CONFIG/);
+			}
+		}
+		expect(exec).not.toHaveBeenCalled();
+		await runLocalServerCommand(exec, openDockerCommand(), { PATH: "/usr/bin" });
+		expect(exec).toHaveBeenCalledOnce();
 	});
 });
 
@@ -410,7 +521,7 @@ describe("trustedPathDirs", () => {
 });
 
 describe("the production adapter (nodeExec) with a mocked child_process", () => {
-	const ENV = { PATH: "/usr/bin", DOCKER_HOST: "unix:///Users/me/.docker/run/docker.sock" };
+	const ENV = pinnedEnv();
 	const HOSTILE_NAMES = ["my dir", "a'b", 'a"b', "a;rm -rf x", "a$(id)b", "a`id`b", "a|b", "a&b", "a\nb", "a\tb", " leading", "trailing ", "--rm", "-f", "a b c d e f", "ünï cödé", "a\\b"];
 
 	beforeEach(() => {
@@ -500,9 +611,9 @@ describe("the production adapter (nodeExec) with a mocked child_process", () => 
 	});
 
 	it("does not reach execFile for a command the module did not issue or without a local endpoint", async () => {
-		const forged: CommandSpec = { name: "up", file: "/bin/sh", args: ["-c", "echo hi"], timeoutMs: 1000, engine: false };
+		const forged: CommandSpec = { name: "up", file: "/bin/sh", args: ["-c", "echo hi"], timeoutMs: 1000, engine: false, docker: false };
 		await expect(runLocalServerCommand(nodeExec, forged, ENV)).rejects.toThrow();
-		await expect(runLocalServerCommand(nodeExec, upCommand(DOCKER, STACK), { PATH: "/usr/bin" })).rejects.toThrow();
+		await expect(runLocalServerCommand(nodeExec, upCommand(DOCKER, STACK), pinnedEnv(null))).rejects.toThrow();
 		expect(childProcess.execFile).not.toHaveBeenCalled();
 	});
 });

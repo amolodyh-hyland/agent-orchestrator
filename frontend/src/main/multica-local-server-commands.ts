@@ -35,6 +35,8 @@ export type CommandSpec = {
 	readonly timeoutMs: number;
 	/** Talks to the Docker engine, so it may only run against the pinned local endpoint. */
 	readonly engine: boolean;
+	/** Runs the docker CLI, so it may only run with AO's own HOME and DOCKER_CONFIG. */
+	readonly docker: boolean;
 };
 
 export type StackPaths = {
@@ -49,7 +51,7 @@ export type StackPaths = {
 const issued = new WeakSet<CommandSpec>();
 
 function issue(name: CommandName, file: string, args: string[], timeoutMs: number, engine = true): CommandSpec {
-	const spec: CommandSpec = Object.freeze({ name, file, args: Object.freeze(args), timeoutMs, engine });
+	const spec: CommandSpec = Object.freeze({ name, file, args: Object.freeze(args), timeoutMs, engine, docker: file !== OPEN_BINARY });
 	issued.add(spec);
 	return spec;
 }
@@ -119,6 +121,28 @@ function trustedInstallDirs(home: string, platform: NodeJS.Platform): string[] {
 		return ["/usr/local/bin", "/opt/homebrew/bin", "/Applications/Docker.app/Contents/Resources/bin", path.join(home, ".docker", "bin")];
 	}
 	return ["/usr/bin", "/usr/local/bin", "/snap/bin", path.join(home, ".docker", "bin")];
+}
+
+/** Where Docker's Compose plugin is installed, in order of preference; the real home is only used to look. */
+function composePluginCandidates(home: string, platform: NodeJS.Platform): string[] {
+	if (platform === "win32") return ["C:\\Program Files\\Docker\\Docker\\resources\\cli-plugins\\docker-compose.exe"];
+	const user = path.join(home, ".docker", "cli-plugins", "docker-compose");
+	if (platform === "darwin") {
+		return [
+			"/Applications/Docker.app/Contents/Resources/cli-plugins/docker-compose",
+			"/usr/local/lib/docker/cli-plugins/docker-compose",
+			"/usr/local/libexec/docker/cli-plugins/docker-compose",
+			"/opt/homebrew/lib/docker/cli-plugins/docker-compose",
+			user,
+		];
+	}
+	return [
+		"/usr/libexec/docker/cli-plugins/docker-compose",
+		"/usr/lib/docker/cli-plugins/docker-compose",
+		"/usr/local/libexec/docker/cli-plugins/docker-compose",
+		"/usr/local/lib/docker/cli-plugins/docker-compose",
+		user,
+	];
 }
 
 const SYSTEM_DIRS = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
@@ -241,9 +265,35 @@ export function trustedPathDirs(options: TrustedPathOptions): string[] {
 	return [...new Set(dirs.filter((dir) => path.isAbsolute(dir) && isTrusted(dir)))];
 }
 
-// DOCKER_CONFIG is not passed: Docker's configuration directory (and the current context
-// it names) is the user's, and an AO environment variable must not swap it for another.
-const PASS_THROUGH_ENV = ["HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "SystemRoot", "USERPROFILE", "APPDATA"] as const;
+export type FindComposePluginOptions = {
+	home: string;
+	platform: NodeJS.Platform;
+	uid?: number | undefined;
+	gid?: number | undefined;
+	isExecutable?: (file: string) => boolean;
+	isTrusted?: (file: string) => boolean;
+};
+
+/** The Compose plugin binary in a trusted install location, passing the same ownership and permission check as docker itself; null when none. */
+export function findComposePlugin(options: FindComposePluginOptions): string | null {
+	const isExecutable = options.isExecutable ?? isExecutableFile;
+	const isTrusted = options.isTrusted ?? ((file: string) => isTrustedExecutable(file, { uid: options.uid, gid: options.gid }));
+	for (const candidate of composePluginCandidates(options.home, options.platform)) {
+		if (path.isAbsolute(candidate) && isExecutable(candidate) && isTrusted(candidate)) return candidate;
+	}
+	return null;
+}
+
+/** True only for an environment localServerChildEnv built with AO's Docker home (a copy or a hand-made one is not). */
+export function hasPinnedDockerHome(env: NodeJS.ProcessEnv): boolean {
+	const home = env.HOME;
+	return pinnedEnvs.has(env) && !!home && path.isAbsolute(home) && env.DOCKER_CONFIG === path.join(home, ".docker");
+}
+
+// HOME, USERPROFILE, APPDATA and DOCKER_CONFIG are not passed through: Docker resolves its CLI
+// plugins (docker-compose) from its config directory, so those come only from AO's own Docker
+// home (see multica-local-server-docker-config.ts).
+const PASS_THROUGH_ENV = ["USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "SystemRoot"] as const;
 
 const WINDOWS_ENGINE_PIPE = "npipe:////./pipe/docker_engine";
 
@@ -311,14 +361,24 @@ export function isLocalDockerEndpoint(value: string | undefined): boolean {
  * `currentContext` cannot take over. COMPOSE_*, DOCKER_CONTEXT, DOCKER_CONFIG and the TLS
  * variables from AO's own environment are not passed.
  */
+// Environments built by localServerChildEnv with AO's Docker home: the runner only runs docker with these.
+const pinnedEnvs = new WeakSet<NodeJS.ProcessEnv>();
+
 export function localServerChildEnv(
 	env: NodeJS.ProcessEnv,
 	_home: string,
 	_platform: NodeJS.Platform,
 	endpoint: string | null = null,
 	pathDirs: readonly string[] = [],
+	dockerHome: string | null = null,
 ): NodeJS.ProcessEnv {
 	const next: NodeJS.ProcessEnv = {};
+	if (dockerHome !== null) {
+		if (!path.isAbsolute(dockerHome) || dockerHome.includes("\0")) throw new Error("Docker home must be an absolute path");
+		next.HOME = dockerHome;
+		next.DOCKER_CONFIG = path.join(dockerHome, ".docker");
+		if (_platform === "win32") next.USERPROFILE = dockerHome;
+	}
 	for (const key of PASS_THROUGH_ENV) if (env[key] !== undefined) next[key] = env[key];
 	// PATH is built only from the trusted directories passed in, never from AO's own PATH.
 	next.PATH = pathDirs.filter((dir) => dir !== "" && path.isAbsolute(dir)).join(path.delimiter);
@@ -326,6 +386,7 @@ export function localServerChildEnv(
 		if (!isLocalDockerEndpoint(endpoint)) throw new Error("Docker endpoint must be a local socket");
 		next.DOCKER_HOST = endpoint;
 	}
+	if (dockerHome !== null) pinnedEnvs.add(next);
 	return next;
 }
 
@@ -364,6 +425,7 @@ export function runLocalServerCommand(
 ): Promise<CommandResult> {
 	if (!isIssuedCommand(spec)) return Promise.reject(new Error("command is not on the local server allow-list"));
 	if (spec.engine && !isLocalDockerEndpoint(env.DOCKER_HOST)) return Promise.reject(new Error("Docker commands only run against the local engine endpoint"));
+	if (spec.docker && !hasPinnedDockerHome(env)) return Promise.reject(new Error("Docker commands only run with AO's own HOME and DOCKER_CONFIG"));
 	if (signal?.aborted) {
 		const error = Object.assign(new Error("aborted"), { name: "AbortError", code: "ABORT_ERR" });
 		return Promise.resolve({ error, stdout: "", stderr: "" });

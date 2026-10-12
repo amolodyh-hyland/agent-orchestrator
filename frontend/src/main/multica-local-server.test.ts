@@ -35,6 +35,8 @@ const HOME = "/Users/me";
 const DIR = "/Users/me/.multica/server";
 const FILE = `${DIR}/docker-compose.selfhost.yml`;
 const SOCKET = "unix:///Users/me/.docker/run/docker.sock";
+const PLUGIN = "/Applications/Docker.app/Contents/Resources/cli-plugins/docker-compose";
+const AO_DOCKER_HOME = "/Users/me/.ao/local-server-docker";
 const LOCAL: MulticaSettings = { mode: "local", customUrl: "http://localhost:3000", apiUrl: "" };
 
 type Reply = { error?: Partial<ExecError> & { message?: string }; stdout?: string; stderr?: string };
@@ -65,6 +67,8 @@ type Fake = {
 	chosen: string | null;
 	endpoint: string | null;
 	env: NodeJS.ProcessEnv;
+	plugin: string | null;
+	dockerConfig: "ok" | "untrusted";
 };
 
 function harness(patch: Partial<Fake> = {}) {
@@ -85,10 +89,13 @@ function harness(patch: Partial<Fake> = {}) {
 		setupOutcome: "created",
 		chosen: null,
 		endpoint: SOCKET,
+		plugin: PLUGIN,
+		dockerConfig: "ok",
 		env: { PATH: "/usr/bin", HOME },
 		...patch,
 	};
 	const calls: Array<{ file: string; args: string[]; env: NodeJS.ProcessEnv }> = [];
+	const ensured: Array<string | null> = [];
 	const emitted: LocalServerStatus[] = [];
 	const writes: unknown[] = [];
 
@@ -151,6 +158,12 @@ function harness(patch: Partial<Fake> = {}) {
 		findDocker: () => fake.docker,
 		findEndpoint: () => fake.endpoint,
 		findPathDirs: () => ["/usr/local/bin", "/usr/bin"],
+		dockerHomeDir: AO_DOCKER_HOME,
+		findComposePlugin: () => fake.plugin,
+		ensureDockerConfig: async (pluginDir) => {
+			ensured.push(pluginDir);
+			return fake.dockerConfig === "ok" ? { ok: true, home: AO_DOCKER_HOME, config: `${AO_DOCKER_HOME}/.docker` } : { ok: false };
+		},
 		now: () => fake.now,
 		sleep: async (ms) => {
 			fake.now += ms;
@@ -158,7 +171,7 @@ function harness(patch: Partial<Fake> = {}) {
 	};
 	const server: MulticaLocalServer = createMulticaLocalServer(options);
 	const verbs = () => calls.map((call) => verbOf(call.args));
-	return { fake, calls, emitted, writes, server, verbs, options };
+	return { fake, calls, emitted, writes, server, verbs, options, ensured };
 }
 
 const hang = () => {
@@ -538,6 +551,75 @@ describe("a failed inspection is not a stopped stack", () => {
 	});
 });
 
+describe("Docker's home and plugins are AO's own", () => {
+	const HOSTILE = { PATH: "/tmp/bin", HOME: "/tmp/evil-home", DOCKER_CONFIG: "/tmp/evil-home/.docker", XDG_CONFIG_HOME: "/tmp/evil-xdg", USERPROFILE: "C:\\evil" };
+
+	it("runs every docker command with AO's HOME and DOCKER_CONFIG, whatever the inherited environment holds", async () => {
+		const h = harness({ env: HOSTILE, ps: ALL_UP, probe: { ok: true, apiUrl: "" } });
+		await h.server.getStatus();
+		await h.server.start();
+		await h.server.stop();
+		await h.server.restart();
+		await h.server.getLogs("backend", 5);
+
+		const dockerCalls = h.calls.filter((call) => call.file === DOCKER);
+		expect(dockerCalls.length).toBeGreaterThan(6);
+		for (const call of dockerCalls) {
+			expect(call.env.HOME, call.args.join(" ")).toBe(AO_DOCKER_HOME);
+			expect(call.env.DOCKER_CONFIG, call.args.join(" ")).toBe(`${AO_DOCKER_HOME}/.docker`);
+			expect(call.env.XDG_CONFIG_HOME).toBeUndefined();
+			expect(call.env.USERPROFILE).toBeUndefined();
+		}
+	});
+
+	it("prepares the Docker home for the validated Compose plugin's directory before each docker command", async () => {
+		const h = harness();
+		await h.server.getStatus();
+		expect(h.ensured.length).toBeGreaterThan(0);
+		for (const pluginDir of h.ensured) expect(pluginDir).toBe("/Applications/Docker.app/Contents/Resources/cli-plugins");
+	});
+
+	it("treats a missing or untrusted Compose plugin as Compose missing, and runs no compose command", async () => {
+		const h = harness({ plugin: null });
+
+		expect((await h.server.getStatus()).state).toBe("compose_missing");
+		expect(await h.server.start()).toEqual({ ok: false, code: "compose_missing" });
+		expect(h.verbs()).not.toContain("compose-version");
+		expect(h.verbs()).not.toContain("ps");
+		expect(h.verbs()).not.toContain("up");
+	});
+
+	it("never lets a plugin outside the validated location be loaded: the config lists only the validated directory", async () => {
+		const h = harness({ plugin: "/Users/me/.docker/cli-plugins/docker-compose" });
+		await h.server.getStatus();
+		expect(new Set(h.ensured)).toEqual(new Set(["/Users/me/.docker/cli-plugins"]));
+	});
+
+	it("fails closed, with no docker command at all, when AO's Docker home cannot be trusted", async () => {
+		const h = harness({ dockerConfig: "untrusted" });
+
+		const status = await h.server.getStatus();
+
+		expect(status.state).toBe("unknown");
+		expect(status.error?.code).toBe("inspect_failed");
+		expect(await h.server.start()).toMatchObject({ ok: false, code: "inspect_failed" });
+		expect(await h.server.stop()).toMatchObject({ ok: false, code: "inspect_failed" });
+		expect(h.calls.filter((call) => call.file === DOCKER)).toEqual([]);
+		expect(h.calls.some((call) => call.file === "/usr/bin/open")).toBe(false);
+	});
+
+	it("does not give Docker Desktop's launcher any of it, since that is not the docker CLI", async () => {
+		const h = harness({ engine: "down", env: HOSTILE });
+		h.fake.handlers["open"] = () => {
+			h.fake.engine = "up";
+			return {};
+		};
+		await h.server.start();
+		const open = h.calls.find((call) => call.file === "/usr/bin/open");
+		expect(open?.env.DOCKER_CONFIG).toBeUndefined();
+	});
+});
+
 describe("a remote API with a local web address", () => {
 	const REMOTE_API: MulticaSettings = { mode: "local", customUrl: "http://localhost:3000", apiUrl: "https://remote.example" };
 
@@ -624,7 +706,7 @@ describe("the local Docker engine", () => {
 			expect(call.env.DOCKER_HOST, call.args.join(" ")).toBe(SOCKET);
 		}
 		for (const call of h.calls) {
-			for (const name of ["DOCKER_CONTEXT", "DOCKER_CONFIG", "DOCKER_TLS_VERIFY", "COMPOSE_PROJECT_NAME"]) expect(call.env[name]).toBeUndefined();
+			for (const name of ["DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "COMPOSE_PROJECT_NAME"]) expect(call.env[name]).toBeUndefined();
 		}
 	});
 

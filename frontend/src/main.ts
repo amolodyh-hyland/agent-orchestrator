@@ -981,6 +981,7 @@ async function createWindowInternal(): Promise<void> {
 			return result.canceled ? null : (result.filePaths[0] ?? null);
 		},
 		exec: nodeExec,
+		dockerHomeDir: path.join(browserProfileStateDir(), "local-server-docker"),
 		emit: (status) => {
 			if (!shellWebContents.isDestroyed()) shellWebContents.send(MULTICA_LOCAL_SERVER_STATUS_CHANNEL, status);
 		},
