@@ -35,7 +35,7 @@ import {
 
 const DOCKER = "/usr/local/bin/docker";
 const STACK: StackPaths = { dir: "/Users/me/.multica/server", file: "/Users/me/.multica/server/docker-compose.selfhost.yml" };
-const BASE = ["compose", "-f", STACK.file, "--project-directory", STACK.dir];
+const BASE = ["compose", "-f", STACK.file, "--project-directory", STACK.dir, "-p", "multica"];
 
 describe("local server commands", () => {
 	it("builds exactly the allow-listed argument vectors", () => {
@@ -48,6 +48,16 @@ describe("local server commands", () => {
 		expect(restartCommand(DOCKER, STACK).args).toEqual([...BASE, "restart"]);
 		expect(logsCommand(DOCKER, STACK, "backend", 200).args).toEqual([...BASE, "logs", "--no-color", "--tail", "200", "backend"]);
 		expect(openDockerCommand()).toMatchObject({ file: "/usr/bin/open", args: ["-a", "Docker"] });
+	});
+
+	it("always names the project, so a COMPOSE_PROJECT_NAME in the stack's .env cannot target another one", () => {
+		for (const spec of [psCommand(DOCKER, STACK), upCommand(DOCKER, STACK), stopCommand(DOCKER, STACK), restartCommand(DOCKER, STACK), logsCommand(DOCKER, STACK, "backend", 5)]) {
+			const at = spec.args.indexOf("-p");
+			expect(at, spec.name).toBeGreaterThan(-1);
+			expect(spec.args[at + 1], spec.name).toBe("multica");
+			// before the verb, where Compose reads global options
+			expect(at, spec.name).toBeLessThan(spec.args.indexOf(spec.name === "ps" ? "ps" : spec.name === "up" ? "up" : spec.name === "stop" ? "stop" : spec.name === "restart" ? "restart" : "logs"));
+		}
 	});
 
 	it("never runs a stack command through a shell, a pipe or a different verb", () => {
@@ -74,8 +84,8 @@ describe("local server commands", () => {
 			const dir = `/Users/me/${name}`;
 			const stack = { dir, file: `${dir}/docker-compose.selfhost.yml` };
 			const spec = upCommand(DOCKER, stack);
-			expect(spec.args).toEqual(["compose", "-f", stack.file, "--project-directory", dir, "up", "-d"]);
-			expect(spec.args.every((arg) => arg === "up" || arg === "-d" || arg === "compose" || arg === "-f" || arg === "--project-directory" || arg.startsWith("/"))).toBe(true);
+			expect(spec.args).toEqual(["compose", "-f", stack.file, "--project-directory", dir, "-p", "multica", "up", "-d"]);
+			expect(spec.args.every((arg) => arg === "up" || arg === "-d" || arg === "compose" || arg === "-f" || arg === "--project-directory" || arg === "-p" || arg === "multica" || arg.startsWith("/"))).toBe(true);
 		}
 	});
 
@@ -428,10 +438,10 @@ describe("the production adapter (nodeExec) with a mocked child_process", () => 
 
 				const [file, args, options] = childProcess.execFile.mock.calls[0] as [string, string[], Record<string, unknown>];
 				expect(file, name).toBe(DOCKER);
-				expect(args, name).toEqual(["compose", "-f", stack.file, "--project-directory", stack.dir, ...tail]);
+				expect(args, name).toEqual(["compose", "-f", stack.file, "--project-directory", stack.dir, "-p", "multica", ...tail]);
 				expect(args[2], name).toBe(stack.file);
 				expect(args[4], name).toBe(stack.dir);
-				expect(args, name).toHaveLength(5 + tail.length);
+				expect(args, name).toHaveLength(7 + tail.length);
 				expect(options, name).not.toHaveProperty("shell");
 			}
 		}

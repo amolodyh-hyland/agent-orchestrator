@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -10,85 +10,245 @@ import {
 	validateStackDir,
 	writeLocalServerSettings,
 	type SetupDeps,
+	type StackFs,
 } from "./multica-local-server-stack";
 
 const COMPOSE = "name: multica\n\nservices:\n  postgres:\n    image: x\n  backend:\n    image: y\n  frontend:\n    image: z\n";
 
+type Entry = { type: "file" | "dir" | "link"; mode: number; uid?: number; gid?: number; target?: string; content?: string; lstatError?: string };
+
+/** An in-memory file system: ownership, modes and symlinks can be set at will, whatever the host's /tmp looks like. */
+function fakeStackFs(entries: Record<string, Entry>): StackFs {
+	const missing = (file: string) => Object.assign(new Error(`ENOENT ${file}`), { code: "ENOENT" });
+	const resolve = (file: string, depth = 0): string => {
+		if (depth > 8) throw missing(file);
+		const parts = file.split("/").filter(Boolean);
+		let current = "";
+		for (const part of parts) {
+			current = `${current}/${part}`;
+			const entry = entries[current];
+			if (!entry) throw missing(current);
+			if (entry.type === "link") {
+				const rest = parts.slice(current.split("/").filter(Boolean).length).join("/");
+				return resolve(path.posix.join(entry.target as string, rest), depth + 1);
+			}
+		}
+		return current === "" ? "/" : current;
+	};
+	const info = (entry: Entry) => ({
+		isFile: () => entry.type === "file",
+		isDirectory: () => entry.type === "dir",
+		isSymbolicLink: () => entry.type === "link",
+		mode: entry.mode,
+		uid: entry.uid ?? 0,
+		gid: entry.gid ?? 0,
+		size: entry.content?.length ?? 0,
+	});
+	return {
+		realpath: async (file) => resolve(file),
+		stat: async (file) => info(entries[resolve(file)] as Entry),
+		lstat: async (file) => {
+			const parent = resolve(path.posix.dirname(file));
+			const entry = entries[path.posix.join(parent, path.posix.basename(file))];
+			if (!entry) throw missing(file);
+			if (entry.lstatError) throw Object.assign(new Error(entry.lstatError), { code: entry.lstatError });
+			return info(entry);
+		},
+		readFile: async (file) => {
+			const entry = entries[resolve(file)];
+			if (!entry || entry.type !== "file") throw missing(file);
+			return entry.content ?? "";
+		},
+	};
+}
+
 describe("validateStackDir", () => {
-	let root: string;
-	let stackDir: string;
-
-	beforeEach(async () => {
-		root = await realpath(await mkdtemp(path.join(os.tmpdir(), "ao-local-server-")));
-		stackDir = path.join(root, "server");
-		await mkdir(stackDir);
-		await chmod(stackDir, 0o755);
-		await writeFile(path.join(stackDir, "docker-compose.selfhost.yml"), COMPOSE, { mode: 0o644 });
-	});
-
-	afterEach(async () => {
-		await chmod(stackDir, 0o755).catch(() => undefined);
-		await rm(root, { recursive: true, force: true });
-	});
+	const ME = { uid: 501, gid: 20 };
+	const D = "/Users/me/.multica/server";
+	const F = `${D}/docker-compose.selfhost.yml`;
+	const dir = (mode = 0o755, uid = 501, gid = 20): Entry => ({ type: "dir", mode, uid, gid });
+	const file = (content: string, mode = 0o644, uid = 501, gid = 20): Entry => ({ type: "file", mode, uid, gid, content });
+	const tree = (patch: Record<string, Entry | null> = {}): Record<string, Entry> => {
+		const entries: Record<string, Entry> = {
+			"/": dir(0o755, 0, 0),
+			"/Users": dir(0o755, 0, 0),
+			"/Users/me": dir(),
+			"/Users/me/.multica": dir(),
+			[D]: dir(),
+			[F]: file(COMPOSE),
+		};
+		for (const [key, value] of Object.entries(patch)) {
+			if (value === null) delete entries[key];
+			else entries[key] = value;
+		}
+		return entries;
+	};
+	const validate = (entries: Record<string, Entry>, target = D, options: { uid?: number; gid?: number } = ME) => validateStackDir(target, { fs: fakeStackFs(entries), ...options });
 
 	it("accepts a Multica stack folder and returns the canonical directory and file", async () => {
-		await expect(validateStackDir(stackDir)).resolves.toEqual({ ok: true, dir: stackDir, file: path.join(stackDir, "docker-compose.selfhost.yml") });
+		await expect(validate(tree())).resolves.toEqual({ ok: true, dir: D, file: F });
+	});
+
+	it("accepts a private .env and a missing one (that is a setup step, not an error)", async () => {
+		await expect(validate(tree({ [`${D}/.env`]: file("JWT_SECRET=x\n", 0o600) }))).resolves.toMatchObject({ ok: true });
+		await expect(validate(tree())).resolves.toMatchObject({ ok: true });
 	});
 
 	it("canonicalizes a symlinked folder to its real location", async () => {
-		const link = path.join(root, "link");
-		await symlink(stackDir, link);
-		await expect(validateStackDir(link)).resolves.toMatchObject({ ok: true, dir: stackDir });
+		await expect(validate(tree({ "/Users/me/link": { type: "link", mode: 0o755, target: D } }), "/Users/me/link")).resolves.toMatchObject({ ok: true, dir: D });
 	});
 
 	it("rejects a relative path, a NUL byte and a missing folder", async () => {
-		await expect(validateStackDir("server")).resolves.toEqual({ ok: false, error: "not_absolute" });
-		await expect(validateStackDir(`${stackDir}\0x`)).resolves.toEqual({ ok: false, error: "not_absolute" });
-		await expect(validateStackDir(path.join(root, "missing"))).resolves.toEqual({ ok: false, error: "not_found" });
+		await expect(validate(tree(), "server")).resolves.toEqual({ ok: false, error: "not_absolute" });
+		await expect(validate(tree(), `${D}\0x`)).resolves.toEqual({ ok: false, error: "not_absolute" });
+		await expect(validate(tree(), "/Users/me/missing")).resolves.toEqual({ ok: false, error: "not_found" });
 	});
 
 	it("rejects a file where a folder is expected", async () => {
-		await expect(validateStackDir(path.join(stackDir, "docker-compose.selfhost.yml"))).resolves.toEqual({ ok: false, error: "not_directory" });
+		await expect(validate(tree(), F)).resolves.toEqual({ ok: false, error: "not_directory" });
 	});
 
 	it("rejects a folder or compose file that others can write", async () => {
-		await chmod(stackDir, 0o777);
-		await expect(validateStackDir(stackDir)).resolves.toEqual({ ok: false, error: "unsafe_directory" });
-		await chmod(stackDir, 0o755);
-		await chmod(path.join(stackDir, "docker-compose.selfhost.yml"), 0o666);
-		await expect(validateStackDir(stackDir)).resolves.toEqual({ ok: false, error: "unsafe_compose_file" });
+		await expect(validate(tree({ [D]: dir(0o777) }))).resolves.toEqual({ ok: false, error: "unsafe_directory" });
+		await expect(validate(tree({ [F]: file(COMPOSE, 0o666) }))).resolves.toEqual({ ok: false, error: "unsafe_compose_file" });
+		await expect(validate(tree({ [F]: file(COMPOSE, 0o664, 501, 1234) }))).resolves.toEqual({ ok: false, error: "unsafe_compose_file" });
 	});
 
-	it("rejects a folder owned by another user", async () => {
-		await expect(validateStackDir(stackDir, { uid: (process.getuid?.() ?? 1) + 1 })).resolves.toEqual({ ok: false, error: "unsafe_directory" });
+	it("rejects a safe folder under a writable ancestor, because whoever can write the parent can swap the folder", async () => {
+		for (const [ancestor, mode] of [["/Users/me/.multica", 0o777], ["/Users/me", 0o777], ["/Users", 0o1777], ["/", 0o777]] as const) {
+			await expect(validate(tree({ [ancestor]: dir(mode, ancestor === "/" || ancestor === "/Users" ? 0 : 501) })), ancestor).resolves.toEqual({ ok: false, error: "unsafe_directory" });
+		}
+		await expect(validate(tree({ "/Users/me": dir(0o775, 501, 1234) }))).resolves.toEqual({ ok: false, error: "unsafe_directory" });
+	});
+
+	it("accepts a group-writable ancestor only for an administrator group or the user's own", async () => {
+		await expect(validate(tree({ "/Users/me": dir(0o775, 501, 80) }))).resolves.toMatchObject({ ok: true });
+		await expect(validate(tree({ "/Users/me": dir(0o775, 501, 20) }))).resolves.toMatchObject({ ok: true });
+	});
+
+	it("rejects a folder, ancestor or compose file owned by another user", async () => {
+		await expect(validate(tree({ [D]: dir(0o755, 502) }))).resolves.toEqual({ ok: false, error: "unsafe_directory" });
+		await expect(validate(tree({ "/Users/me": dir(0o755, 502) }))).resolves.toEqual({ ok: false, error: "unsafe_directory" });
+		await expect(validate(tree({ [F]: file(COMPOSE, 0o644, 502) }))).resolves.toEqual({ ok: false, error: "unsafe_compose_file" });
+	});
+
+	it("rejects a .env it cannot inspect, rather than assuming there is none", async () => {
+		for (const code of ["EACCES", "EPERM", "EIO"]) {
+			await expect(validate(tree({ [`${D}/.env`]: { ...file("x", 0o600), lstatError: code } })), code).resolves.toEqual({ ok: false, error: "unsafe_env_file" });
+		}
+	});
+
+	it("rejects a .env that is a symlink, even to a private file", async () => {
+		const entries = tree({ [`${D}/.env`]: { type: "link", mode: 0o777, target: `${D}/real.env` }, [`${D}/real.env`]: file("JWT_SECRET=x", 0o600) });
+		await expect(validate(entries)).resolves.toEqual({ ok: false, error: "unsafe_env_file" });
+	});
+
+	it("rejects a .env that is a symlink to a world-writable target", async () => {
+		const entries = tree({ [`${D}/.env`]: { type: "link", mode: 0o777, target: "/tmp/shared.env" }, "/tmp": dir(0o1777, 0, 0), "/tmp/shared.env": file("COMPOSE_PROJECT_NAME=other", 0o666) });
+		await expect(validate(entries)).resolves.toEqual({ ok: false, error: "unsafe_env_file" });
+	});
+
+	it("rejects a .env that others or a group can write, one owned by another user, one that is not a file or too large", async () => {
+		for (const [name, entry] of [
+			["world-writable", file("x", 0o666)],
+			["group-writable", file("x", 0o660)],
+			["other owner", file("x", 0o600, 502)],
+			["directory", dir()],
+			["huge", file("x".repeat(300 * 1024), 0o600)],
+		] as const) {
+			await expect(validate(tree({ [`${D}/.env`]: entry })), name).resolves.toEqual({ ok: false, error: "unsafe_env_file" });
+		}
 	});
 
 	it("rejects a compose file that is a symlink, even to a good file inside the folder", async () => {
-		await writeFile(path.join(stackDir, "real.yml"), COMPOSE);
-		await rm(path.join(stackDir, "docker-compose.selfhost.yml"));
-		await symlink(path.join(stackDir, "real.yml"), path.join(stackDir, "docker-compose.selfhost.yml"));
-		await expect(validateStackDir(stackDir)).resolves.toEqual({ ok: false, error: "unsafe_compose_file" });
+		const entries = tree({ [F]: { type: "link", mode: 0o777, target: `${D}/real.yml` }, [`${D}/real.yml`]: file(COMPOSE) });
+		await expect(validate(entries)).resolves.toEqual({ ok: false, error: "unsafe_compose_file" });
 	});
 
 	it("rejects a compose file that points outside the folder", async () => {
-		const outside = path.join(root, "outside.yml");
-		await writeFile(outside, COMPOSE);
-		await rm(path.join(stackDir, "docker-compose.selfhost.yml"));
-		await symlink(outside, path.join(stackDir, "docker-compose.selfhost.yml"));
-		await expect(validateStackDir(stackDir)).resolves.toEqual({ ok: false, error: "unsafe_compose_file" });
+		const entries = tree({ [F]: { type: "link", mode: 0o777, target: "/Users/me/outside.yml" }, "/Users/me/outside.yml": file(COMPOSE) });
+		await expect(validate(entries)).resolves.toEqual({ ok: false, error: "unsafe_compose_file" });
 	});
 
 	it("rejects a folder without the fixed compose file name", async () => {
-		await rm(path.join(stackDir, "docker-compose.selfhost.yml"));
-		await writeFile(path.join(stackDir, "docker-compose.yml"), COMPOSE);
-		await expect(validateStackDir(stackDir)).resolves.toEqual({ ok: false, error: "no_compose_file" });
+		await expect(validate(tree({ [F]: null, [`${D}/docker-compose.yml`]: file(COMPOSE) }))).resolves.toEqual({ ok: false, error: "no_compose_file" });
 	});
 
 	it("rejects a compose file that is not Multica's, or is too large", async () => {
-		await writeFile(path.join(stackDir, "docker-compose.selfhost.yml"), "name: other\nservices:\n  web:\n    image: x\n");
-		await expect(validateStackDir(stackDir)).resolves.toEqual({ ok: false, error: "not_multica" });
-		await writeFile(path.join(stackDir, "docker-compose.selfhost.yml"), `${COMPOSE}${"#".repeat(300 * 1024)}`);
-		await expect(validateStackDir(stackDir)).resolves.toEqual({ ok: false, error: "unsafe_compose_file" });
+		await expect(validate(tree({ [F]: file("name: other\nservices:\n  web:\n    image: x\n") }))).resolves.toEqual({ ok: false, error: "not_multica" });
+		await expect(validate(tree({ [F]: file(`${COMPOSE}${"#".repeat(300 * 1024)}`) }))).resolves.toEqual({ ok: false, error: "unsafe_compose_file" });
+	});
+
+	it("does not judge ownership or modes where there is no user id (Windows)", async () => {
+		await expect(validate(tree({ [D]: dir(0o777, 999), "/Users/me": dir(0o777, 999) }), D, { uid: undefined, gid: undefined } as never)).resolves.toMatchObject({ ok: true });
+	});
+
+	describe("compose content", () => {
+		const withService = (extra: string) => `${COMPOSE}${extra}`;
+		const rejected = async (text: string) => validate(tree({ [F]: file(text) }));
+
+		it("accepts what Multica's own file contains: named volumes, loopback ports, depends_on, healthchecks", async () => {
+			const stock = `name: multica
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: \${POSTGRES_DB:-multica}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U x",
+        ]
+  backend:
+    image: b
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:\${BACKEND_PORT:-8080}:8080"
+    volumes:
+      - backend_uploads:/app/data/uploads
+  frontend:
+    image: f
+    depends_on:
+      - backend
+    ports:
+      - "127.0.0.1:\${FRONTEND_PORT:-3000}:3000"
+volumes:
+  pgdata:
+  backend_uploads:
+`;
+			await expect(validate(tree({ [F]: file(stock) }))).resolves.toEqual({ ok: true, dir: D, file: F });
+		});
+
+		it("rejects keys that hand out the host, other files or other projects", async () => {
+			for (const key of ["include: [other.yml]", "extends: {file: x.yml, service: y}", "env_file: .env.evil", "privileged: true", "pid: host", "network_mode: host", "cap_add: [ALL]", "devices: ['/dev/sda']", "security_opt: ['seccomp=unconfined']", "volumes_from: [x]", "build: ./x", "ipc: host", "userns_mode: host"]) {
+				expect(await rejected(withService(`\n    ${key}\n`)), key).toEqual({ ok: false, error: "unsafe_compose_content" });
+				expect(await rejected(withService(`\n    x: { ${key.replace(/^\s+/, "")} }\n`)), `flow ${key}`).toEqual({ ok: false, error: "unsafe_compose_content" });
+			}
+		});
+
+		it("rejects a top-level include", async () => {
+			expect(await rejected(`include:\n  - evil.yml\n${COMPOSE}`)).toEqual({ ok: false, error: "unsafe_compose_content" });
+		});
+
+		it("rejects bind mounts, in short, long and flow form", async () => {
+			for (const volume of ["- /:/host", "- ./data:/data", "- ~/x:/x", "- ${HOME}:/h", "- /var/run/docker.sock:/var/run/docker.sock"]) {
+				expect(await rejected(withService(`\n    volumes:\n      ${volume}\n`)), volume).toEqual({ ok: false, error: "unsafe_compose_content" });
+			}
+			expect(await rejected(withService("\n    volumes:\n      - type: bind\n        source: /\n        target: /h\n"))).toEqual({ ok: false, error: "unsafe_compose_content" });
+			expect(await rejected(withService('\n    volumes: ["/:/host"]\n'))).toEqual({ ok: false, error: "unsafe_compose_content" });
+		});
+
+		it("rejects ports published beyond loopback, in list and flow form", async () => {
+			for (const port of ['- "8080:8080"', '- "0.0.0.0:8080:8080"', "- 3000:3000", '- "192.168.1.5:3000:3000"']) {
+				expect(await rejected(withService(`\n    ports:\n      ${port}\n`)), port).toEqual({ ok: false, error: "unsafe_compose_content" });
+			}
+			expect(await rejected(withService('\n    ports: ["0.0.0.0:80:80"]\n'))).toEqual({ ok: false, error: "unsafe_compose_content" });
+		});
 	});
 });
 

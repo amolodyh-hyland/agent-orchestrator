@@ -387,8 +387,12 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 			const installed = await composeInstalled(prepared.docker);
 			if (signal.aborted) return { ok: false, code: "cancelled" };
 			if (!installed) return { ok: false, code: "compose_missing" };
+			// The stack is validated again right before the command: the Docker wait above can be long, and the folder or its .env may have changed since.
+			const fresh = await prepare();
+			if (signal.aborted) return { ok: false, code: "cancelled" };
+			if (!fresh.ok) return fresh;
 			setOp(state);
-			const result = outcome(await run(build(prepared.docker, prepared.stack), signal), signal);
+			const result = outcome(await run(build(fresh.docker, fresh.stack), signal), signal);
 			if (result.ok) portFailure = false;
 			return result;
 		});

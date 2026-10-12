@@ -97,7 +97,7 @@ function harness(patch: Partial<Fake> = {}) {
 		if (args[0] === "-a") return "open";
 		if (args[1] === "version") return "compose-version";
 		if (args[1] === "ls") return "compose-ls";
-		return args[5] ?? "?";
+		return args[7] ?? "?";
 	};
 
 	const exec: ExecFileLike = (file, args, options, callback) => {
@@ -329,15 +329,15 @@ describe("start, stop and restart", () => {
 		const h = harness();
 		expect(await h.server.start()).toEqual({ ok: true });
 		const up = h.calls.find((call) => call.args.includes("up"));
-		expect(up).toMatchObject({ file: DOCKER, args: ["compose", "-f", FILE, "--project-directory", DIR, "up", "-d"] });
+		expect(up).toMatchObject({ file: DOCKER, args: ["compose", "-f", FILE, "--project-directory", DIR, "-p", "multica", "up", "-d"] });
 	});
 
 	it("stops and restarts with their commands", async () => {
 		const h = harness({ ps: ALL_UP, probe: { ok: true, apiUrl: "" } });
 		expect(await h.server.stop()).toEqual({ ok: true });
 		expect(await h.server.restart()).toEqual({ ok: true });
-		expect(h.calls.filter((call) => call.args[6] === undefined && call.args[5] === "stop")).toHaveLength(1);
-		expect(h.calls.some((call) => call.args[5] === "restart" && call.args.length === 6)).toBe(true);
+		expect(h.calls.filter((call) => call.args[8] === undefined && call.args[7] === "stop")).toHaveLength(1);
+		expect(h.calls.some((call) => call.args[7] === "restart" && call.args.length === 8)).toBe(true);
 	});
 
 	it("reports the transient state while the command runs", async () => {
@@ -366,6 +366,47 @@ describe("start, stop and restart", () => {
 		expect(h.calls.find((call) => call.file === "/usr/bin/open")?.args).toEqual(["-a", "Docker"]);
 		expect(h.verbs().indexOf("open")).toBeLessThan(h.verbs().indexOf("up"));
 		expect(h.emitted.map((s) => s.state)).toContain("docker_starting");
+	});
+
+	it("validates the stack again right before the command, after a long Docker wait", async () => {
+		const h = harness({ engine: "down" });
+		let polls = 0;
+		h.fake.handlers["docker-version"] = () => (++polls > 2 ? { stdout: "27.0.0\n" } : { error: { code: 1 }, stderr: "Cannot connect to the Docker daemon. Is the docker daemon running?" });
+		h.fake.handlers["open"] = () => {
+			// The folder is swapped for something that no longer validates while Docker starts.
+			h.fake.validDirs = new Set();
+			return {};
+		};
+
+		const result = await h.server.start();
+
+		expect(result).toEqual({ ok: false, code: "no_folder" });
+		expect(h.verbs()).not.toContain("up");
+	});
+
+	it("runs the command against the folder as validated just before it", async () => {
+		const validate = vi.fn(async (dir: string): Promise<StackCheck> => ({ ok: true, dir, file: `${dir}/docker-compose.selfhost.yml` }));
+		const h = harness();
+		h.options.validate = validate;
+		const server = createMulticaLocalServer(h.options);
+
+		await server.start();
+
+		// Once to prepare, once more right before `up`.
+		const before = validate.mock.calls.length;
+		expect(before).toBeGreaterThanOrEqual(2);
+		const upIndex = h.calls.findIndex((call) => call.args.includes("up"));
+		expect(upIndex).toBeGreaterThan(-1);
+	});
+
+	it("refuses to run when the .env became unsafe after the first check", async () => {
+		const h = harness({ stackDir: DIR });
+		let calls = 0;
+		h.options.validate = async (dir) => (++calls > 1 ? { ok: false, error: "unsafe_env_file" } : { ok: true, dir, file: `${dir}/docker-compose.selfhost.yml` });
+		const server = createMulticaLocalServer(h.options);
+
+		expect(await server.start()).toEqual({ ok: false, code: "invalid_folder" });
+		expect(h.verbs()).not.toContain("up");
 	});
 
 	it("gives up waiting for Docker after the timeout and does not start the stack", async () => {
@@ -924,7 +965,7 @@ describe("logs", () => {
 		const result = await h.server.getLogs("backend", 200);
 
 		expect(result).toEqual({ ok: true, lines: ["backend-1  | starting", "backend-1  | [DEV] Verification code for a@b.c: 123456"] });
-		expect(h.calls.find((call) => call.args[5] === "logs")?.args).toEqual(["compose", "-f", FILE, "--project-directory", DIR, "logs", "--no-color", "--tail", "200", "backend"]);
+		expect(h.calls.find((call) => call.args[7] === "logs")?.args).toEqual(["compose", "-f", FILE, "--project-directory", DIR, "-p", "multica", "logs", "--no-color", "--tail", "200", "backend"]);
 		expect(JSON.stringify([h.emitted, h.writes])).not.toContain("123456");
 	});
 

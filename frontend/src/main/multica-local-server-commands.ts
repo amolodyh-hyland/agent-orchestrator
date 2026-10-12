@@ -8,6 +8,8 @@ import { LOCAL_SERVER_LOG_TAIL_MAX, LOCAL_SERVER_SERVICES, type LocalServerServi
 // values; the runner refuses anything that did not come from here.
 
 export const COMPOSE_FILE_NAME = "docker-compose.selfhost.yml";
+/** Multica's Compose project name; passed with -p so a COMPOSE_PROJECT_NAME in the stack's .env cannot target another project. */
+export const COMPOSE_PROJECT_NAME = "multica";
 export const OPEN_BINARY = "/usr/bin/open";
 
 const MAX_BUFFER = 512 * 1024;
@@ -67,7 +69,7 @@ function composeBase(docker: string, stack: StackPaths): string[] {
 	if (path.dirname(stack.file) !== stack.dir || path.basename(stack.file) !== COMPOSE_FILE_NAME) {
 		throw new Error("compose file must be the Multica self-hosting file inside the stack directory");
 	}
-	return ["compose", "-f", stack.file, "--project-directory", stack.dir];
+	return ["compose", "-f", stack.file, "--project-directory", stack.dir, "-p", COMPOSE_PROJECT_NAME];
 }
 
 export const dockerVersionCommand = (docker: string): CommandSpec => {
@@ -144,7 +146,7 @@ export type TrustContext = {
 	fs?: TrustFs;
 };
 
-function ownedAndNotWritableByOthers(info: TrustStat, context: TrustContext): boolean {
+export function ownedAndNotWritableByOthers(info: TrustStat, context: TrustContext): boolean {
 	if (context.uid === undefined) return true;
 	if (info.uid !== 0 && info.uid !== context.uid) return false;
 	if ((info.mode & 0o002) !== 0) return false;
