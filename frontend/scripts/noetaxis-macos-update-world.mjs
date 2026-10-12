@@ -217,6 +217,11 @@ export async function mutatedScripts(t, file, search, replacement) {
 		if (/\.(sh)$/.test(name)) await cp(path.join(realScriptsDir, name), path.join(directory, name));
 	}
 	await mkdir(path.join(directory, "pkg-scripts"), { recursive: true });
+	// search === null: just a copy, for mutations the caller applies itself.
+	if (search === null) {
+		for (const name of ["install.sh", "update.sh", "rollback.sh"]) await chmod(path.join(directory, name), 0o755);
+		return directory;
+	}
 	const target = path.join(directory, file);
 	const original = await readFile(target, "utf8");
 	const mutated = typeof search === "string" ? original.replace(search, replacement) : original.replace(search, replacement);

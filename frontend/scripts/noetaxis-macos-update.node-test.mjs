@@ -102,6 +102,47 @@ async function scenarioBackupBeforeSwap(t, scriptsDir) {
 	return violations;
 }
 
+// The completed backup record must exist before the old app moves, and the old app must be in the
+// backup once it has: checked at the two pause points of the swap (update mode, throwaway world).
+async function scenarioRecordBeforeMove(t, scriptsDir) {
+	const violations = [];
+	for (const point of ["after-record", "after-old-moved"]) {
+		const world = await makeWorld(t, `record-${point}`);
+		const marker = path.join(world.root, "paused");
+		const child = spawn(path.join(scriptsDir, "install.sh"), ["--update", "--quit-timeout", "3", "--stop-timeout", "3", "--health-timeout", "3", "--yes", world.newApp], {
+			env: { ...world.env, NOETAXIS_TEST_PAUSE_AT: point, NOETAXIS_TEST_PAUSE_MARKER: marker },
+			stdio: "ignore",
+		});
+		const exited = new Promise((resolve) => child.on("exit", (code) => resolve(code)));
+		for (let attempt = 0; attempt < 300 && !existsSync(marker); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+		const [dir] = await world.backupDirs();
+		const complete = dir ? existsSync(path.join(dir, "BACKUP_COMPLETE")) : false;
+		const moved = dir ? (await readdir(dir)).some((name) => name.endsWith(".app.bak")) : false;
+		if (!complete) violations.push(`${point}: BACKUP_COMPLETE does not exist yet`);
+		if (point === "after-record" && (moved || world.installedVersion() !== oldVersion)) violations.push("after-record: the old app already moved");
+		if (point === "after-old-moved" && !moved) violations.push("after-old-moved: the old app is not in the backup");
+		child.kill("SIGTERM");
+		await exited;
+	}
+	return violations;
+}
+
+// Only sessions that are live (not terminated, agent not exited) may be touched, by exact id.
+async function scenarioExactSessionIds(t, scriptsDir) {
+	const world = await makeWorld(t, "exact-ids", {
+		sessions: [liveSession("s1"), liveSession("s2", { activity: "exited", host: false }), liveSession("s3", { terminated: true, host: false })],
+	});
+	const result = world.update(["--yes", "--end-sessions", "--restore-sessions"], { scriptsDir });
+	const calls = await world.calls();
+	const violations = [];
+	const ended = matching(calls, /session exit-agent/).map((line) => line.replace(/^.*session exit-agent (\S+).*$/, "$1"));
+	const restored = matching(calls, /session restore/).map((line) => line.replace(/^.*session restore (\S+).*$/, "$1"));
+	if (JSON.stringify(ended) !== JSON.stringify(["s1"])) violations.push(`exit-agent ran for ${JSON.stringify(ended)}, expected only ["s1"]`);
+	if (JSON.stringify(restored) !== JSON.stringify(["s1"])) violations.push(`restore ran for ${JSON.stringify(restored)}, expected only ["s1"]`);
+	if (result.status !== 0) violations.push(`expected success, got ${result.status}`);
+	return violations;
+}
+
 // ---------------------------------------------------------------------------
 // Plan, confirmation, refusal
 // ---------------------------------------------------------------------------
@@ -962,6 +1003,35 @@ test("an interruption while staging, before anything is stopped, leaves the runn
 	assert.equal(callIndex(calls, /^osascript/), -1);
 	assert.equal(callIndex(calls, /^open /), -1);
 	assert.equal(world.installedVersion(), oldVersion);
+});
+
+test("the completed backup record exists before the old app moves, and the old app is in the backup after it", darwin, async (t) => {
+	assert.deepEqual(await scenarioRecordBeforeMove(t, realScriptsDir), []);
+});
+
+test("mutation: writing BACKUP_COMPLETE only after the old app moved is caught", darwin, async (t) => {
+	const dir = await mutatedScripts(t, "install.sh", null);
+	const file = path.join(dir, "install.sh");
+	const text = await readFile(file, "utf8");
+	const start = text.indexOf('if ! noetaxis_write_backup_record');
+	const end = text.indexOf("fi\n", text.indexOf("exit 35", start)) + 3;
+	const block = text.slice(start, end);
+	assert.ok(block.includes("exit 35"));
+	const moved = text.slice(0, start) + text.slice(end).replace("old_moved=1\n", `old_moved=1\n${block}`);
+	assert.notEqual(moved, text);
+	await writeFile(file, moved);
+	const violations = await scenarioRecordBeforeMove(t, dir);
+	assert.ok(violations.some((v) => /after-record: BACKUP_COMPLETE does not exist yet/.test(v)), violations.join("; "));
+});
+
+test("only live sessions are stopped and restored, by exact id (not terminated or already exited ones)", darwin, async (t) => {
+	assert.deepEqual(await scenarioExactSessionIds(t, realScriptsDir), []);
+});
+
+test("mutation: applying exit-agent to terminated or exited sessions is caught", darwin, async (t) => {
+	const mutant = await mutatedScripts(t, "update-lib.sh", 'if [[ "$terminated" != true && "$activity" != exited ]]; then', "if true; then");
+	const violations = await scenarioExactSessionIds(t, mutant);
+	assert.ok(violations.some((v) => /exit-agent ran for/.test(v)), violations.join("; "));
 });
 
 test("a person's own AO_MULTICA_DAEMON / AO_KEEP_DAEMON settings are not an AO session; any other AO_ variable is, and is named", darwin, async (t) => {
