@@ -1476,6 +1476,8 @@ BEGIN {
 		if (defined $p && $p) { open(my $f, ">>", $ENV{TRACE_LOG}); print $f "fork $p\\n"; close $f; }
 		# The second fork is the copier: stall it BEFORE any of its own initialisation (handlers, alarm, unblock).
 		if (defined $p && !$p && $n == 2 && $ENV{TRACE_DELAY_COPIER}) { select(undef, undef, undef, $ENV{TRACE_DELAY_COPIER}); }
+		# The first fork is the helper: stall it BEFORE it moves into its own process group.
+		if (defined $p && !$p && $n == 1 && $ENV{TRACE_DELAY_HELPER}) { select(undef, undef, undef, $ENV{TRACE_DELAY_HELPER}); }
 		return $p;
 	};
 }
@@ -1532,6 +1534,49 @@ test("mutation: returning while the copier is still alive (no end of the copier)
 	await writeFile(file, text.replace("alarm 2;\n				sigprocmask(SIG_UNBLOCK", "sigprocmask(SIG_UNBLOCK"));
 	const result = await copierAtReturn(t, path.join(mutant, "common.sh"), "mutant", 15_000);
 	assert.ok(result.outcome === "hung" || result.alive, "without ending the copier it outlives the call or holds the substitution pipe");
+});
+
+// The helper is created in its own process group from the PARENT side as well: stall the helper child for
+// six seconds before it reaches its own setpgrp, give the call a one second bound, and check that the
+// group signals still reach it (no marker written, process gone) and that the call returns at the deadline.
+async function stalledHelper(t, libPath, label) {
+	const root = await mkdtemp(path.join(os.tmpdir(), `noetaxis-helperdelay-${label}-`));
+	t.after(async () => rm(root, { recursive: true, force: true }));
+	await writeFile(path.join(root, "Trace.pm"), `package Trace;
+BEGIN {
+	my $forks = 0;
+	*CORE::GLOBAL::fork = sub {
+		my $n = ++$forks;
+		my $p = CORE::fork();
+		if (defined $p && !$p && $n == 1 && $ENV{TRACE_DELAY_HELPER}) { select(undef, undef, undef, $ENV{TRACE_DELAY_HELPER}); }
+		return $p;
+	};
+}
+1;
+`);
+	const marker = path.join(root, "helper-ran");
+	const outFile = path.join(root, "o");
+	const started = Date.now();
+	spawnSync("/bin/bash", ["-c", `{ . "${libPath}"; rc=0; noetaxis_bounded 1 /bin/sh -c 'echo ran > "${marker}"; /bin/sleep 30' || rc=$?; echo "rc=$rc"; } > ${outFile} 2>&1`], { env: { PATH: "/usr/bin:/bin", TMPDIR: root, PERL5OPT: `-I${root} -MTrace`, TRACE_DELAY_HELPER: "6" }, timeout: 60_000, killSignal: "SIGKILL" });
+	const elapsed = Date.now() - started;
+	// Give a surviving helper time to come out of its stall and run.
+	await new Promise((resolve) => setTimeout(resolve, 7_500));
+	const ran = existsSync(marker);
+	if (ran) { try { spawnSync("/usr/bin/pkill", ["-f", marker]); } catch { /* nothing to clean */ } }
+	return { elapsed, ran, output: readFileSync(outFile, "utf8") };
+}
+
+test("a helper stalled before its own setpgrp is still ended by the group signals: it never runs and the call returns at the deadline", darwin, async (t) => {
+	const result = await stalledHelper(t, path.join(realScriptsDir, "common.sh"), "real");
+	assert.match(result.output, /rc=142/);
+	assert.ok(result.elapsed < 5_000, `returned after ${result.elapsed} ms`);
+	assert.equal(result.ran, false, "the stalled helper was killed before it could run");
+});
+
+test("mutation: creating the helper's group only in the child is caught by the stalled-helper case", darwin, async (t) => {
+	const mutant = await mutatedScripts(t, "common.sh", "		setpgrp($child, $child) if $child;\n", "");
+	const result = await stalledHelper(t, path.join(mutant, "common.sh"), "mutant");
+	assert.equal(result.ran, true, "without the parent-side group the TERM and KILL miss the stalled helper, which then runs");
 });
 
 test("a hung helper is terminated and reported as a failure, while AO's own processes are never sent SIGKILL", darwin, async (t) => {

@@ -44,6 +44,11 @@ noetaxis_bounded() {
 		my $err = private_file();
 		my $child = fork();
 		exit 127 unless defined $child;
+		# The helper leads a process group of its own. It is set on BOTH sides of the fork, so the group
+		# exists (and can be signalled) from the moment the fork returns in the parent, even if the child
+		# has not run a single instruction yet; after the exec only the parent'"'"'s call could not succeed,
+		# and then the child'"'"'s own call has long since happened.
+		setpgrp($child, $child) if $child;
 		if (!$child) {
 			setpgrp(0, 0);
 			open(STDIN, "<", "/dev/null");
