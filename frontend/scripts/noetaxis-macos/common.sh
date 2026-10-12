@@ -69,12 +69,25 @@ noetaxis_bounded() {
 			}
 			return ($cut, @data);
 		}
+		# The ONE TERM-then-KILL sequence of the installer. It is only ever aimed at a process group this
+		# supervisor started itself (the helper, or the output copier) and whose leader it has NOT reaped,
+		# so the group id is still reserved; the caller reaps only after this returned.
+		sub end_group {
+			my ($pgid, $grace) = @_;
+			kill "TERM", -$pgid;
+			select(undef, undef, undef, $grace);
+			kill "KILL", -$pgid;
+		}
 		# Returns 0 when everything was written, 1 when the caller did not take it in time.
 		sub deliver {
 			my ($outdata, $errdata) = @_;
 			my $copier = fork();
 			return 1 unless defined $copier;
+			# The copier leads a process group of its own (set on both sides of the fork, so there is no
+			# window in which it still shares the supervisor group).
+			setpgrp($copier, $copier) if $copier;
 			if (!$copier) {
+				setpgrp(0, 0);
 				# The copier must be terminable and must end by itself. The inherited handlers only record a
 				# flag, so they are reset to the default action WHILE the signals are still blocked, then the
 				# signals are unblocked (a TERM that arrives in between stays pending and terminates it), and
@@ -98,8 +111,10 @@ noetaxis_bounded() {
 				if (waitpid($copier, WNOHANG) == $copier) { return $? == 0 ? 0 : 1; }
 				select(undef, undef, undef, 0.05);
 			}
-			kill "TERM", $copier;
-			for (1 .. 20) { last if waitpid($copier, WNOHANG) == $copier; select(undef, undef, undef, 0.05); }
+			# Not taken in time: end the copier (TERM, then KILL through the one sequence above), and only then
+			# reap it, so this call never returns while the copier can still hold the pipe of the caller.
+			end_group($copier, 0.2);
+			for (1 .. 60) { last if waitpid($copier, WNOHANG) == $copier; select(undef, undef, undef, 0.05); }
 			return 1;
 		}
 		# Group ownership: the helper'"'"'s process id (and so its group id) stays reserved for as long as
@@ -131,11 +146,9 @@ noetaxis_bounded() {
 			select(undef, undef, undef, 0.05);
 		}
 		# Stop sequence, with the signals still blocked and the leader still unreaped.
-		kill "TERM", -$child;
-		select(undef, undef, undef, 1);
-		# Whoever is still in the group after the grace (a hung leader, or descendants that outlived a
-		# leader that exited on TERM) gets KILL; the leader is a zombie at worst, so the group id is ours.
-		kill "KILL", -$child;
+		# Whoever is in the group after the grace (a hung leader, or descendants that outlived a leader that
+		# exited on TERM) gets KILL; the leader is a zombie at worst, so the group id is ours.
+		end_group($child, 1);
 		for (1 .. 60) { last if waitpid($child, WNOHANG) == $child; select(undef, undef, undef, 0.05); }
 		my ($cut, $outdata, $errdata) = gather();
 		$errdata .= "noetaxis: helper command timed out after ${limit}s: @ARGV\n" if $fired == 142;

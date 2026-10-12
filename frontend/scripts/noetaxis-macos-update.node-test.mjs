@@ -1243,14 +1243,17 @@ test("mutation: letting the helper inherit the caller's pipes is caught by the e
 // comes before the final KILL, and any unblocked signal handler window around a reap.
 function reapsBeforeLastSignal(source) {
 	const body = source.slice(source.indexOf("noetaxis_bounded() {"), source.indexOf("\n}\n", source.indexOf("noetaxis_bounded() {")));
+	const sequence = body.slice(body.indexOf("sub end_group {"), body.indexOf("# Returns 0 when everything was written"));
 	const stop = body.slice(body.indexOf("# Stop sequence"));
-	const kill = stop.indexOf('kill "KILL"');
+	const call = stop.indexOf("end_group($child");
 	const problems = [];
-	if (kill < 0) problems.push("no KILL in the stop sequence");
-	if (/waitpid/.test(stop.slice(0, Math.max(kill, 0)))) problems.push("the leader is reaped before the last signal");
+	if (call < 0) problems.push("the stop sequence does not use end_group for the helper");
+	if (!/kill "TERM", -\$pgid;[\s\S]*kill "KILL", -\$pgid;/.test(sequence)) problems.push("end_group does not send TERM and then KILL to the group");
+	if (/waitpid/.test(sequence)) problems.push("the leader is reaped inside the signal sequence");
+	if (/waitpid/.test(stop.slice(0, Math.max(call, 0)))) problems.push("the leader is reaped before the last signal");
 	const loop = body.slice(body.indexOf("while (1) {"), body.indexOf("# Stop sequence"));
 	if (!/sigprocmask\(SIG_BLOCK, \$blocked\);\s*unless \(\$fired\) \{\s*if \(waitpid/.test(loop)) problems.push("the reap in the polling loop is not done with the stop signals blocked and the fired flag checked");
-	if (/\bkill\b/.test(loop.replace(/#.*$/gm, ""))) problems.push("a signal is sent from the polling loop");
+	if (/\bkill\b|end_group/.test(loop.replace(/#.*$/gm, ""))) problems.push("a signal is sent from the polling loop");
 	return problems;
 }
 
@@ -1259,8 +1262,8 @@ test("the helper watchdog reaps its leader only when nothing will be signalled a
 });
 
 test("mutation: reaping the leader before the last signal (the PGID-reuse race) is caught", darwin, async (t) => {
-	const mutant = await mutatedScripts(t, "common.sh", '		select(undef, undef, undef, 1);\n', '		select(undef, undef, undef, 1);\n		waitpid($child, WNOHANG);\n');
-	assert.ok(reapsBeforeLastSignal(await readFile(path.join(mutant, "common.sh"), "utf8")).some((p) => /reaped before the last signal/.test(p)));
+	const mutant = await mutatedScripts(t, "common.sh", '			select(undef, undef, undef, $grace);\n', '			select(undef, undef, undef, $grace);\n			waitpid($pgid, WNOHANG);\n');
+	assert.ok(reapsBeforeLastSignal(await readFile(path.join(mutant, "common.sh"), "utf8")).some((p) => /reaped (before the last signal|inside the signal sequence)/.test(p)));
 	const unblocked = await mutatedScripts(t, "common.sh", "sigprocmask(SIG_BLOCK, $blocked);\n			unless ($fired) {", "unless ($fired) {");
 	assert.ok(reapsBeforeLastSignal(await readFile(path.join(unblocked, "common.sh"), "utf8")).some((p) => /stop signals blocked/.test(p)));
 });
@@ -1351,7 +1354,7 @@ test("traced supervisor: the leader is reaped only after the last signal, and a 
 });
 
 test("mutation: reaping the leader before the last signal is caught by the traced supervisor", darwin, async (t) => {
-	const mutant = await mutatedScripts(t, "common.sh", '		select(undef, undef, undef, 1);\n', '		select(undef, undef, undef, 1);\n		waitpid($child, WNOHANG);\n');
+	const mutant = await mutatedScripts(t, "common.sh", '			select(undef, undef, undef, $grace);\n', '			select(undef, undef, undef, $grace);\n			waitpid($pgid, WNOHANG);\n');
 	const traced = await tracedWatchdog(t, path.join(mutant, "common.sh"), "mutant");
 	assert.ok(orderProblems(traced).some((problem) => /reaped before the last signal/.test(problem)), traced.timedOut.join("\n"));
 });
@@ -1443,8 +1446,8 @@ function copierOrderProblems(source) {
 
 test("the copier resets its handlers before unblocking and ends by itself even if no signal reaches it", darwin, async (t) => {
 	assert.deepEqual(copierOrderProblems(await readFile(path.join(realScriptsDir, "common.sh"), "utf8")), []);
-	// Without the supervisor's TERM the copier still ends at its own alarm, so an undrained pipe cannot hold the call.
-	const noTerm = await mutatedScripts(t, "common.sh", 'kill "TERM", $copier;\n', "");
+	// Without any signal from the supervisor the copier still ends at its own alarm, so an undrained pipe cannot hold the call.
+	const noTerm = await mutatedScripts(t, "common.sh", "end_group($copier, 0.2);\n", "");
 	const root = await mkdtemp(path.join(os.tmpdir(), "noetaxis-copier-"));
 	t.after(async () => rm(root, { recursive: true, force: true }));
 	const { stdout, elapsed } = await runWithUndrainedStderr(path.join(noTerm, "common.sh"), root, 30_000);
@@ -1455,6 +1458,56 @@ test("the copier resets its handlers before unblocking and ends by itself even i
 test("mutation: unblocking before resetting the handlers (the swallowed-TERM race) is caught", darwin, async (t) => {
 	const mutant = await mutatedScripts(t, "common.sh", '$SIG{TERM} = $SIG{ALRM} = $SIG{INT} = $SIG{HUP} = "DEFAULT";\n				alarm 2;\n				sigprocmask(SIG_UNBLOCK, $blocked);', 'sigprocmask(SIG_UNBLOCK, $blocked);\n				$SIG{TERM} = $SIG{ALRM} = $SIG{INT} = $SIG{HUP} = "DEFAULT";\n				alarm 2;');
 	assert.ok(copierOrderProblems(await readFile(path.join(mutant, "common.sh"), "utf8")).some((p) => /before the signals are unblocked/.test(p)));
+});
+
+// Deterministic check that the supervisor returns only when its copier is gone, and that the command
+// substitution that captured its stdout is closed at that moment. The copier is found through a traced
+// fork (perl CORE::GLOBAL override loaded through PERL5OPT): the first fork is the helper, the second the
+// copier. stderr is never read, so the copier blocks on it until it is ended.
+async function copierAtReturn(t, libPath, label, lifetime) {
+	const root = await mkdtemp(path.join(os.tmpdir(), `noetaxis-copier-${label}-`));
+	t.after(async () => rm(root, { recursive: true, force: true }));
+	await writeFile(path.join(root, "Trace.pm"), `package Trace;
+BEGIN {
+	*CORE::GLOBAL::fork = sub { my $p = CORE::fork(); if (defined $p && $p) { open(my $f, ">>", $ENV{TRACE_LOG}); print $f "fork $p\\n"; close $f; } return $p; };
+}
+1;
+`);
+	const trace = path.join(root, "trace.log");
+	const child = spawn("/bin/bash", ["-c", `. "${libPath}"; rc=0; out=$(noetaxis_bounded 5 /bin/sh -c 'head -c 1048576 /dev/zero >&2') || rc=$?; echo "rc=$rc"`], { env: { PATH: "/usr/bin:/bin", TMPDIR: root, TRACE_LOG: trace, PERL5OPT: `-I${root} -MTrace` }, stdio: ["ignore", "pipe", "pipe"] });
+	let stdout = "";
+	child.stdout.on("data", (chunk) => { stdout += chunk; });
+	const started = Date.now();
+	const outcome = await new Promise((resolve) => {
+		const timer = setTimeout(() => { child.kill("SIGKILL"); resolve("hung"); }, lifetime);
+		child.on("exit", () => { clearTimeout(timer); resolve("returned"); });
+	});
+	const pids = existsSync(trace) ? readFileSync(trace, "utf8").trim().split("\n").map((line) => Number(line.split(" ")[1])) : [];
+	const copier = pids[1];
+	let alive = false;
+	if (copier) {
+		try { process.kill(copier, 0); alive = true; } catch { alive = false; }
+		try { process.kill(copier, "SIGKILL"); } catch { /* gone */ }
+	}
+	return { outcome, stdout, elapsed: Date.now() - started, copier, alive };
+}
+
+test("the supervisor returns only after its copier is gone: the substitution pipe is closed and the copier process no longer exists", darwin, async (t) => {
+	const result = await copierAtReturn(t, path.join(realScriptsDir, "common.sh"), "real", 30_000);
+	assert.equal(result.outcome, "returned");
+	assert.match(result.stdout, /rc=145/);
+	assert.ok(result.copier > 0, "the copier was forked");
+	assert.equal(result.alive, false, "the copier is gone when the call returns");
+	assert.ok(result.elapsed < 12_000, `returned after ${result.elapsed} ms`);
+});
+
+test("mutation: returning while the copier is still alive (no end of the copier) is caught", darwin, async (t) => {
+	const mutant = await mutatedScripts(t, "common.sh", "end_group($copier, 0.2);\n", "");
+	const file = path.join(mutant, "common.sh");
+	const text = await readFile(file, "utf8");
+	await writeFile(file, text.replace("alarm 2;\n				sigprocmask(SIG_UNBLOCK", "sigprocmask(SIG_UNBLOCK"));
+	const result = await copierAtReturn(t, path.join(mutant, "common.sh"), "mutant", 15_000);
+	assert.ok(result.outcome === "hung" || result.alive, "without ending the copier it outlives the call or holds the substitution pipe");
 });
 
 test("a hung helper is terminated and reported as a failure, while AO's own processes are never sent SIGKILL", darwin, async (t) => {
@@ -1478,7 +1531,7 @@ test("a hung helper is terminated and reported as a failure, while AO's own proc
 });
 
 test("mutation: a watchdog that never escalates to KILL (or only sets an alarm) is caught", darwin, async (t) => {
-	const mutant = await mutatedScripts(t, "common.sh", '		kill "KILL", -$child;\n', "");
+	const mutant = await mutatedScripts(t, "common.sh", '			kill "KILL", -$pgid;\n', "");
 	const root = await mkdtemp(path.join(os.tmpdir(), "noetaxis-bounded-mutant-"));
 	t.after(async () => rm(root, { recursive: true, force: true }));
 	const pidFile = path.join(root, "hung.pid");
@@ -1525,7 +1578,7 @@ test("SIGKILL exists in exactly one place: the watchdog of noetaxis_bounded, aim
 		});
 	}
 	assert.equal(hits.length, 1, hits.join("\n"));
-	assert.match(hits[0], /^common\.sh:\d+ in noetaxis_bounded: kill "KILL", -\$child;$/);
+	assert.match(hits[0], /^common\.sh:\d+ in noetaxis_bounded: kill "KILL", -\$pgid;$/);
 });
 
 test("the daemon's identity is re-checked before every session is ended, not only once", darwin, async (t) => {
