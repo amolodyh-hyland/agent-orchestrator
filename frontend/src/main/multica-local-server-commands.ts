@@ -315,10 +315,52 @@ export function findComposePlugin(options: FindComposePluginOptions): string | n
 	return inspectComposePlugin(options).path;
 }
 
-/** True only for an environment built with AO's Docker home AND a trusted Compose plugin for this run. */
-export function hasTrustedComposePlugin(env: NodeJS.ProcessEnv): boolean {
-	return hasPinnedDockerHome(env) && pinnedEnvs.get(env)?.composePlugin === true;
+/**
+ * What was verified about the Compose plugin: where it was found, where it really lives, and which
+ * file that is (device, inode, size, mtime). This travels across every await instead of a "found"
+ * boolean, and the runner re-checks it immediately before it spawns, so a plugin that was replaced,
+ * removed or made untrustworthy after the lookup is never run.
+ */
+export type ComposePluginIdentity = {
+	readonly path: string;
+	readonly realPath: string;
+	readonly dev: number;
+	readonly ino: number;
+	readonly size: number;
+	readonly mtimeMs: number;
+};
+
+/** The identity of the file at `file` right now, or null when it cannot be read. Synchronous on purpose. */
+export function identifyComposePlugin(file: string): ComposePluginIdentity | null {
+	try {
+		const realPath = realpathSync(file);
+		const info = statSync(realPath);
+		if (!info.isFile()) return null;
+		return { path: file, realPath, dev: info.dev, ino: info.ino, size: info.size, mtimeMs: info.mtimeMs };
+	} catch {
+		return null;
+	}
 }
+
+/** Whether the plugin is still exactly the verified file and still passes the ownership and permission check. Synchronous. */
+export function composePluginStillTrusted(identity: ComposePluginIdentity, context: TrustContext = {}): boolean {
+	const now = identifyComposePlugin(identity.path);
+	return (
+		now !== null &&
+		now.realPath === identity.realPath &&
+		now.dev === identity.dev &&
+		now.ino === identity.ino &&
+		now.size === identity.size &&
+		now.mtimeMs === identity.mtimeMs &&
+		isTrustedExecutable(identity.path, context)
+	);
+}
+
+/** The gate a Compose command needs at spawn time: the verified identity and the re-check to run against it. */
+export type ComposePluginGate = {
+	readonly identity: ComposePluginIdentity;
+	readonly stillTrusted: (identity: ComposePluginIdentity) => boolean;
+};
 
 /** True only for an environment localServerChildEnv built with AO's Docker home (a copy or a hand-made one is not). */
 export function hasPinnedDockerHome(env: NodeJS.ProcessEnv): boolean {
@@ -398,7 +440,7 @@ export function isLocalDockerEndpoint(value: string | undefined): boolean {
  * variables from AO's own environment are not passed.
  */
 // Environments built by localServerChildEnv with AO's Docker home: the runner only runs docker with these.
-const pinnedEnvs = new WeakMap<NodeJS.ProcessEnv, { composePlugin: boolean }>();
+const pinnedEnvs = new WeakSet<NodeJS.ProcessEnv>();
 
 export function localServerChildEnv(
 	env: NodeJS.ProcessEnv,
@@ -407,8 +449,6 @@ export function localServerChildEnv(
 	endpoint: string | null = null,
 	pathDirs: readonly string[] = [],
 	dockerHome: string | null = null,
-	/** Whether a trusted Compose plugin was found for this run; without one no `docker compose` command may run with this environment. */
-	composePlugin = false,
 ): NodeJS.ProcessEnv {
 	const next: NodeJS.ProcessEnv = {};
 	if (dockerHome !== null) {
@@ -424,7 +464,7 @@ export function localServerChildEnv(
 		if (!isLocalDockerEndpoint(endpoint)) throw new Error("Docker endpoint must be a local socket");
 		next.DOCKER_HOST = endpoint;
 	}
-	if (dockerHome !== null) pinnedEnvs.set(next, { composePlugin });
+	if (dockerHome !== null) pinnedEnvs.add(next);
 	return next;
 }
 
@@ -454,20 +494,32 @@ export type CommandResult = {
 export const nodeExec: ExecFileLike = (file, args, options, callback) =>
 	nodeExecFile(file, args, options, (error, stdout, stderr) => callback(error, String(stdout), String(stderr)));
 
+/** A refusal by the runner: an Error that carries a machine-readable code, so callers can turn it into a result. */
+function refusal(code: string, message: string): Error & { code: string } {
+	return Object.assign(new Error(message), { code });
+}
+
 /** Runs a command built by this module; anything else is refused before a process exists. */
 export function runLocalServerCommand(
 	exec: ExecFileLike,
 	spec: CommandSpec,
 	env: NodeJS.ProcessEnv,
+	/** Required: the verified Compose plugin for a Compose command (re-checked here, right before the spawn); null for anything else. */
+	plugin: ComposePluginGate | null,
 	signal?: AbortSignal,
 ): Promise<CommandResult> {
-	if (!isIssuedCommand(spec)) return Promise.reject(new Error("command is not on the local server allow-list"));
-	if (spec.engine && !isLocalDockerEndpoint(env.DOCKER_HOST)) return Promise.reject(new Error("Docker commands only run against the local engine endpoint"));
-	if (spec.docker && !hasPinnedDockerHome(env)) return Promise.reject(new Error("Docker commands only run with AO's own HOME and DOCKER_CONFIG"));
-	if (spec.compose && !hasTrustedComposePlugin(env)) return Promise.reject(new Error("Docker Compose commands only run with a trusted Compose plugin"));
+	if (!isIssuedCommand(spec)) return Promise.reject(refusal("NOT_ALLOWLISTED", "command is not on the local server allow-list"));
+	if (spec.engine && !isLocalDockerEndpoint(env.DOCKER_HOST)) return Promise.reject(refusal("NO_LOCAL_ENGINE", "Docker commands only run against the local engine endpoint"));
+	if (spec.docker && !hasPinnedDockerHome(env)) return Promise.reject(refusal("UNPINNED_DOCKER_HOME", "Docker commands only run with AO's own HOME and DOCKER_CONFIG"));
 	if (signal?.aborted) {
 		const error = Object.assign(new Error("aborted"), { name: "AbortError", code: "ABORT_ERR" });
 		return Promise.resolve({ error, stdout: "", stderr: "" });
+	}
+	// The last check before the spawn. Nothing is awaited between it and exec(): the Promise executor below
+	// runs synchronously, so what was verified is what is started (apart from the window Docker itself leaves
+	// between this spawn and its own load of the plugin, which AO cannot close).
+	if (spec.compose && (plugin === null || !plugin.stillTrusted(plugin.identity))) {
+		return Promise.reject(refusal("NO_TRUSTED_COMPOSE", "Docker Compose commands only run with a trusted Compose plugin"));
 	}
 	return new Promise((resolve) => {
 		exec(

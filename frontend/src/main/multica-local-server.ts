@@ -16,8 +16,10 @@ import {
 	composeListCommand,
 	composeVersionCommand,
 	dockerVersionCommand,
+	composePluginStillTrusted,
 	findComposePlugin,
 	findDockerBinary,
+	identifyComposePlugin,
 	inspectComposePlugin,
 	inspectDockerBinary,
 	findLocalDockerEndpoint,
@@ -32,6 +34,7 @@ import {
 	upCommand,
 	type CommandResult,
 	type CommandSpec,
+	type ComposePluginIdentity,
 	type ExecFileLike,
 	type StackPaths,
 } from "./multica-local-server-commands";
@@ -106,7 +109,9 @@ export type MulticaLocalServerOptions = {
 	/** True when a Compose plugin exists in a usual install location but fails the ownership/permission check. */
 	isComposeUntrusted?: () => boolean;
 	/** The Compose plugin binary in a trusted location; defaults to a search of the usual install paths. */
-	findComposePlugin?: () => string | null;
+	findComposePlugin?: () => ComposePluginIdentity | null;
+	/** Re-checks a verified plugin identity right before a Compose command is spawned; defaults to a file-system check. */
+	isComposePluginStillTrusted?: (identity: ComposePluginIdentity) => boolean;
 	/** Prepares AO's Docker home so Docker only loads the validated Compose plugin; defaults to the file-system implementation. */
 	ensureDockerConfig?: (pluginDir: string | null) => Promise<DockerConfigResult>;
 	/** The local engine's address (`unix://…`); defaults to a search of the usual local sockets. */
@@ -146,7 +151,13 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 	const findDocker = options.findDocker ?? (() => findDockerBinary({ home: options.home, platform: options.platform, uid, gid }));
 	const dockerUntrusted = options.isDockerUntrusted ?? (() => inspectDockerBinary({ home: options.home, platform: options.platform, uid, gid }).untrusted);
 	const composeUntrusted = options.isComposeUntrusted ?? (() => inspectComposePlugin({ home: options.home, platform: options.platform, uid, gid }).untrusted);
-	const locateComposePlugin = options.findComposePlugin ?? (() => findComposePlugin({ home: options.home, platform: options.platform, uid, gid }));
+	const locateComposePlugin =
+		options.findComposePlugin ??
+		((): ComposePluginIdentity | null => {
+			const found = findComposePlugin({ home: options.home, platform: options.platform, uid, gid });
+			return found === null ? null : identifyComposePlugin(found);
+		});
+	const pluginStillTrusted = options.isComposePluginStillTrusted ?? ((identity: ComposePluginIdentity) => composePluginStillTrusted(identity, { uid, gid }));
 	const ensureDockerConfig = options.ensureDockerConfig ?? ((pluginDir: string | null) => ensureLocalDockerConfig({ root: options.dockerHomeDir, pluginDir, uid }));
 	const findPathDirs = options.findPathDirs ?? (() => trustedPathDirs({ home: options.home, platform: options.platform, uid, gid }));
 
@@ -171,17 +182,27 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 		if (spec.engine && endpoint === null) {
 			return { error: Object.assign(new Error("no local Docker engine endpoint"), { code: "NO_LOCAL_ENGINE" }), stdout: "", stderr: "" };
 		}
-		// HOME and DOCKER_CONFIG are AO's own, listing only the Compose plugin validated just now.
+		// HOME and DOCKER_CONFIG are AO's own, listing only the Compose plugin validated just now. What is carried
+		// from here to the spawn is the plugin's identity (not a "found" flag): the runner re-checks it right before it spawns.
 		const plugin = locateComposePlugin();
 		// Every Compose command is refused here when no trusted plugin is found right now (Docker would fall back to its system plugin directories).
 		if (spec.compose && plugin === null) {
 			return { error: Object.assign(new Error("no trusted Docker Compose plugin"), { code: "NO_TRUSTED_COMPOSE" }), stdout: "", stderr: "" };
 		}
-		const config = spec.docker ? await ensureDockerConfig(plugin === null ? null : path.dirname(plugin)) : null;
+		const config = spec.docker ? await ensureDockerConfig(plugin === null ? null : path.dirname(plugin.path)) : null;
 		if (config !== null && !config.ok) {
 			return { error: Object.assign(new Error("AO's Docker settings folder is not safe to use"), { code: "UNTRUSTED_DOCKER_CONFIG" }), stdout: "", stderr: "AO's Docker settings folder is not safe to use" };
 		}
-		return runLocalServerCommand(options.exec, spec, localServerChildEnv(options.env, options.home, options.platform, endpoint, findPathDirs(), config === null ? null : config.home, plugin !== null), signal);
+		// A refusal by the runner (or an endpoint that is not local) becomes a failed result like any other, never a rejection that escapes to a caller.
+		try {
+			return await runLocalServerCommand(options.exec, spec, localServerChildEnv(options.env, options.home, options.platform, endpoint, findPathDirs(), config === null ? null : config.home), spec.compose && plugin !== null ? { identity: plugin, stillTrusted: pluginStillTrusted } : null, signal);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "command refused";
+			// Only the Compose-plugin refusal keeps its own code; any other refusal is "refused", with its message as the
+			// text, so it can never be read as "Docker is not running" (which would launch Docker Desktop).
+			const code = (error as { code?: unknown } | null)?.code === "NO_TRUSTED_COMPOSE" ? "NO_TRUSTED_COMPOSE" : "COMMAND_REFUSED";
+			return { error: Object.assign(new Error(message), { code }), stdout: "", stderr: message };
+		}
 	};
 
 	const publish = (status: LocalServerStatus): void => {

@@ -26,7 +26,7 @@ import type { MulticaCheckResult, MulticaSettings } from "../shared/multica";
 import type { LocalServerStatus } from "../shared/multica-local-server";
 import { checkMulticaServer } from "./multica-server-check";
 import { createMulticaLocalServer, type MulticaLocalServer, type MulticaLocalServerOptions } from "./multica-local-server";
-import type { ExecError, ExecFileLike } from "./multica-local-server-commands";
+import type { ComposePluginIdentity, ExecError, ExecFileLike } from "./multica-local-server-commands";
 import type { SetupOutcome, StackCheck } from "./multica-local-server-stack";
 import { STARTING_GRACE_MS } from "./multica-local-server-state";
 
@@ -36,6 +36,7 @@ const DIR = "/Users/me/.multica/server";
 const FILE = `${DIR}/docker-compose.selfhost.yml`;
 const SOCKET = "unix:///Users/me/.docker/run/docker.sock";
 const PLUGIN = "/Applications/Docker.app/Contents/Resources/cli-plugins/docker-compose";
+const identityFor = (path: string, ino = 1): ComposePluginIdentity => ({ path, realPath: path, dev: 1, ino, size: 1, mtimeMs: 1 });
 const AO_DOCKER_HOME = "/Users/me/.ao/local-server-docker";
 const LOCAL: MulticaSettings = { mode: "local", customUrl: "http://localhost:3000", apiUrl: "" };
 
@@ -68,6 +69,10 @@ type Fake = {
 	endpoint: string | null;
 	env: NodeJS.ProcessEnv;
 	plugin: string | null;
+	/** Bumped to model the plugin file being replaced (a different inode) after it was verified. */
+	pluginGeneration: number;
+	/** False models the plugin no longer passing the ownership/permission check. */
+	pluginTrusted: boolean;
 	dockerConfig: "ok" | "untrusted";
 	dockerUntrusted: boolean;
 	composeUntrusted: boolean;
@@ -92,6 +97,8 @@ function harness(patch: Partial<Fake> = {}) {
 		chosen: null,
 		endpoint: SOCKET,
 		plugin: PLUGIN,
+		pluginGeneration: 1,
+		pluginTrusted: true,
 		dockerConfig: "ok",
 		dockerUntrusted: false,
 		composeUntrusted: false,
@@ -163,7 +170,8 @@ function harness(patch: Partial<Fake> = {}) {
 		findEndpoint: () => fake.endpoint,
 		findPathDirs: () => ["/usr/local/bin", "/usr/bin"],
 		dockerHomeDir: AO_DOCKER_HOME,
-		findComposePlugin: () => fake.plugin,
+		findComposePlugin: () => (fake.plugin === null ? null : identityFor(fake.plugin, fake.pluginGeneration)),
+		isComposePluginStillTrusted: (identity) => fake.plugin !== null && fake.pluginTrusted && identity.path === fake.plugin && identity.ino === fake.pluginGeneration,
 		isDockerUntrusted: () => fake.dockerUntrusted,
 		isComposeUntrusted: () => fake.composeUntrusted,
 		ensureDockerConfig: async (pluginDir) => {
@@ -673,7 +681,7 @@ describe("no Compose command runs without a trusted plugin, anywhere", () => {
 		let lookups = 0;
 		const h = harness();
 		// The plugin is there for the first few lookups (status checks, preparation), then gone.
-		h.options.findComposePlugin = () => (++lookups <= 3 ? PLUGIN : null);
+		h.options.findComposePlugin = () => (++lookups <= 3 ? identityFor(PLUGIN) : null);
 		const server = createMulticaLocalServer(h.options);
 
 		const result = await server.start();
@@ -685,7 +693,7 @@ describe("no Compose command runs without a trusted plugin, anywhere", () => {
 	it("reports the right reason when the plugin vanishes during a log read", async () => {
 		const h = harness({ ps: ALL_UP });
 		let lookups = 0;
-		h.options.findComposePlugin = () => (++lookups <= 2 ? PLUGIN : null);
+		h.options.findComposePlugin = () => (++lookups <= 2 ? identityFor(PLUGIN) : null);
 		h.options.isComposeUntrusted = () => true;
 		const server = createMulticaLocalServer(h.options);
 		const result = await server.getLogs("backend", 5);
@@ -716,7 +724,7 @@ describe("no Compose command runs without a trusted plugin, anywhere", () => {
 				h.options.findComposePlugin = () => {
 					lookups += 1;
 					lastLookupFound = lookups <= present;
-					return lastLookupFound ? PLUGIN : null;
+					return lastLookupFound ? identityFor(PLUGIN) : null;
 				};
 				h.options.isComposeUntrusted = () => true;
 				const inner = h.options.exec;
@@ -733,6 +741,61 @@ describe("no Compose command runs without a trusted plugin, anywhere", () => {
 			expect(ranWithPlugin, `${command} must run when the plugin is there`).toBeGreaterThan(0);
 		});
 	}
+
+	// The plugin changes while the command is waiting on the (awaited) Docker-home preparation, after the lookup
+	// succeeded: removed, replaced by another file, or no longer passing the trust check. The command that was in
+	// flight must not be spawned, at whichever await the change lands.
+	const CHANGES: Array<[string, (fake: Fake) => void]> = [
+		["removed", (fake) => void (fake.plugin = null)],
+		["replaced", (fake) => void (fake.pluginGeneration += 1)],
+		["no longer trusted", (fake) => void (fake.pluginTrusted = false)],
+	];
+	for (const [command, entry, call, patch] of ENTRY_POINTS) {
+		it(`${command} (${entry}): a plugin that changes during the awaited config step is never run, whichever await it lands on`, async () => {
+			let violations = 0;
+			let composeRuns = 0;
+			for (const [, change] of CHANGES) {
+				for (let landsOn = 1; landsOn <= 10; landsOn += 1) {
+					const h = harness(patch);
+					let ensures = 0;
+					let justChanged = false;
+					const ensure = h.options.ensureDockerConfig as NonNullable<typeof h.options.ensureDockerConfig>;
+					h.options.ensureDockerConfig = async (dir) => {
+						justChanged = false;
+						ensures += 1;
+						const result = await ensure(dir);
+						if (ensures === landsOn) {
+							change(h.fake);
+							justChanged = true;
+						}
+						return result;
+					};
+					const inner = h.options.exec;
+					h.options.exec = (file, args, options, callback) => {
+						if (args[0] === "compose" && args[1] !== undefined) {
+							composeRuns += 1;
+							if (justChanged) violations += 1;
+						}
+						justChanged = false;
+						return inner(file, args, options, callback);
+					};
+					await call(createMulticaLocalServer(h.options));
+				}
+			}
+			expect(violations, `${command} ran after the plugin changed`).toBe(0);
+			expect(composeRuns, `${command} still runs when nothing changes it`).toBeGreaterThan(0);
+		});
+	}
+
+	it("the re-check is made against the identity from the lookup, not a fresh one", async () => {
+		const h = harness({ ps: ALL_UP });
+		const seen: ComposePluginIdentity[] = [];
+		const stillTrusted = h.options.isComposePluginStillTrusted as NonNullable<typeof h.options.isComposePluginStillTrusted>;
+		h.options.isComposePluginStillTrusted = (identity) => (seen.push(identity), stillTrusted(identity));
+		await createMulticaLocalServer(h.options).getStatus();
+		expect(seen.length).toBeGreaterThan(0);
+		for (const identity of seen) expect(identity).toMatchObject({ path: PLUGIN, ino: 1 });
+	});
 
 	it("a plugin that is never found leaves every entry point without a single compose command", async () => {
 		for (const [command, entry, call, patch] of ENTRY_POINTS) {
@@ -908,10 +971,24 @@ describe("the local Docker engine", () => {
 		for (const call of h.calls) expect(call.env.PATH, call.args.join(" ")).toBe("/usr/local/bin:/usr/bin");
 	});
 
+	it("a refused or unbuildable command is a failed result for every entry point, never a rejection", async () => {
+		const h = harness({ endpoint: "tcp://10.0.0.5:2375", ps: ALL_UP });
+
+		await expect(h.server.getStatus()).resolves.toBeDefined();
+		await expect(h.server.getLogs("backend", 5)).resolves.toMatchObject({ ok: false });
+		await expect(h.server.useDetectedFolder()).resolves.toMatchObject({ ok: false });
+		await expect(h.server.start()).resolves.toMatchObject({ ok: false });
+		await expect(h.server.stop()).resolves.toMatchObject({ ok: false });
+		await expect(h.server.restart()).resolves.toMatchObject({ ok: false });
+		expect(h.calls.filter((call) => call.args[0] === "compose")).toEqual([]);
+		expect(h.calls.some((call) => call.file === "/usr/bin/open")).toBe(false);
+	});
+
 	it("never starts the stack on a remote engine even if the endpoint lookup is wrong", async () => {
 		const h = harness({ endpoint: "tcp://10.0.0.5:2375" });
-		expect(await h.server.start()).toEqual({ ok: false, code: "command_failed" });
+		expect(await h.server.start()).toMatchObject({ ok: false, code: "inspect_failed" });
 		expect(h.calls.some((call) => call.args.includes("up"))).toBe(false);
+		expect(h.calls.some((call) => call.file === "/usr/bin/open")).toBe(false);
 	});
 });
 

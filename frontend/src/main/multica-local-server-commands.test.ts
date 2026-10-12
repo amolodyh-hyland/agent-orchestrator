@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { realpathSync } from "node:fs";
+import { mkdtemp, rename, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Every way to start a process is a recorder, so nothing real can run and any other entry point shows up.
 const childProcess = vi.hoisted(() => {
@@ -12,13 +16,14 @@ import {
 	composeListCommand,
 	composeVersionCommand,
 	dockerVersionCommand,
+	composePluginStillTrusted,
 	findComposePlugin,
 	findDockerBinary,
+	identifyComposePlugin,
 	findLocalDockerEndpoint,
 	inspectComposePlugin,
 	inspectDockerBinary,
 	hasPinnedDockerHome,
-	hasTrustedComposePlugin,
 	isIssuedCommand,
 	isLocalDockerEndpoint,
 	isTrustedExecutable,
@@ -33,6 +38,8 @@ import {
 	trustedPathDirs,
 	upCommand,
 	type CommandSpec,
+	type ComposePluginGate,
+	type ComposePluginIdentity,
 	type TrustFs,
 	type ExecFileLike,
 	type StackPaths,
@@ -41,9 +48,12 @@ import {
 const DOCKER = "/usr/local/bin/docker";
 const STACK: StackPaths = { dir: "/Users/me/.multica/server", file: "/Users/me/.multica/server/docker-compose.selfhost.yml" };
 const AO_HOME = "/ao/docker-home";
+const GATE_IDENTITY: ComposePluginIdentity = { path: "/Applications/Docker.app/Contents/Resources/cli-plugins/docker-compose", realPath: "/Applications/Docker.app/Contents/Resources/cli-plugins/docker-compose", dev: 1, ino: 2, size: 3, mtimeMs: 4 };
+/** A gate whose plugin is (still) trusted: what the service hands the runner after a successful lookup. */
+const GATE: ComposePluginGate = { identity: GATE_IDENTITY, stillTrusted: () => true };
 const LOCAL_SOCKET = "unix:///Users/me/.docker/run/docker.sock";
 /** An environment as the service builds it: AO's Docker home, trusted PATH, local endpoint. */
-const pinnedEnv = (endpoint: string | null = LOCAL_SOCKET, composePlugin = true) => localServerChildEnv({}, "/Users/me", "darwin", endpoint, ["/usr/bin"], AO_HOME, composePlugin);
+const pinnedEnv = (endpoint: string | null = LOCAL_SOCKET) => localServerChildEnv({}, "/Users/me", "darwin", endpoint, ["/usr/bin"], AO_HOME);
 const BASE = ["compose", "-f", STACK.file, "--project-directory", STACK.dir, "-p", "multica"];
 
 describe("local server commands", () => {
@@ -114,7 +124,7 @@ describe("runLocalServerCommand", () => {
 	it("runs an issued command through execFile with timeout, buffer cap, hidden window and the given environment", async () => {
 		const exec = vi.fn<ExecFileLike>((_file, _args, _options, callback) => callback(null, "ok", ""));
 		const spec = stopCommand(DOCKER, STACK);
-		const result = await runLocalServerCommand(exec, spec, env);
+		const result = await runLocalServerCommand(exec, spec, env, GATE);
 
 		expect(result).toEqual({ error: null, stdout: "ok", stderr: "" });
 		expect(exec).toHaveBeenCalledExactlyOnceWith(DOCKER, [...spec.args], { timeout: 60_000, maxBuffer: 512 * 1024, windowsHide: true, env }, expect.any(Function));
@@ -125,8 +135,8 @@ describe("runLocalServerCommand", () => {
 		const forged: CommandSpec = { name: "up", file: DOCKER, args: ["compose", "down", "-v"], timeoutMs: 1000, engine: true, docker: true, compose: true };
 		const copied: CommandSpec = { ...upCommand(DOCKER, STACK) };
 
-		await expect(runLocalServerCommand(exec, forged, env)).rejects.toThrow(/allow-list/);
-		await expect(runLocalServerCommand(exec, copied, env)).rejects.toThrow(/allow-list/);
+		await expect(runLocalServerCommand(exec, forged, env, GATE)).rejects.toThrow(/allow-list/);
+		await expect(runLocalServerCommand(exec, copied, env, GATE)).rejects.toThrow(/allow-list/);
 		expect(isIssuedCommand(forged)).toBe(false);
 		expect(exec).not.toHaveBeenCalled();
 	});
@@ -140,7 +150,7 @@ describe("runLocalServerCommand", () => {
 		};
 		for (const bad of [pinnedEnv(null), remote("tcp://10.0.0.5:2375"), remote("ssh://me@box")]) {
 			for (const spec of [dockerVersionCommand(DOCKER), composeListCommand(DOCKER), psCommand(DOCKER, STACK), upCommand(DOCKER, STACK), stopCommand(DOCKER, STACK), restartCommand(DOCKER, STACK), logsCommand(DOCKER, STACK, "backend", 5)]) {
-				await expect(runLocalServerCommand(exec, spec, bad)).rejects.toThrow(/local engine/);
+				await expect(runLocalServerCommand(exec, spec, bad, GATE)).rejects.toThrow(/local engine/);
 			}
 		}
 		expect(exec).not.toHaveBeenCalled();
@@ -148,8 +158,8 @@ describe("runLocalServerCommand", () => {
 
 	it("lets the commands that never contact the engine run without an endpoint", async () => {
 		const exec = vi.fn<ExecFileLike>((_f, _a, _o, callback) => callback(null, "", ""));
-		await runLocalServerCommand(exec, composeVersionCommand(DOCKER), pinnedEnv(null));
-		await runLocalServerCommand(exec, openDockerCommand(), { PATH: "/usr/bin" });
+		await runLocalServerCommand(exec, composeVersionCommand(DOCKER), pinnedEnv(null), GATE);
+		await runLocalServerCommand(exec, openDockerCommand(), { PATH: "/usr/bin" }, GATE);
 		expect(exec).toHaveBeenCalledTimes(2);
 	});
 
@@ -157,12 +167,12 @@ describe("runLocalServerCommand", () => {
 		const exec = vi.fn<ExecFileLike>((_f, _a, _o, callback) => callback(null, "", ""));
 		const aborted = new AbortController();
 		aborted.abort();
-		const result = await runLocalServerCommand(exec, upCommand(DOCKER, STACK), env, aborted.signal);
+		const result = await runLocalServerCommand(exec, upCommand(DOCKER, STACK), env, GATE, aborted.signal);
 		expect(result.error?.name).toBe("AbortError");
 		expect(exec).not.toHaveBeenCalled();
 
 		const live = new AbortController();
-		await runLocalServerCommand(exec, upCommand(DOCKER, STACK), env, live.signal);
+		await runLocalServerCommand(exec, upCommand(DOCKER, STACK), env, GATE, live.signal);
 		expect(exec.mock.calls[0]?.[2].signal).toBe(live.signal);
 	});
 
@@ -379,17 +389,38 @@ describe("hasPinnedDockerHome and the runner guard", () => {
 			{ PATH: "/usr/bin", DOCKER_HOST: LOCAL_SOCKET, HOME: "/tmp/evil", DOCKER_CONFIG: "/tmp/evil/.docker" },
 		]) {
 			for (const spec of [dockerVersionCommand(DOCKER), composeVersionCommand(DOCKER), composeListCommand(DOCKER), psCommand(DOCKER, STACK), upCommand(DOCKER, STACK), logsCommand(DOCKER, STACK, "backend", 5)]) {
-				await expect(runLocalServerCommand(exec, spec, bad), spec.name).rejects.toThrow(/HOME and DOCKER_CONFIG/);
+				await expect(runLocalServerCommand(exec, spec, bad, GATE), spec.name).rejects.toThrow(/HOME and DOCKER_CONFIG/);
 			}
 		}
 		expect(exec).not.toHaveBeenCalled();
-		await runLocalServerCommand(exec, openDockerCommand(), { PATH: "/usr/bin" });
+		await runLocalServerCommand(exec, openDockerCommand(), { PATH: "/usr/bin" }, GATE);
 		expect(exec).toHaveBeenCalledOnce();
 	});
 });
 
-describe("Compose commands need a trusted Compose plugin for the run", () => {
+describe("runner refusals carry a machine-readable code", () => {
+	const reject = async (spec: CommandSpec, env: NodeJS.ProcessEnv, gate: ComposePluginGate | null = GATE) => {
+		const exec = vi.fn<ExecFileLike>();
+		const error = await runLocalServerCommand(exec, spec, env, gate).then(
+			() => null,
+			(caught: unknown) => caught as Error & { code?: string },
+		);
+		expect(exec).not.toHaveBeenCalled();
+		return error?.code;
+	};
+
+	it("names each reason", async () => {
+		expect(await reject({ ...upCommand(DOCKER, STACK) }, pinnedEnv())).toBe("NOT_ALLOWLISTED");
+		expect(await reject(upCommand(DOCKER, STACK), pinnedEnv(null))).toBe("NO_LOCAL_ENGINE");
+		expect(await reject(upCommand(DOCKER, STACK), { DOCKER_HOST: LOCAL_SOCKET })).toBe("UNPINNED_DOCKER_HOME");
+		expect(await reject(upCommand(DOCKER, STACK), pinnedEnv(), null)).toBe("NO_TRUSTED_COMPOSE");
+	});
+});
+
+describe("Compose commands need the verified plugin identity, re-checked right before the spawn", () => {
 	const COMPOSE_SPECS = () => [composeVersionCommand(DOCKER), composeListCommand(DOCKER), psCommand(DOCKER, STACK), upCommand(DOCKER, STACK), stopCommand(DOCKER, STACK), restartCommand(DOCKER, STACK), logsCommand(DOCKER, STACK, "backend", 5)];
+	const okExec = () => vi.fn<ExecFileLike>((_f, _a, _o, callback) => callback(null, "", ""));
+	const gateWith = (stillTrusted: (identity: ComposePluginIdentity) => boolean): ComposePluginGate => ({ identity: GATE_IDENTITY, stillTrusted });
 
 	it("marks exactly the docker compose commands as Compose commands", () => {
 		for (const spec of COMPOSE_SPECS()) expect(spec.compose, spec.name).toBe(true);
@@ -397,29 +428,186 @@ describe("Compose commands need a trusted Compose plugin for the run", () => {
 		expect(openDockerCommand().compose).toBe(false);
 	});
 
-	it("refuses every Compose command when the environment was built without a trusted plugin, and runs docker version", async () => {
-		const exec = vi.fn<ExecFileLike>((_f, _a, _o, callback) => callback(null, "", ""));
-		const noPlugin = pinnedEnv(LOCAL_SOCKET, false);
-		for (const spec of COMPOSE_SPECS()) await expect(runLocalServerCommand(exec, spec, noPlugin), spec.name).rejects.toThrow(/trusted Compose plugin/);
+	it("refuses every Compose command without a plugin gate, and still runs docker version", async () => {
+		const exec = okExec();
+		for (const spec of COMPOSE_SPECS()) await expect(runLocalServerCommand(exec, spec, pinnedEnv(), null), spec.name).rejects.toMatchObject({ code: "NO_TRUSTED_COMPOSE" });
 		expect(exec).not.toHaveBeenCalled();
-		await runLocalServerCommand(exec, dockerVersionCommand(DOCKER), noPlugin);
+		await runLocalServerCommand(exec, dockerVersionCommand(DOCKER), pinnedEnv(), null);
 		expect(exec).toHaveBeenCalledOnce();
 	});
 
-	it("runs them with an environment that has one, and refuses a copy of it", async () => {
-		const exec = vi.fn<ExecFileLike>((_f, _a, _o, callback) => callback(null, "", ""));
-		for (const spec of COMPOSE_SPECS()) await runLocalServerCommand(exec, spec, pinnedEnv(LOCAL_SOCKET, true));
-		expect(exec).toHaveBeenCalledTimes(7);
-		await expect(runLocalServerCommand(exec, upCommand(DOCKER, STACK), { ...pinnedEnv() })).rejects.toThrow();
+	it("refuses every Compose command whose verified plugin is no longer trusted at the spawn, and runs none of them", async () => {
+		const exec = okExec();
+		const gone = gateWith(() => false);
+		for (const spec of COMPOSE_SPECS()) await expect(runLocalServerCommand(exec, spec, pinnedEnv(), gone), spec.name).rejects.toMatchObject({ code: "NO_TRUSTED_COMPOSE" });
+		expect(exec).not.toHaveBeenCalled();
 	});
 
-	it("an environment that was built without the plugin cannot be upgraded afterwards", async () => {
-		const exec = vi.fn<ExecFileLike>();
-		const env = pinnedEnv(LOCAL_SOCKET, false);
-		env.COMPOSE_PLUGIN = "1";
-		await expect(runLocalServerCommand(exec, psCommand(DOCKER, STACK), env)).rejects.toThrow();
-		expect(hasTrustedComposePlugin(env)).toBe(false);
-		expect(hasTrustedComposePlugin(pinnedEnv(LOCAL_SOCKET, true))).toBe(true);
+	it("hands the re-check the very identity it was given, once per Compose spawn, and never for other commands", async () => {
+		const exec = okExec();
+		const seen: ComposePluginIdentity[] = [];
+		const gate = gateWith((identity) => (seen.push(identity), true));
+		for (const spec of COMPOSE_SPECS()) await runLocalServerCommand(exec, spec, pinnedEnv(), gate);
+		expect(seen).toHaveLength(7);
+		for (const identity of seen) expect(identity).toBe(GATE_IDENTITY);
+		await runLocalServerCommand(exec, dockerVersionCommand(DOCKER), pinnedEnv(), gate);
+		await runLocalServerCommand(exec, openDockerCommand(), { PATH: "/usr/bin" }, gate);
+		expect(seen).toHaveLength(7);
+	});
+
+	it("starts the process in the same turn as the re-check: nothing is awaited in between", async () => {
+		let turned = false;
+		const gate = gateWith(() => {
+			turned = false;
+			queueMicrotask(() => {
+				turned = true;
+			});
+			return true;
+		});
+		let turnedAtSpawn: boolean | null = null;
+		const exec = vi.fn<ExecFileLike>((_f, _a, _o, callback) => {
+			turnedAtSpawn = turned;
+			callback(null, "", "");
+		});
+
+		await runLocalServerCommand(exec, upCommand(DOCKER, STACK), pinnedEnv(), gate);
+
+		expect(turnedAtSpawn).toBe(false);
+	});
+
+	it("re-checks after every other check, so a plugin that changed while the caller awaited is caught", async () => {
+		const exec = okExec();
+		let trusted = true;
+		const gate = gateWith(() => trusted);
+		await runLocalServerCommand(exec, psCommand(DOCKER, STACK), pinnedEnv(), gate);
+		trusted = false; // the plugin changes after the lookup, before the spawn
+		await expect(runLocalServerCommand(exec, psCommand(DOCKER, STACK), pinnedEnv(), gate)).rejects.toMatchObject({ code: "NO_TRUSTED_COMPOSE" });
+		expect(exec).toHaveBeenCalledOnce();
+	});
+
+	it("does not accept a gate in place of the other checks: unpinned home, remote engine and forged commands still refuse", async () => {
+		const exec = okExec();
+		await expect(runLocalServerCommand(exec, upCommand(DOCKER, STACK), { DOCKER_HOST: LOCAL_SOCKET }, GATE)).rejects.toMatchObject({ code: "UNPINNED_DOCKER_HOME" });
+		await expect(runLocalServerCommand(exec, upCommand(DOCKER, STACK), pinnedEnv(null), GATE)).rejects.toMatchObject({ code: "NO_LOCAL_ENGINE" });
+		await expect(runLocalServerCommand(exec, { ...upCommand(DOCKER, STACK) }, pinnedEnv(), GATE)).rejects.toMatchObject({ code: "NOT_ALLOWLISTED" });
+		expect(exec).not.toHaveBeenCalled();
+	});
+});
+
+describe("identifying the Compose plugin and re-checking it", () => {
+	let dir: string;
+	let plugin: string;
+	beforeEach(async () => {
+		dir = await mkdtemp(path.join(os.tmpdir(), "ao-plugin-"));
+		plugin = path.join(dir, "docker-compose");
+		await writeFile(plugin, "#!/bin/sh\necho plugin\n", { mode: 0o755 });
+	});
+	afterEach(() => rm(dir, { recursive: true, force: true }));
+
+	it("records the real path, device, inode, size and mtime of the file", () => {
+		const identity = identifyComposePlugin(plugin);
+		expect(identity).toMatchObject({ path: plugin, size: 22 });
+		expect(identity?.realPath).toBe(realpathSync(plugin));
+		expect(typeof identity?.ino).toBe("number");
+		expect(typeof identity?.dev).toBe("number");
+		expect(identity?.mtimeMs).toBeGreaterThan(0);
+	});
+
+	it("is null for a missing file, a directory and a dangling link", async () => {
+		expect(identifyComposePlugin(path.join(dir, "nope"))).toBeNull();
+		expect(identifyComposePlugin(dir)).toBeNull();
+		await symlink(path.join(dir, "nowhere"), path.join(dir, "dangling"));
+		expect(identifyComposePlugin(path.join(dir, "dangling"))).toBeNull();
+	});
+
+	it("is still trusted while the file is unchanged (ownership is judged with no user id here)", () => {
+		const identity = identifyComposePlugin(plugin) as ComposePluginIdentity;
+		expect(composePluginStillTrusted(identity)).toBe(true);
+	});
+
+	it("is no longer trusted after the file is rewritten, replaced, removed or its link retargeted", async () => {
+		const identity = identifyComposePlugin(plugin) as ComposePluginIdentity;
+		await writeFile(plugin, "#!/bin/sh\necho changed content\n", { mode: 0o755 });
+		expect(composePluginStillTrusted(identity), "content/size").toBe(false);
+
+		const fresh = identifyComposePlugin(plugin) as ComposePluginIdentity;
+		await writeFile(`${plugin}.new`, "#!/bin/sh\necho changed content\n", { mode: 0o755 });
+		await rename(`${plugin}.new`, plugin);
+		expect(composePluginStillTrusted(fresh), "replaced (same size, new inode)").toBe(false);
+
+		const current = identifyComposePlugin(plugin) as ComposePluginIdentity;
+		await rm(plugin);
+		expect(composePluginStillTrusted(current), "removed").toBe(false);
+
+		await writeFile(path.join(dir, "real-a"), "a", { mode: 0o755 });
+		await writeFile(path.join(dir, "real-b"), "b", { mode: 0o755 });
+		await symlink(path.join(dir, "real-a"), plugin);
+		const linked = identifyComposePlugin(plugin) as ComposePluginIdentity;
+		await rm(plugin);
+		await symlink(path.join(dir, "real-b"), plugin);
+		expect(composePluginStillTrusted(linked), "link retargeted").toBe(false);
+	});
+
+	it("compares every recorded field on its own: a different real path, device, inode, size or mtime is not the verified file", () => {
+		const identity = identifyComposePlugin(plugin) as ComposePluginIdentity;
+		for (const changed of [
+			{ realPath: `${identity.realPath}-other` },
+			{ dev: identity.dev + 1 },
+			{ ino: identity.ino + 1 },
+			{ size: identity.size + 1 },
+			{ mtimeMs: identity.mtimeMs + 1 },
+		]) {
+			expect(composePluginStillTrusted({ ...identity, ...changed }), JSON.stringify(Object.keys(changed))).toBe(false);
+		}
+		expect(composePluginStillTrusted({ ...identity })).toBe(true);
+	});
+
+	it("catches a change that leaves the modification time alone: a different size, or a different inode, with the old mtime restored", async () => {
+		const identity = identifyComposePlugin(plugin) as ComposePluginIdentity;
+		const original = new Date(identity.mtimeMs);
+		await writeFile(plugin, "#!/bin/sh\necho a longer replacement of the plugin\n", { mode: 0o755 });
+		await utimes(plugin, original, original);
+		expect(composePluginStillTrusted(identity), "size").toBe(false);
+
+		await writeFile(plugin, "#!/bin/sh\necho plugin\n", { mode: 0o755 });
+		await utimes(plugin, original, original);
+		const same = identifyComposePlugin(plugin) as ComposePluginIdentity;
+		await writeFile(`${plugin}.new`, "#!/bin/sh\necho plugin\n", { mode: 0o755 });
+		await utimes(`${plugin}.new`, new Date(same.mtimeMs), new Date(same.mtimeMs));
+		await rename(`${plugin}.new`, plugin);
+		expect(composePluginStillTrusted(same), "inode").toBe(false);
+	});
+
+	it("is no longer trusted when only the modification time changed (same bytes, same inode)", async () => {
+		const identity = identifyComposePlugin(plugin) as ComposePluginIdentity;
+		const later = new Date(Date.now() + 60_000);
+		await utimes(plugin, later, later);
+		expect(composePluginStillTrusted(identity)).toBe(false);
+	});
+
+	it("is no longer trusted when the same file now fails the ownership and permission check", () => {
+		const identity = identifyComposePlugin(plugin) as ComposePluginIdentity;
+		const parts = dir.split("/").filter(Boolean);
+		const chain = (mode: number): Record<string, FakeEntry> => {
+			const entries: Record<string, FakeEntry> = { "/": { type: "dir", mode: 0o755, uid: 0 } };
+			let current = "";
+			for (const part of parts) {
+				current = `${current}/${part}`;
+				entries[current] = { type: "dir", mode, uid: 501 };
+			}
+			entries[plugin] = { type: "file", mode: 0o755, uid: 501 };
+			entries[realpathSync(plugin)] = entries[plugin] as FakeEntry;
+			for (const real of [realpathSync(dir)]) {
+				let walk = "";
+				for (const part of real.split("/").filter(Boolean)) {
+					walk = `${walk}/${part}`;
+					entries[walk] ??= { type: "dir", mode, uid: 501 };
+				}
+			}
+			return entries;
+		};
+		expect(composePluginStillTrusted(identity, { uid: 501, gid: 20, fs: fakeTree(chain(0o755)) }), "private dirs").toBe(true);
+		expect(composePluginStillTrusted(identity, { uid: 501, gid: 20, fs: fakeTree(chain(0o777)) }), "world-writable dirs").toBe(false);
 	});
 });
 
@@ -611,7 +799,7 @@ describe("the production adapter (nodeExec) with a mocked child_process", () => 
 	it("hands execFile the file, the untouched argument array and only the intended options, never a shell", async () => {
 		const spec = upCommand(DOCKER, STACK);
 
-		const result = await runLocalServerCommand(nodeExec, spec, ENV);
+		const result = await runLocalServerCommand(nodeExec, spec, ENV, GATE);
 
 		expect(result).toEqual({ error: null, stdout: "out", stderr: "err" });
 		expect(childProcess.execFile).toHaveBeenCalledOnce();
@@ -636,7 +824,7 @@ describe("the production adapter (nodeExec) with a mocked child_process", () => 
 			] as const) {
 				childProcess.execFile.mockClear();
 
-				await runLocalServerCommand(nodeExec, spec, ENV);
+				await runLocalServerCommand(nodeExec, spec, ENV, GATE);
 
 				const [file, args, options] = childProcess.execFile.mock.calls[0] as [string, string[], Record<string, unknown>];
 				expect(file, name).toBe(DOCKER);
@@ -654,7 +842,7 @@ describe("the production adapter (nodeExec) with a mocked child_process", () => 
 		const specs = [dockerVersionCommand(DOCKER), composeVersionCommand(DOCKER), composeListCommand(DOCKER), psCommand(DOCKER, stack), upCommand(DOCKER, stack), stopCommand(DOCKER, stack), restartCommand(DOCKER, stack), logsCommand(DOCKER, stack, "frontend", 5), openDockerCommand()];
 		for (const spec of specs) {
 			childProcess.execFile.mockClear();
-			await runLocalServerCommand(nodeExec, spec, ENV);
+			await runLocalServerCommand(nodeExec, spec, ENV, GATE);
 			const [file, args, options] = childProcess.execFile.mock.calls[0] as [string, string[], Record<string, unknown>];
 			expect(["/bin/sh", "/bin/bash", "/bin/zsh", "sh", "bash", "cmd.exe"].some((shell) => file.endsWith(shell)), spec.name).toBe(false);
 			expect(args.some((arg) => arg === "-c" || arg === "/c"), spec.name).toBe(false);
@@ -665,28 +853,28 @@ describe("the production adapter (nodeExec) with a mocked child_process", () => 
 	});
 
 	it("uses no other way to start a process", async () => {
-		await runLocalServerCommand(nodeExec, upCommand(DOCKER, STACK), ENV);
-		await runLocalServerCommand(nodeExec, openDockerCommand(), ENV);
+		await runLocalServerCommand(nodeExec, upCommand(DOCKER, STACK), ENV, GATE);
+		await runLocalServerCommand(nodeExec, openDockerCommand(), ENV, GATE);
 		for (const name of childProcess.others) expect(childProcess.fns[name], name).not.toHaveBeenCalled();
 	});
 
 	it("reports a failed process with its error, stdout and stderr as strings", async () => {
 		childProcess.execFile.mockImplementation((_f, _a, _o, callback) => callback(Object.assign(new Error("exit 1"), { code: 1 }), Buffer.from(""), Buffer.from("boom")));
-		const result = await runLocalServerCommand(nodeExec, stopCommand(DOCKER, STACK), ENV);
+		const result = await runLocalServerCommand(nodeExec, stopCommand(DOCKER, STACK), ENV, GATE);
 		expect(result.error?.code).toBe(1);
 		expect(result.stderr).toBe("boom");
 	});
 
 	it("passes the abort signal to execFile for cancel", async () => {
 		const controller = new AbortController();
-		await runLocalServerCommand(nodeExec, stopCommand(DOCKER, STACK), ENV, controller.signal);
+		await runLocalServerCommand(nodeExec, stopCommand(DOCKER, STACK), ENV, GATE, controller.signal);
 		expect((childProcess.execFile.mock.calls[0]?.[2] as { signal?: AbortSignal }).signal).toBe(controller.signal);
 	});
 
 	it("does not reach execFile for a command the module did not issue or without a local endpoint", async () => {
 		const forged: CommandSpec = { name: "up", file: "/bin/sh", args: ["-c", "echo hi"], timeoutMs: 1000, engine: false, docker: false, compose: false };
-		await expect(runLocalServerCommand(nodeExec, forged, ENV)).rejects.toThrow();
-		await expect(runLocalServerCommand(nodeExec, upCommand(DOCKER, STACK), pinnedEnv(null))).rejects.toThrow();
+		await expect(runLocalServerCommand(nodeExec, forged, ENV, GATE)).rejects.toThrow();
+		await expect(runLocalServerCommand(nodeExec, upCommand(DOCKER, STACK), pinnedEnv(null), GATE)).rejects.toThrow();
 		expect(childProcess.execFile).not.toHaveBeenCalled();
 	});
 });
