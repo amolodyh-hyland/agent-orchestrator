@@ -1382,6 +1382,10 @@ test("a caller that does not drain stderr cannot hold the watchdog past its boun
 
 test("mutation: a copy-out that blocks until the caller drains is caught", darwin, async (t) => {
 	const mutant = await mutatedScripts(t, "common.sh", "my $until = time + 2;\n			while (time < $until) {\n				if (waitpid($copier", "my $until = time + 100000;\n			while (time < $until) {\n				if (waitpid($copier");
+	// Two layers keep the copier bounded (the supervisor's deadline and the copier's own alarm): switch off both.
+	const file = path.join(mutant, "common.sh");
+	const text = await readFile(file, "utf8");
+	await writeFile(file, text.replace("alarm 2;\n				sigprocmask(SIG_UNBLOCK", "sigprocmask(SIG_UNBLOCK"));
 	const root = await mkdtemp(path.join(os.tmpdir(), "noetaxis-undrained-mutant-"));
 	t.after(async () => rm(root, { recursive: true, force: true }));
 	await assert.rejects(runWithUndrainedStderr(path.join(mutant, "common.sh"), root, 12_000), /still blocked/);
@@ -1420,6 +1424,37 @@ test("mutation: leaving the caller's descriptors non-blocking is caught", darwin
 	t.after(async () => rm(root, { recursive: true, force: true }));
 	const result = runFlagsProbe(path.join(mutant, "common.sh"), root, "/usr/bin/true");
 	assert.match(result.stdout, /NB1/, `the mutant sets O_NONBLOCK: ${result.stdout}`);
+});
+
+// The copier child inherits the supervisor's handlers (which only record a flag) and its blocked stop
+// signals. A TERM that arrives between "unblock" and "reset to default" would be swallowed by the
+// inherited handler, leaving the copier blocked on an undrained pipe. So the reset comes first, while the
+// signals are still blocked, and the copier arms its own alarm so it ends even if no signal reaches it.
+function copierOrderProblems(source) {
+	const copier = source.slice(source.indexOf("if (!$copier) {"), source.indexOf("POSIX::_exit(0);", source.indexOf("if (!$copier) {")));
+	const reset = copier.indexOf('$SIG{TERM} = $SIG{ALRM} = $SIG{INT} = $SIG{HUP} = "DEFAULT"');
+	const alarm = copier.indexOf("alarm 2;");
+	const unblock = copier.indexOf("sigprocmask(SIG_UNBLOCK");
+	const problems = [];
+	if (reset < 0 || unblock < 0 || reset > unblock) problems.push("the handlers are not reset to the default action before the signals are unblocked");
+	if (alarm < 0 || alarm > unblock) problems.push("the copier does not arm its own alarm before it is unblocked");
+	return problems;
+}
+
+test("the copier resets its handlers before unblocking and ends by itself even if no signal reaches it", darwin, async (t) => {
+	assert.deepEqual(copierOrderProblems(await readFile(path.join(realScriptsDir, "common.sh"), "utf8")), []);
+	// Without the supervisor's TERM the copier still ends at its own alarm, so an undrained pipe cannot hold the call.
+	const noTerm = await mutatedScripts(t, "common.sh", 'kill "TERM", $copier;\n', "");
+	const root = await mkdtemp(path.join(os.tmpdir(), "noetaxis-copier-"));
+	t.after(async () => rm(root, { recursive: true, force: true }));
+	const { stdout, elapsed } = await runWithUndrainedStderr(path.join(noTerm, "common.sh"), root, 30_000);
+	assert.match(stdout, /rc=145/);
+	assert.ok(elapsed < 12_000, `returned after ${elapsed} ms`);
+});
+
+test("mutation: unblocking before resetting the handlers (the swallowed-TERM race) is caught", darwin, async (t) => {
+	const mutant = await mutatedScripts(t, "common.sh", '$SIG{TERM} = $SIG{ALRM} = $SIG{INT} = $SIG{HUP} = "DEFAULT";\n				alarm 2;\n				sigprocmask(SIG_UNBLOCK, $blocked);', 'sigprocmask(SIG_UNBLOCK, $blocked);\n				$SIG{TERM} = $SIG{ALRM} = $SIG{INT} = $SIG{HUP} = "DEFAULT";\n				alarm 2;');
+	assert.ok(copierOrderProblems(await readFile(path.join(mutant, "common.sh"), "utf8")).some((p) => /before the signals are unblocked/.test(p)));
 });
 
 test("a hung helper is terminated and reported as a failure, while AO's own processes are never sent SIGKILL", darwin, async (t) => {

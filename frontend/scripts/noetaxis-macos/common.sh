@@ -75,9 +75,13 @@ noetaxis_bounded() {
 			my $copier = fork();
 			return 1 unless defined $copier;
 			if (!$copier) {
-				# The stop signals are blocked in this process; the copier must be terminable.
+				# The copier must be terminable and must end by itself. The inherited handlers only record a
+				# flag, so they are reset to the default action WHILE the signals are still blocked, then the
+				# signals are unblocked (a TERM that arrives in between stays pending and terminates it), and
+				# an alarm ends it at the copy deadline even if no signal is ever sent to it.
+				$SIG{TERM} = $SIG{ALRM} = $SIG{INT} = $SIG{HUP} = "DEFAULT";
+				alarm 2;
 				sigprocmask(SIG_UNBLOCK, $blocked);
-				$SIG{TERM} = "DEFAULT";
 				for my $pair ([\*STDOUT, $outdata], [\*STDERR, $errdata]) {
 					my ($fh, $data) = @$pair;
 					my $offset = 0;
