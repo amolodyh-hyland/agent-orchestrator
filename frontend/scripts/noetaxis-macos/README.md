@@ -71,6 +71,10 @@ AO="/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao"
 
 Upstream (`frontend/src/main/desktop-quit.ts`, from the macOS tray change) turns Cmd+Q, the Dock "Quit", an AppleScript `quit` and a plain SIGTERM into "close the window" on macOS. Only the tray item **Quit AO Completely** (and a system shutdown) exits the app, and there is no CLI command, daemon API or URL for it. The item's label is translated, so the script tries the label of every UI locale the app ships (a test keeps the list in step with `renderer/i18n/*.json`). So the script drives that tray item through the accessibility API (`osascript` with System Events), for the exact process id of this bundle's main process (never by bundle id, which another copy shares). macOS asks once to let your terminal control System Events and to grant it Accessibility. If AO asks about unsaved chat drafts while quitting, answer in the app; the wait is bounded, so rerun if it ran out. This path has been **compiled and tested against fakes only**, not against a real tray: if it cannot click, it says so and waits up to `--quit-timeout` seconds (default 60) for you to click **Quit AO Completely** yourself, which is always the fallback. `--manual-quit` skips the scripting and just waits. After the wait, `--force` sends SIGTERM to the app's own processes (a tray build may treat it as a window close); if the app is still there the run stops with exit 54. Nothing is ever force-killed.
 
+### What the signal guarantee covers
+
+The guarantee is about **signals this script sends itself**: only SIGTERM, only with `--force`, only to processes whose command line starts with `<app>/Contents/`, each one logged. It does **not** cover what AO does when asked to stop a session. `--end-sessions` calls `ao session exit-agent`, and the daemon tears the agent's controller down by its own code: `exit-agent` -> stop chat / runtime -> controller terminate -> adapter close, which ends in `syscall.Kill(-pgid, SIGKILL)` of the agent's process group (`backend/internal/adapters/chatdriver/acp/process_unix.go`, `chatdriver/persistenthost/child_unix.go`). Those are the selected sessions' provider processes (the agent CLI and what it started), outside the bundle, and they are force-killed by AO, not by this script. A running agent turn is interrupted without a chance to finish. So use `--end-sessions` only when that is acceptable, let turns finish first, or stop the sessions yourself in the app beforehand. The test suite uses a fake `ao` and cannot observe that teardown.
+
 ### Options
 
 | Option | Effect |
@@ -79,7 +83,7 @@ Upstream (`frontend/src/main/desktop-quit.ts`, from the macOS tray change) turns
 | `--yes` | Do not ask for confirmation. Required with `--detached`. |
 | `--end-sessions` | Stop the agents of live sessions with `ao session exit-agent` (sessions, worktrees and conversations are kept). Without it, live sessions are refused. |
 | `--restore-sessions` | Afterwards try `ao session restore` once per session that was live. |
-| `--force` | SIGTERM, never SIGKILL, to processes of **this bundle only** (command line starts with `<app>/Contents/`) that survive the waits; each is logged. |
+| `--force` | SIGTERM, never SIGKILL (sent by this script), to processes of **this bundle only** (command line starts with `<app>/Contents/`) that survive the waits; each is logged. |
 | `--manual-quit` | Do not script the tray; wait for your click. |
 | `--restart-multica-daemon` | Restart a standalone `multica` CLI daemon that was running before. |
 | `--restart-multica-stack` | `docker restart` the Multica containers that were running before. |

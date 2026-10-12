@@ -120,6 +120,7 @@ test("the plan names what is stopped, which sessions end, what is backed up and 
 		"Fix login",
 		"s2",
 		"These agents WILL BE STOPPED (--end-sessions)",
+		"AO's own agent teardown can force-kill the agent's process group (SIGKILL by AO, outside this script's signal rules)",
 		"Will be BACKED UP",
 		"ao.db (+WAL/SHM)",
 		"Will be RESTARTED",

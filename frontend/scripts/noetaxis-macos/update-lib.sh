@@ -460,7 +460,7 @@ noetaxis_update_print_plan() {
 	fi
 	printf '    4. then it waits up to %ss for agent chat hosts (%s) and helper processes (%s) and for ShipIt to exit\n' "$update_stop_timeout" "$host_count" "$other_count"
 	if [[ "$update_force" -eq 1 ]]; then
-		printf '       --force: processes of THIS bundle that are still alive after the wait get SIGTERM (never SIGKILL), each one logged\n'
+		printf '       --force: processes of THIS bundle that are still alive after the wait get SIGTERM (this script never sends SIGKILL), each one logged\n'
 	else
 		printf '       without --force nothing is signalled: a survivor stops the run with a list\n'
 	fi
@@ -468,7 +468,7 @@ noetaxis_update_print_plan() {
 		printf '\n  Live sessions (%s):\n' "$cap_live_count"
 		noetaxis_update_print_live_sessions
 		if [[ "$update_end_sessions" -eq 1 ]]; then
-			printf '    These agents WILL BE STOPPED (--end-sessions): running turns and terminals end; each session, worktree and conversation stays.\n'
+			printf '    These agents WILL BE STOPPED (--end-sessions): running turns and terminals end; each session, worktree and conversation stays. AO's own agent teardown can force-kill the agent's process group (SIGKILL by AO, outside this script's signal rules), so a running turn is cut off.\n'
 			if [[ "$update_restore_sessions" -eq 1 ]]; then
 				printf '    --restore-sessions: one "ao session restore" attempt each afterwards (best effort, restore has been unreliable).\n'
 			fi

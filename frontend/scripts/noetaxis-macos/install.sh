@@ -52,11 +52,12 @@ automatically if the new app is not healthy. The app argument defaults to
   --yes                      do not ask for confirmation (required with --detached)
   --end-sessions             stop the agents of live sessions with "ao session exit-agent"
                              (keeps each session, worktree and conversation; "ao session
-                             kill" is never used). Without it live sessions make the run
+                             kill" is never used; AO's own agent teardown may still
+                             force-kill the agent's process group). Without it live sessions make the run
                              refuse before anything is stopped
   --restore-sessions         afterwards try "ao session restore" once per session that was
                              live (resumes the exited agents)
-  --force                    SIGTERM (never SIGKILL) processes of THIS bundle that
+  --force                    SIGTERM (never SIGKILL, from this script) processes of THIS bundle that
                              survive the waits; each one is logged
   --manual-quit              do not script the tray item; wait for you to click
                              "Quit AO Completely"
