@@ -1344,6 +1344,37 @@ test("mutation: reaping the leader before the last signal is caught by the trace
 	assert.ok(orderProblems(traced).some((problem) => /reaped before the last signal/.test(problem)), traced.timedOut.join("\n"));
 });
 
+// A caller that does not drain its stderr pipe (a full pipe) must not hold the supervisor past its bound:
+// the output copy-out writes without blocking, within two seconds, and the call fails with 145.
+function runWithUndrainedStderr(libPath, root, lifetime) {
+	const child = spawn("/bin/bash", ["-c", `. "${libPath}"; rc=0; noetaxis_bounded 5 /bin/sh -c 'head -c 1048576 /dev/zero >&2' || rc=$?; echo "rc=$rc"`], { env: { PATH: "/usr/bin:/bin", TMPDIR: root }, stdio: ["ignore", "pipe", "pipe"] });
+	let stdout = "";
+	child.stdout.on("data", (chunk) => { stdout += chunk; });
+	// stderr is deliberately NOT read: its pipe fills up.
+	const started = Date.now();
+	const outcome = new Promise((resolve, reject) => {
+		const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error(`still blocked after ${lifetime} ms`)); }, lifetime);
+		child.on("exit", () => { clearTimeout(timer); resolve({ stdout, elapsed: Date.now() - started }); });
+	});
+	outcome.catch(() => {});
+	return outcome;
+}
+
+test("a caller that does not drain stderr cannot hold the watchdog past its bound (145 within the copy-out deadline)", darwin, async (t) => {
+	const root = await mkdtemp(path.join(os.tmpdir(), "noetaxis-undrained-"));
+	t.after(async () => rm(root, { recursive: true, force: true }));
+	const { stdout, elapsed } = await runWithUndrainedStderr(path.join(realScriptsDir, "common.sh"), root, 30_000);
+	assert.match(stdout, /rc=145/);
+	assert.ok(elapsed < 10_000, `returned after ${elapsed} ms`);
+});
+
+test("mutation: a copy-out that blocks until the caller drains is caught", darwin, async (t) => {
+	const mutant = await mutatedScripts(t, "common.sh", "return 0 if time >= $deadline;", "");
+	const root = await mkdtemp(path.join(os.tmpdir(), "noetaxis-undrained-mutant-"));
+	t.after(async () => rm(root, { recursive: true, force: true }));
+	await assert.rejects(runWithUndrainedStderr(path.join(mutant, "common.sh"), root, 12_000), /still blocked/);
+});
+
 test("a hung helper is terminated and reported as a failure, while AO's own processes are never sent SIGKILL", darwin, async (t) => {
 	// A real, unrelated process stands in for a user's AO process: it must survive the whole run.
 	const bystander = spawn("/bin/sleep", ["300"], { stdio: "ignore", detached: true });

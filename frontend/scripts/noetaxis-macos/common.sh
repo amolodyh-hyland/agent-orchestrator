@@ -50,18 +50,42 @@ noetaxis_bounded() {
 			exec @ARGV;
 			exit 127;
 		}
-		# Copies at most $max bytes of each stream; returns 1 when something was cut off.
+		# Writes without ever blocking past a deadline: a caller that does not drain its pipe (a full
+		# pipe) must not hold this supervisor beyond its bound. Returns 0 when the data was not all written.
+		sub write_bounded {
+			my ($fh, $data, $deadline) = @_;
+			my $fd = fileno($fh);
+			my $flags = fcntl($fh, F_GETFL, 0);
+			fcntl($fh, F_SETFL, $flags | O_NONBLOCK);
+			my $offset = 0;
+			my $length = length($data);
+			while ($offset < $length) {
+				my $written = syswrite($fh, $data, $length - $offset, $offset);
+				if (defined $written) { $offset += $written; next; }
+				return 0 unless $!{EAGAIN} || $!{EWOULDBLOCK};
+				return 0 if time >= $deadline;
+				my $writable = "";
+				vec($writable, $fd, 1) = 1;
+				select(undef, $writable, undef, 0.1);
+			}
+			return 1;
+		}
+		# Copies at most $max bytes of each stream within two seconds. Returns 0, 1 when something was
+		# cut off by the size cap, or 2 when the caller did not take the output in time.
 		sub flush_output {
-			$| = 1;
-			my $cut = 0;
+			my $result = 0;
+			my $deadline = time + 2;
 			for my $pair ([$out, \*STDOUT], [$err, \*STDERR]) {
-				$cut = 1 if (-s $pair->[0]) > $max;
+				$result = 1 if $result == 0 && (-s $pair->[0]) > $max;
 				seek($pair->[0], 0, 0);
 				my $data = "";
 				read($pair->[0], $data, $max);
-				print { $pair->[1] } $data;
+				$result = 2 unless write_bounded($pair->[1], $data, $deadline);
 			}
-			return $cut;
+			return $result;
+		}
+		sub note {
+			write_bounded(\*STDERR, $_[0], time + 1);
 		}
 		# Group ownership: the helper'"'"'s process id (and so its group id) stays reserved for as long as
 		# its leader is unreaped, so every signal below can only reach this helper'"'"'s own group. The
@@ -81,8 +105,10 @@ noetaxis_bounded() {
 				if (waitpid($child, WNOHANG) == $child) {
 					my $status = $?;
 					alarm 0;
-					if (flush_output()) {
-						print STDERR "noetaxis: helper output exceeded $max bytes and was truncated: @ARGV\n";
+					my $flushed = flush_output();
+					exit 145 if $flushed == 2;
+					if ($flushed) {
+						note("noetaxis: helper output exceeded $max bytes and was truncated: @ARGV\n");
 						exit 144;
 					}
 					exit(($status & 127) ? 128 + ($status & 127) : ($status >> 8));
@@ -101,8 +127,9 @@ noetaxis_bounded() {
 		kill "KILL", -$child;
 		for (1 .. 60) { last if waitpid($child, WNOHANG) == $child; select(undef, undef, undef, 0.05); }
 		my $cut = flush_output();
-		print STDERR "noetaxis: helper command timed out after ${limit}s: @ARGV\n" if $fired == 142;
-		print STDERR "noetaxis: helper output exceeded $max bytes and was truncated: @ARGV\n" if $fired == 144 || $cut;
+		note("noetaxis: helper command timed out after ${limit}s: @ARGV\n") if $fired == 142;
+		note("noetaxis: helper output exceeded $max bytes and was truncated: @ARGV\n") if $fired == 144 || $cut == 1;
+		exit 145 if $cut == 2 && $fired == 0;
 		exit $fired;
 	' "$seconds" "$max_bytes" "$@" )
 }
