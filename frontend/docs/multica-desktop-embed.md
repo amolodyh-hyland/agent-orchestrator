@@ -147,6 +147,50 @@ Settings file `multica-settings.json` (AO state dir, mode `0600`, atomic writes)
 
 **Security.** Mode and URLs only in the settings file; the check logs and returns only an error code, never the URL or the transport message; no certificate-verification bypass; IPC stays limited to the trusted shell; the WebSocket origin rewrite applies to the selected server's API origin only.
 
+## Local Multica server controls
+
+Settings → General → Multica has a **Local Multica server** block under the server switch. It starts, stops and restarts the self-hosted Multica **server** (backend, web app and Postgres, run by Docker Compose on this computer) and shows its status and backend log. It is **not** the Multica agent daemon (`AO_MULTICA_DAEMON=1`, the CLI-driven daemon panel): that program runs agents and is managed elsewhere; the block says so and never touches it. Design and decisions: [`docs/plans/2026-10-11-multica-local-server-controls.md`](../../docs/plans/2026-10-11-multica-local-server-controls.md).
+
+**When it shows.** Only when the saved server is **Local** and the address is this computer (`localhost`, `127.0.0.0/8`, `::1`). Cloud, an empty address, or a LAN/remote address (`http://mybox:3000`, `https://multica.example.com`) hides it: the stack AO manages listens on `127.0.0.1` only, so another address is another machine. The main process answers `unavailable` in those cases too. Nothing runs until the block is on screen: it starts a 5 s status poll when shown and stops it when removed or at quit, so users who never open it see no Docker call, probe or file.
+
+**The stack.** AO controls the Compose project in a folder that holds Multica's `docker-compose.selfhost.yml` (project `multica`). Which folder: the saved one (`multica-local-server.json` in the AO state dir, `{ "version": 1, "stackDir": "…" }`, mode `0600`, separate from `multica-settings.json`), else `~/.multica/server` (where Multica's installer puts it). If neither is usable, `docker compose ls` may reveal a Multica project; AO then *offers* "Use this folder" and never uses it without a click. **Choose folder…** opens the native dialog in the main process; the renderer never sends a path. A folder is accepted only if its canonical path is absolute, owned by the user and not group/world-writable, and `docker-compose.selfhost.yml` in it is a plain (non-symlink) file of the same kind, ≤ 256 KiB, that stays inside the folder and looks like Multica's (`name: multica`, services `postgres`, `backend`, `frontend`). That is re-checked before every operation. This is a mistake guard, not a sandbox: Compose runs whatever the chosen file says, as the user. An overlay such as `docker-compose.selfhost.build.yml` (from `make selfhost-build`) is not applied; such users keep using the terminal.
+
+**Allow-listed commands** (`src/main/multica-local-server-commands.ts` is the only place that builds them; `execFile` with an argument array, never a shell; the runner refuses any command the module did not issue):
+
+| | |
+| --- | --- |
+| Engine / plugin | `docker version --format {{.Server.Version}}`, `docker compose version --short` |
+| Detect | `docker compose ls --all --format json` |
+| Status | `docker compose -f <file> --project-directory <dir> ps --all --format json` |
+| Start / stop / restart | `… up -d`, `… stop`, `… restart` (same prefix) |
+| Log | `… logs --no-color --tail <1..500> <backend\|frontend\|postgres>` (no follow) |
+| Docker Desktop | `/usr/bin/open -a Docker` (macOS only), then `docker version` every 2 s for up to 120 s |
+
+`<file>` and `<dir>` are the validated canonical paths. Timeouts: 10–15 s for reads, 60 s stop, 120 s restart, **10 min for `up -d`** (the first start pulls the images). The child environment is a short allow-list (`PATH` plus Docker's usual install directories, `HOME`, `USER`, `LANG`, `TMPDIR`, `DOCKER_CONFIG`); `COMPOSE_*` and `DOCKER_HOST` from AO's own environment are **not** passed, so a stray variable cannot point a "local" stack at another project or machine (a `docker context` in `~/.docker` still works). **One operation at a time** per machine (setup, start, stop, restart, Docker launch); a second request gets `busy`. **Cancel** aborts the running command or the Docker wait; a cancelled `up -d` can leave a partial pull or stack, which the next status shows as it is.
+
+**Status.** `unavailable`, `no_folder`, `invalid_folder`, `needs_setup` (no `.env`), `docker_not_installed`, `compose_missing`, `docker_not_running`, `docker_starting`, `stopped`, `starting`, `healthy`, `unhealthy`, `port_conflict`, `running_elsewhere`, and while an operation runs `setting_up`, `starting_server`, `stopping`, `restarting`. Derived from `compose ps` (newline-delimited JSON or an array, both read) and an HTTP probe of the configured Multica URL with the server switch's own check (`/api/config` shape, `/healthz`): *healthy* needs all three services running and Multica answering; running but silent is *starting* for 90 s, then *unhealthy*; an exited, restarting or health-failing service is *unhealthy* at once. With no running container, a Multica that answers is *running elsewhere* (for example `make dev`), something else answering or a start that failed on a taken port is *port conflict*. A note appears when Compose publishes the web service on another port than the Multica URL uses; AO does not edit the URL.
+
+| State | Start | Stop / Restart | Other |
+| --- | --- | --- | --- |
+| stopped | yes | no | |
+| starting | no | yes | |
+| healthy | no | yes | |
+| unhealthy | yes | yes | |
+| docker_not_running | yes on macOS ("Start Docker and server": opens Docker Desktop, waits, starts) | no | elsewhere: start Docker yourself |
+| needs_setup | no | no | **Set up local server** |
+| port_conflict, running_elsewhere, no_folder, invalid_folder, docker_not_installed, compose_missing | no | no | the reason is shown |
+| while an operation runs | no | no | **Cancel** |
+
+**First-time setup.** `docker-compose.selfhost.yml` requires `JWT_SECRET`, so the first start needs a `.env`; `make selfhost` creates it from `.env.example`. **Set up local server** does just that step, with no process: it replaces `JWT_SECRET`, `POSTGRES_PASSWORD`, `MULTICA_VCS_SECRET_KEY` and the password inside `DATABASE_URL` with fresh `crypto.randomBytes` values (32 hex, 24 hex, 32 base64, as in the Makefile; `JWT_SECRET` is added if the template has none), and creates `.env` exclusively (never overwrites) with mode `0600`. The content is neither returned nor logged. Not automated: getting Multica's files (clone the repository or run Multica's installer yourself, `curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash -s -- --with-server`, then choose the folder), `make selfhost-build`, and later `.env` edits (email provider, origins, `APP_ENV`). Restart does not re-read `.env`; after editing it use Stop, then Start. Known limit: if a `multica_pgdata` volume from an earlier run with another password still exists, the new random Postgres password will not match it and the backend log shows the authentication error.
+
+**Log.** **Show log** tails the backend (last 200 lines, refreshed every 3 s while open and visible). Sign-in codes are **shown**: with no mail provider the backend prints `[DEV] Verification code for …` and the log is how the user signs in without email. Log lines are returned to the shell and held in that component's state only; they are not written to disk, to the action log, to the console or to telemetry, and the view forgets them when closed or when the server goes away.
+
+**Secrets.** AO never reads `.env` (it only checks that it exists) and never passes it anywhere; Compose reads it. The service logs nothing but results. Failure details shown to the user are the command's stderr cut to its last 400 characters with secret-looking `KEY=value` pairs, URL credentials and bearer tokens replaced by `[redacted]`.
+
+**IPC.** `multica:localServer:*` channels (`getState`, `watch`, `start`, `stop`, `restart`, `cancel`, `setup`, `chooseFolder`, `useDetected`, `getLogs`, and the `status` push), shell sender only. No channel carries a path or command text; a log request is an enumerated service plus a bounded integer. The Multica view's own preload is jailed to the bridge channel list and cannot reach them. The view host (`multica-view-host.ts`) is not modified: after the server is healthy, press **Retry** in the Multica pane.
+
+**Manual verification (isolated app, see "Test it isolated").** With Docker Desktop quit and the Multica folder chosen: the block shows *Docker not running* and *Start Docker and server*; pressing it opens Docker Desktop, waits, pulls and starts; the status goes *Starting…* then *Running*; **Show log** shows the sign-in code after requesting one in the Multica pane; *Stop* gives *Stopped*; *Restart* returns to *Running*; Cancel during a first pull stops it; switching the server to Cloud or to a LAN address hides the block; with a different program on `:3000`, *Port in use*.
+
 ## Send to AO
 
 The existing `ao://multica/send-issue` request still opens the Send to AO dialog in AO's shell, where
