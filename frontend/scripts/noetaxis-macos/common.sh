@@ -187,7 +187,7 @@ noetaxis_process_executable_path() {
 	local pid="$1" output
 	[[ "$pid" =~ ^[0-9]+$ ]] || return 1
 	# proc_pidpath reads p_textvp; argv, ps comm and lsof txt mappings are not executable identity.
-	output="$(noetaxis_bounded 5 /usr/bin/python3 -c '
+	output="$(noetaxis_bounded 5 /usr/bin/python3 -I -S -c '
 import ctypes
 import os
 import sys

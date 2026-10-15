@@ -466,21 +466,30 @@ test("process lookup matches a bundle path literally even when it contains regex
 	await mkdir(weirdApps, { recursive: true });
 	await makeApp(weirdApp, "0.13.4");
 	const lookalike = path.join(weirdApps, "Agent OrchestratorXapp");
-	const spawnRunner = async (appPath) => {
-		const runner = path.join(appPath, "Contents/Resources/daemon/runner");
-		await mkdir(path.dirname(runner), { recursive: true });
-		await writeFile(runner, "#!/bin/sh\n/bin/sleep 30\n", { mode: 0o755 });
-		const child = spawn("/bin/sh", [runner, "daemon"], { stdio: "ignore", detached: true });
-		t.after(() => { try { process.kill(-child.pid); } catch {} });
-		await new Promise((resolve) => setTimeout(resolve, 300));
-		return runner;
-	};
-	// Real pgrep (no fake on PATH). The process's command line contains the bundle path.
-	const env = { ...f.env, APPS_DIR: weirdApps, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" };
+	const bin = f.env.PATH.split(":")[0];
+	const commandFile = path.join(bin, "process-command");
+	await writeFile(path.join(bin, "pgrep"), `#!/bin/bash
+pattern="\${@: -1}"
+if /usr/bin/grep -Eq -- "$pattern" "$(dirname "$0")/process-command"; then printf '4242\\n'; else exit 1; fi
+`, { mode: 0o755 });
+	await writeFile(path.join(bin, "ps"), `#!/bin/bash
+pid="\${@: -1}"
+command="$(cat "$(dirname "$0")/process-command")"
+case "$*" in
+  *pid=*ppid=*lstart=*command=*) printf '%s 1 Mon Oct 12 00:00:00 2026 %s\\n' "$pid" "$command" ;;
+  *command=*) printf '%s\\n' "$command" ;;
+  *lstart=*) printf 'Mon Oct 12 00:00:00 2026\\n' ;;
+  *ppid=*) printf '1\\n' ;;
+  *) exit 1 ;;
+esac
+`, { mode: 0o755 });
+	await writeFile(path.join(bin, "executables"), "4242|<APP>/Contents/Resources/daemon/ao\n*|/bin/bash\n");
+	const env = { ...f.env, APPS_DIR: weirdApps };
 	const dryRun = () => execute("/bin/bash", [installScript, "--allow-ao-session", "--dry-run", f.sourceApp], { cwd: repoRoot, env });
-	await spawnRunner(lookalike);
+	await writeFile(commandFile, `${lookalike}/Contents/Resources/daemon/ao daemon\n`);
 	assert.equal(dryRun().status, 0, "a lookalike path must not count as the installed app");
-	const runner = await spawnRunner(weirdApp);
+	const runner = `${weirdApp}/Contents/Resources/daemon/ao`;
+	await writeFile(commandFile, `${runner} daemon\n`);
 	const refused = dryRun();
 	assert.equal(refused.status, 21, `a real process under a path with metacharacters must be found: ${refused.stderr}`);
 	assert.match(refused.stderr, /still running/);
