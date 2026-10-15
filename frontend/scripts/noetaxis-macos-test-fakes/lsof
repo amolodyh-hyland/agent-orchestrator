@@ -1,0 +1,12 @@
+#!/bin/bash
+SIM="${NOETAXIS_SIM:?}"
+pid=""
+while [[ "$#" -gt 0 ]]; do
+	if [[ "$1" == -p ]]; then shift; pid="$1"; fi
+	shift
+done
+[[ -n "$pid" ]] || exit 1
+printf 'p%s\n' "$pid"
+while IFS='|' read -r row_pid mapping; do
+	if [[ "$row_pid" == "$pid" ]]; then printf 'ftxt\nn%s\n' "$mapping"; fi
+done < "$SIM/text-mappings"

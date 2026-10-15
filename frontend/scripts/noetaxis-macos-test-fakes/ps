@@ -2,6 +2,14 @@
 . "${NOETAXIS_FAKES:?}/sim-lib.sh"
 pid="${@: -1}"
 case "$*" in
+	*pid=*ppid=*lstart=*command=*)
+		sim_tick
+		command="$(sim_command_of "$pid")"
+		[[ -n "$command" ]] || exit 1
+		parent="$(sim_ppid_of "$pid")"
+		if [[ -f "$SIM/cfg/lstart_$pid" ]]; then start="$(cat "$SIM/cfg/lstart_$pid")"; else start="Mon Oct 12 00:00:$(printf '%02d' "$((pid % 60))") 2026"; fi
+		printf '%s %s %s %s\n' "$pid" "$parent" "$start" "$command"
+		;;
 	*command=*)
 		command="$(sim_command_of "$pid")"
 		[[ -n "$command" ]] || exit 1
@@ -11,7 +19,7 @@ case "$*" in
 		[[ -n "$(sim_command_of "$pid")" ]] || exit 1
 		if [[ -f "$SIM/cfg/lstart_$pid" ]]; then cat "$SIM/cfg/lstart_$pid"; else printf 'Mon Oct 12 00:00:%02d 2026\n' "$((pid % 60))"; fi
 		;;
-	*ppid=*) printf '1\n' ;;
+	*ppid=*) sim_ppid_of "$pid"; printf '\n' ;;
 	# Plain "ps -p <pid>" (the lock's liveness check): real process liveness, so the lock tests do not
 	# depend on what the host sandbox lets /bin/ps do.
 	*"-p "*)

@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
@@ -8,11 +8,15 @@ import { fileURLToPath } from "node:url";
 import { copyAgentBrowserLicenses } from "./agent-browser-license.mjs";
 import { buildDiskImage, buildPackages, writeManifest } from "./noetaxis-macos/package-artifacts.mjs";
 import { parseMulticaPin, stampVersion, validateRegistry } from "./noetaxis-macos/build.mjs";
+import { copyFakeScripts } from "./noetaxis-macos-update-world.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
-const installScript = path.join(scriptDir, "noetaxis-macos/install.sh");
-const rollbackScript = path.join(scriptDir, "noetaxis-macos/rollback.sh");
+const fakeScriptsDir = await mkdtemp(path.join(os.tmpdir(), "noetaxis-classic-scripts-"));
+await copyFakeScripts(path.join(scriptDir, "noetaxis-macos"), fakeScriptsDir);
+const installScript = path.join(fakeScriptsDir, "install.sh");
+const rollbackScript = path.join(fakeScriptsDir, "rollback.sh");
+after(async () => { await makeWritable(fakeScriptsDir); await rm(fakeScriptsDir, { recursive: true, force: true }); });
 const revision = "8e2bc21fd5d95c525f536dc03b5e7b7f10b04c7c";
 const version = "0.13.4-noetaxis.8e2bc21";
 const registry = "https://proget.onbase.net/npm/npm";
@@ -54,6 +58,7 @@ async function makeApp(appPath, appVersion, sourceRevision = "") {
 	const contents = path.join(appPath, "Contents");
 	const resources = path.join(contents, "Resources");
 	await mkdir(path.join(resources, "daemon"), { recursive: true });
+	for (const directory of ["MacOS", "Frameworks", "Resources/acp-runtime/node/bin"]) await mkdir(path.join(contents, directory), { recursive: true });
 	const versionProperties = sourceRevision ? `<key>NoetaxisSourceRevision</key><string>${sourceRevision}</string>` : "";
 	const info = `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.agent-orchestrator.desktop</string><key>CFBundleShortVersionString</key><string>${appVersion}</string><key>CFBundleVersion</key><string>${appVersion}</string><key>CFBundlePackageType</key><string>APPL</string>${versionProperties}</dict></plist>`;
 	await writeFile(path.join(contents, "Info.plist"), info);
@@ -90,7 +95,7 @@ async function makeFakeBin(root, pgrepMode = "idle", psMode = "plain") {
 	const kindPatterns = { desktop: "*/Contents/MacOS/*", daemon: '*"ao daemon"*', "chat-host": '*"ao chat-host"*', other: "*/Contents/" };
 	const pgrep = pgrepMode === "busy"
 		? `#!/bin/sh
-case "$*" in *ShipIt*) exit 1;; *) exit 0;; esac
+case "$*" in *ShipIt*) exit 1;; *) echo 4242; exit 0;; esac
 `
 		: pgrepMode === "shipit"
 		? `#!/bin/sh
@@ -107,6 +112,15 @@ case "$*" in ${kindPatterns[pgrepMode]}) echo 4242; exit 0;; *) exit 1;; esac
 	for (const name of ["kill", "pkill", "killall", "osascript", "launchctl"]) {
 		await writeFile(path.join(bin, name), `#!/bin/sh\necho "${name} $*" >> "$(dirname "$0")/kill-calls"\nexit 0\n`, { mode: 0o755 });
 	}
+	const fixtureCommands = {
+		busy: "Contents/MacOS/Agent Orchestrator",
+		desktop: "Contents/MacOS/Agent Orchestrator",
+		daemon: "Contents/Resources/daemon/ao daemon",
+		"chat-host": "Contents/Resources/daemon/ao chat-host s1 /tmp/data /tmp/worktrees",
+		other: "Contents/Resources/acp-runtime/node/bin/node helper",
+	};
+	const fixtureExecutables = { busy: "Contents/MacOS/Agent Orchestrator", desktop: "Contents/MacOS/Agent Orchestrator", daemon: "Contents/Resources/daemon/ao", "chat-host": "Contents/Resources/daemon/ao", other: "Contents/Resources/acp-runtime/node/bin/node" };
+	await writeFile(path.join(bin, "executables"), `*|/bin/bash\n${fixtureExecutables[pgrepMode] ? `4242|<APP>/${fixtureExecutables[pgrepMode]}\n` : ""}`);
 	const ps = psMode === "chain" || psMode === "cycle"
 		? `#!/bin/bash
 echo call >> "$(dirname "$0")/ps-calls"
@@ -125,8 +139,17 @@ case "$*" in *command=*"-p 4000000"*|*"-p 4000000"*command=*) printf '%s\\n' '/A
 		? `#!/bin/sh
 case "$*" in *command=*) printf '%s\\n' '/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao daemon';; *ppid=*) printf '1\\n';; *) exit 1;; esac
 `
-		: `#!/bin/sh
-case "$*" in *command=*) printf '%s\\n' 'zsh';; *ppid=*) printf '1\\n';; *) exit 1;; esac
+		: `#!/bin/bash
+pid="\${@: -1}"
+command='zsh'
+if [[ "$pid" == 4242 && -n '${fixtureCommands[pgrepMode] ?? ""}' ]]; then command="$APPS_DIR/Agent Orchestrator.app/${fixtureCommands[pgrepMode] ?? ""}"; fi
+case "$*" in
+  *pid=*ppid=*lstart=*command=*) printf '%s 1 Mon Oct 12 00:00:00 2026 %s\\n' "$pid" "$command" ;;
+  *command=*) printf '%s\\n' "$command" ;;
+  *lstart=*) printf 'Mon Oct 12 00:00:00 2026\\n' ;;
+  *ppid=*) printf '1\\n' ;;
+  *) exit 1 ;;
+esac
 `;
 	await writeFile(path.join(bin, "ps"), ps, { mode: 0o755 });
 	return bin;
@@ -502,11 +525,11 @@ test("rollback and the PKG preinstall apply the same background-process prefligh
 	const desktop = execute("/bin/bash", [rollbackScript, "--allow-ao-session", "--allow-background-processes"], { cwd: repoRoot, env: { ...f.env, PATH: `${desktopBin}:/usr/bin:/bin:/usr/sbin:/sbin` } });
 	assert.equal(desktop.status, 21, desktop.stderr);
 	// The PKG preinstall has no flag: a surviving daemon always stops it before anything is backed up.
-	const preinstall = path.join(scriptDir, "noetaxis-macos/pkg-scripts/preinstall");
+	const preinstall = path.join(fakeScriptsDir, "pkg-scripts/preinstall");
 	const packaged = path.join(f.root, "pkg-scripts");
 	await mkdir(packaged, { recursive: true });
 	await cp(preinstall, path.join(packaged, "preinstall"));
-	await cp(path.join(scriptDir, "noetaxis-macos/common.sh"), path.join(packaged, "common.sh"));
+	await cp(path.join(fakeScriptsDir, "common.sh"), path.join(packaged, "common.sh"));
 	delete env.AO_HOME;
 	const pkg = execute("/bin/bash", [path.join(packaged, "preinstall")], { cwd: repoRoot, env });
 	assert.equal(pkg.status, 21, pkg.stderr);
@@ -631,7 +654,7 @@ test("PKG preinstall backs up state before moving the app, and postinstall verif
 	const packaged = path.join(f.root, "pkg-scripts");
 	await mkdir(packaged, { recursive: true });
 	for (const [from, name] of [["pkg-scripts/preinstall", "preinstall"], ["pkg-scripts/postinstall", "postinstall"], ["common.sh", "common.sh"]]) {
-		await cp(path.join(scriptDir, "noetaxis-macos", from), path.join(packaged, name));
+		await cp(path.join(fakeScriptsDir, from), path.join(packaged, name));
 	}
 	const pre = path.join(packaged, "preinstall");
 	const post = path.join(packaged, "postinstall");
@@ -803,7 +826,9 @@ test("install removes stale staging directories of dead processes only", { skip:
 	for (const dir of [stale, live, unrelated, otherUser, outside]) await mkdir(dir, { recursive: true });
 	await writeFile(path.join(outside, "keep"), "keep");
 	await symlink(outside, link);
-	const install = execute("/bin/bash", [installScript, "--allow-ao-session", f.sourceApp], { cwd: repoRoot, env: f.env });
+	const fakePs = path.join(f.root, "staging-ps");
+	await writeFile(fakePs, `#!/bin/sh\ncase "$2" in 1|${process.pid}) printf 'PID\\n%s\\n' "$2"; exit 0;; *) exit 1;; esac\n`, { mode: 0o755 });
+	const install = execute("/bin/bash", [installScript, "--allow-ao-session", f.sourceApp], { cwd: repoRoot, env: { ...f.env, NOETAXIS_PS: fakePs } });
 	assert.equal(install.status, 0, install.stderr);
 	assert.deepEqual((await readdir(f.appsDir)).sort(), [path.basename(live), path.basename(otherUser), path.basename(link), "Agent Orchestrator.app", "Other.app"].sort());
 	assert.equal(await readFile(path.join(outside, "keep"), "utf8"), "keep");

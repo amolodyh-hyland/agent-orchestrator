@@ -39,6 +39,7 @@ async function alsoDisableSessionIdentity(directory) {
 // An install run started asynchronously (to interrupt or pause it): stdout and stderr are drained, and
 // the run has a hard lifetime, so a stalled run fails fast with what it printed instead of hanging a test.
 function startRun(scriptsDir, args, env, { lifetime = 120_000 } = {}) {
+	if (scriptsDir === realScriptsDir) scriptsDir = env.NOETAXIS_TEST_SCRIPTS_DIR;
 	const child = spawn(path.join(scriptsDir, "install.sh"), args, { env, stdio: ["ignore", "pipe", "pipe"] });
 	const output = { stdout: "", stderr: "" };
 	child.stdout.on("data", (chunk) => { output.stdout += chunk; });
@@ -63,6 +64,7 @@ async function waitForMarker(file, what, timeoutMs = 60_000) {
 const callIndex = (calls, pattern) => calls.findIndex((line) => pattern.test(line));
 const matching = (calls, pattern) => calls.filter((line) => pattern.test(line));
 const liveSession = (id, extra = {}) => ({ id, ...extra });
+const sessionHostCommand = (id) => `<APP>/Contents/Resources/daemon/ao chat-host ${id} /tmp/ao-data /tmp/ao-worktrees`;
 
 async function onlyBackup(world) {
 	const dirs = await world.backupDirs();
@@ -120,7 +122,7 @@ async function scenarioLookalikeProcess(t, scriptsDir) {
 
 async function scenarioForcedTermination(t, scriptsDir) {
 	// A chat host that survives the stop; --force sends it SIGTERM and nothing else.
-	const world = await makeWorld(t, "force", { extraProcs: ["<APP>/Contents/Resources/daemon/ao chat-host --session orphan"] });
+	const world = await makeWorld(t, "force", { extraProcs: [sessionHostCommand("orphan")] });
 	const result = world.update(["--yes", "--force"], { scriptsDir });
 	const calls = await world.calls();
 	const violations = [];
@@ -301,7 +303,7 @@ test("an unreadable session list while the daemon runs refuses (52) unless --for
 });
 
 test("chat hosts with no daemon to end their sessions are refused up front", darwin, async (t) => {
-	const world = await makeWorld(t, "hosts-no-daemon", { extraProcs: ["<APP>/Contents/Resources/daemon/ao chat-host --session lost"], running: false });
+	const world = await makeWorld(t, "hosts-no-daemon", { extraProcs: [sessionHostCommand("lost")], running: false });
 	const result = world.update(["--yes"]);
 	assert.equal(result.status, 56);
 	assert.match(result.stderr, /chat host process\(es\)/);
@@ -426,11 +428,11 @@ test("--manual-quit does not script the tray; the run waits for the user's click
 });
 
 test("survivors after the stop are listed and refused (56) without --force", darwin, async (t) => {
-	const world = await makeWorld(t, "survivor", { extraProcs: ["<APP>/Contents/Resources/daemon/ao chat-host --session orphan"] });
+	const world = await makeWorld(t, "survivor", { extraProcs: [sessionHostCommand("orphan")] });
 	const result = world.update(["--yes"]);
 	assert.equal(result.status, 56);
 	assert.match(result.stderr, /still running after the wait/);
-	assert.match(result.stderr, /chat-host --session orphan/);
+	assert.match(result.stderr, /chat-host orphan/);
 	assert.match(result.stderr, /rerun with --force/);
 	assert.equal(matching(await world.calls(), /^kill /).length, 0);
 	assert.equal(world.installedVersion(), oldVersion);
@@ -455,7 +457,7 @@ test("a ShipIt that finishes is waited for; one that stays blocks (22) and is ne
 
 test("--force sends plain SIGTERM to a surviving own-bundle process and never any other signal", darwin, async (t) => {
 	assert.deepEqual(await scenarioForcedTermination(t, realScriptsDir), []);
-	const world = await makeWorld(t, "force-stubborn", { extraProcs: ["<APP>/Contents/Resources/daemon/ao chat-host --session orphan"] });
+	const world = await makeWorld(t, "force-stubborn", { extraProcs: [sessionHostCommand("orphan")] });
 	await world.setCfg("stubborn", "4004\n");
 	const result = world.update(["--yes", "--force"]);
 	assert.equal(result.status, 56, "a process that ignores SIGTERM is reported, not escalated");
@@ -478,7 +480,7 @@ test("only processes of this bundle are touched: lookalike paths and other apps 
 
 	// An unrelated app and an AO bundle at another path never match, so the run goes on and leaves them.
 	const bystanders = await makeWorld(t, "bystanders", {
-		extraProcs: ["/Users/someone/Other/Agent Orchestrator Dev.app/Contents/MacOS/Agent Orchestrator", "/usr/bin/vim notes.txt", "<APP>/Contents/Resources/daemon/ao chat-host --session orphan"],
+		extraProcs: ["/Users/someone/Other/Agent Orchestrator Dev.app/Contents/MacOS/Agent Orchestrator", "/usr/bin/vim notes.txt", sessionHostCommand("orphan")],
 	});
 	const ok = bystanders.update(["--yes", "--force"]);
 	assert.equal(ok.status, 0, ok.stdout + ok.stderr);
@@ -703,7 +705,7 @@ test("--restore-sessions is honoured when the update ends on the previous app, a
 });
 
 test("--restore-sessions also applies when a failure before the swap reopens the previous app", darwin, async (t) => {
-	const world = await makeWorld(t, "reopen-restore", { sessions: [liveSession("s1")], extraProcs: ["<APP>/Contents/Resources/daemon/ao chat-host --session orphan"] });
+	const world = await makeWorld(t, "reopen-restore", { sessions: [liveSession("s1")], extraProcs: [sessionHostCommand("orphan")] });
 	const result = world.update(["--yes", "--end-sessions", "--restore-sessions"]);
 	assert.equal(result.status, 56);
 	assert.equal(matching(await world.calls(), /session restore s1/).length, 1);
@@ -815,7 +817,7 @@ test("inside an AO session the update refuses (20) and nothing runs; --allow-ao-
 test("only the sessions the plan listed may be ended: one that appears afterwards is refused with a new plan", darwin, async (t) => {
 	const addedLine = "s9|demo|worker|working|active|false|Started late";
 	const world = await makeWorld(t, "late-session", { sessions: [liveSession("s1")], cfg: { add_session_on_call: "2", add_session_line: `${addedLine}\n` } });
-	await world.addProc(`${world.targetApp}/Contents/Resources/daemon/ao chat-host --session s9`);
+	await world.addProc(sessionHostCommand("s9").replaceAll("<APP>", world.targetApp));
 	const result = world.update(["--yes", "--end-sessions"]);
 	assert.equal(result.status, 51, result.stdout + result.stderr);
 	assert.match(result.stderr, /appeared since the plan was shown and confirmed/);
@@ -1668,11 +1670,11 @@ test("--force never signals a process that started after the plan was confirmed 
 	assert.equal(result.status, 56, result.stdout + result.stderr);
 	assert.match(result.stdout, /NOT signalling pid \d+ \(survived the stop\): it was started after the plan was confirmed/);
 	assert.match(result.stderr, /Started after the plan was confirmed, so not part of it and never signalled/);
-	assert.match(result.stderr, /chat-host --session s9/);
+	assert.match(result.stderr, /chat-host s9/);
 	assert.equal(matching(await world.calls(), /^kill /).length, 0, "nothing was signalled");
-	assert.ok((await world.procs()).some((p) => p.command.endsWith("chat-host --session s9")), "the late host is still running");
+	assert.ok((await world.procs()).some((p) => p.command.includes("chat-host s9 ")), "the late host is still running");
 	// An approved survivor is still terminated with --force.
-	const approved = await makeWorld(t, "force-approved-host", { extraProcs: ["<APP>/Contents/Resources/daemon/ao chat-host --session orphan"] });
+	const approved = await makeWorld(t, "force-approved-host", { extraProcs: [sessionHostCommand("orphan")] });
 	assert.equal(approved.update(["--yes", "--force"]).status, 0);
 	assert.equal(matching(await approved.calls(), /^kill -TERM \d+$/).length, 1);
 });
@@ -1705,13 +1707,13 @@ test("mutation: ending a session without re-checking its identity is caught", da
 });
 
 test("--force checks pid AND start time: a pid whose process started later is not signalled", darwin, async (t) => {
-	const world = await makeWorld(t, "force-pid-reuse", { extraProcs: ["<APP>/Contents/Resources/daemon/ao chat-host --session orphan"], cfg: { reuse_pid_after_quit: "4004" } });
+	const world = await makeWorld(t, "force-pid-reuse", { extraProcs: [sessionHostCommand("orphan")], cfg: { reuse_pid_after_quit: "4004" } });
 	const result = world.update(["--yes", "--force"]);
 	assert.equal(result.status, 56, result.stdout + result.stderr);
 	assert.match(result.stdout, /NOT signalling pid 4004/);
 	assert.equal(matching(await world.calls(), /^kill /).length, 0);
 	const mutant = await mutatedScripts(t, "update-lib.sh", "$1 == pid && $2 == started && substr", "$1 == pid && substr");
-	const second = await makeWorld(t, "force-pid-reuse-mutant", { extraProcs: ["<APP>/Contents/Resources/daemon/ao chat-host --session orphan"], cfg: { reuse_pid_after_quit: "4004" } });
+	const second = await makeWorld(t, "force-pid-reuse-mutant", { extraProcs: [sessionHostCommand("orphan")], cfg: { reuse_pid_after_quit: "4004" } });
 	second.update(["--yes", "--force"], { scriptsDir: mutant });
 	assert.ok(matching(await second.calls(), /^kill -TERM 4004$/).length > 0, "without the start-time check the reused pid is signalled");
 });
@@ -1859,7 +1861,7 @@ test("a refusal says nothing was changed; a failure after the stop reopens the p
 	const result = refused.update(["--yes"]);
 	assert.equal(result.status, 51);
 	assert.match(result.stdout, /Update result \(exit 51: refused: live sessions \(use --end-sessions\)\)\. Nothing was stopped, backed up or installed\./);
-	const stopped = await makeWorld(t, "left-stopped", { extraProcs: ["<APP>/Contents/Resources/daemon/ao chat-host --session orphan"] });
+	const stopped = await makeWorld(t, "left-stopped", { extraProcs: [sessionHostCommand("orphan")] });
 	const failed = stopped.update(["--yes"]);
 	assert.equal(failed.status, 56);
 	assert.match(failed.stdout, /Update summary \(exit 56/);
