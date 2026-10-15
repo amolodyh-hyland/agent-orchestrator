@@ -461,7 +461,7 @@ test("a port 3001 listener with no bundle process is only a warning, and an AO d
 
 test("process lookup matches a bundle path literally even when it contains regex metacharacters", { skip: process.platform !== "darwin" }, async (t) => {
 	const f = await installFixture(t, "noetaxis-regex-test");
-	const weirdApps = path.join(f.root, "Apps (v1)+[x]");
+	const weirdApps = path.join(f.root, "Parent/Contents/Apps (v1)+[x]");
 	const weirdApp = path.join(weirdApps, "Agent Orchestrator.app");
 	await mkdir(weirdApps, { recursive: true });
 	await makeApp(weirdApp, "0.13.4");

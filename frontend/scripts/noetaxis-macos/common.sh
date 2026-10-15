@@ -413,7 +413,7 @@ noetaxis_pattern_running() {
 
 # Process ids (space separated, possibly empty) of the processes matching a pgrep pattern.
 noetaxis_pattern_pids() {
-	local pattern="$1" app_path="${1%%/Contents/*}" pid command_line pids=""
+	local pattern="$1" app_path="${1%/Contents/*}" pid command_line pids=""
 	for pid in $(pgrep -f "$(noetaxis_regex_escape "$pattern")" 2>/dev/null || true); do
 		[[ "$pid" =~ ^[0-9]+$ && "$pid" -ne "$$" ]] || continue
 		command_line="$(ps -ww -o command= -p "$pid" 2>/dev/null || true)"
