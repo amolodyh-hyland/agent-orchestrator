@@ -1932,11 +1932,13 @@ test("mutation: ending sessions without --end-sessions is caught", darwin, async
 
 test("mutation: signalling processes of other bundles is caught", darwin, async (t) => {
 	assert.deepEqual(await scenarioLookalikeProcess(t, realScriptsDir), []);
-	// The bundle filter accepts any command line that mentions the path, and the refusal for lookalikes is gone.
-	let dir = await mutatedScripts(t, "update-lib.sh", '"$app_path/Contents/"*) printf \'%s\\t%s\\n\' "$pid" "$command_line" ;;', '*) printf \'%s\\t%s\\n\' "$pid" "$command_line" ;;');
+	// Remove the candidate filter, both executable checks and the foreign-process refusals.
+	let dir = await mutatedScripts(t, "update-lib.sh", '[[ "$command_line" == "$app_path/Contents/"* ]] || continue', ":");
 	const refusal = await readFile(path.join(dir, "update-lib.sh"), "utf8");
 	const looser = refusal
-		.replace('if [[ -n "$foreign" ]]; then', "if false; then")
+		.replaceAll('if [[ -n "$foreign" ]]; then', "if false; then")
+		.replace('noetaxis_process_executable_is_in_bundle "$app_path" "$pid" || continue', ":")
+		.replace('if ! noetaxis_process_executable_is_in_bundle "$app_path" "$pid"; then', "if false; then")
 		.replace(/(noetaxis_signal_own_pid\(\) \{[\s\S]*?)"\$app_path\/Contents\/"\*\) ;;/, "$1*) ;;");
 	assert.notEqual(looser, refusal);
 	const { writeFile } = await import("node:fs/promises");
