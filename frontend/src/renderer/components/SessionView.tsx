@@ -1,6 +1,6 @@
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Globe2, Loader2, PanelRight, Plus } from "lucide-react";
-import { useBlocker } from "@tanstack/react-router";
+import { useBlocker, useRouter } from "@tanstack/react-router";
 import { motion } from "motion/react";
 import {
 	useCallback,
@@ -68,6 +68,14 @@ import {
 	workspaceQueryKeyForHost,
 } from "../hooks/useWorkspaceQuery";
 import { subscribeChatReveal } from "../lib/chat-context-bus";
+import {
+	readAONavigationLocationForHref,
+	subscribeNavigationRestore,
+	writeAONavigationLocation,
+	type NavigationHistoryLike,
+	type SessionNavigationLocation,
+	type SessionNavigationTarget,
+} from "../lib/navigation-history";
 import { cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage } from "../lib/cloud-lifecycle";
 import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
@@ -101,6 +109,7 @@ import { terminalTargetBelongsToSession, type TerminalTarget } from "../types/te
 import { useCloudSessionPresence } from "../hooks/useCloudSessionPresence";
 import { focusAfterPaint, useSessionShortcut } from "../hooks/useAppShortcut";
 import { inspectorIsOpen, useResolvedTheme, useUiStore, type InspectorView } from "../stores/ui-store";
+import { useMulticaStore } from "../stores/multica-store";
 import { useSideChatsAvailable } from "../lib/side-chats";
 import {
 	INSPECTOR_SEPARATOR_RESERVE_PX,
@@ -365,6 +374,7 @@ function CloudPausedStatus({ stage }: { stage: "paused" | "paused_by_coder" }) {
 
 export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: SessionViewProps) {
 	const { t } = useTranslation();
+	const router = useRouter();
 	const queryClient = useQueryClient();
 	const uiSessionId = sessionUiKey(sessionId, hostId);
 	const { baseUrl: remoteBase, label: hostLabel } = useHostConnection(hostId);
@@ -548,6 +558,91 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		&& !consumedCenterLineRequestsRef.current.has(activeCenterFileRequestToken)
 		? activeCenterFileRequest.line
 		: undefined;
+	const createSessionNavigationLocation = useCallback((
+		targetOverride?: SessionNavigationTarget,
+		inspectorOverride?: Partial<Pick<SessionNavigationLocation, "inspectorView" | "inspectorOpen">>,
+	): SessionNavigationLocation => {
+		const inspectorState = useUiStore.getState().inspectorSessions[uiSessionId];
+		const activePath = targetOverride?.kind === "file" ? targetOverride.path : fileTabs.activePath;
+		const request = activePath ? centerFileRequestsBySession[uiSessionId]?.[activePath] : undefined;
+		const rememberedMode = activePath ? inspectorState?.fileDisplayModes?.[activePath] : undefined;
+		const target = targetOverride ?? (activePath
+			? {
+					kind: "file" as const,
+					path: activePath,
+					...(request ? {
+						request: {
+							commitSha: request.commitSha,
+							editing: request.editing,
+							line: request.line,
+							mode: rememberedMode?.requestKey === request.key ? rememberedMode.mode : request.mode,
+							scope: request.scope,
+						},
+					} : {}),
+				}
+			: reviewerChatId
+				? { kind: "reviewer-chat" as const, reviewId: reviewerChatId }
+				: terminalTargetBelongsToSession(terminalTarget, sessionId) ? terminalTarget : { kind: "worker" as const });
+		const locationTarget = target.kind === "file" && !target.request && request
+			? {
+				...target,
+				request: {
+					commitSha: request.commitSha,
+					editing: request.editing,
+					line: request.line,
+					mode: rememberedMode?.requestKey === request.key ? rememberedMode.mode : request.mode,
+					scope: request.scope,
+				},
+			}
+			: target;
+		return {
+			sessionKey: uiSessionId,
+			sessionId,
+			...(hostId ? { hostId } : {}),
+			target: locationTarget,
+			inspectorView: inspectorOverride?.inspectorView ?? inspectorState?.view ?? inspectorView,
+			inspectorOpen: inspectorOverride?.inspectorOpen ?? inspectorState?.isOpen ?? isInspectorOpen,
+		};
+	}, [centerFileRequestsBySession, fileTabs.activePath, hostId, inspectorView, isInspectorOpen, reviewerChatId, sessionId, terminalTarget, uiSessionId]);
+	const recordSessionNavigationLocation = useCallback((
+		target?: SessionNavigationTarget,
+		inspectorOverride?: Partial<Pick<SessionNavigationLocation, "inspectorView" | "inspectorOpen">>,
+		mode: "push" | "replace" = "push",
+	) => {
+		writeAONavigationLocation(router.history as unknown as NavigationHistoryLike, {
+			settingsModal: useUiStore.getState().settingsModal,
+			multicaActive: useMulticaStore.getState().view.active,
+			sessionView: createSessionNavigationLocation(target, inspectorOverride),
+		}, mode);
+	}, [createSessionNavigationLocation, router]);
+	const recordCenterFileMode = useCallback((mode: FileViewMode) => {
+		const path = fileTabs.activePath;
+		if (!path) return;
+		const request = centerFileRequestsBySession[uiSessionId]?.[path];
+		const fileRequest = {
+			commitSha: request?.commitSha,
+			editing: request?.editing ?? false,
+			line: request?.line,
+			mode,
+			scope: request?.scope,
+		};
+		setCenterFileRequestsBySession((current) => ({
+			...current,
+			[uiSessionId]: {
+				...current[uiSessionId],
+				[path]: {
+					...(current[uiSessionId]?.[path] ?? { editing: false, key: nextCenterFileRequestKey() }),
+					...fileRequest,
+				},
+			},
+		}));
+		recordSessionNavigationLocation({ kind: "file", path, request: fileRequest });
+	}, [centerFileRequestsBySession, fileTabs.activePath, recordSessionNavigationLocation, uiSessionId]);
+	useEffect(() => {
+		const current = readAONavigationLocationForHref(router.history.location.state, router.history.location.href);
+		if (current?.sessionView?.sessionKey === uiSessionId) return;
+		recordSessionNavigationLocation(undefined, { inspectorView, inspectorOpen: isInspectorOpen }, "replace");
+	}, [inspectorOpen, inspectorView, recordSessionNavigationLocation, router, uiSessionId]);
 	const [auxiliaryTabOrderBySession, setAuxiliaryTabOrderBySession] = useState<Record<string, string[]>>({});
 	const auxiliaryTabOrder = auxiliaryTabOrderBySession[uiSessionId] ?? EMPTY_AUXILIARY_TAB_ORDER;
 	const setAuxiliaryTabOrder = useCallback(
@@ -849,8 +944,16 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			sessionId,
 			title: shell.title,
 		});
+		recordSessionNavigationLocation({
+			generation: shell.createdAt,
+			kind: "shell",
+			handleId: shell.handleId,
+			sessionId,
+			title: shell.title,
+		});
 	}, [
 		openShellTerminal,
+		recordSessionNavigationLocation,
 		sessionId,
 		session?.cloud,
 		session?.workspaceId,
@@ -868,6 +971,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					...current,
 					[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, path),
 				}));
+				recordSessionNavigationLocation({ kind: "file", path });
 				return;
 			}
 			if (reviewerTerminal && key === `reviewer:${reviewerTerminal.handleId}`) {
@@ -882,6 +986,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					...current,
 					[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, null),
 				}));
+				recordSessionNavigationLocation({
+					kind: "reviewer",
+					handleId: reviewerTerminal.handleId,
+					harness: reviewerTerminal.harness,
+					sessionId,
+				});
 				return;
 			}
 			if (reviewerChat && key === `reviewer-chat:${reviewerChat.reviewId}`) {
@@ -892,6 +1002,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					...current,
 					[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, null),
 				}));
+				recordSessionNavigationLocation({ kind: "reviewer-chat", reviewId: reviewerChat.reviewId });
 				return;
 			}
 			const shell = shellTerminals.find((candidate) => candidate.handleId === key);
@@ -908,6 +1019,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					...current,
 					[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, null),
 				}));
+				recordSessionNavigationLocation({
+					generation: shell.createdAt,
+					kind: "shell",
+					handleId: shell.handleId,
+					sessionId,
+					title: shell.title,
+				});
 				return;
 			}
 			setActiveShellTerminal(null);
@@ -916,8 +1034,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				...current,
 				[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, null),
 			}));
+			recordSessionNavigationLocation({ kind: "worker" });
 		},
-		[reviewerChat, reviewerTerminal, sessionId, shellTerminals, setActiveShellTerminal, uiSessionId],
+		[recordSessionNavigationLocation, reviewerChat, reviewerTerminal, sessionId, shellTerminals, setActiveShellTerminal, uiSessionId],
 	);
 	const adjacentAuxiliaryTab = useCallback(
 		(closingKey: string) => {
@@ -945,8 +1064,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				sessionId,
 				title: shell.title,
 			});
+			recordSessionNavigationLocation({
+				generation: shell.createdAt,
+				kind: "shell",
+				handleId: shell.handleId,
+				sessionId,
+				title: shell.title,
+			});
 		},
-		[sessionId, shellTerminals, setActiveShellTerminal, uiSessionId],
+		[recordSessionNavigationLocation, sessionId, shellTerminals, setActiveShellTerminal, uiSessionId],
 	);
 
 	const closeShellTerminalByHandle = useCallback(
@@ -985,7 +1111,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			...current,
 			[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, null),
 		}));
-	}, [setActiveShellTerminal, uiSessionId]);
+		recordSessionNavigationLocation({ kind: "worker" });
+	}, [recordSessionNavigationLocation, setActiveShellTerminal, uiSessionId]);
 	// "Ask in chat" from a file tab brings the session's Chat surface forward.
 	useEffect(() => subscribeChatReveal(uiSessionId, selectSessionTerminal), [selectSessionTerminal, uiSessionId]);
 	const selectReviewerTerminal = useCallback((target: ReviewerTerminalTarget) => {
@@ -996,7 +1123,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			...current,
 			[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, null),
 		}));
-	}, [sessionId, setActiveShellTerminal, uiSessionId]);
+		recordSessionNavigationLocation({ kind: "reviewer", handleId: target.handleId, harness: target.harness, sessionId });
+	}, [recordSessionNavigationLocation, sessionId, setActiveShellTerminal, uiSessionId]);
 	const selectReviewerChat = useCallback((reviewId: string) => {
 		setActiveShellTerminal(null);
 		setTerminalTarget({ kind: "worker" });
@@ -1005,7 +1133,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			...current,
 			[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, null),
 		}));
-	}, [setActiveShellTerminal, uiSessionId]);
+		recordSessionNavigationLocation({ kind: "reviewer-chat", reviewId });
+	}, [recordSessionNavigationLocation, setActiveShellTerminal, uiSessionId]);
 	const openCenterFile = useCallback((path: string, options?: FileOpenOptions) => {
 		setReviewerChatId(null);
 		setActiveShellTerminal(null);
@@ -1032,7 +1161,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			...current,
 			[uiSessionId]: openSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, path),
 		}));
-	}, [setActiveShellTerminal, uiSessionId]);
+		recordSessionNavigationLocation({
+			kind: "file",
+			path,
+			request: {
+				commitSha: options?.commitSha,
+				editing: options?.editing ?? false,
+				line: options?.line,
+				mode: options?.mode ?? "file",
+				scope: options?.scope,
+			},
+		});
+	}, [recordSessionNavigationLocation, setActiveShellTerminal, uiSessionId]);
 	const markCenterFileEditingConsumed = useCallback((path: string, requestKey: number) => {
 		consumedCenterEditingRequestsRef.current.add(`${uiSessionId}:${path}:${requestKey}`);
 	}, [uiSessionId]);
@@ -1060,7 +1200,78 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			...current,
 			[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, path),
 		}));
-	}, [setActiveShellTerminal, uiSessionId]);
+		recordSessionNavigationLocation({ kind: "file", path });
+	}, [recordSessionNavigationLocation, setActiveShellTerminal, uiSessionId]);
+	const pendingNavigationRestoreRef = useRef<SessionNavigationLocation | null>(null);
+	const restoredNavigationLocationRef = useRef<string | null>(null);
+	const restoreSessionNavigationLocation = useCallback((location: SessionNavigationLocation) => {
+		if (location.sessionId !== sessionId || (location.hostId ?? undefined) !== (hostId ?? undefined)) return;
+		restoredNavigationLocationRef.current = JSON.stringify(location);
+		const target = location.target;
+		setInspectorViewForSession(uiSessionId, location.inspectorView);
+		setInspectorOpenForSession(uiSessionId, location.inspectorOpen);
+		setReviewerChatId(null);
+
+		if (target.kind === "file") {
+			setActiveShellTerminal(null);
+			setTerminalTarget({ kind: "worker" });
+			setFileTabsBySession((current) => ({
+				...current,
+				[uiSessionId]: openSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, target.path),
+			}));
+			const request = target.request ?? centerFileRequestsBySession[uiSessionId]?.[target.path];
+			if (request) {
+				const key = nextCenterFileRequestKey();
+				setCenterFileRequestsBySession((current) => ({
+					...current,
+					[uiSessionId]: {
+						...current[uiSessionId],
+						[target.path]: { ...request, key },
+					},
+				}));
+			}
+		} else {
+			setFileTabsBySession((current) => ({
+				...current,
+				[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, null),
+			}));
+			if (target.kind === "shell") {
+				setActiveShellTerminal(target.handleId);
+				setTerminalTarget(target);
+			} else {
+				setActiveShellTerminal(null);
+				setTerminalTarget(target.kind === "reviewer-chat" ? { kind: "worker" } : target);
+				if (target.kind === "reviewer-chat") setReviewerChatId(target.reviewId);
+			}
+		}
+		pendingNavigationRestoreRef.current = null;
+	}, [centerFileRequestsBySession, fileTabsBySession, hostId, sessionId, setActiveShellTerminal, setInspectorOpenForSession, setInspectorViewForSession, uiSessionId]);
+	useEffect(() => subscribeNavigationRestore((location) => {
+		if (!location.sessionView) {
+			pendingNavigationRestoreRef.current = null;
+			restoredNavigationLocationRef.current = null;
+			return;
+		}
+		pendingNavigationRestoreRef.current = location.sessionView;
+		restoreSessionNavigationLocation(location.sessionView);
+	}), [restoreSessionNavigationLocation]);
+	const restoreSessionNavigationLocationRef = useRef(restoreSessionNavigationLocation);
+	useEffect(() => {
+		restoreSessionNavigationLocationRef.current = restoreSessionNavigationLocation;
+	}, [restoreSessionNavigationLocation]);
+	useEffect(() => {
+		const current = readAONavigationLocationForHref(router.history.location.state, router.history.location.href);
+		const sessionView = current?.sessionView;
+		if (!sessionView || sessionView.sessionKey !== uiSessionId) return;
+		const key = JSON.stringify(sessionView);
+		if (restoredNavigationLocationRef.current === key) return;
+		pendingNavigationRestoreRef.current = sessionView;
+		restoreSessionNavigationLocationRef.current(sessionView);
+	}, [router, uiSessionId]);
+	useEffect(() => {
+		const pending = pendingNavigationRestoreRef.current;
+		if (pending) restoreSessionNavigationLocation(pending);
+	}, [restoreSessionNavigationLocation]);
 	// Closed file tabs, newest last, so ⌘⇧T can bring them back.
 	const closedFilePathsRef = useRef<Record<string, string[]>>({});
 	const closeCenterFile = useCallback((path: string) => {
@@ -1110,12 +1321,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// elsewhere — fall back to the session's own pane rather than render a tab
 	// that isn't shown here.
 	useEffect(() => {
+		if (shellTerminalsQuery.data === undefined) return;
 		setTerminalTarget((current) =>
 			current.kind === "shell" && !shellTerminals.some((s) => s.handleId === current.handleId)
 				? { kind: "worker" }
 				: current,
 		);
-	}, [shellTerminals]);
+	}, [shellTerminals, shellTerminalsQuery.data]);
 	// Reviewer selection belongs to the tab, not its replaceable controller.
 	// Keep it through switch teardown, then follow the replacement surface.
 	useEffect(() => {
@@ -1226,7 +1438,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	);
 
 	const transitionInspectorView = useCallback(
-		(next: InspectorView) => {
+		(next: InspectorView, inspectorOpen = isInspectorOpen) => {
 			if (next === inspectorView) return;
 			if (next === "browser") {
 				const currentWidth = Number(window.localStorage.getItem(sizing.storageKey));
@@ -1237,10 +1449,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			const nextSizing = inspectorSizing(next);
 			if (!sizingGeometryEqual(sizing, nextSizing)) prepareWorkspaceProfile(nextSizing);
 			setInspectorViewForSession(uiSessionId, next);
+			recordSessionNavigationLocation(undefined, { inspectorView: next, inspectorOpen });
 		},
 		[
 			inspectorView,
+			isInspectorOpen,
 			prepareWorkspaceProfile,
+			recordSessionNavigationLocation,
 			uiSessionId,
 			setInspectorViewForSession,
 			sizing,
@@ -1330,9 +1545,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			window.ao?.browser.onClosePanel((targetViewId) => {
 				if (!browserViewId || targetViewId !== browserViewId) return;
 				setBrowserPopOutState({ sessionId, phase: "docked" });
+				recordSessionNavigationLocation(undefined, { inspectorView, inspectorOpen: false });
 				setInspectorOpenForSession(uiSessionId, false);
 			}),
-		[browserViewId, sessionId, uiSessionId, setInspectorOpenForSession],
+		[browserViewId, inspectorView, recordSessionNavigationLocation, sessionId, uiSessionId, setInspectorOpenForSession],
 	);
 	const browserUrl = browserView.navState.url.trim();
 	// A terminated session's `previewUrl` is a stale DB fact; useBrowserView
@@ -1496,9 +1712,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		setBrowserPopOutState({ sessionId, phase: "docked" });
 		setFilesPoppedOut(false);
 		setFilesChangedOnly(uiSessionId, true);
-		transitionInspectorView("files");
+		transitionInspectorView("files", true);
 		setInspectorOpenForSession(uiSessionId, true);
-	}, [browserOnly, sessionId, uiSessionId, setFilesChangedOnly, setInspectorOpenForSession, transitionInspectorView]);
+		recordSessionNavigationLocation(undefined, { inspectorView: "files", inspectorOpen: true });
+	}, [browserOnly, sessionId, uiSessionId, recordSessionNavigationLocation, setFilesChangedOnly, setInspectorOpenForSession, transitionInspectorView]);
 
 	const fetchWorkspaceFiles = useCallback(async () => {
 		return queryClient.fetchQuery(
@@ -1511,14 +1728,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			if (browserOnly) return;
 			setBrowserPopOutState({ sessionId, phase: "docked" });
 			setFilesPoppedOut(false);
-			transitionInspectorView("artifacts");
+			transitionInspectorView("artifacts", true);
 			setInspectorOpenForSession(uiSessionId, true);
+			recordSessionNavigationLocation(undefined, { inspectorView: "artifacts", inspectorOpen: true });
 			setArtifactRequestsBySession((current) => ({
 				...current,
 				[uiSessionId]: { feedback: target.feedback, path: target.path, key: (current[uiSessionId]?.key ?? 0) + 1 },
 			}));
 		},
-		[browserOnly, sessionId, setInspectorOpenForSession, transitionInspectorView, uiSessionId],
+		[browserOnly, sessionId, recordSessionNavigationLocation, setInspectorOpenForSession, transitionInspectorView, uiSessionId],
 	);
 
 	// A file written moments ago, or one past the artifact list cap, is not in
@@ -1630,10 +1848,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		(next: boolean) => {
 			if (next) setBrowserPopOutState({ sessionId, phase: "docked" });
 			setFilesPoppedOut(next);
-			transitionInspectorView("files");
+			transitionInspectorView("files", true);
 			setInspectorOpenForSession(uiSessionId, true);
+			recordSessionNavigationLocation(undefined, { inspectorView: "files", inspectorOpen: true });
 		},
-		[sessionId, uiSessionId, setInspectorOpenForSession, transitionInspectorView],
+		[recordSessionNavigationLocation, sessionId, uiSessionId, setInspectorOpenForSession, transitionInspectorView],
 	);
 
 	const handleToggleBrowserPopOut = useCallback(
@@ -1681,9 +1900,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		setBrowserUnseen(uiSessionId, false);
 		if (browserIsVisible(uiSessionId, browserPoppedOut)) return;
 		setFilesPoppedOut(false);
-		transitionInspectorView("browser");
+		transitionInspectorView("browser", true);
 		setInspectorOpenForSession(uiSessionId, true);
-	}, [browserPoppedOut, uiSessionId, setBrowserContentRevealed, setBrowserUnseen, transitionInspectorView, setInspectorOpenForSession]);
+		recordSessionNavigationLocation(undefined, { inspectorView: "browser", inspectorOpen: true });
+	}, [browserPoppedOut, uiSessionId, recordSessionNavigationLocation, setBrowserContentRevealed, setBrowserUnseen, transitionInspectorView, setInspectorOpenForSession]);
 
 	useEffect(() => {
 		if (!hasInspector) return;
@@ -1761,8 +1981,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	const handleToggleInspector = useCallback(() => {
 		if (browserOnly) setBrowserContentRevealed(uiSessionId, true);
+		recordSessionNavigationLocation(undefined, { inspectorView, inspectorOpen: !isInspectorOpen });
 		toggleInspector(uiSessionId);
-	}, [browserOnly, uiSessionId, toggleInspector, setBrowserContentRevealed]);
+	}, [browserOnly, inspectorView, isInspectorOpen, recordSessionNavigationLocation, uiSessionId, toggleInspector, setBrowserContentRevealed]);
+	const handleExpandInspector = useCallback(() => {
+		recordSessionNavigationLocation(undefined, { inspectorView, inspectorOpen: true });
+		setInspectorOpenForSession(uiSessionId, true);
+	}, [inspectorView, recordSessionNavigationLocation, setInspectorOpenForSession, uiSessionId]);
 
 	// Keyboard commands scoped to the session on screen. The main process matches
 	// the chord (see main/app-shortcuts.ts), so these also work from xterm and the
@@ -1776,8 +2001,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				isInspectorOpen &&
 				inspectorView === "files" &&
 				(useUiStore.getState().inspectorSessions[uiSessionId]?.filesChangedOnly ?? true);
-			if (showingDiff) setInspectorOpenForSession(uiSessionId, false);
-			else prepareFilesInspector();
+			if (showingDiff) {
+				recordSessionNavigationLocation(undefined, { inspectorView, inspectorOpen: false });
+				setInspectorOpenForSession(uiSessionId, false);
+			} else prepareFilesInspector();
 		},
 		hasInspector,
 	);
@@ -2068,6 +2295,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							initialMode={activeCenterFileRequest?.mode ?? "file"}
 							initialRequestKey={activeCenterFileRequest?.key ?? 0}
 							onDirtyChange={setCenterFileDirty}
+							onModeChange={recordCenterFileMode}
 							path={fileTabs.activePath}
 							scope={activeCenterFileRequest?.scope}
 							session={session}
@@ -2083,6 +2311,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 											initialMode={activeCenterFileRequest?.mode ?? "file"}
 											initialRequestKey={activeCenterFileRequest?.key ?? 0}
 											onDirtyChange={setCenterFileDirty}
+											onModeChange={recordCenterFileMode}
 							onInitialEditingConsumed={markCenterFileEditingConsumed}
 							onInitialLineConsumed={markCenterFileLineConsumed}
 											path={fileTabs.activePath}
@@ -2103,7 +2332,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						showCollapsedHandle={!browserOnly}
 						isOpen={isInspectorOpen}
 						onCloseAnimationComplete={handleInspectorCloseAnimationComplete}
-						onExpand={() => setInspectorOpenForSession(uiSessionId, true)}
+						onExpand={handleExpandInspector}
 						restoreMinWidth={
 							sizing.mode === "browser" ? (browserEntryWidthFloorRef.current ?? undefined) : undefined
 						}

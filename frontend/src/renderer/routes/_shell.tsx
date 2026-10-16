@@ -33,6 +33,7 @@ import { useRemoteHosts } from "../hooks/useRemoteHosts";
 import { SidebarProvider } from "../components/ui/sidebar";
 import { TitlebarNav } from "../components/TitlebarNav";
 import { WindowTitlebar } from "../components/WindowTitlebar";
+import { NavigationHistorySync } from "../components/NavigationHistorySync";
 import { preloadXtermTerminal, TerminalCacheProvider } from "../components/TerminalPane";
 import { scheduleIdle } from "../lib/idle";
 import { LazyChunkBoundary, LazyChunkErrorPanel } from "../components/LazyChunkBoundary";
@@ -1459,6 +1460,7 @@ function ShellLayout() {
 							/>
 						</div>
 						<MulticaPane />
+						<NavigationHistorySync />
 						<TopbarTabsRouteSync />
 						<TopbarTabsLifecycle />
 						</main>

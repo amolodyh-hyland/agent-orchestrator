@@ -12,6 +12,7 @@ export function SessionFileWorkspace({
 	initialLine,
 	initialMode = "file",
 	initialRequestKey = 0,
+	onModeChange,
 	onDirtyChange,
 	onInitialEditingConsumed,
 	onInitialLineConsumed,
@@ -27,6 +28,7 @@ export function SessionFileWorkspace({
 	initialLine?: number;
 	initialMode?: FileViewMode;
 	initialRequestKey?: number;
+	onModeChange?: (mode: FileViewMode) => void;
 	onDirtyChange?: (path: string, dirty: boolean) => void;
 	onInitialEditingConsumed?: (path: string, requestKey: number) => void;
 	onInitialLineConsumed?: (path: string, requestKey: number) => void;
@@ -103,6 +105,7 @@ export function SessionFileWorkspace({
 					initialLine={initialLine}
 					initialMode={initialMode}
 					initialRequestKey={initialRequestKey}
+					onModeChange={onModeChange}
 					onDirtyChange={handleDirtyChange}
 					onContentReady={handleContentReady}
 					onInitialLineConsumed={handleLineConsumed}

@@ -8,6 +8,7 @@ import {
 	useWorkspaceSession,
 } from "../../hooks/useWorkspaceQuery";
 import { useTopbarTabsStore } from "../../stores/topbar-tabs-store";
+import { isTopbarSessionClosed } from "../../lib/navigation-history";
 import { isOrchestratorSession, STANDALONE_WORKSPACE_ID } from "../../types/workspace";
 
 export function TopbarTabsRouteSync() {
@@ -61,6 +62,7 @@ export function TopbarTabsRouteSync() {
 			lastActivationRef.current = null;
 			return;
 		}
+		if (isTopbarSessionClosed(sessionId)) return;
 		if (!resolvedSession || !groupId || !kind) return;
 
 		const activationKey = JSON.stringify([sessionId, groupId, kind, href]);

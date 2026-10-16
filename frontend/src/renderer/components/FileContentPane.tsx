@@ -68,6 +68,7 @@ export function FileContentPane({
 	initialMode = "diff",
 	initialRequestKey = 0,
 	commitSha,
+	onModeChange,
 	onDirtyChange,
 	onInitialLineConsumed,
 	onContentReady,
@@ -87,6 +88,7 @@ export function FileContentPane({
 	initialMode?: FileViewMode;
 	initialRequestKey?: number;
 	commitSha?: string;
+	onModeChange?: (mode: FileViewMode) => void;
 	onDirtyChange?: (dirty: boolean) => void;
 	onInitialLineConsumed?: (requestKey: number) => void;
 	onContentReady?: () => void;
@@ -174,6 +176,7 @@ export function FileContentPane({
 	const selectMode = (next: FileViewMode) => {
 		setMode(next);
 		if (rememberDisplayMode && path) setFileDisplayMode(uiSessionId, path, next, initialRequestKey);
+		onModeChange?.(next);
 	};
 	useEffect(() => {
 		if (initialEditing && query.data) setDraft(query.data.content);
@@ -327,7 +330,7 @@ export function FileContentPane({
 		/>
 	);
 	const beginEditing = () => {
-		setMode("file");
+		selectMode("file");
 		cancelFileAnnotations(annotation, (target) => target.surface !== "review" && target.path === detail.path);
 		setDraft(detail.content);
 		setSaveError("");

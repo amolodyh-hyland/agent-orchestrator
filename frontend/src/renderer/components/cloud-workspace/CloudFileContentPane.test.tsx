@@ -24,12 +24,15 @@ function renderPane(client: CloudCpClient, props: Partial<React.ComponentProps<t
 describe("CloudFileContentPane", () => {
 	it("switches between diff, complete file, and rendered Markdown", async () => {
 		const client = { getWorkspaceReviewFile: vi.fn().mockResolvedValue(detail) } as unknown as CloudCpClient;
-		renderPane(client);
+		const onModeChange = vi.fn();
+		renderPane(client, { onModeChange });
 		expect(await screen.findByTestId("cloud-diff")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("tab", { name: "File" }));
 		expect(screen.getByText("# Hello")).toBeInTheDocument();
+		expect(onModeChange).toHaveBeenCalledWith("file");
 		await userEvent.click(screen.getByRole("tab", { name: "Rich preview" }));
 		expect(screen.getByRole("article")).toHaveTextContent("# Hello");
+		expect(onModeChange).toHaveBeenCalledWith("rendered");
 	});
 
 	it("saves edits with the current fingerprint and reports dirty state", async () => {

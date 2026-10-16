@@ -277,8 +277,9 @@ describe("FileContentPane", () => {
 				diffTruncated: false,
 			},
 		});
+		const onModeChange = vi.fn();
 
-		renderWithQuery(<FileContentPane annotation={noopAnnotation()} path="src/App.tsx" sessionId="sess-1" split={false} toolbar="compact" />);
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} onModeChange={onModeChange} path="src/App.tsx" sessionId="sess-1" split={false} toolbar="compact" />);
 
 		const breadcrumb = await screen.findByRole("navigation", { name: "File path" });
 		expect(breadcrumb).toHaveTextContent("src/App.tsx");
@@ -287,6 +288,7 @@ describe("FileContentPane", () => {
 		expect(screen.getByRole("tab", { name: "Diff" })).toHaveAttribute("aria-selected", "true");
 		await userEvent.click(screen.getByRole("tab", { name: "File" }));
 		expect(await screen.findByText((_, element) => element?.tagName === "CODE" && element.textContent === "export const next = 2;\n")).toBeInTheDocument();
+		expect(onModeChange).toHaveBeenCalledWith("file");
 	});
 
 	it("opens a changed markdown file directly in rendered mode while retaining its status", async () => {

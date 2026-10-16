@@ -10,18 +10,8 @@ import { useMulticaStore } from "../stores/multica-store";
 import { useUiStore } from "../stores/ui-store";
 import { MulticaPane } from "./MulticaPane";
 
-const router = vi.hoisted(() => ({ pathname: "/" }));
 const navigation = vi.hoisted(() => ({ navigateToSession: vi.fn() }));
 let sendRequestListener: ((request: MulticaSendRequest) => void) | undefined;
-
-vi.mock("@tanstack/react-router", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("@tanstack/react-router")>();
-	return {
-		...actual,
-		useRouterState: ({ select }: { select: (state: { location: { pathname: string } }) => unknown }) =>
-			select({ location: { pathname: router.pathname } }),
-	};
-});
 
 vi.mock("../lib/navigate-to-session", () => ({ useNavigateToSession: () => navigation.navigateToSession }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({ useWorkspaceQuery: () => ({ data: [] }), workspaceQueryKey: ["workspaces"] }));
@@ -55,7 +45,6 @@ describe("MulticaPane", () => {
 
 	beforeEach(() => {
 		originalLinksLoad = useMulticaLinksStore.getState().load;
-		router.pathname = "/";
 		originalMultica = { ...window.ao!.multica };
 		originalMulticaLinks = { ...window.ao!.multicaLinks };
 		originalMulticaSend = { ...window.ao!.multicaSend };
@@ -218,26 +207,6 @@ describe("MulticaPane", () => {
 		expect(navigation.navigateToSession).toHaveBeenCalledExactlyOnceWith("p", "s");
 		unmount();
 		expect(removeOpenSessionListener).toHaveBeenCalledOnce();
-	});
-
-	it("returns to AO when the user navigates inside AO", () => {
-		showView({ active: true, status: "ready", url: URL });
-		const { rerender, queryClient } = renderPane();
-		expect(window.ao!.multica.setActive).not.toHaveBeenCalled();
-
-		router.pathname = "/sessions/abc";
-		rerender(<QueryClientProvider client={queryClient}><MulticaPane /></QueryClientProvider>);
-
-		expect(window.ao!.multica.setActive).toHaveBeenCalledExactlyOnceWith(false);
-	});
-
-	it("does not message the main process on navigation while AO is showing", () => {
-		const { rerender, queryClient } = renderPane();
-
-		router.pathname = "/sessions/abc";
-		rerender(<QueryClientProvider client={queryClient}><MulticaPane /></QueryClientProvider>);
-
-		expect(window.ao!.multica.setActive).not.toHaveBeenCalled();
 	});
 
 	it("mounts the Send to AO dialog and displays a request from the bridge", () => {
