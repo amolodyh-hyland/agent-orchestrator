@@ -371,11 +371,11 @@ describe("send keys", () => {
 		expect(composerWireText(field)).toBe("one\ntwo");
 	});
 
-	it("wraps selected text in inline-code Markdown with Cmd+E and sends it unchanged", async () => {
+	it("wraps selected text in inline-code Markdown with Ctrl+E and sends it unchanged", async () => {
 		const { onSend, field } = renderComposer();
 		await typeInComposer(field, "sample");
 		selectComposerText(field, 0, 6);
-		await userEvent.keyboard("{Meta>}e{/Meta}");
+		await userEvent.keyboard("{Control>}e{/Control}");
 
 		expect(composerWireText(field)).toBe("`sample`");
 		await userEvent.keyboard("{Enter}");
@@ -386,7 +386,7 @@ describe("send keys", () => {
 		const { onSend, field } = renderComposer();
 		await typeInComposer(field, "const x = 1;");
 		selectComposerText(field, 0, 12);
-		await userEvent.keyboard("{Control>}{Shift>}m{/Shift}{/Control}");
+		await userEvent.keyboard("{Control>}{Shift>}k{/Shift}{/Control}");
 		await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
 
 		const markdown = "```\nconst x = 1;\n\n```";
@@ -407,7 +407,7 @@ describe("send keys", () => {
 		const text = "before:const x = 1;:after";
 		await typeInComposer(field, text);
 		selectComposerText(field, 7, 19);
-		await userEvent.keyboard("{Control>}{Shift>}m{/Shift}{/Control}");
+		await userEvent.keyboard("{Control>}{Shift>}k{/Shift}{/Control}");
 
 		expect(composerWireText(field)).toBe("before:\n```\nconst x = 1;\n```\n:after");
 	});

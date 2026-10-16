@@ -84,7 +84,12 @@ import {
 	MAX_ATTACHMENTS,
 	type FileAttachmentPayload,
 } from "../../hooks/useFileAttachments";
+import { useTranslation } from "react-i18next";
 import { File } from "lucide-react";
+import { effectiveShortcutBindings, shortcutBindingLabel, type AppShortcutId } from "../../../shared/shortcuts";
+import { useAppShortcut } from "../../hooks/useAppShortcut";
+import { isMacPlatform } from "../../lib/platform";
+import { useKeybindingsStore } from "../../stores/keybindings-store";
 import type { ChatSkill, ChatSteerOutcome } from "../../types/conversation";
 import {
 	acknowledgeChatComposerMutation,
@@ -353,6 +358,12 @@ export const ChatComposer = memo(function ChatComposer({
 	acceptedClientMessageIds?: ReadonlySet<string>;
 }) {
 	const translateDraft = useChatDraftTranslation();
+	const { t } = useTranslation();
+	const shortcutOverrides = useKeybindingsStore((state) => state.overrides);
+	const shortcutHint = (id: AppShortcutId) => {
+		const [primary] = effectiveShortcutBindings(id, isMacPlatform(), shortcutOverrides);
+		return primary ? shortcutBindingLabel(primary, isMacPlatform()) : "";
+	};
 	const draftScope = useMemo<ChatDraftScope | undefined>(
 		() =>
 			draftSessionId
@@ -417,6 +428,7 @@ export const ChatComposer = memo(function ChatComposer({
 	 */
 
 	const editor = useRef<ComposerEditorHandle>(null);
+	const formRef = useRef<HTMLFormElement>(null);
 	const filePicker = useRef<HTMLInputElement>(null);
 	const submitInFlight = useRef<Promise<void> | null>(null);
 	// Disabling the active editor can move focus to the document body. Remember
@@ -1555,19 +1567,18 @@ export const ChatComposer = memo(function ChatComposer({
 		[canSteerDraft, canSteerNext, fileAttachments, onCompact, pick, suggestionsFor],
 	);
 
+	// Registered shortcuts reach every mounted composer, so only the one that
+	// holds focus formats.
+	const composerHasFocus = () => !!formRef.current?.contains(document.activeElement);
+	useAppShortcut("format-inline-code", () => {
+		if (composerHasFocus()) editor.current?.wrapInlineCode();
+	});
+	useAppShortcut("format-code-block", () => {
+		if (composerHasFocus()) editor.current?.wrapCodeBlock();
+	});
+
 	function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
 		if (event.nativeEvent.isComposing) return;
-		if ((event.metaKey || event.ctrlKey) && !event.altKey) {
-			const key = event.key.toLowerCase();
-			if (key === "e" && !event.shiftKey && editor.current?.wrapInlineCode()) {
-				event.preventDefault();
-				return;
-			}
-			if (key === "m" && event.shiftKey && editor.current?.wrapCodeBlock()) {
-				event.preventDefault();
-				return;
-			}
-		}
 		// Enter is handled in Lexical before a newline is inserted; this handler is
 		// only for menu navigation and escape while a completion menu is open.
 		const liveSnapshot = editor.current?.getSnapshot();
@@ -1706,6 +1717,7 @@ export const ChatComposer = memo(function ChatComposer({
 
 	return withQueueStack(
 		<form
+			ref={formRef}
 			// Cmd/Ctrl steering remains available as a quiet power-user action.
 			onSubmit={(event) => void submit(event, steersDraft)}
 				onDragOver={(event) => {
@@ -1859,7 +1871,7 @@ export const ChatComposer = memo(function ChatComposer({
 				{markdownPreview ? (
 					<div
 						role="region"
-						aria-label="Markdown preview"
+						aria-label={t("chat.composer.markdownPreview")}
 						data-composer-preview
 						className="chat-composer-scrollbar max-h-40 min-h-[4.5rem] w-full overflow-y-auto overscroll-contain py-1 pl-[7px] pr-0"
 					>
@@ -1909,8 +1921,7 @@ export const ChatComposer = memo(function ChatComposer({
 										variant="ghost"
 										size="icon-sm"
 										disabled={composerEditorDisabled || markdownPreview}
-										aria-label="Inline code"
-										aria-keyshortcuts="Meta+E Control+E"
+										aria-label={t("chat.composer.inlineCode")}
 										onMouseDown={(event) => event.preventDefault()}
 										onClick={() => editor.current?.wrapInlineCode()}
 										className="size-7 shrink-0 rounded-full p-0 text-muted-foreground hover:bg-interactive-active! hover:text-foreground"
@@ -1919,7 +1930,7 @@ export const ChatComposer = memo(function ChatComposer({
 									</Button>
 								</span>
 							</TooltipTrigger>
-							<TooltipContent side="bottom">Inline code · ⌘E / Ctrl+E</TooltipContent>
+							<TooltipContent side="bottom">{t("chat.composer.inlineCode")} · {shortcutHint("format-inline-code")}</TooltipContent>
 						</Tooltip>
 						<Tooltip>
 							<TooltipTrigger asChild>
@@ -1929,8 +1940,7 @@ export const ChatComposer = memo(function ChatComposer({
 										variant="ghost"
 										size="icon-sm"
 										disabled={composerEditorDisabled || markdownPreview}
-										aria-label="Code block"
-										aria-keyshortcuts="Meta+Shift+M Control+Shift+M"
+										aria-label={t("chat.composer.codeBlock")}
 										onMouseDown={(event) => event.preventDefault()}
 										onClick={() => editor.current?.wrapCodeBlock()}
 										className="size-7 shrink-0 rounded-full p-0 text-muted-foreground hover:bg-interactive-active! hover:text-foreground"
@@ -1939,7 +1949,7 @@ export const ChatComposer = memo(function ChatComposer({
 									</Button>
 								</span>
 							</TooltipTrigger>
-							<TooltipContent side="bottom">Code block · ⌘⇧M / Ctrl+Shift+M</TooltipContent>
+							<TooltipContent side="bottom">{t("chat.composer.codeBlock")} · {shortcutHint("format-code-block")}</TooltipContent>
 						</Tooltip>
 						<Tooltip>
 							<TooltipTrigger asChild>
@@ -1947,7 +1957,7 @@ export const ChatComposer = memo(function ChatComposer({
 									type="button"
 									variant="ghost"
 									size="icon-sm"
-									aria-label={markdownPreview ? "Edit markdown" : "Preview markdown"}
+									aria-label={markdownPreview ? t("chat.composer.editMarkdown") : t("chat.composer.previewMarkdown")}
 									aria-pressed={markdownPreview}
 									onClick={() => {
 										if (markdownPreview) {
@@ -1966,7 +1976,7 @@ export const ChatComposer = memo(function ChatComposer({
 									)}
 								</Button>
 							</TooltipTrigger>
-							<TooltipContent side="bottom">{markdownPreview ? "Edit markdown" : "Preview markdown"}</TooltipContent>
+							<TooltipContent side="bottom">{markdownPreview ? t("chat.composer.editMarkdown") : t("chat.composer.previewMarkdown")}</TooltipContent>
 						</Tooltip>
 						{canAttach ? (
 							<>

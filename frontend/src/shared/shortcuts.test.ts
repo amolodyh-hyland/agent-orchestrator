@@ -317,7 +317,7 @@ describe("shortcut binding matching and validation", () => {
 
 	it("keeps Windows/Linux defaults off bare terminal-owned chords other than the yielding ones", () => {
 		const readline = ["a", "e", "k", "u", "w", "r", "p", "n", "b", "f", "l", "y", "t", "d", "c", "z"];
-		const yielding = new Set(["k", "p", "w", "t", "b"]);
+		const yielding = new Set(["k", "p", "w", "t", "b", "e"]);
 		for (const key of readline) {
 			if (yielding.has(key)) continue;
 			for (const { id } of APP_SHORTCUTS) {
@@ -409,5 +409,28 @@ describe("toggle-multica shortcut", () => {
 				).toBe(false);
 			}
 		}
+	});
+});
+
+describe("default binding uniqueness", () => {
+	it("never assigns the same default chord to two shortcuts", () => {
+		for (const isMac of [true, false]) {
+			const owners = new Map<string, string>();
+			for (const shortcut of APP_SHORTCUTS) {
+				for (const candidate of defaultShortcutBindings(shortcut.id, isMac)) {
+					const signature = [candidate.key.toLowerCase(), candidate.ctrl, candidate.meta, candidate.shift, candidate.alt].join("|");
+					expect(owners.get(signature), `${shortcut.id} duplicates ${owners.get(signature)} (${isMac ? "mac" : "other"})`).toBeUndefined();
+					owners.set(signature, shortcut.id);
+				}
+			}
+		}
+	});
+
+	it("binds the composer formatting commands to Cmd/Ctrl+E and Cmd/Ctrl+Shift+K", () => {
+		expect(matchesAppShortcut("format-inline-code", chord({ key: "e", meta: true }), true)).toBe(true);
+		expect(matchesAppShortcut("format-inline-code", chord({ key: "e", ctrl: true }), false)).toBe(true);
+		expect(matchesAppShortcut("format-code-block", chord({ key: "K", meta: true, shift: true }), true)).toBe(true);
+		expect(matchesAppShortcut("format-code-block", chord({ key: "K", ctrl: true, shift: true }), false)).toBe(true);
+		expect(matchesAppShortcut("model-picker", chord({ key: "M", meta: true, shift: true }), true)).toBe(true);
 	});
 });

@@ -1,4 +1,9 @@
 {
+	"chat.composer.codeBlock": "Bloc de code",
+	"chat.composer.editMarkdown": "Modifier le Markdown",
+	"chat.composer.inlineCode": "Code en ligne",
+	"chat.composer.markdownPreview": "Aperçu du Markdown",
+	"chat.composer.previewMarkdown": "Aperçu du Markdown",
 	"settings.harness.health.detectedCredential": "Identifiant détecté",
 	"settings.harness.health.keychain": "Trousseau système",
 	"settings.harness.health.checkFailed": "La vérification n’a pas pu aboutir. Réessayez ou copiez les diagnostics.",
@@ -532,6 +537,8 @@
 	"createProject.projectSuggestWorkspace": "Essayez d’importer ce dossier comme espace de travail si vous voulez qu’AO traite les dépôts enfants comme des projets séparés. Continuez comme projet si vous voulez qu’AO initialise uniquement le dossier racine sélectionné.",
 	"createProject.repoCannotImport": "Le dépôt ne peut pas être importé",
 	"createProject.retry": "Réessayer",
+	"shortcut.format-code-block": "Formater en bloc de code",
+	"shortcut.format-inline-code": "Formater en code en ligne",
 	"terminal.sessionLoader.workspace": "Création de l'espace de travail",
 	"terminal.sessionLoader.worker": "Connexion au worker",
 	"terminal.sessionLoader.repositoryAgent": "Préparation de votre dépôt et de votre agent",

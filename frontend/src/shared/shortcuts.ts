@@ -55,6 +55,8 @@ export type AppShortcutId =
 	| "open-in-editor"
 	| "copy-session-path"
 	| "model-picker"
+	| "format-inline-code"
+	| "format-code-block"
 	| "toggle-browser-devtools"
 	| "toggle-multica";
 
@@ -105,6 +107,8 @@ export const APP_SHORTCUTS: readonly ShortcutDefinition[] = [
 	{ id: "open-in-editor", label: "Open in editor", category: "Session" },
 	{ id: "copy-session-path", label: "Copy session path", category: "Session" },
 	{ id: "model-picker", label: "Choose model", category: "Session" },
+	{ id: "format-inline-code", label: "Format as inline code", category: "Session" },
+	{ id: "format-code-block", label: "Format as code block", category: "Session" },
 	{ id: "toggle-sidebar", label: "Toggle sidebar", category: "Panels" },
 	{ id: "toggle-inspector", label: "Toggle inspector", category: "Panels" },
 	{ id: "toggle-terminal", label: "Toggle terminal", category: "Panels" },
@@ -199,6 +203,10 @@ export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): read
 			return [isMac ? binding("c", { meta: true, shift: true }) : binding("l", { ctrl: true, shift: true })];
 		case "model-picker":
 			return [binding("m", { ...primary, shift: true })];
+		case "format-inline-code":
+			return [binding("e", primary)];
+		case "format-code-block":
+			return [binding("k", { ...primary, shift: true })];
 		case "toggle-browser-devtools":
 			return [isMac ? binding("i", { meta: true, alt: true }) : binding("i", { ctrl: true, shift: true })];
 		case "toggle-multica":
@@ -309,6 +317,7 @@ const YIELDS_TO_FOCUSED_TERMINAL: ReadonlySet<AppShortcutId> = new Set<AppShortc
 	"close-shell-terminal", // Ctrl+W unix-word-rubout
 	"toggle-sidebar", // Ctrl+B backward-char / tmux prefix
 	"keyboard-shortcuts", // Ctrl+/ readline undo
+	"format-inline-code", // Ctrl+E readline end-of-line
 ]);
 
 /** True when `chord` for `id` must reach a focused terminal instead (Windows/Linux only). */
