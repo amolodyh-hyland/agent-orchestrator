@@ -1,12 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
 import { EMPTY_TOPBAR_TABS, findSession } from "../lib/topbar-tabs";
 import { useTopbarTabsStore } from "../stores/topbar-tabs-store";
 import { FileContentPane } from "./FileContentPane";
+import type { FileViewMode } from "./FileContentPane";
 import type { FileAnnotationModel } from "./WorkspaceDiffView";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -414,6 +415,26 @@ describe("FileContentPane", () => {
 		await waitFor(() => expect(findSession(useTopbarTabsStore.getState().tabs, "sess-1")?.mode).toBe("persistent"));
 		expect(screen.queryByRole("textbox", { name: "Edit src/App.tsx" })).not.toBeInTheDocument();
 		expect(screen.queryByTestId("unsaved-file-indicator")).not.toBeInTheDocument();
+	});
+
+	it("keeps editing after Edit from Diff when the parent follows the reported mode", async () => {
+		getMock.mockResolvedValue({
+			data: {
+				sessionId: "sess-1", path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 18, binary: false, deleted: false, editable: true,
+				content: "export const x = 1;\n", contentTruncated: false, diff: "@@ -0,0 +1,1 @@\n+export const x = 1;\n", diffTruncated: false,
+				workspaceVersion: "workspace-1", fileFingerprint: "file-1",
+			},
+		});
+		function ControlledParent() {
+			const [mode, setMode] = useState<FileViewMode>("diff");
+			return <FileContentPane annotation={noopAnnotation()} initialMode={mode} onModeChange={setMode} path="src/App.tsx" sessionId="sess-1" split={false} />;
+		}
+
+		renderWithQuery(<ControlledParent />);
+		await userEvent.click(await screen.findByRole("button", { name: "Edit file" }));
+
+		expect(await screen.findByRole("textbox", { name: "Edit src/App.tsx" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
 	});
 
 	it.each([

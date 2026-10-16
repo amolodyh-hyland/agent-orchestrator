@@ -56,7 +56,8 @@ export function CloudFileContentPane({
 		setMode(next);
 		onModeChange?.(next);
 	};
-	useEffect(() => { setMode(initialMode); setEditing(initialEditing); setDraft(""); setSaveError(""); }, [commitSha, initialEditing, initialMode, initialRequestKey, path, scope]);
+	useEffect(() => { setMode(initialMode); }, [commitSha, initialMode, initialRequestKey, path, scope]);
+	useEffect(() => { setEditing(initialEditing); setDraft(""); setSaveError(""); }, [commitSha, initialEditing, initialRequestKey, path, scope]);
 	useEffect(() => { if (initialEditing && detail) setDraft(detail.content); }, [detail, initialEditing, initialRequestKey]);
 	useEffect(() => { onDirtyChange?.(hasUnsavedChanges); }, [hasUnsavedChanges, onDirtyChange]);
 	useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);

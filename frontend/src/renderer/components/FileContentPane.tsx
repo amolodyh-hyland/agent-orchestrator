@@ -169,10 +169,14 @@ export function FileContentPane({
 	}, [onContentReady, query.data, sourceHighlightReady]);
 	useEffect(() => {
 		setMode(restoredMode());
+	}, [commitSha, hostId, initialMode, initialRequestKey, path, rememberDisplayMode, scope, sessionId, source, uiSessionId]);
+	// Editing resets with the file or request, not with a mode the pane reported
+	// to its parent: choosing Edit from Diff must not cancel the edit it starts.
+	useEffect(() => {
 		setEditing(initialEditing);
 		setDraft("");
 		setSaveError("");
-	}, [commitSha, hostId, initialEditing, initialMode, initialRequestKey, path, rememberDisplayMode, scope, sessionId, source, uiSessionId]);
+	}, [commitSha, hostId, initialEditing, initialRequestKey, path, scope, sessionId, source, uiSessionId]);
 	const selectMode = (next: FileViewMode) => {
 		setMode(next);
 		if (rememberDisplayMode && path) setFileDisplayMode(uiSessionId, path, next, initialRequestKey);

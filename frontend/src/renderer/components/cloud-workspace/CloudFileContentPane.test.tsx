@@ -4,6 +4,7 @@ import "@testing-library/jest-dom/vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { CloudCpClient } from "../../lib/cloud-cp";
 import type { FileAnnotationModel } from "../WorkspaceDiffView";
@@ -33,6 +34,18 @@ describe("CloudFileContentPane", () => {
 		await userEvent.click(screen.getByRole("tab", { name: "Rich preview" }));
 		expect(screen.getByRole("article")).toHaveTextContent("# Hello");
 		expect(onModeChange).toHaveBeenCalledWith("rendered");
+	});
+
+	it("keeps editing after Edit from Diff when the parent follows the reported mode", async () => {
+		const client = { getWorkspaceReviewFile: vi.fn().mockResolvedValue(detail) } as unknown as CloudCpClient;
+		function ControlledParent() {
+			const [mode, setMode] = useState<"diff" | "file" | "rendered">("diff");
+			return <CloudFileContentPane annotation={annotation} baseUrl="https://cloud.test" client={client} initialMode={mode} onModeChange={setMode} orgId="org-1" path="README.md" sessionId="session-1" split={false} />;
+		}
+		render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><TooltipProvider><ControlledParent /></TooltipProvider></QueryClientProvider>);
+		await userEvent.click(await screen.findByRole("button", { name: "Edit file" }));
+
+		expect(await screen.findByRole("button", { name: "Save" })).toBeInTheDocument();
 	});
 
 	it("saves edits with the current fingerprint and reports dirty state", async () => {

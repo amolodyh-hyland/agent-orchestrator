@@ -263,6 +263,7 @@ vi.mock("../components/OrchestratorReplacementDialog", () => ({ OrchestratorRepl
 vi.mock("../components/ShellTopbar", () => ({ ShellTopbar: () => null }));
 vi.mock("../components/topbar-tabs/TopbarTabsLifecycle", () => ({ TopbarTabsLifecycle: () => null }));
 vi.mock("../components/topbar-tabs/TopbarTabsRouteSync", () => ({ TopbarTabsRouteSync: () => null }));
+vi.mock("../components/NavigationHistorySync", () => ({ NavigationHistorySync: () => null }));
 vi.mock("../components/topbar-tabs/TopbarTabsRow", () => ({ TopbarTabsRow: () => null }));
 vi.mock("../components/TitlebarNav", async () => {
 	const { sidebarIsVisible, useUiStore: useStore } = await vi.importActual<

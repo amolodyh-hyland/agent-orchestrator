@@ -75,7 +75,8 @@ export function NavigationHistorySync() {
 			}
 
 			if (routeChanged && (action.type === "PUSH" || action.type === "REPLACE")) {
-				if (useMulticaStore.getState().view.active) {
+				const multica = useMulticaStore.getState();
+				if (multica.pendingActive ?? multica.view.active) {
 					useMulticaStore.getState().setActive(false, { recordHistory: false });
 				}
 				writeAONavigationLocation(historyLike, {
@@ -100,7 +101,8 @@ export function NavigationHistorySync() {
 			const locationToRestore = restored ?? defaultLocation(location.href);
 			applyingHistoryRestore = true;
 			useUiStore.setState({ settingsModal: locationToRestore.settingsModal });
-			if (useMulticaStore.getState().view.active !== locationToRestore.multicaActive) {
+			const multica = useMulticaStore.getState();
+			if ((multica.pendingActive ?? multica.view.active) !== locationToRestore.multicaActive) {
 				useMulticaStore.getState().setActive(locationToRestore.multicaActive, { recordHistory: false });
 			}
 			notifyNavigationRestore(locationToRestore);

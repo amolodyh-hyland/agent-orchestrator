@@ -8,6 +8,8 @@ const INITIAL_VIEW: MulticaViewState = { active: false, status: "unconfigured", 
 type MulticaStore = {
 	view: MulticaViewState;
 	isLoaded: boolean;
+	/** Visibility requested from the main process and not yet acknowledged by a state push. */
+	pendingActive: boolean | null;
 	/** Subscribes to main-process state pushes and fetches the current state. Idempotent. */
 	load: () => Promise<void>;
 	setActive: (active: boolean, options?: { recordHistory?: boolean }) => void;
@@ -20,6 +22,7 @@ let subscribed = false;
 export const useMulticaStore = create<MulticaStore>((set, get) => ({
 	view: INITIAL_VIEW,
 	isLoaded: false,
+	pendingActive: null,
 	load: async () => {
 		if (subscribed) return;
 		subscribed = true;
@@ -28,7 +31,7 @@ export const useMulticaStore = create<MulticaStore>((set, get) => ({
 		let pushed = false;
 		aoBridge.multica.onState((view) => {
 			pushed = true;
-			set({ view, isLoaded: true });
+			set((state) => ({ view, isLoaded: true, pendingActive: state.pendingActive === view.active ? null : state.pendingActive }));
 		});
 		try {
 			const view = await aoBridge.multica.getState();
@@ -38,10 +41,14 @@ export const useMulticaStore = create<MulticaStore>((set, get) => ({
 		}
 	},
 	setActive: (active, options) => {
-		if (options?.recordHistory === false && get().view.active !== active) {
+		const effective = get().pendingActive ?? get().view.active;
+		if (options?.recordHistory === false && effective !== active) {
 			suppressNextMulticaHistoryChange(active);
 		}
-		void aoBridge.multica.setActive(active).catch(() => undefined);
+		set({ pendingActive: active });
+		void aoBridge.multica.setActive(active).catch(() => {
+			if (get().pendingActive === active) set({ pendingActive: null });
+		});
 	},
 	toggle: () => get().setActive(!get().view.active),
 	reload: () => {

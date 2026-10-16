@@ -8,6 +8,8 @@ import {
 	resetNavigationHistoryForTests,
 } from "../lib/navigation-history";
 
+const bridgeSetActive = vi.hoisted(() => vi.fn((_active: boolean) => Promise.resolve()));
+
 const { history, navigate, setActive } = vi.hoisted(() => {
 	type Location = { href: string; state: Record<string, unknown> };
 	type Event = { location: Location; action: { type: string } };
@@ -40,6 +42,10 @@ vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigate,
 	useRouter: () => ({ history }),
 	useRouterState: () => ({ location: { href: history.location.href } }),
+}));
+
+vi.mock("../lib/bridge", () => ({
+	aoBridge: { multica: { setActive: bridgeSetActive, getState: vi.fn(), onState: vi.fn(), reload: vi.fn() } },
 }));
 
 import { NavigationHistorySync } from "./NavigationHistorySync";
@@ -138,6 +144,24 @@ describe("NavigationHistorySync", () => {
 
 		expect(history.forward).toHaveBeenCalledTimes(1);
 		expect(navigate).not.toHaveBeenCalled();
+	});
+
+	it("restores Multica on Back while the hide request from leaving it is still pending", () => {
+		bridgeSetActive.mockClear();
+		useMulticaStore.setState({
+			view: { active: true, status: "ready", url: "https://multica.test" },
+			setActive: originalSetActive,
+		});
+		const multicaState = { __aoNavigation: { version: 1, href: "#/sessions", settingsModal: null, multicaActive: true } };
+		history.location = { href: "#/sessions", state: { __TSR_index: 0, ...multicaState } };
+		render(<NavigationHistorySync />);
+
+		// Leave Multica for an AO route; the main process has not acknowledged the hide yet.
+		act(() => history.emit("#/sessions/worker-2", { __TSR_index: 1 }, "PUSH"));
+		expect(useMulticaStore.getState().view.active).toBe(true);
+		act(() => history.emit("#/sessions", { __TSR_index: 0, ...multicaState }, "POP"));
+
+		expect(bridgeSetActive.mock.calls.map(([active]) => active)).toEqual([false, true]);
 	});
 
 	it("reopens a closed local session after a direct route visit", () => {
