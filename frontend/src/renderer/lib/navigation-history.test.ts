@@ -13,7 +13,10 @@ import {
 
 function createHistory(): NavigationHistoryLike & { pushes: unknown[][]; replacements: unknown[][] } {
 	const history = {
-		location: { href: "#/projects/project-1/sessions/worker-1", state: { __TSR_index: 2, keep: "value" } },
+		location: {
+			href: "#/projects/project-1/sessions/worker-1",
+			state: { __TSR_index: 2, keep: "value" } as Record<string, unknown>,
+		},
 		pushes: [] as unknown[][],
 		replacements: [] as unknown[][],
 		push(href: string, state?: Record<string, unknown>) {

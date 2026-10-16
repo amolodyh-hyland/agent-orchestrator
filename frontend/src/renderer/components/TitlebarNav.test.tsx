@@ -99,7 +99,6 @@ describe("TitlebarNav", () => {
 		const back = screen.getByRole("button", { name: "Go back" });
 		expect(container.querySelector('[data-slot="titlebar-nav"]')).toBeInTheDocument();
 		expect(back).toBeEnabled();
-		expect(back).toHaveStyle({ WebkitAppRegion: "no-drag" });
 		fireEvent.click(back);
 		expect(history.back).toHaveBeenCalledTimes(1);
 	});

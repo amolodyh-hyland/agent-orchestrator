@@ -103,6 +103,7 @@ const routeBlockerState = vi.hoisted(() => ({
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
 	useParams: () => routeBlockerState.params,
+	useRouter: () => ({ history: { location: { href: "#/", state: {} }, push: vi.fn(), replace: vi.fn() } }),
 	useBlocker: (options: NonNullable<typeof routeBlockerState.options>) => {
 		routeBlockerState.options = options;
 	},

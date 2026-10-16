@@ -642,7 +642,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		const current = readAONavigationLocationForHref(router.history.location.state, router.history.location.href);
 		if (current?.sessionView?.sessionKey === uiSessionId) return;
 		recordSessionNavigationLocation(undefined, { inspectorView, inspectorOpen: isInspectorOpen }, "replace");
-	}, [inspectorOpen, inspectorView, recordSessionNavigationLocation, router, uiSessionId]);
+	}, [isInspectorOpen, inspectorView, recordSessionNavigationLocation, router, uiSessionId]);
 	const [auxiliaryTabOrderBySession, setAuxiliaryTabOrderBySession] = useState<Record<string, string[]>>({});
 	const auxiliaryTabOrder = auxiliaryTabOrderBySession[uiSessionId] ?? EMPTY_AUXILIARY_TAB_ORDER;
 	const setAuxiliaryTabOrder = useCallback(
