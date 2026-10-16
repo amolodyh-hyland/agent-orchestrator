@@ -30,8 +30,14 @@ case "$1" in
 		if [[ "$status_calls" == "$(sim_value swap_host_on_status_call | /usr/bin/cut -d: -f1)" ]]; then
 			swapped="$(sim_value swap_host_on_status_call | /usr/bin/cut -d: -f2)"
 			/bin/sleep 0.3
-			sim_remove_prefix "$APP/Contents/Resources/daemon/ao chat-host --session $swapped"
-			sim_add_proc "$APP/Contents/Resources/daemon/ao chat-host --session $swapped" > /dev/null
+			sim_remove_prefix "$APP/Contents/Resources/daemon/ao chat-host $swapped "
+			sim_add_proc "$APP/Contents/Resources/daemon/ao chat-host $swapped $HOME/.ao/data $HOME/.ao/worktrees" > /dev/null
+		fi
+		if [[ -f "$SIM/cfg/exec_host_after_session_lists" && -f "$SIM/ls_calls" && "$(cat "$SIM/ls_calls")" -ge 2 ]]; then
+			host_session="$(sim_value exec_host_after_session_lists)"
+			host_pid="$(/usr/bin/awk -F '|' -v prefix="$APP/Contents/Resources/daemon/ao chat-host $host_session " 'index($2, prefix) == 1 { print $1; exit }' "$SIM/procs")"
+			/usr/bin/awk -F '|' -v pid="$host_pid" -v executable="$SIM/foreign/ao" '$1 == pid { print $1 "|" executable; next } { print }' "$SIM/executables" > "$SIM/executables.tmp"
+			/bin/mv "$SIM/executables.tmp" "$SIM/executables"
 		fi
 		# Test hook: a foreign or old daemon answers "ready" for this app, with its own binary path.
 		if /usr/bin/grep -qxF "$(version)" "$SIM/cfg/foreign_status_versions" 2>/dev/null; then
@@ -99,7 +105,8 @@ case "$1" in
 				if [[ -e "$SIM/cfg/exit_fail_$id" ]]; then printf 'could not stop the agent of %s\n' "$id" >&2; exit 1; fi
 				/usr/bin/awk -F '|' -v OFS='|' -v id="$id" '$1 == id { $5 = "exited" } { print }' "$SIM/sessions" > "$SIM/sessions.tmp"
 				/bin/mv "$SIM/sessions.tmp" "$SIM/sessions"
-				sim_remove_prefix "$APP/Contents/Resources/daemon/ao chat-host --session $id"
+				sim_remove_prefix "$APP/Contents/Resources/daemon/ao chat-host $id "
+				sim_end_session_agents "$id"
 				if [[ -f "$SIM/cfg/foreign_after_exit_agent" ]]; then /bin/cp "$SIM/cfg/foreign_after_exit_agent" "$SIM/cfg/foreign_status_versions"; fi
 				# Test hook: another session is re-created (new generation) while the batch runs.
 				if [[ -f "$SIM/cfg/recreate_created_on_exit_agent" ]]; then
@@ -109,10 +116,10 @@ case "$1" in
 				# Test hook: another session's host is replaced by a new process while the batch runs.
 				if [[ -f "$SIM/cfg/replace_host_on_exit_agent" ]]; then
 					replaced="$(sim_value replace_host_on_exit_agent)"
-					sim_remove_prefix "$APP/Contents/Resources/daemon/ao chat-host --session $replaced"
-					sim_add_proc "$APP/Contents/Resources/daemon/ao chat-host --session $replaced" > /dev/null
+					sim_remove_prefix "$APP/Contents/Resources/daemon/ao chat-host $replaced "
+					sim_add_proc "$APP/Contents/Resources/daemon/ao chat-host $replaced $HOME/.ao/data $HOME/.ao/worktrees" > /dev/null
 				fi
-				if [[ -f "$SIM/cfg/spawn_host_on_exit_agent" ]]; then sim_add_proc "$APP/Contents/Resources/daemon/ao chat-host --session $(sim_value spawn_host_on_exit_agent)" > /dev/null; fi
+				if [[ -f "$SIM/cfg/spawn_host_on_exit_agent" ]]; then sim_add_proc "$APP/Contents/Resources/daemon/ao chat-host $(sim_value spawn_host_on_exit_agent) $HOME/.ao/data $HOME/.ao/worktrees" > /dev/null; fi
 				printf 'agent exited for session %s\n' "$id"
 				;;
 			restore)
@@ -121,7 +128,7 @@ case "$1" in
 				if [[ ! -e "$SIM/cfg/restore_noop_$id" ]]; then
 					/usr/bin/awk -F '|' -v OFS='|' -v id="$id" '$1 == id { $5 = "active"; $6 = "false" } { print }' "$SIM/sessions" > "$SIM/sessions.tmp"
 					/bin/mv "$SIM/sessions.tmp" "$SIM/sessions"
-					sim_add_proc "$APP/Contents/Resources/daemon/ao chat-host --session $id" > /dev/null
+					sim_add_proc "$APP/Contents/Resources/daemon/ao chat-host $id $HOME/.ao/data $HOME/.ao/worktrees" > /dev/null
 				fi
 				printf 'session %s restored\n' "$id"
 				;;

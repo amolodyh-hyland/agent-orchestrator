@@ -8,11 +8,38 @@ sim_has() { [[ -e "$SIM/cfg/$1" ]]; }
 sim_value() { cat "$SIM/cfg/$1" 2>/dev/null || true; }
 
 sim_add_proc() {
-	local pid
+	local pid command="$1" app executable
 	pid=$(( $(cat "$SIM/nextpid" 2>/dev/null || echo 5000) + 1 ))
 	printf '%s\n' "$pid" > "$SIM/nextpid"
 	printf '%s|%s\n' "$pid" "$1" >> "$SIM/procs"
+	app="${command%%/Contents/*}"
+	case "$command" in
+		*/Contents/Resources/daemon/ao*) executable="$app/Contents/Resources/daemon/ao" ;;
+		*/Contents/MacOS/*) executable="$app/Contents/MacOS/Agent Orchestrator" ;;
+		*/Contents/Frameworks/*) executable="$app/Contents/Frameworks/fake-helper" ;;
+		*) executable="/bin/bash" ;;
+	esac
+	printf '%s|%s\n' "$pid" "$executable" >> "$SIM/executables"
+	printf '%s|1\n' "$pid" >> "$SIM/ppids"
 	printf '%s' "$pid"
+}
+
+sim_ppid_of() {
+	local pid="$1" row parent
+	while IFS='|' read -r row parent; do
+		if [[ "$row" == "$pid" ]]; then printf '%s' "$parent"; return; fi
+	done < "$SIM/ppids"
+	printf '1'
+}
+
+sim_end_session_agents() {
+	local session="$1" row agent_session delay
+	while IFS='|' read -r row agent_session; do
+		[[ "$agent_session" == "$session" ]] || continue
+		if sim_has agents_survive; then continue; fi
+		delay="$(sim_value agents_exit_ticks)"
+		sim_timer "${delay:-2}" "sim_remove_pid '$row'"
+	done < "$SIM/agents"
 }
 
 # Remove processes whose command line starts with the given prefix.
@@ -35,6 +62,12 @@ sim_app_running_daemon() {
 }
 
 sim_quit_bundle() {
+	if [[ -f "$SIM/cfg/exec_after_quit" ]]; then
+		local pid executable
+		IFS='|' read -r pid executable < "$SIM/cfg/exec_after_quit"
+		/usr/bin/awk -F '|' -v pid="$pid" -v executable="$executable" '$1 == pid { print $1 "|" executable; next } { print }' "$SIM/executables" > "$SIM/executables.tmp"
+		/bin/mv "$SIM/executables.tmp" "$SIM/executables"
+	fi
 	# Test hook: a process id is reused (new start time) once the app has been asked to quit.
 	if [[ -f "$SIM/cfg/reuse_pid_after_quit" ]]; then printf 'Tue Oct 13 11:11:11 2026\n' > "$SIM/cfg/lstart_$(cat "$SIM/cfg/reuse_pid_after_quit")"; fi
 	if [[ -f "$SIM/cfg/foreign_after_quit" ]]; then /bin/cp "$SIM/cfg/foreign_after_quit" "$SIM/cfg/foreign_status_versions"; fi

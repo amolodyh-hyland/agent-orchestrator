@@ -5,8 +5,8 @@
 #
 # Safety rules this file enforces (each one has a test):
 #   - It only ever sends SIGTERM, only through noetaxis_signal_own_pid, only with --force,
-#     and only to a process whose command line STARTS with this bundle's path
-#     (<app>/Contents/). A lookalike path (another copy of AO, an editor with a file open
+#     and only to a process whose command path starts with this bundle's path and whose
+#     current executable vnode is verified under <app>/Contents/. A lookalike path (another copy of AO, an editor with a file open
 #     inside the bundle) is listed and refused, never signalled.
 #   - Sessions are never ended without --end-sessions, and by default live sessions make the
 #     run refuse before anything is stopped.
@@ -44,6 +44,7 @@ cap_standalone="unknown"
 cap_stack_running=""
 cap_schema_before=""
 cap_processes_file=""
+cap_agent_processes_file=""
 cap_hosts_file=""
 cap_hostless=""
 update_sessions_unverifiable=""
@@ -137,42 +138,25 @@ noetaxis_wait_until() {
 # Processes of exactly this bundle
 # ---------------------------------------------------------------------------
 
-# "pid<TAB>command" for each process whose command line starts with <app>/Contents/.
+# "pid<TAB>command" for each candidate whose executable vnode belongs to this bundle.
 noetaxis_own_bundle_processes() {
 	local app_path="$1" pid command_line
-	for pid in $(pgrep -f "$(noetaxis_regex_escape "$app_path/Contents/")" 2>/dev/null || true); do
+	for pid in $(pgrep -if "$(noetaxis_regex_escape "$app_path/Contents/")" 2>/dev/null || true); do
 		[[ "$pid" =~ ^[0-9]+$ ]] || continue
 		[[ "$pid" -ne "$$" ]] || continue
 		command_line="$(ps -ww -o command= -p "$pid" 2>/dev/null || true)"
-		case "$command_line" in
-			"$app_path/Contents/"*) printf '%s\t%s\n' "$pid" "$command_line" ;;
-		esac
-	done
-}
-
-# "pid<TAB>command" for processes that mention the bundle path but do not start with it:
-# another copy of AO whose path ends the same way, or a tool holding a file open inside it.
-noetaxis_foreign_bundle_processes() {
-	local app_path="$1" pid command_line
-	for pid in $(pgrep -f "$(noetaxis_regex_escape "$app_path/Contents/")" 2>/dev/null || true); do
-		[[ "$pid" =~ ^[0-9]+$ ]] || continue
-		[[ "$pid" -ne "$$" ]] || continue
-		command_line="$(ps -ww -o command= -p "$pid" 2>/dev/null || true)"
-		case "$command_line" in
-			"$app_path/Contents/"*) ;;
-			*) printf '%s\t%s\n' "$pid" "$command_line" ;;
-		esac
+		noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" || continue
+		noetaxis_process_executable_is_in_bundle "$app_path" "$pid" || continue
+		printf '%s\t%s\n' "$pid" "$command_line"
 	done
 }
 
 noetaxis_process_kind() {
 	local app_path="$1" command_line="$2"
-	case "$command_line" in
-		"$app_path/Contents/Resources/daemon/ao daemon"*) printf 'daemon' ;;
-		"$app_path/Contents/Resources/daemon/ao chat-host"*) printf 'chat-host' ;;
-		"$app_path/Contents/MacOS/"*|"$app_path/Contents/Frameworks/"*) printf 'desktop' ;;
-		*) printf 'helper' ;;
-	esac
+	if noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" 'Resources/daemon/ao daemon'; then printf 'daemon'
+	elif noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" 'Resources/daemon/ao chat-host'; then printf 'chat-host'
+	elif noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" 'MacOS/' || noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" 'Frameworks/'; then printf 'desktop'
+	else printf 'helper'; fi
 }
 
 # Own processes of one kind (desktop, daemon, chat-host, helper) or "any", as "pid<TAB>command".
@@ -194,9 +178,7 @@ noetaxis_none_running_of_kind() {
 noetaxis_own_main_pid() {
 	local app_path="$1" pid command_line
 	while IFS=$'\t' read -r pid command_line; do
-		case "$command_line" in
-			"$app_path/Contents/MacOS/"*) printf '%s' "$pid"; return 0 ;;
-		esac
+		if noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" 'MacOS/'; then printf '%s' "$pid"; return 0; fi
 	done < <(noetaxis_own_bundle_processes "$app_path")
 	return 1
 }
@@ -232,6 +214,40 @@ noetaxis_update_snapshot_processes() {
 	done < <(noetaxis_own_bundle_processes "$app_path")
 }
 
+noetaxis_update_agent_processes_remaining() {
+	local app_path="$1" session_ids="${2:-}" row rest pid started session_id command_line info actual parent current_start current_command
+	[[ -f "$cap_agent_processes_file" ]] || return 0
+	while IFS= read -r row; do
+		pid="${row%%$'\t'*}"
+		rest="${row#*$'\t'}"
+		started="${rest%%$'\t'*}"
+		rest="${rest#*$'\t'}"
+		session_id="${rest%%$'\t'*}"
+		command_line="${rest#*$'\t'}"
+		[[ -n "$pid" ]] || continue
+		if [[ -n "$session_ids" ]] && ! /usr/bin/grep -qxF "$session_id" "$session_ids"; then continue; fi
+		info="$(noetaxis_process_info "$pid")" || continue
+		IFS=$'\t' read -r actual parent current_start current_command <<< "$info"
+		if [[ "$actual" == "$pid" && "$current_start" == "$started" ]]; then
+			printf '%s\t%s\n' "$pid" "$current_command"
+		fi
+	done < "$cap_agent_processes_file"
+}
+
+noetaxis_update_agent_processes_gone() {
+	[[ -z "$(noetaxis_update_agent_processes_remaining "$1" "${2:-}")" ]]
+}
+
+noetaxis_update_wait_agent_processes() {
+	local app_path="$1" session_ids="${2:-}"
+	[[ -n "$(noetaxis_update_agent_processes_remaining "$app_path" "$session_ids")" ]] || return 0
+	noetaxis_update_step "Waiting for agent processes of live sessions to exit"
+	if noetaxis_wait_until "agent processes of live sessions to exit" "$update_stop_timeout" noetaxis_update_agent_processes_gone "$app_path" "$session_ids"; then return 0; fi
+	noetaxis_error "Agent processes of live sessions are still running after the wait; they were not signalled:"
+	noetaxis_update_agent_processes_remaining "$app_path" "$session_ids" | noetaxis_describe_processes >&2
+	return 56
+}
+
 # Chat-host processes of one session: those of the bundle whose command line carries the session id
 # as a word. "pid<TAB>start<TAB>command" lines.
 noetaxis_update_session_hosts() {
@@ -263,18 +279,19 @@ noetaxis_update_print_unapproved() {
 noetaxis_signal_own_pid() {
 	local app_path="$1" pid="$2" reason="$3" command_line
 	command_line="$(ps -ww -o command= -p "$pid" 2>/dev/null || true)"
-	case "$command_line" in
-		"$app_path/Contents/"*) ;;
-		*)
-			noetaxis_update_log "skipped pid $pid ($reason): no longer a process of $app_path"
-			return 1
-			;;
-	esac
+	if ! noetaxis_command_matches_bundle_pattern "$app_path" "$command_line"; then
+		noetaxis_update_log "skipped pid $pid ($reason): no longer a process of $app_path"
+		return 1
+	fi
 	if ! noetaxis_update_process_approved "$pid" "$command_line"; then
 		noetaxis_update_say "NOT signalling pid $pid ($reason): it was started after the plan was confirmed: $command_line"
 		return 1
 	fi
 	noetaxis_update_say "SIGTERM to pid $pid ($reason): $command_line"
+	if ! noetaxis_process_executable_is_in_bundle "$app_path" "$pid"; then
+		noetaxis_update_say "NOT signalling pid $pid ($reason): its current executable is not verified inside this bundle"
+		return 1
+	fi
 	"${NOETAXIS_KILL:-/bin/kill}" -TERM "$pid" || return 1
 }
 
@@ -296,7 +313,7 @@ noetaxis_update_status_identity() {
 	pid="$(printf '%s' "$json" | /usr/bin/plutil -extract pid raw -o - - 2>/dev/null || true)"
 	executable="$(printf '%s' "$json" | /usr/bin/plutil -extract executablePath raw -o - - 2>/dev/null || true)"
 	expected="$app_path/Contents/Resources/daemon/ao"
-	if [[ -n "$executable" && "$(noetaxis_physical_file "$executable")" != "$(noetaxis_physical_file "$expected")" ]]; then
+	if [[ -n "$executable" && ! "$executable" -ef "$expected" ]]; then
 		noetaxis_update_identity_detail="the daemon that owns the shared run file (pid ${pid:-unknown}) runs ${executable}, not $expected"
 		return 1
 	fi
@@ -388,6 +405,8 @@ noetaxis_update_capture_state() {
 	cap_dir="$dir"
 	cap_live_file="$dir/live-sessions.tsv"
 	cap_processes_file="$dir/processes.txt"
+	cap_agent_processes_file="$dir/agent-processes.tsv"
+	noetaxis_bundle_descendant_processes "$app_path" > "$cap_agent_processes_file" || true
 	: > "$cap_live_file"
 	cap_cli="$app_path/Contents/Resources/daemon/ao"
 	cap_old_version="none"
@@ -529,6 +548,8 @@ noetaxis_update_print_plan() {
 	host_count="$(noetaxis_own_pids_of_kind "$app_path" chat-host | /usr/bin/awk 'END { print NR }')"
 	other_count="$(noetaxis_own_pids_of_kind "$app_path" helper | /usr/bin/awk 'END { print NR }')"
 	printf '\nUpdate plan\n'
+	printf '  Agent processes of live sessions (%s):\n' "$(/usr/bin/awk 'END { print NR }' "$cap_agent_processes_file")"
+	/usr/bin/awk -F '\t' '{ printf "      pid %s  %s\n", $1, $4 }' "$cap_agent_processes_file"
 	printf '  Install:   %s -> %s\n             in %s\n' "$cap_old_version" "$new_version" "$app_path"
 	printf '\n  Will be STOPPED, in this order:\n'
 	if [[ "$update_end_sessions" -eq 1 && "$cap_live_count" -gt 0 ]]; then
@@ -722,6 +743,7 @@ noetaxis_update_host_unchanged() {
 
 noetaxis_update_end_sessions() {
 	local id project role status activity name created harness branch issue output status_code failed=0 total=0 ended=0 timed_out=0
+	: > "$cap_dir/ended-agent-ids.txt"
 	noetaxis_update_step "Ending $cap_live_count live session(s)"
 	while IFS="$noetaxis_sep" read -r id project role status activity name created harness branch issue; do
 		[[ -n "$id" ]] || continue
@@ -744,6 +766,7 @@ noetaxis_update_end_sessions() {
 		# list was read and immediately before the call, so nothing can change in between.
 		if ! noetaxis_update_verify_daemon "$target_app"; then
 			noetaxis_error "Stopped before ending $id: $noetaxis_update_identity_detail. Sessions ended so far stay ended; the app and daemon were not touched."
+			noetaxis_update_wait_agent_processes "$target_app" "$cap_dir/ended-agent-ids.txt" || return $?
 			return 57
 		fi
 		# The daemon check above is a blocking call, and the session's host can change while it runs. So
@@ -757,6 +780,7 @@ noetaxis_update_end_sessions() {
 		status_code=0
 		output="$(noetaxis_bounded 90 "$cap_cli" session exit-agent "$id" ${project:+--project "$project"} 2>&1)" || status_code=$?
 		if [[ "$status_code" -eq 0 ]]; then
+			printf '%s\n' "$id" >> "$cap_dir/ended-agent-ids.txt"
 			ended=$((ended + 1))
 			update_sessions_ended=1
 			noetaxis_update_say "agent of $id [$project] $role stopped: $output"
@@ -767,6 +791,7 @@ noetaxis_update_end_sessions() {
 			noetaxis_update_say "FAILED to end $id [$project]: ${output:-exit $status_code}$([[ "$status_code" -eq 142 ]] && printf ' (timed out)')"
 		fi
 	done < "$cap_live_file"
+	noetaxis_update_wait_agent_processes "$target_app" "$cap_dir/ended-agent-ids.txt" || return $?
 	if [[ -n "$update_sessions_changed" ]]; then
 		noetaxis_error "Session(s) changed since the plan was confirmed and were not touched (the app and daemon were not touched either; rerun to see a new plan):"
 		printf '%s\n' "$update_sessions_changed" | /usr/bin/sed 's/^/      /' >&2
@@ -909,14 +934,25 @@ noetaxis_update_stop_daemon() {
 	return 55
 }
 
+noetaxis_update_helpers_gone() {
+	noetaxis_none_running_of_kind "$1" any && [[ -z "$(noetaxis_foreign_bundle_processes "$1")" ]]
+}
+
 noetaxis_update_stop_helpers() {
-	local app_path="$1" cli pid command_line
+	local app_path="$1" cli pid command_line foreign
 	cli="$app_path/Contents/Resources/daemon/ao"
-	if noetaxis_none_running_of_kind "$app_path" any; then
+	noetaxis_update_wait_agent_processes "$app_path" || return $?
+	foreign="$(noetaxis_foreign_bundle_processes "$app_path")"
+	if [[ -n "$foreign" ]]; then
+		noetaxis_error "Processes are no longer verifiably part of this bundle; they were not signalled:"
+		printf '%s\n' "$foreign" | noetaxis_describe_processes >&2
+		return 56
+	fi
+	if noetaxis_update_helpers_gone "$app_path"; then
 		return 0
 	fi
 	noetaxis_update_step "Waiting for chat hosts and helper processes to exit"
-	if noetaxis_wait_until "helper processes to exit" "$update_stop_timeout" noetaxis_none_running_of_kind "$app_path" any; then
+	if noetaxis_wait_until "helper processes to exit" "$update_stop_timeout" noetaxis_update_helpers_gone "$app_path"; then
 		noetaxis_update_append noetaxis_update_summary_stopped "chat hosts and helper processes exited"
 		return 0
 	fi
@@ -926,13 +962,14 @@ noetaxis_update_stop_helpers() {
 			[[ -n "$pid" ]] || continue
 			noetaxis_signal_own_pid "$app_path" "$pid" "survived the stop" || true
 		done < <(noetaxis_own_pids_of_kind "$app_path" any)
-		if noetaxis_wait_until "the remaining processes to exit after SIGTERM" "$update_stop_timeout" noetaxis_none_running_of_kind "$app_path" any; then
+		if noetaxis_wait_until "the remaining processes to exit after SIGTERM" "$update_stop_timeout" noetaxis_update_helpers_gone "$app_path"; then
 			noetaxis_update_append noetaxis_update_summary_stopped "remaining chat hosts/helpers terminated (SIGTERM, --force)"
 			return 0
 		fi
 	fi
 	noetaxis_error "Processes of this bundle are still running after the wait. They keep agent conversations or terminals alive:"
 	noetaxis_own_pids_of_kind "$app_path" any | noetaxis_describe_processes >&2
+	noetaxis_foreign_bundle_processes "$app_path" | noetaxis_describe_processes >&2
 	noetaxis_update_print_unapproved "$app_path"
 	printf 'Nothing was installed and AO is stopped. Reopen it (open -a "%s"), end the sessions (--end-sessions with the daemon up), or rerun with --force to SIGTERM these processes (their conversations end). No process was force-killed.\n' "$app_path" >&2
 	return 56
@@ -1016,7 +1053,7 @@ noetaxis_update_daemon_healthy() {
 	# daemon that happens to be ready on the same port.
 	pid="$(printf '%s' "$json" | /usr/bin/plutil -extract pid raw -o - - 2>/dev/null || true)"
 	expected="$app_path/Contents/Resources/daemon/ao"
-	if [[ -z "$executable" || "$(noetaxis_physical_file "$executable")" != "$(noetaxis_physical_file "$expected")" ]]; then
+	if [[ -z "$executable" || ! "$executable" -ef "$expected" ]]; then
 		update_health_detail="the daemon that answers runs ${executable:-an unknown binary}, not $expected (an old or foreign daemon is serving the port)"
 		return 1
 	fi
