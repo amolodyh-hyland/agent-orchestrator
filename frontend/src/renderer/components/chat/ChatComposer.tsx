@@ -48,10 +48,23 @@ import {
 	type ReactNode,
 	type Ref,
 } from "react";
-import { ArrowUp, CornerUpRight, Loader2, Play, Plus, Square, X } from "lucide-react";
+import {
+	ArrowUp,
+	Code,
+	CodeXml,
+	CornerUpRight,
+	Eye,
+	Loader2,
+	Pencil,
+	Play,
+	Plus,
+	Square,
+	X,
+} from "lucide-react";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { ChatAnnotationSummary } from "./ChatAnnotationSummary";
+import { ChatMarkdown } from "./ChatMarkdown";
 import { cn } from "../../lib/utils";
 import { apiErrorCode, apiErrorMessage, getApiBaseUrl } from "../../lib/api-client";
 import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
@@ -383,6 +396,7 @@ export const ChatComposer = memo(function ChatComposer({
 		string | null
 	>(null);
 	const [submitting, setSubmitting] = useState(false);
+	const [markdownPreview, setMarkdownPreview] = useState(false);
 	const [durableDelivery, setDurableDelivery] = useState<ChatComposerDelivery | undefined>(() =>
 		draftScope
 			? readChatSessionDraft(draftScope).composer.delivery
@@ -583,6 +597,9 @@ export const ChatComposer = memo(function ChatComposer({
 	const acceptedClearFailed = composerMutation.accepted?.result.ok === false;
 	const draftMutationPending =
 		submitting || composerMutation.pending || acceptedMutationWaiting || Boolean(durableDelivery);
+	const composerEditorDisabled = Boolean(
+		disabled || queuedEditRecovery || (!optimisticSend && (submitting || draftMutationPending)),
+	);
 	const canRecoverDelivery = Boolean(
 		durableDelivery &&
 			(!busy || durableDelivery.state === "accepted") &&
@@ -771,6 +788,7 @@ export const ChatComposer = memo(function ChatComposer({
 		setDismissedKey(null);
 		highlightedRef.current = 0;
 		setHighlighted(0);
+		setMarkdownPreview(false);
 		editor.current?.clear();
 	}, []);
 
@@ -1539,6 +1557,17 @@ export const ChatComposer = memo(function ChatComposer({
 
 	function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
 		if (event.nativeEvent.isComposing) return;
+		if ((event.metaKey || event.ctrlKey) && !event.altKey) {
+			const key = event.key.toLowerCase();
+			if (key === "e" && !event.shiftKey && editor.current?.wrapInlineCode()) {
+				event.preventDefault();
+				return;
+			}
+			if (key === "m" && event.shiftKey && editor.current?.wrapCodeBlock()) {
+				event.preventDefault();
+				return;
+			}
+		}
 		// Enter is handled in Lexical before a newline is inserted; this handler is
 		// only for menu navigation and escape while a completion menu is open.
 		const liveSnapshot = editor.current?.getSnapshot();
@@ -1695,7 +1724,7 @@ export const ChatComposer = memo(function ChatComposer({
 				data-attached-top={attachedTop && !queuedDock && !elicitation ? true : undefined}
 			onClick={(e) => {
 					if (controlsDisabled) return;
-					if ((e.target as HTMLElement).closest('[contenteditable="true"]')) return;
+					if ((e.target as HTMLElement).closest('[contenteditable="true"], [data-composer-preview]')) return;
 					// The focusable context tooltip must keep its focus on click.
 					if (
 						e.target === e.currentTarget ||
@@ -1801,30 +1830,42 @@ export const ChatComposer = memo(function ChatComposer({
 					</div>
 				) : null}
 
-				<ComposerEditor
-					ref={editor}
-					images={composerImages}
-					promptSuggestion={willQueue || starting || editingQueuedTurnId || staged ? undefined : promptSuggestion}
-					disabled={Boolean(disabled || queuedEditRecovery || (!optimisticSend && (submitting || draftMutationPending)))}
-					concealed={sendConcealed && !optimisticSend}
-					label="Message the agent"
-					placeholder={
-						disabledPlaceholder ?? (disabled
-							? "The controller is not connected"
-							: willQueue
-								? (queuePlaceholder ?? "Next message you send will be queued")
-								: emptyPlaceholder ?? "Message the agent")
-					}
-					menuOpen={menuOpen}
-					menuId={menuId}
-					activeIndex={activeIndex}
-					onChange={onEditorChange}
-					onComplete={completeFromEditor}
-					onEnter={onEditorEnter}
-					onCompositionChange={setIsComposing}
-					onKeyDown={onKeyDown}
-					onPaste={onPaste}
-				/>
+				<div className={markdownPreview ? "hidden" : undefined}>
+					<ComposerEditor
+						ref={editor}
+						images={composerImages}
+						promptSuggestion={willQueue || starting || editingQueuedTurnId || staged ? undefined : promptSuggestion}
+						disabled={composerEditorDisabled}
+						concealed={sendConcealed && !optimisticSend}
+						label="Message the agent"
+						placeholder={
+							disabledPlaceholder ?? (disabled
+								? "The controller is not connected"
+								: willQueue
+									? (queuePlaceholder ?? "Next message you send will be queued")
+									: emptyPlaceholder ?? "Message the agent")
+						}
+						menuOpen={menuOpen}
+						menuId={menuId}
+						activeIndex={activeIndex}
+						onChange={onEditorChange}
+						onComplete={completeFromEditor}
+						onEnter={onEditorEnter}
+						onCompositionChange={setIsComposing}
+						onKeyDown={onKeyDown}
+						onPaste={onPaste}
+					/>
+				</div>
+				{markdownPreview ? (
+					<div
+						role="region"
+						aria-label="Markdown preview"
+						data-composer-preview
+						className="chat-composer-scrollbar max-h-40 min-h-[4.5rem] w-full overflow-y-auto overscroll-contain py-1 pl-[7px] pr-0"
+					>
+						<ChatMarkdown text={textRef.current} className="text-base!" />
+					</div>
+				) : null}
 
 				{attachmentError ? (
 					<p role="alert" className="px-1.5 text-xs leading-snug text-destructive">
@@ -1860,6 +1901,73 @@ export const ChatComposer = memo(function ChatComposer({
 
 				<div className="flex h-7 items-center gap-1.5">
 					<div role="group" aria-label="Message tools" className="flex min-w-0 flex-1 items-center gap-0.5">
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<span className="inline-flex">
+									<Button
+										type="button"
+										variant="ghost"
+										size="icon-sm"
+										disabled={composerEditorDisabled || markdownPreview}
+										aria-label="Inline code"
+										aria-keyshortcuts="Meta+E Control+E"
+										onMouseDown={(event) => event.preventDefault()}
+										onClick={() => editor.current?.wrapInlineCode()}
+										className="size-7 shrink-0 rounded-full p-0 text-muted-foreground hover:bg-interactive-active! hover:text-foreground"
+									>
+										<Code aria-hidden="true" className="size-3.5" />
+									</Button>
+								</span>
+							</TooltipTrigger>
+							<TooltipContent side="bottom">Inline code · ⌘E / Ctrl+E</TooltipContent>
+						</Tooltip>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<span className="inline-flex">
+									<Button
+										type="button"
+										variant="ghost"
+										size="icon-sm"
+										disabled={composerEditorDisabled || markdownPreview}
+										aria-label="Code block"
+										aria-keyshortcuts="Meta+Shift+M Control+Shift+M"
+										onMouseDown={(event) => event.preventDefault()}
+										onClick={() => editor.current?.wrapCodeBlock()}
+										className="size-7 shrink-0 rounded-full p-0 text-muted-foreground hover:bg-interactive-active! hover:text-foreground"
+									>
+										<CodeXml aria-hidden="true" className="size-3.5" />
+									</Button>
+								</span>
+							</TooltipTrigger>
+							<TooltipContent side="bottom">Code block · ⌘⇧M / Ctrl+Shift+M</TooltipContent>
+						</Tooltip>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button
+									type="button"
+									variant="ghost"
+									size="icon-sm"
+									aria-label={markdownPreview ? "Edit markdown" : "Preview markdown"}
+									aria-pressed={markdownPreview}
+									onClick={() => {
+										if (markdownPreview) {
+											setMarkdownPreview(false);
+											window.requestAnimationFrame(() => editor.current?.focus());
+											return;
+										}
+										setMarkdownPreview(true);
+									}}
+									className="size-7 shrink-0 rounded-full p-0 text-muted-foreground hover:bg-interactive-active! hover:text-foreground"
+								>
+									{markdownPreview ? (
+										<Pencil aria-hidden="true" className="size-3.5" />
+									) : (
+										<Eye aria-hidden="true" className="size-3.5" />
+									)}
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent side="bottom">{markdownPreview ? "Edit markdown" : "Preview markdown"}</TooltipContent>
+						</Tooltip>
 						{canAttach ? (
 							<>
 								<input
