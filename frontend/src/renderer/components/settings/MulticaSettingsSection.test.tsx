@@ -52,17 +52,22 @@ describe("MulticaSettingsSection", () => {
 		await open();
 
 		expect(screen.getByRole("heading", { name: "Multica" })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Server" })).toHaveTextContent("Local / self-hosted");
+		expect(screen.getByRole("button", { name: "Server" })).toHaveTextContent("Self-hosted (local or remote)");
+		expect(screen.getByText(/If it can send email, sign in with its email code/)).toBeInTheDocument();
+		expect(screen.getByText(/Google sign-in opens in your browser and can't finish inside AO yet/)).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Server" }));
+		expect(await screen.findByRole("menuitem", { name: "Multica Cloud (official)" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "Self-hosted (local or remote)" })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Save and switch" })).not.toBeInTheDocument();
 	});
 
 	it("switches to Multica Cloud only after the change is applied, and warns about sign-in and data first", async () => {
 		await open();
 
-		await chooseMode("Multica Cloud");
+		await chooseMode("Multica Cloud (official)");
 
 		expect(window.ao!.multica.setSettings).not.toHaveBeenCalled();
-		expect(screen.getByText(/has its own accounts and data/)).toBeInTheDocument();
+		expect(screen.getByText(/selected server has its own accounts and data/)).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Edit Multica URL" })).not.toBeInTheDocument();
 
 		await userEvent.click(screen.getByRole("button", { name: "Save and switch" }));
@@ -71,20 +76,20 @@ describe("MulticaSettingsSection", () => {
 			expect(window.ao!.multica.setSettings).toHaveBeenCalledExactlyOnceWith({ mode: "cloud", customUrl: "http://localhost:3000", apiUrl: "" }),
 		);
 		await waitFor(() => expect(screen.queryByRole("button", { name: "Save and switch" })).not.toBeInTheDocument());
-		expect(screen.getByRole("button", { name: "Server" })).toHaveTextContent("Multica Cloud");
+		expect(screen.getByRole("button", { name: "Server" })).toHaveTextContent("Multica Cloud (official)");
 		expect(screen.getByText(/multica login --profile ao-multica\.ai/)).toBeInTheDocument();
 	});
 
 	it("explains what a switch leaves behind, in a polite live region the buttons are described by", async () => {
 		await open();
 
-		await chooseMode("Multica Cloud");
+		await chooseMode("Multica Cloud (official)");
 
-		const notes = screen.getByText(/has its own accounts and data/).closest("[role='status']")!;
+		const notes = screen.getByText(/selected server has its own accounts and data/).closest("[role='status']")!;
 		expect(notes).toHaveAttribute("aria-live", "polite");
-		expect(notes).toHaveTextContent("Issue links made on the other server stay hidden");
+		expect(notes).toHaveTextContent("Links from the server you're leaving stay hidden");
 		expect(notes).toHaveTextContent("keeps running");
-		expect(notes).toHaveTextContent("hosted daemon only serves the default local server");
+		expect(notes).toHaveTextContent("hosted daemon only serves the default local Multica server");
 		expect(screen.getByRole("button", { name: "Save and switch" })).toHaveAttribute("aria-describedby", notes.id);
 	});
 
@@ -95,14 +100,14 @@ describe("MulticaSettingsSection", () => {
 		const input = screen.getByRole("textbox", { name: "API URL (optional)" });
 		await userEvent.type(input, "https://api.other.example.com{Enter}");
 
-		expect(screen.getByText(/has its own accounts and data/)).toBeInTheDocument();
+		expect(screen.getByText(/selected server has its own accounts and data/)).toBeInTheDocument();
 	});
 
 	it("announces that the server is being checked", async () => {
 		let finish!: (result: MulticaSetSettingsResult) => void;
 		window.ao!.multica.setSettings = vi.fn(() => new Promise<MulticaSetSettingsResult>((resolve) => (finish = resolve)));
 		await open();
-		await chooseMode("Multica Cloud");
+		await chooseMode("Multica Cloud (official)");
 
 		await userEvent.click(screen.getByRole("button", { name: "Save and switch" }));
 
@@ -198,11 +203,11 @@ describe("MulticaSettingsSection", () => {
 
 	it("discards the pending change on cancel", async () => {
 		await open();
-		await chooseMode("Multica Cloud");
+		await chooseMode("Multica Cloud (official)");
 
 		await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
-		expect(screen.getByRole("button", { name: "Server" })).toHaveTextContent("Local / self-hosted");
+		expect(screen.getByRole("button", { name: "Server" })).toHaveTextContent("Self-hosted (local or remote)");
 		expect(window.ao!.multica.setSettings).not.toHaveBeenCalled();
 	});
 
