@@ -168,6 +168,153 @@ noetaxis_process_start() {
 	ps -ww -o lstart= -p "$1" 2>/dev/null | /usr/bin/tr -s ' ' | /usr/bin/sed 's/^ //; s/ $//' || true
 }
 
+noetaxis_process_info() {
+	local pid="$1" raw actual parent weekday month day clock year command_line
+	raw="$(ps -ww -o pid=,ppid=,lstart=,command= -p "$pid" 2>/dev/null)" || return 1
+	read -r actual parent weekday month day clock year command_line <<< "$raw"
+	[[ "$actual" == "$pid" && "$parent" =~ ^[0-9]+$ && -n "$year" && -n "$command_line" ]] || return 1
+	printf '%s\t%s\t%s %s %s %s %s\t%s\n' "$actual" "$parent" "$weekday" "$month" "$day" "$clock" "$year" "$command_line"
+}
+
+noetaxis_normalized_file_path() {
+	local directory
+	[[ "$1" == /* && "$1" != *$'\n'* && "$1" != *$'\r'* ]] || return 1
+	directory="$(cd -P "$(/usr/bin/dirname "$1")" 2>/dev/null && pwd -P)" || return 1
+	printf '%s/%s' "$directory" "$(/usr/bin/basename "$1")"
+}
+
+noetaxis_process_executable_path() {
+	local pid="$1" output
+	[[ "$pid" =~ ^[0-9]+$ ]] || return 1
+	# proc_pidpath reads p_textvp; argv, ps comm and lsof txt mappings are not executable identity.
+	output="$(noetaxis_bounded 5 /usr/bin/python3 -I -S -c '
+import ctypes
+import os
+import sys
+try:
+    buffer = ctypes.create_string_buffer(4096)
+    libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    lookup = libproc.proc_pidpath
+    lookup.argtypes = (ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32)
+    lookup.restype = ctypes.c_int
+    if lookup(int(sys.argv[1]), buffer, len(buffer)) <= 0:
+        raise OSError(ctypes.get_errno(), "proc_pidpath failed")
+    result = os.fsdecode(buffer.value)
+    if not result.startswith("/") or "\n" in result or "\r" in result:
+        raise ValueError("invalid executable path")
+    sys.stdout.write(result)
+except Exception:
+    sys.exit(1)
+' "$pid" 2>/dev/null && printf '\001')" || return 1
+	[[ "$output" == *$'\001' ]] || return 1
+	output="${output%$'\001'}"
+	noetaxis_normalized_file_path "$output"
+}
+
+noetaxis_executable_path_is_in_bundle() {
+	local app_path="$1" executable="$2" directory
+	directory="$(noetaxis_normalized_file_path "$executable")" || return 1
+	directory="${directory%/*}"
+	while [[ -n "$directory" ]]; do
+		[[ "$directory" -ef "$app_path/Contents" ]] && return 0
+		directory="${directory%/*}"
+	done
+	return 1
+}
+
+noetaxis_command_matches_bundle_pattern() {
+	local app_path="$1" remaining="$2" suffix="${3:-}" directory="" segment
+	[[ "$remaining" == /* ]] || return 1
+	while [[ "$remaining" == */Contents/* ]]; do
+		segment="${remaining%%/Contents/*}/Contents"
+		directory="$directory$segment"
+		remaining="${remaining#*/Contents/}"
+		if [[ "$directory" -ef "$app_path/Contents" && "$remaining" == "$suffix"* ]]; then return 0; fi
+		directory="$directory/"
+	done
+	return 1
+}
+
+noetaxis_process_executable_is_in_bundle() {
+	local executable
+	executable="$(noetaxis_process_executable_path "$2")" || return 1
+	noetaxis_executable_path_is_in_bundle "$1" "$executable"
+}
+
+noetaxis_process_executable_matches_path() {
+	local expected executable
+	expected="$(noetaxis_normalized_file_path "$1")" || return 1
+	executable="$(noetaxis_process_executable_path "$2")" || return 1
+	[[ "$expected" -ef "$executable" ]]
+}
+
+noetaxis_process_ancestor_chain() {
+	local pid="$1" child_info info current parent start command_line actual depth=0 visited=" $1 "
+	child_info="$(noetaxis_process_info "$pid")" || return 1
+	IFS=$'\t' read -r actual current start command_line <<< "$child_info"
+	while [[ "$current" =~ ^[0-9]+$ && "$current" -gt 1 && "$depth" -lt 64 && "$visited" != *" $current "* ]]; do
+		visited="$visited$current "
+		info="$(noetaxis_process_info "$current")" || break
+		[[ "$(noetaxis_process_info "$pid")" == "$child_info" ]] || break
+		IFS=$'\t' read -r actual parent start command_line <<< "$info"
+		printf '%s\n' "$info"
+		pid="$current"
+		child_info="$info"
+		current="$parent"
+		depth=$((depth + 1))
+	done
+}
+
+noetaxis_process_has_bundle_ancestor() {
+	local app_path="$1" pid="$2" ancestor parent start command_line
+	while IFS=$'\t' read -r ancestor parent start command_line; do
+		if noetaxis_process_executable_is_in_bundle "$app_path" "$ancestor"; then return 0; fi
+	done < <(noetaxis_process_ancestor_chain "$pid")
+	return 1
+}
+
+noetaxis_process_bundle_session_id() {
+	local app_path="$1" pid="$2" ancestor parent start command_line rest
+	while IFS=$'\t' read -r ancestor parent start command_line; do
+		noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" "Resources/daemon/ao chat-host " || continue
+		noetaxis_process_executable_matches_path "$app_path/Contents/Resources/daemon/ao" "$ancestor" || continue
+		rest="${command_line#*/Contents/Resources/daemon/ao chat-host }"
+		printf '%s' "${rest%% *}"
+		return 0
+	done < <(noetaxis_process_ancestor_chain "$pid")
+	return 1
+}
+
+noetaxis_foreign_bundle_processes() {
+	local app_path="$1" pid executable info actual parent start command_line
+	for pid in $(pgrep -if "$(noetaxis_regex_escape "$app_path/Contents/")" 2>/dev/null || true); do
+		[[ "$pid" =~ ^[0-9]+$ && "$pid" -ne "$$" ]] || continue
+		info="$(noetaxis_process_info "$pid")" || { printf '%s\t<unverified process identity>\n' "$pid"; continue; }
+		IFS=$'\t' read -r actual parent start command_line <<< "$info"
+		executable="$(noetaxis_process_executable_path "$pid")" || { printf '%s\t<unverified executable path>\n' "$pid"; continue; }
+		if noetaxis_executable_path_is_in_bundle "$app_path" "$executable"; then
+			noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" && continue
+		elif noetaxis_process_has_bundle_ancestor "$app_path" "$pid"; then
+			continue
+		fi
+		printf '%s\t%s\n' "$pid" "$command_line"
+	done
+}
+
+noetaxis_bundle_descendant_processes() {
+	local app_path="$1" pid executable info actual parent start command_line session_id
+	for pid in $(pgrep -if "$(noetaxis_regex_escape "$app_path/Contents/")" 2>/dev/null || true); do
+		[[ "$pid" =~ ^[0-9]+$ && "$pid" -ne "$$" ]] || continue
+		info="$(noetaxis_process_info "$pid")" || continue
+		IFS=$'\t' read -r actual parent start command_line <<< "$info"
+		executable="$(noetaxis_process_executable_path "$pid")" || continue
+		noetaxis_executable_path_is_in_bundle "$app_path" "$executable" && continue
+		noetaxis_process_has_bundle_ancestor "$app_path" "$pid" || continue
+		session_id="$(noetaxis_process_bundle_session_id "$app_path" "$pid" || true)"
+		printf '%s\t%s\t%s\t%s\n' "$pid" "$start" "$session_id" "$command_line"
+	done
+}
+
 noetaxis_error() {
 	printf 'Error: %s\n' "$1" >&2
 }
@@ -273,22 +420,27 @@ noetaxis_shipit_running() {
 	return 1
 }
 
-# pgrep -f takes an extended regular expression. App paths come from APPS_DIR and may
-# contain regex metacharacters (".", "(", "+"), so every pattern is escaped: a path
-# must match literally, neither missing a real process nor matching a lookalike.
+# pgrep takes an extended regular expression; escape paths before selecting candidates.
+# Case aliases are included, then filesystem and executable identity decide ownership.
 noetaxis_regex_escape() {
 	printf '%s' "$1" | /usr/bin/sed 's/[]\\.*^$(){}?+|[]/\\&/g'
 }
 
 noetaxis_pattern_running() {
-	pgrep -f "$(noetaxis_regex_escape "$1")" >/dev/null 2>&1
+	[[ -n "$(noetaxis_pattern_pids "$1")" ]]
 }
 
 # Process ids (space separated, possibly empty) of the processes matching a pgrep pattern.
 noetaxis_pattern_pids() {
-	local pids
-	pids="$(pgrep -f "$(noetaxis_regex_escape "$1")" 2>/dev/null | /usr/bin/tr '\n' ' ')" || true
-	printf '%s' "${pids% }"
+	local pattern="$1" app_path="${1%/Contents/*}" pid command_line pids=""
+	for pid in $(pgrep -if "$(noetaxis_regex_escape "$pattern")" 2>/dev/null || true); do
+		[[ "$pid" =~ ^[0-9]+$ && "$pid" -ne "$$" ]] || continue
+		command_line="$(ps -ww -o command= -p "$pid" 2>/dev/null || true)"
+		noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" "${pattern#"$app_path/Contents/"}" || continue
+		noetaxis_process_executable_is_in_bundle "$app_path" "$pid" || continue
+		pids="$pids${pids:+ }$pid"
+	done
+	printf '%s' "$pids"
 }
 
 noetaxis_daemon_running() {
@@ -317,8 +469,20 @@ noetaxis_desktop_pids() {
 # processes under the bundle refuse unless the caller passes 1 (the
 # --allow-background-processes flag).
 noetaxis_assert_idle() {
-	local app_path="$1" allow_background="${2:-0}" cli pids found=""
+	local app_path="$1" allow_background="${2:-0}" cli pids found="" foreign descendants count
 	cli="$app_path/Contents/Resources/daemon/ao"
+	foreign="$(noetaxis_foreign_bundle_processes "$app_path")"
+	if [[ -n "$foreign" ]]; then
+		noetaxis_error "Processes that mention $app_path/Contents/ but are not part of this bundle are running:"
+		printf '%s\n' "$foreign" >&2
+		return 21
+	fi
+	descendants="$(noetaxis_bundle_descendant_processes "$app_path")"
+	if [[ -n "$descendants" ]]; then
+		count="$(printf '%s\n' "$descendants" | /usr/bin/awk 'END { print NR }')"
+		printf 'Agent processes of live sessions (%s):\n%s\n' "$count" "$descendants" >&2
+		if [[ "$allow_background" -ne 1 ]]; then return 21; fi
+	fi
 	if noetaxis_desktop_running "$app_path"; then
 		pids="$(noetaxis_desktop_pids "$app_path")"
 		noetaxis_error "The Agent Orchestrator desktop app is still running from $app_path${pids:+ (pid $pids)}. On macOS, Quit and Cmd+Q only close its window: the Dock icon, menu-bar tray and daemon stay up. Quit it completely yourself: click the Agent Orchestrator icon in the menu bar and choose \"Quit AO Completely\", then wait about 10 seconds for the daemon to stop and rerun this command. This command never quits AO or kills processes for you."

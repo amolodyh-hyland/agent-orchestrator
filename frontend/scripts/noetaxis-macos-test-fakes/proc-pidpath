@@ -1,0 +1,32 @@
+#!/bin/bash
+pid="${@: -1}"
+table="${NOETAXIS_FAKE_EXECUTABLES:-${NOETAXIS_SIM:-${PATH%%:*}}/executables}"
+[[ "$pid" =~ ^[0-9]+$ && -f "$table" ]] || exit 1
+executable=""
+fallback=""
+while IFS='|' read -r row_pid row_path; do
+	if [[ "$row_pid" == "$pid" ]]; then executable="$row_path"; break; fi
+	if [[ "$row_pid" == '*' ]]; then fallback="$row_path"; fi
+done < "$table"
+fixture_process=0
+if [[ -z "$executable" && -f "${NOETAXIS_SIM:-}/procs" ]]; then
+	while IFS='|' read -r row_pid _; do
+		if [[ "$row_pid" == "$pid" ]]; then fixture_process=1; break; fi
+	done < "$NOETAXIS_SIM/procs"
+fi
+if [[ -z "$executable" && "$fixture_process" -eq 0 ]]; then executable="$fallback"; fi
+[[ -n "$executable" && "$executable" != '!'* ]] || exit 1
+executable="${executable//<APP>/${APPS_DIR:-}/Agent Orchestrator.app}"
+transition="${NOETAXIS_SIM:-}/cfg/proc_path_transition_$pid"
+if [[ -f "$transition" ]]; then
+	IFS='|' read -r after next < "$transition"
+	count=0
+	if [[ -f "$transition.count" ]]; then read -r count < "$transition.count"; fi
+	count=$((count + 1))
+	printf '%s\n' "$count" > "$transition.count"
+	if [[ "$count" -eq "$after" ]]; then
+		/usr/bin/awk -F '|' -v pid="$pid" -v executable="$next" '$1 == pid { print $1 "|" executable; next } { print }' "$table" > "$table.tmp"
+		/bin/mv "$table.tmp" "$table"
+	fi
+fi
+printf '%s' "$executable"

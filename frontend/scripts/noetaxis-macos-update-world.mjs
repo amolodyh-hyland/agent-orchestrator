@@ -14,6 +14,7 @@ import { writeManifest } from "./noetaxis-macos/package-artifacts.mjs";
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const realScriptsDir = path.join(here, "noetaxis-macos");
 export const fakesDir = path.join(here, "noetaxis-macos-test-fakes");
+const fakeProcPidPath = path.join(fakesDir, "proc-pidpath");
 export const oldVersion = "0.13.4-noetaxis.1111111";
 export const newVersion = "0.13.4-noetaxis.2222222";
 const newRevision = "2222222aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -43,6 +44,7 @@ async function makeAppWithFakeCli(appPath, appVersion, sourceRevision = "") {
 	const contents = path.join(appPath, "Contents");
 	const resources = path.join(contents, "Resources");
 	await mkdir(path.join(resources, "daemon"), { recursive: true });
+	for (const directory of ["MacOS", "Frameworks", "Resources/acp-runtime/node/bin"]) await mkdir(path.join(contents, directory), { recursive: true });
 	const revisionProperty = sourceRevision ? `<key>NoetaxisSourceRevision</key><string>${sourceRevision}</string>` : "";
 	await writeFile(
 		path.join(contents, "Info.plist"),
@@ -59,6 +61,31 @@ async function makeAppWithFakeCli(appPath, appVersion, sourceRevision = "") {
 }
 
 const defaultSessions = [];
+
+export async function copyFakeScripts(sourceDir, destination) {
+	await mkdir(destination, { recursive: true });
+	for (const name of await readdir(sourceDir)) {
+		if (name.endsWith(".sh")) await cp(path.join(sourceDir, name), path.join(destination, name));
+	}
+	const commonFile = path.join(destination, "common.sh");
+	const original = await readFile(commonFile, "utf8");
+	const fake = original.replaceAll("noetaxis_bounded 5 /usr/bin/python3", fakeProcPidPath);
+	assert.notEqual(fake, original, "fake worlds must use their executable-vnode lookup");
+	await writeFile(commonFile, fake);
+	await cp(path.join(sourceDir, "pkg-scripts"), path.join(destination, "pkg-scripts"), { recursive: true });
+	for (const name of ["install.sh", "update.sh", "rollback.sh"]) await chmod(path.join(destination, name), 0o755);
+	return destination;
+}
+
+function fixtureExecutable(command, app, explicit = "") {
+	if (explicit) return explicit.replaceAll("<APP>", app);
+	for (const name of ["Resources/daemon/ao", "Resources/acp-runtime/node/bin/node", "MacOS/Agent Orchestrator"]) {
+		const executable = `${app}/Contents/${name}`;
+		if (command === executable || command.startsWith(`${executable} `)) return executable;
+	}
+	if (command.startsWith(`${app}/Contents/Frameworks/`)) return `${app}/Contents/Frameworks/fake-helper`;
+	return path.join(path.dirname(path.dirname(app)), "foreign-executables", command.split(" ", 1)[0].replace(/^\/+/, ""));
+}
 
 /**
  * options:
@@ -82,9 +109,11 @@ export async function makeWorld(t, label, options = {}) {
 	const bin = path.join(root, "bin");
 	const tmp = path.join(root, "tmp");
 	const artifactDir = path.join(root, "build");
+	const scriptsDir = path.join(root, "scripts", "noetaxis-macos");
 	for (const directory of [home, appsDir, path.join(sim, "cfg"), bin, tmp, path.join(artifactDir, "Applications"), path.join(home, ".ao/data")]) {
 		await mkdir(directory, { recursive: true });
 	}
+	await copyFakeScripts(realScriptsDir, scriptsDir);
 	const targetApp = path.join(appsDir, appName);
 	const newApp = path.join(artifactDir, "Applications", appName);
 	await makeAppWithFakeCli(targetApp, oldVersion);
@@ -112,13 +141,22 @@ export async function makeWorld(t, label, options = {}) {
 	const procs = [];
 	const running = options.running !== false;
 	if (running) {
-		procs.push(`${targetApp}/Contents/MacOS/Agent Orchestrator`);
-		procs.push(`${targetApp}/Contents/Frameworks/Agent Orchestrator Helper.app/Contents/MacOS/Agent Orchestrator Helper --type=gpu-process`);
-		procs.push(`${targetApp}/Contents/Resources/daemon/ao daemon`);
-		for (const session of sessions) if (!session.terminated && session.host) procs.push(`${targetApp}/Contents/Resources/daemon/ao chat-host --session ${session.id}`);
+		procs.push({ command: `${targetApp}/Contents/MacOS/Agent Orchestrator`, ppid: 1 });
+		procs.push({ command: `${targetApp}/Contents/Frameworks/Agent Orchestrator Helper.app/Contents/MacOS/Agent Orchestrator Helper --type=gpu-process`, ppid: 4001 });
+		procs.push({ command: `${targetApp}/Contents/Resources/daemon/ao daemon`, ppid: 4001 });
+		for (const session of sessions) if (!session.terminated && session.host) procs.push({ command: `${targetApp}/Contents/Resources/daemon/ao chat-host ${session.id} ${home}/.ao/data ${home}/.ao/worktrees`, ppid: 4003 });
 	}
-	procs.push(...(options.extraProcs ?? []).map((command) => command.replaceAll("<APP>", targetApp)));
-	await writeFile(path.join(sim, "procs"), procs.map((command, index) => `${4001 + index}|${command}`).join("\n") + (procs.length ? "\n" : ""));
+	for (const extra of options.extraProcs ?? []) procs.push(typeof extra === "string" ? { command: extra } : extra);
+	const rows = procs.map((row, index) => ({ ...row, command: row.command.replaceAll("<APP>", targetApp), pid: row.pid ?? 4001 + index, ppid: row.ppid ?? 1 }));
+	for (const row of rows) {
+		row.executable = fixtureExecutable(row.command, targetApp, row.executable);
+		if (row.executable.startsWith("/")) await mkdir(path.dirname(row.executable), { recursive: true });
+	}
+	await writeFile(path.join(sim, "procs"), rows.map(({ pid, command }) => `${pid}|${command}\n`).join(""));
+	await writeFile(path.join(sim, "ppids"), rows.map(({ pid, ppid }) => `${pid}|${ppid}\n`).join(""));
+	await writeFile(path.join(sim, "executables"), rows.map(({ pid, executable }) => `${pid}|${executable}\n`).join("") + "*|/bin/bash\n");
+	await writeFile(path.join(sim, "agents"), rows.filter((row) => row.session).map(({ pid, session }) => `${pid}|${session}\n`).join(""));
+	await writeFile(path.join(sim, "text-mappings"), rows.flatMap(({ pid, mappings }) => (mappings ?? []).map((name) => `${pid}|${name.replaceAll("<APP>", targetApp)}\n`)).join(""));
 	await writeFile(path.join(sim, "calls.log"), "");
 	for (const [name, value] of Object.entries(options.cfg ?? {})) {
 		await writeFile(path.join(sim, "cfg", name), value === true ? "" : String(value));
@@ -132,8 +170,10 @@ export async function makeWorld(t, label, options = {}) {
 		PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`,
 		NOETAXIS_SIM: sim,
 		NOETAXIS_FAKES: fakesDir,
+		NOETAXIS_FAKE_EXECUTABLES: path.join(sim, "executables"),
+		NOETAXIS_TEST_SCRIPTS_DIR: scriptsDir,
 		NOETAXIS_POLL_INTERVAL: "0.05",
-		NOETAXIS_LSOF: path.join(fakesDir, "no-lsof"),
+		NOETAXIS_LSOF: path.join(fakesDir, "lsof"),
 		NOETAXIS_KILL: path.join(fakesDir, "kill"),
 		NOETAXIS_PS: path.join(fakesDir, "ps"),
 		NOETAXIS_OSASCRIPT: path.join(fakesDir, "osascript"),
@@ -151,6 +191,7 @@ export async function makeWorld(t, label, options = {}) {
 		sim,
 		bin,
 		artifactDir,
+		scriptsDir,
 		targetApp,
 		newApp,
 		env,
@@ -159,7 +200,8 @@ export async function makeWorld(t, label, options = {}) {
 		// Output goes to files, not pipes: a stray grandchild that outlives the script can then not hold
 		// the test up, and a timeout keeps everything the script printed plus the processes still alive
 		// under this world (evidence for the rare multi-minute stalls seen on a loaded host).
-		run(args, { input = "", scriptsDir = realScriptsDir, script = "install.sh", extraEnv = {}, timeout = 150_000 } = {}) {
+		run(args, { input = "", scriptsDir: requestedScripts = realScriptsDir, script = "install.sh", extraEnv = {}, cwd, timeout = 150_000 } = {}) {
+			const scriptsDir = requestedScripts === realScriptsDir ? world.scriptsDir : requestedScripts;
 			const outPath = path.join(root, `run-${Math.random().toString(36).slice(2)}.out`);
 			const errPath = `${outPath}.err`;
 			const outFd = openSync(outPath, "w");
@@ -171,7 +213,7 @@ export async function makeWorld(t, label, options = {}) {
 			const sampler = spawn("/bin/sh", ["-c", `/bin/sleep 120; /bin/ps -axo pid,ppid,stat,wchan,etime,command | /usr/bin/grep -F "${root}" > "${samplePath}"`], { stdio: "ignore" });
 			let result;
 			try {
-				result = spawnSync(path.join(scriptsDir, script), args, { input, env: { ...env, ...extraEnv }, timeout, killSignal: "SIGKILL", encoding: "utf8", stdio: ["pipe", outFd, errFd] });
+				result = spawnSync(path.join(scriptsDir, script), args, { cwd, input, env: { ...env, ...extraEnv }, timeout, killSignal: "SIGKILL", encoding: "utf8", stdio: ["pipe", outFd, errFd] });
 			} finally {
 				sampler.kill();
 				closeSync(outFd);
@@ -206,11 +248,14 @@ export async function makeWorld(t, label, options = {}) {
 			await mkdir(path.join(sim, "timers"), { recursive: true });
 			await writeFile(path.join(sim, "timers", `t${Math.random().toString(36).slice(2)}`), `${ticks}|${action}\n`);
 		},
-		async addProc(command) {
+		async addProc(command, ppid = 1, explicitExecutable = "") {
 			const procsFile = path.join(sim, "procs");
 			const existing = await readFile(procsFile, "utf8");
 			const pid = 9000 + existing.split("\n").filter(Boolean).length;
 			await writeFile(procsFile, `${existing}${pid}|${command}\n`);
+			const executable = fixtureExecutable(command, targetApp, explicitExecutable);
+			if (executable.startsWith("/")) await mkdir(path.dirname(executable), { recursive: true });
+			for (const [file, value] of [["ppids", ppid], ["executables", executable]]) await writeFile(path.join(sim, file), `${await readFile(path.join(sim, file), "utf8")}${pid}|${value}\n`);
 			return pid;
 		},
 		async sessionsNow() {
@@ -241,10 +286,7 @@ export async function mutatedScripts(t, file, search, replacement) {
 		await makeWritable(directory);
 		await rm(directory, { recursive: true, force: true });
 	});
-	for (const name of await readdir(realScriptsDir)) {
-		if (/\.(sh)$/.test(name)) await cp(path.join(realScriptsDir, name), path.join(directory, name));
-	}
-	await mkdir(path.join(directory, "pkg-scripts"), { recursive: true });
+	await copyFakeScripts(realScriptsDir, directory);
 	// search === null: just a copy, for mutations the caller applies itself.
 	if (search === null) {
 		for (const name of ["install.sh", "update.sh", "rollback.sh"]) await chmod(path.join(directory, name), 0o755);
