@@ -1051,7 +1051,7 @@ test("a ready daemon of another binary, or with a pid that is not this bundle's 
 });
 
 test("mutation: accepting a ready daemon without checking its identity is caught", darwin, async (t) => {
-	let dir = await mutatedScripts(t, "update-lib.sh", 'if [[ -z "$executable" || "$(noetaxis_physical_file "$executable")" != "$(noetaxis_physical_file "$expected")" ]]; then', "if false; then");
+	let dir = await mutatedScripts(t, "update-lib.sh", 'if [[ -z "$executable" || ! "$executable" -ef "$expected" ]]; then', "if false; then");
 	const file = path.join(dir, "update-lib.sh");
 	const text = await readFile(file, "utf8");
 	// Only the health gate's pid check (the identity helper for the shared run file has the same line earlier in the file).
@@ -1933,13 +1933,13 @@ test("mutation: ending sessions without --end-sessions is caught", darwin, async
 test("mutation: signalling processes of other bundles is caught", darwin, async (t) => {
 	assert.deepEqual(await scenarioLookalikeProcess(t, realScriptsDir), []);
 	// Remove the candidate filter, both executable checks and the foreign-process refusals.
-	let dir = await mutatedScripts(t, "update-lib.sh", '[[ "$command_line" == "$app_path/Contents/"* ]] || continue', ":");
+	let dir = await mutatedScripts(t, "update-lib.sh", 'noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" || continue', ":");
 	const refusal = await readFile(path.join(dir, "update-lib.sh"), "utf8");
 	const looser = refusal
 		.replaceAll('if [[ -n "$foreign" ]]; then', "if false; then")
 		.replace('noetaxis_process_executable_is_in_bundle "$app_path" "$pid" || continue', ":")
 		.replace('if ! noetaxis_process_executable_is_in_bundle "$app_path" "$pid"; then', "if false; then")
-		.replace(/(noetaxis_signal_own_pid\(\) \{[\s\S]*?)"\$app_path\/Contents\/"\*\) ;;/, "$1*) ;;");
+		.replace('if ! noetaxis_command_matches_bundle_pattern "$app_path" "$command_line"; then', 'if false; then');
 	assert.notEqual(looser, refusal);
 	const { writeFile } = await import("node:fs/promises");
 	await writeFile(path.join(dir, "update-lib.sh"), looser);

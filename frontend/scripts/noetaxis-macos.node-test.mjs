@@ -371,10 +371,10 @@ test("install explains which part of AO is still running and never stops a proce
 	const escape = (text) => text.replace(/[\][\\.*^$(){}?+|]/g, "\\$&");
 	const pgrepArgs = async (mode) => (await readFile(path.join(f.root, `bin-${mode}-plain`, "pgrep-calls"), "utf8")).trim().split("\n");
 	const desktopCalls = await pgrepArgs("desktop");
-	assert.ok(desktopCalls.includes(`-f ${escape(`${f.targetApp}/Contents/MacOS/`)}`), desktopCalls.join("\n"));
-	assert.ok((await pgrepArgs("daemon")).includes(`-f ${escape(`${cli} daemon`)}`));
-	assert.ok((await pgrepArgs("chat-host")).includes(`-f ${escape(`${cli} chat-host`)}`));
-	assert.ok((await pgrepArgs("other")).includes(`-f ${escape(`${f.targetApp}/Contents/`)}`));
+	assert.ok(desktopCalls.includes(`-if ${escape(`${f.targetApp}/Contents/MacOS/`)}`), desktopCalls.join("\n"));
+	assert.ok((await pgrepArgs("daemon")).includes(`-if ${escape(`${cli} daemon`)}`));
+	assert.ok((await pgrepArgs("chat-host")).includes(`-if ${escape(`${cli} chat-host`)}`));
+	assert.ok((await pgrepArgs("other")).includes(`-if ${escape(`${f.targetApp}/Contents/`)}`));
 	// The bundled ao CLI is only ever named in messages, never run with stop.
 	for (const app of [f.targetApp]) {
 		assert.equal(await readFile(path.join(app, "Contents/Resources/daemon/ao-stop-calls"), "utf8").catch(() => ""), "");

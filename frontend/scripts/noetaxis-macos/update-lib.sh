@@ -141,11 +141,11 @@ noetaxis_wait_until() {
 # "pid<TAB>command" for each candidate whose executable vnode belongs to this bundle.
 noetaxis_own_bundle_processes() {
 	local app_path="$1" pid command_line
-	for pid in $(pgrep -f "$(noetaxis_regex_escape "$app_path/Contents/")" 2>/dev/null || true); do
+	for pid in $(pgrep -if "$(noetaxis_regex_escape "$app_path/Contents/")" 2>/dev/null || true); do
 		[[ "$pid" =~ ^[0-9]+$ ]] || continue
 		[[ "$pid" -ne "$$" ]] || continue
 		command_line="$(ps -ww -o command= -p "$pid" 2>/dev/null || true)"
-		[[ "$command_line" == "$app_path/Contents/"* ]] || continue
+		noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" || continue
 		noetaxis_process_executable_is_in_bundle "$app_path" "$pid" || continue
 		printf '%s\t%s\n' "$pid" "$command_line"
 	done
@@ -153,12 +153,10 @@ noetaxis_own_bundle_processes() {
 
 noetaxis_process_kind() {
 	local app_path="$1" command_line="$2"
-	case "$command_line" in
-		"$app_path/Contents/Resources/daemon/ao daemon"*) printf 'daemon' ;;
-		"$app_path/Contents/Resources/daemon/ao chat-host"*) printf 'chat-host' ;;
-		"$app_path/Contents/MacOS/"*|"$app_path/Contents/Frameworks/"*) printf 'desktop' ;;
-		*) printf 'helper' ;;
-	esac
+	if noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" 'Resources/daemon/ao daemon'; then printf 'daemon'
+	elif noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" 'Resources/daemon/ao chat-host'; then printf 'chat-host'
+	elif noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" 'MacOS/' || noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" 'Frameworks/'; then printf 'desktop'
+	else printf 'helper'; fi
 }
 
 # Own processes of one kind (desktop, daemon, chat-host, helper) or "any", as "pid<TAB>command".
@@ -180,9 +178,7 @@ noetaxis_none_running_of_kind() {
 noetaxis_own_main_pid() {
 	local app_path="$1" pid command_line
 	while IFS=$'\t' read -r pid command_line; do
-		case "$command_line" in
-			"$app_path/Contents/MacOS/"*) printf '%s' "$pid"; return 0 ;;
-		esac
+		if noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" 'MacOS/'; then printf '%s' "$pid"; return 0; fi
 	done < <(noetaxis_own_bundle_processes "$app_path")
 	return 1
 }
@@ -283,13 +279,10 @@ noetaxis_update_print_unapproved() {
 noetaxis_signal_own_pid() {
 	local app_path="$1" pid="$2" reason="$3" command_line
 	command_line="$(ps -ww -o command= -p "$pid" 2>/dev/null || true)"
-	case "$command_line" in
-		"$app_path/Contents/"*) ;;
-		*)
-			noetaxis_update_log "skipped pid $pid ($reason): no longer a process of $app_path"
-			return 1
-			;;
-	esac
+	if ! noetaxis_command_matches_bundle_pattern "$app_path" "$command_line"; then
+		noetaxis_update_log "skipped pid $pid ($reason): no longer a process of $app_path"
+		return 1
+	fi
 	if ! noetaxis_update_process_approved "$pid" "$command_line"; then
 		noetaxis_update_say "NOT signalling pid $pid ($reason): it was started after the plan was confirmed: $command_line"
 		return 1
@@ -320,7 +313,7 @@ noetaxis_update_status_identity() {
 	pid="$(printf '%s' "$json" | /usr/bin/plutil -extract pid raw -o - - 2>/dev/null || true)"
 	executable="$(printf '%s' "$json" | /usr/bin/plutil -extract executablePath raw -o - - 2>/dev/null || true)"
 	expected="$app_path/Contents/Resources/daemon/ao"
-	if [[ -n "$executable" && "$(noetaxis_physical_file "$executable")" != "$(noetaxis_physical_file "$expected")" ]]; then
+	if [[ -n "$executable" && ! "$executable" -ef "$expected" ]]; then
 		noetaxis_update_identity_detail="the daemon that owns the shared run file (pid ${pid:-unknown}) runs ${executable}, not $expected"
 		return 1
 	fi
@@ -1060,7 +1053,7 @@ noetaxis_update_daemon_healthy() {
 	# daemon that happens to be ready on the same port.
 	pid="$(printf '%s' "$json" | /usr/bin/plutil -extract pid raw -o - - 2>/dev/null || true)"
 	expected="$app_path/Contents/Resources/daemon/ao"
-	if [[ -z "$executable" || "$(noetaxis_physical_file "$executable")" != "$(noetaxis_physical_file "$expected")" ]]; then
+	if [[ -z "$executable" || ! "$executable" -ef "$expected" ]]; then
 		update_health_detail="the daemon that answers runs ${executable:-an unknown binary}, not $expected (an old or foreign daemon is serving the port)"
 		return 1
 	fi

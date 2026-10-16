@@ -212,10 +212,27 @@ except Exception:
 }
 
 noetaxis_executable_path_is_in_bundle() {
-	local app_path="$1" executable="$2" contents normalized
-	contents="$(cd -P "$app_path/Contents" 2>/dev/null && pwd -P)" || return 1
-	normalized="$(noetaxis_normalized_file_path "$executable")" || return 1
-	[[ "$normalized" == "$contents/"* ]]
+	local app_path="$1" executable="$2" directory
+	directory="$(noetaxis_normalized_file_path "$executable")" || return 1
+	directory="${directory%/*}"
+	while [[ -n "$directory" ]]; do
+		[[ "$directory" -ef "$app_path/Contents" ]] && return 0
+		directory="${directory%/*}"
+	done
+	return 1
+}
+
+noetaxis_command_matches_bundle_pattern() {
+	local app_path="$1" remaining="$2" suffix="${3:-}" directory="" segment
+	[[ "$remaining" == /* ]] || return 1
+	while [[ "$remaining" == */Contents/* ]]; do
+		segment="${remaining%%/Contents/*}/Contents"
+		directory="$directory$segment"
+		remaining="${remaining#*/Contents/}"
+		if [[ "$directory" -ef "$app_path/Contents" && "$remaining" == "$suffix"* ]]; then return 0; fi
+		directory="$directory/"
+	done
+	return 1
 }
 
 noetaxis_process_executable_is_in_bundle() {
@@ -228,7 +245,7 @@ noetaxis_process_executable_matches_path() {
 	local expected executable
 	expected="$(noetaxis_normalized_file_path "$1")" || return 1
 	executable="$(noetaxis_process_executable_path "$2")" || return 1
-	[[ "$expected" == "$executable" ]]
+	[[ "$expected" -ef "$executable" ]]
 }
 
 noetaxis_process_ancestor_chain() {
@@ -258,11 +275,10 @@ noetaxis_process_has_bundle_ancestor() {
 
 noetaxis_process_bundle_session_id() {
 	local app_path="$1" pid="$2" ancestor parent start command_line rest
-	local prefix="$app_path/Contents/Resources/daemon/ao chat-host "
 	while IFS=$'\t' read -r ancestor parent start command_line; do
-		[[ "$command_line" == "$prefix"* ]] || continue
+		noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" "Resources/daemon/ao chat-host " || continue
 		noetaxis_process_executable_matches_path "$app_path/Contents/Resources/daemon/ao" "$ancestor" || continue
-		rest="${command_line#"$prefix"}"
+		rest="${command_line#*/Contents/Resources/daemon/ao chat-host }"
 		printf '%s' "${rest%% *}"
 		return 0
 	done < <(noetaxis_process_ancestor_chain "$pid")
@@ -271,19 +287,23 @@ noetaxis_process_bundle_session_id() {
 
 noetaxis_foreign_bundle_processes() {
 	local app_path="$1" pid executable info actual parent start command_line
-	for pid in $(pgrep -f "$(noetaxis_regex_escape "$app_path/Contents/")" 2>/dev/null || true); do
+	for pid in $(pgrep -if "$(noetaxis_regex_escape "$app_path/Contents/")" 2>/dev/null || true); do
 		[[ "$pid" =~ ^[0-9]+$ && "$pid" -ne "$$" ]] || continue
 		info="$(noetaxis_process_info "$pid")" || { printf '%s\t<unverified process identity>\n' "$pid"; continue; }
 		IFS=$'\t' read -r actual parent start command_line <<< "$info"
 		executable="$(noetaxis_process_executable_path "$pid")" || { printf '%s\t<unverified executable path>\n' "$pid"; continue; }
-		if noetaxis_executable_path_is_in_bundle "$app_path" "$executable" || noetaxis_process_has_bundle_ancestor "$app_path" "$pid"; then continue; fi
+		if noetaxis_executable_path_is_in_bundle "$app_path" "$executable"; then
+			noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" && continue
+		elif noetaxis_process_has_bundle_ancestor "$app_path" "$pid"; then
+			continue
+		fi
 		printf '%s\t%s\n' "$pid" "$command_line"
 	done
 }
 
 noetaxis_bundle_descendant_processes() {
 	local app_path="$1" pid executable info actual parent start command_line session_id
-	for pid in $(pgrep -f "$(noetaxis_regex_escape "$app_path/Contents/")" 2>/dev/null || true); do
+	for pid in $(pgrep -if "$(noetaxis_regex_escape "$app_path/Contents/")" 2>/dev/null || true); do
 		[[ "$pid" =~ ^[0-9]+$ && "$pid" -ne "$$" ]] || continue
 		info="$(noetaxis_process_info "$pid")" || continue
 		IFS=$'\t' read -r actual parent start command_line <<< "$info"
@@ -400,9 +420,8 @@ noetaxis_shipit_running() {
 	return 1
 }
 
-# pgrep -f takes an extended regular expression. App paths come from APPS_DIR and may
-# contain regex metacharacters (".", "(", "+"), so every pattern is escaped: a path
-# must match literally, neither missing a real process nor matching a lookalike.
+# pgrep takes an extended regular expression; escape paths before selecting candidates.
+# Case aliases are included, then filesystem and executable identity decide ownership.
 noetaxis_regex_escape() {
 	printf '%s' "$1" | /usr/bin/sed 's/[]\\.*^$(){}?+|[]/\\&/g'
 }
@@ -414,10 +433,10 @@ noetaxis_pattern_running() {
 # Process ids (space separated, possibly empty) of the processes matching a pgrep pattern.
 noetaxis_pattern_pids() {
 	local pattern="$1" app_path="${1%/Contents/*}" pid command_line pids=""
-	for pid in $(pgrep -f "$(noetaxis_regex_escape "$pattern")" 2>/dev/null || true); do
+	for pid in $(pgrep -if "$(noetaxis_regex_escape "$pattern")" 2>/dev/null || true); do
 		[[ "$pid" =~ ^[0-9]+$ && "$pid" -ne "$$" ]] || continue
 		command_line="$(ps -ww -o command= -p "$pid" 2>/dev/null || true)"
-		[[ "$command_line" == "$pattern"* ]] || continue
+		noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" "${pattern#"$app_path/Contents/"}" || continue
 		noetaxis_process_executable_is_in_bundle "$app_path" "$pid" || continue
 		pids="$pids${pids:+ }$pid"
 	done

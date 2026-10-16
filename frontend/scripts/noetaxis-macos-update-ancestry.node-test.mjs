@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { execute, fakesDir, makeWorld, mutatedScripts, oldVersion, realScriptsDir } from "./noetaxis-macos-update-world.mjs";
 
@@ -89,6 +89,77 @@ for (const [name, command] of [["unowned session CLI", agentCommand()], ["argume
 		assert.deepEqual(signals(await world.calls()), []);
 	});
 }
+
+test("a bundled executable with basename argv cannot fall between process inventories", darwin, async (t) => {
+	const world = await makeWorld(t, "ancestry-basename-argv", { extraProcs: [{
+		pid: 6151, ppid: 4003, command: "node <APP>/Contents/Resources/acp-runtime/claude-agent-acp/dist/index.js",
+		executable: "<APP>/Contents/Resources/acp-runtime/node/bin/node",
+	}] });
+	assertBlocked(world.update(["--dry-run"]), [6151]);
+	assertBlocked(world.update(["--yes", "--force"]), [6151]);
+	const classic = world.run(["--dry-run", "--allow-background-processes", world.newApp]);
+	assert.equal(classic.status, 21, classic.stdout + classic.stderr);
+	assert.match(classic.stderr, /6151\tnode /);
+	assert.equal(world.installedVersion(), oldVersion);
+	assert.ok((await world.procs()).some(({ pid }) => pid === 6151));
+	assert.deepEqual(signals(await world.calls()), []);
+});
+
+test("bundle case aliases use directory identity in inventories and the final signal check", darwin, async (t) => {
+	const world = await makeWorld(t, "ancestry-case-alias", { running: false, extraProcs: [{
+		pid: 6161, command: "<APP>/Contents/Resources/acp-runtime/node/bin/node --stdio",
+	}] });
+	const alias = path.join(world.root, "applications");
+	if (!(await stat(alias).catch(() => undefined))) await symlink(world.appsDir, alias);
+	const original = await stat(world.appsDir);
+	const resolved = await stat(alias);
+	assert.equal(resolved.dev, original.dev);
+	assert.equal(resolved.ino, original.ino);
+	const extraEnv = { APPS_DIR: alias };
+	const plan = world.update(["--dry-run"], { extraEnv });
+	assert.equal(plan.status, 0, plan.stdout + plan.stderr);
+	assert.match(plan.stdout, /helper processes \(1\)/);
+	const classic = world.run(["--dry-run", world.newApp], { extraEnv });
+	assert.equal(classic.status, 21, classic.stdout + classic.stderr);
+	assert.match(classic.stderr, /helper processes/);
+	const result = world.update(["--yes", "--force"], { extraEnv });
+	assert.equal(result.status, 0, result.stdout + result.stderr);
+	assert.deepEqual(signals(await world.calls()), ["kill -TERM 6161"]);
+});
+
+test("distinct Contents directories never become owned through case folding", darwin, async (t) => {
+	const world = await makeWorld(t, "ancestry-case-distinct", { running: false, extraProcs: [{
+		pid: 6171, command: "<APP>/Contents/Resources/acp-runtime/node/bin/node --stdio",
+	}] });
+	const separate = path.join(world.root, "separate", "applications", "Agent Orchestrator.app", "Contents", "Resources", "node");
+	await setExecutable(world, 6171, separate);
+	assertBlocked(world.update(["--dry-run"]), [6171]);
+	const alias = path.join(world.root, "applications");
+	if (!(await stat(alias).catch(() => undefined))) {
+		await mkdir(path.join(alias, "Agent Orchestrator.app", "Contents", "Resources"), { recursive: true });
+		await setExecutable(world, 6171, path.join(alias, "Agent Orchestrator.app", "Contents", "Resources", "node"));
+		assertBlocked(world.update(["--dry-run"]), [6171]);
+	}
+});
+
+test("mutation: exempting unsupported bundled argv recreates the inventory gap", darwin, async (t) => {
+	const mutant = await mutatedScripts(t, "common.sh", 'noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" && continue', 'continue');
+	const world = await makeWorld(t, "ancestry-argv-gap-mutant", { running: false, extraProcs: [{
+		pid: 6181, command: "node <APP>/Contents/Resources/acp-runtime/index.js",
+		executable: "<APP>/Contents/Resources/acp-runtime/node/bin/node",
+	}] });
+	assert.notEqual(world.update(["--dry-run"], { scriptsDir: mutant }).status, 21);
+});
+
+test("mutation: textual directory comparison rejects a real bundle alias", darwin, async (t) => {
+	const mutant = await mutatedScripts(t, "common.sh", '[[ "$directory" -ef "$app_path/Contents" ]] && return 0', '[[ "$directory" == "$app_path/Contents" ]] && return 0');
+	const world = await makeWorld(t, "ancestry-case-mutant", { running: false, extraProcs: [{
+		pid: 6191, command: "<APP>/Contents/Resources/acp-runtime/node/bin/node --stdio",
+	}] });
+	const alias = path.join(world.root, "applications");
+	if (!(await stat(alias).catch(() => undefined))) await symlink(world.appsDir, alias);
+	assertBlocked(world.update(["--dry-run"], { scriptsDir: mutant, extraEnv: { APPS_DIR: alias } }), [6191]);
+});
 
 test("a forged parent title cannot grant ownership to its child", darwin, async (t) => {
 	const world = await makeWorld(t, "ancestry-forged-parent", { running: false, extraProcs: [
@@ -239,7 +310,7 @@ test("mutation: skipping the ancestor walk is caught", darwin, async (t) => {
 });
 
 test("mutation: treating every session CLI as owned is caught", darwin, async (t) => {
-	const mutant = await mutatedScripts(t, "common.sh", 'if noetaxis_executable_path_is_in_bundle "$app_path" "$executable" || noetaxis_process_has_bundle_ancestor "$app_path" "$pid"; then continue; fi', 'if [[ "$command_line" == *"/claude "* ]] || noetaxis_executable_path_is_in_bundle "$app_path" "$executable" || noetaxis_process_has_bundle_ancestor "$app_path" "$pid"; then continue; fi');
+	const mutant = await mutatedScripts(t, "common.sh", 'elif noetaxis_process_has_bundle_ancestor "$app_path" "$pid"; then', 'elif [[ "$command_line" == *"/claude "* ]] || noetaxis_process_has_bundle_ancestor "$app_path" "$pid"; then');
 	const world = await makeWorld(t, "ancestry-every-cli-mutant", { running: false, extraProcs: [{ pid: 6951, command: agentCommand() }] });
 	assert.notEqual(world.update(["--dry-run"], { scriptsDir: mutant }).status, 21);
 });
