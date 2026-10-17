@@ -435,6 +435,9 @@ async function importAutoUpdater(
   }));
   const module = await import("./auto-updater");
   module.setRendererSink(() => ({ send: rendererSend }));
+  // The real probe reads the host volume, so a nearly full dev disk would trip
+  // the staging preflight in tests that have nothing to do with disk space.
+  module.__setStagingProbesForTesting({ stagingDiskIsFull: () => false });
   return {
     nativeAutoUpdater,
     startMacUpdateProgress,
@@ -1990,6 +1993,42 @@ describe("startAutoUpdates", () => {
     });
   });
 
+  it("nudges a restart after three consecutive automatic-check timeouts", async () => {
+    // A hang and a net::ERR_FAILED are the same wedged network stack (#3526);
+    // checkForUpdatesWithDeadline exists specifically to turn the hang into a
+    // terminal failure after 60s once nothing has answered. That failure must
+    // count toward the same restart nudge a fail-fast net:: error would,
+    // rather than resetting the streak as if a server had actually answered.
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
+    autoUpdater.httpExecutor.request.mockImplementation(async (_options, token) => {
+      return await token!.createPromise<string>(() => {});
+    });
+    autoUpdater.checkForUpdates.mockImplementation(async () => {
+      updaterEvents.get("checking-for-update")?.();
+      await autoUpdater.httpExecutor.request({});
+    });
+    const runTimedOutCheck = async () => {
+      const run = module.startAutoUpdates(stateDir);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await run;
+    };
+
+    await runTimedOutCheck();
+    await runTimedOutCheck();
+    // Below the threshold the suppressed automatic failure stays fully silent.
+    expect(module.getUpdateStatus()).toMatchObject({ state: "idle" });
+
+    await runTimedOutCheck();
+
+    expect(module.getUpdateStatus()).toMatchObject({
+      state: "idle",
+      staleCheckNudge: true,
+      checksFailing: true,
+    });
+  });
+
   it("does not nudge for non-net automatic-check failures", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
@@ -2705,7 +2744,10 @@ describe("startAutoUpdates", () => {
       // in the UI; it stays "checking" until it settles, then restores quietly.
       expect(h.module.getUpdateStatus().state).toBe("checking");
     } else {
-      expect(h.module.getUpdateStatus()).toMatchObject({ state: "error", message: expect.stringContaining("timed out") });
+      // The timeout is a stand-in for a wedged network stack (#3526), so it
+      // must carry the same netError flag a net::ERR_* failure would, or the
+      // renderer tells the user to "Try again" when only a restart can help.
+      expect(h.module.getUpdateStatus()).toMatchObject({ state: "error", message: expect.stringContaining("timed out"), netError: true });
     }
     expect(h.autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
     finishAborting();
@@ -2986,7 +3028,7 @@ describe("startAutoUpdates", () => {
     }
   });
 
-  it("keeps staged notes when a later check offers a newer build", async () => {
+  it("keeps staged notes on the staged stamp when a later check offers a newer build", async () => {
     const { module, updaterEvents, statusMessages } = await importAutoUpdater();
     await module.checkForUpdatesNow(stateDir);
     updaterEvents.get("update-downloaded")?.({
@@ -2994,6 +3036,8 @@ describe("startAutoUpdates", () => {
       releaseNotes: "Staged release notes",
     });
 
+    // The top-level notes follow `version`; the staged build keeps its own on
+    // the stamp, so the restart dialog never pairs 2.0.0 with 2.1.0's notes.
     updaterEvents.get("update-available")?.({
       version: "2.1.0",
       releaseNotes: "Newer offered release notes",
@@ -3001,20 +3045,20 @@ describe("startAutoUpdates", () => {
     expect(statusMessages().at(-1)?.payload).toMatchObject({
       state: "available",
       version: "2.1.0",
-      releaseNotes: "Staged release notes",
-      staged: { version: "2.0.0" },
+      releaseNotes: "Newer offered release notes",
+      staged: { version: "2.0.0", releaseNotes: "Staged release notes" },
     });
 
     updaterEvents.get("checking-for-update")?.();
     expect(statusMessages().at(-1)?.payload).toMatchObject({
       state: "checking",
       releaseNotes: "Staged release notes",
-      staged: { version: "2.0.0" },
+      staged: { version: "2.0.0", releaseNotes: "Staged release notes" },
     });
     expect(module.getUpdateStatus()).toMatchObject({
       state: "checking",
       releaseNotes: "Staged release notes",
-      staged: { version: "2.0.0" },
+      staged: { version: "2.0.0", releaseNotes: "Staged release notes" },
     });
   });
 
@@ -4742,4 +4786,133 @@ describe("updates-disabled builds", () => {
 
 		expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
 	});
+});
+
+describe("disk preflight refusal (#6607)", () => {
+  const DISK_MESSAGE = "Not enough disk space to install the update. Free up space, then retry.";
+  // Answers a check by announcing `version` the way electron-updater does.
+  const offer = (
+    autoUpdater: AutoUpdaterMock,
+    updaterEvents: Map<string, UpdaterEventHandler>,
+    version: string,
+    releaseNotes?: string,
+  ) => {
+    autoUpdater.checkForUpdates.mockImplementationOnce(async () => {
+      updaterEvents.get("checking-for-update")?.();
+      updaterEvents.get("update-available")?.({ version, releaseNotes });
+      return { isUpdateAvailable: true, updateInfo: { version, releaseNotes } };
+    });
+  };
+
+  it("keeps checking after a refusal and names the newer build without downloading it", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const restore = stubProcess("darwin", process.execPath);
+    try {
+      const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
+      module.__setStagingProbesForTesting({ stagingDiskIsFull: () => true });
+      await module.checkForUpdatesNow(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.0.0" });
+      expect(module.getUpdateStatus()).toMatchObject({ state: "error", message: DISK_MESSAGE, staged: { version: "2.0.0", ready: false } });
+      expect(autoUpdater.autoInstallOnAppQuit).toBe(false);
+
+      vi.setSystemTime(Date.now() + 60 * 60_000);
+      offer(autoUpdater, updaterEvents, "2.1.0");
+      await expect(module.checkForUpdatesNow(stateDir)).resolves.toBeUndefined();
+
+      // The check reached the feed, so it counts as a check and names 2.1.0.
+      const status = module.getUpdateStatus();
+      expect(status).toMatchObject({ state: "error", message: DISK_MESSAGE, version: "2.1.0" });
+      expect(status.checkedAt).toBe(Date.now());
+      // Downloading onto a disk that cannot stage it would only fail again.
+      expect(autoUpdater.autoDownload).toBe(false);
+      expect(autoUpdater.downloadUpdate).not.toHaveBeenCalled();
+      await module.downloadUpdateNow();
+      expect(autoUpdater.downloadUpdate).not.toHaveBeenCalled();
+      expect(module.getUpdateStatus()).toMatchObject({ state: "error", message: DISK_MESSAGE });
+    } finally { restore(); vi.useRealTimers(); }
+  });
+
+  it("stages again in the same process once space is freed", async () => {
+    const restore = stubProcess("darwin", process.execPath);
+    try {
+      let diskFull = true;
+      const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
+      module.__setStagingProbesForTesting({ stagingDiskIsFull: () => diskFull });
+      await module.checkForUpdatesNow(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.0.0" });
+      expect(module.getUpdateStatus().state).toBe("error");
+
+      diskFull = false;
+      autoUpdater.checkForUpdates.mockImplementationOnce(async () => {
+        // The refused build never reached Squirrel, so the re-check must fetch
+        // it again (a cache hit) to hand it over.
+        expect(autoUpdater.autoDownload).toBe(true);
+        updaterEvents.get("update-downloaded")?.({ version: "2.0.0" });
+        return { isUpdateAvailable: true, updateInfo: { version: "2.0.0" } };
+      });
+      await module.checkForUpdatesNow(stateDir);
+      expect(module.getUpdateStatus()).toMatchObject({ state: "downloaded", version: "2.0.0" });
+      expect(module.getUpdateStatus().staged?.ready).toBeUndefined();
+      expect(autoUpdater.autoInstallOnAppQuit).toBe(true);
+    } finally { restore(); }
+  });
+
+  it("still refuses an explicit restart while the disk is full", async () => {
+    const restore = stubProcess("darwin", process.execPath);
+    try {
+      const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
+      module.__setStagingProbesForTesting({ stagingDiskIsFull: () => true });
+      await module.checkForUpdatesNow(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.0.0" });
+      await expect(module.quitAndInstallUpdate()).rejects.toThrow(DISK_MESSAGE);
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+    } finally { restore(); }
+  });
+});
+
+describe("release notes while a newer build replaces a staged one (#6607)", () => {
+  it("shows the downloading build's notes and keeps the staged notes on the stamp", async () => {
+    const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
+    await module.checkForUpdatesNow(stateDir);
+    updaterEvents.get("update-downloaded")?.({ version: "2.0.0", releaseNotes: "Notes for 2.0.0" });
+    expect(module.getUpdateStatus()).toMatchObject({ releaseNotes: "Notes for 2.0.0", staged: { releaseNotes: "Notes for 2.0.0" } });
+
+    let notesWhileDownloading: unknown;
+    let stagedNotesWhileDownloading: unknown;
+    autoUpdater.checkForUpdates.mockImplementationOnce(async () => {
+      updaterEvents.get("update-available")?.({ version: "2.1.0", releaseNotes: "Notes for 2.1.0" });
+      return { isUpdateAvailable: true, updateInfo: { version: "2.1.0", releaseNotes: "Notes for 2.1.0" } };
+    });
+    autoUpdater.downloadUpdate.mockImplementationOnce(async () => {
+      updaterEvents.get("download-progress")?.({ percent: 40, transferred: 40, total: 100 });
+      const status = module.getUpdateStatus();
+      expect(status).toMatchObject({ state: "downloading", version: "2.1.0" });
+      notesWhileDownloading = status.releaseNotes;
+      stagedNotesWhileDownloading = status.staged?.releaseNotes;
+    });
+    await module.checkForUpdatesNow(stateDir);
+
+    expect(autoUpdater.downloadUpdate).toHaveBeenCalled();
+    expect(notesWhileDownloading).toBe("Notes for 2.1.0");
+    // The restart dialog still pairs the staged build with its own changelog.
+    expect(stagedNotesWhileDownloading).toBe("Notes for 2.0.0");
+  });
+
+  it("never shows the staged build's notes for a newer build with none of its own", async () => {
+    const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
+    await module.checkForUpdatesNow(stateDir);
+    updaterEvents.get("update-downloaded")?.({ version: "2.0.0", releaseNotes: "Notes for 2.0.0" });
+
+    let notesWhileDownloading: unknown = "unset";
+    autoUpdater.checkForUpdates.mockImplementationOnce(async () => {
+      updaterEvents.get("update-available")?.({ version: "2.1.0" });
+      return { isUpdateAvailable: true, updateInfo: { version: "2.1.0" } };
+    });
+    autoUpdater.downloadUpdate.mockImplementationOnce(async () => {
+      updaterEvents.get("download-progress")?.({ percent: 40, transferred: 40, total: 100 });
+      notesWhileDownloading = module.getUpdateStatus().releaseNotes;
+    });
+    await module.checkForUpdatesNow(stateDir);
+    expect(notesWhileDownloading).toBeUndefined();
+  });
 });
