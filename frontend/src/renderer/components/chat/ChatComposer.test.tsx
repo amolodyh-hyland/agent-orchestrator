@@ -2402,6 +2402,41 @@ describe("attachments", () => {
 
 /* ---- disabled and busy states ------------------------------------------- */
 
+describe("code formatting shortcut guards", () => {
+	it("ignores the shortcuts while previewing markdown", async () => {
+		const { field } = renderComposer();
+		await typeInComposer(field, "sample");
+		selectComposerText(field, 0, 6);
+		await userEvent.click(screen.getByRole("button", { name: "Preview markdown" }));
+		await userEvent.keyboard("{Control>}e{/Control}");
+		await userEvent.keyboard("{Control>}{Shift>}k{/Shift}{/Control}");
+
+		expect(composerWireText(field)).toBe("sample");
+	});
+
+	it("ignores the shortcuts while the editor is disabled", async () => {
+		const { field } = renderComposer({ disabled: true });
+		const wrapped = composerWireText(field);
+		await userEvent.keyboard("{Control>}e{/Control}");
+		await userEvent.keyboard("{Control>}{Shift>}k{/Shift}{/Control}");
+
+		expect(composerWireText(field)).toBe(wrapped);
+	});
+
+	it("ignores the shortcuts during IME composition", async () => {
+		const { field } = renderComposer();
+		await typeInComposer(field, "sample");
+		fireEvent.compositionStart(field);
+		await userEvent.keyboard("{Control>}e{/Control}");
+		await userEvent.keyboard("{Control>}{Shift>}k{/Shift}{/Control}");
+		expect(composerWireText(field)).toBe("sample");
+
+		fireEvent.compositionEnd(field);
+		await userEvent.keyboard("{Control>}e{/Control}");
+		expect(composerWireText(field)).toBe("sample``");
+	});
+});
+
 describe("unavailable states", () => {
 	it("explains a stopped controller and refuses to send", async () => {
 		const { onSend, field } = renderComposer({ disabled: true, skills: SKILLS });

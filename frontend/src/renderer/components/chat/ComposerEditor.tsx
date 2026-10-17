@@ -540,6 +540,7 @@ const EditorBridge = forwardRef<
 				});
 			},
 			wrapInlineCode: () => {
+				if (editor.isComposing()) return false;
 				let applied = false;
 				editor.update(() => {
 					applied = $wrapSelectionWithMarkdown("`", "`");
@@ -547,6 +548,7 @@ const EditorBridge = forwardRef<
 				return applied;
 			},
 			wrapCodeBlock: () => {
+				if (editor.isComposing()) return false;
 				let applied = false;
 				editor.update(() => {
 					applied = $wrapSelectionWithMarkdown("```\n", "\n```", true);

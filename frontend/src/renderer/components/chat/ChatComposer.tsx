@@ -1569,12 +1569,15 @@ export const ChatComposer = memo(function ChatComposer({
 
 	// Registered shortcuts reach every mounted composer, so only the one that
 	// holds focus formats.
-	const composerHasFocus = () => !!formRef.current?.contains(document.activeElement);
+	// The toolbar buttons are disabled while previewing or when the editor is
+	// unavailable; the shortcuts honor the same state.
+	const canFormatDraft = () =>
+		!composerEditorDisabled && !markdownPreview && !!formRef.current?.contains(document.activeElement);
 	useAppShortcut("format-inline-code", () => {
-		if (composerHasFocus()) editor.current?.wrapInlineCode();
+		if (canFormatDraft()) editor.current?.wrapInlineCode();
 	});
 	useAppShortcut("format-code-block", () => {
-		if (composerHasFocus()) editor.current?.wrapCodeBlock();
+		if (canFormatDraft()) editor.current?.wrapCodeBlock();
 	});
 
 	function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
