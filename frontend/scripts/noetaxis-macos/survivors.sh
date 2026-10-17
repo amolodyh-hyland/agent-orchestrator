@@ -56,14 +56,20 @@ noetaxis_survivor_scan() {
 	for history in "${cap_survivors_file:-}" "${cap_survivors_confirmed_file:-}"; do
 		[[ -f "$history" && "$out" != "$history" ]] || continue
 		while IFS="$sep" read -r old_kind old_pid old_parent old_start old_exe old_command old_chain old_cwd old_eligible; do
-			info="$(noetaxis_process_info "$old_pid")" || continue
+			if ! info="$(noetaxis_process_info "$old_pid")"; then
+				if noetaxis_pid_may_be_alive "$old_pid"; then noetaxis_error "Cannot verify survivor pid $old_pid; it may still be running. End its session manually and rerun. Nothing may be swapped."; return 56; fi
+				continue
+			fi
 			IFS=$'\t' read -r pid parent started command_line <<< "$info"
 			[[ "$started" != "$old_start" ]] || printf '%s\t%s\n' "$pid" "$old_kind" >> "$seeds"
 		done < "$history"
 	done
-	/usr/bin/awk -F '\t' 'FILENAME == ARGV[1] { kind[$1] = $2; next } { parent[$1] = $2 } END { for (n = 0; n < 64; n++) for (p in parent) if (!(p in kind) && parent[p] in kind) kind[p] = kind[parent[p]]; for (p in kind) print p "\t" kind[p] }' "$seeds" "$table" > "$chosen" || return 56
+	/usr/bin/awk -F '\t' 'BEGIN { rank["a"] = 1; rank["b"] = 2; rank["c"] = 3 } FILENAME == ARGV[1] { if (rank[$2] > rank[kind[$1]]) kind[$1] = $2; next } { parent[$1] = $2 } END { for (n = 0; n < 64; n++) for (p in parent) if (parent[p] in kind && kind[parent[p]] != "" && (kind[p] == "" || (kind[parent[p]] == "c" && kind[p] != "c"))) kind[p] = kind[parent[p]]; for (p in kind) if (kind[p] != "") print p "\t" kind[p] }' "$seeds" "$table" > "$chosen" || return 56
 	while IFS=$'\t' read -r pid kind; do
-		info="$(noetaxis_process_info "$pid")" || continue
+		if ! info="$(noetaxis_process_info "$pid")"; then
+			if noetaxis_pid_may_be_alive "$pid"; then noetaxis_error "Cannot verify survivor pid $pid; it may still be running. End its session manually and rerun. Nothing may be swapped."; return 56; fi
+			continue
+		fi
 		IFS=$'\t' read -r pid parent started command_line <<< "$info"
 		executable="$(noetaxis_process_executable_path "$pid" || true)"
 		cwd="$(noetaxis_process_cwd "$pid" || true)"

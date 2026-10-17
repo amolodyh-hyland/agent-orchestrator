@@ -177,6 +177,62 @@ test("kill-survivors is update-only and cannot be detached", darwin, async (t) =
 	assert.deepEqual(signals(await world.calls()), []);
 });
 
+function transitionToFixture(world, scripts) {
+	return survivorCall(world, `
+noetaxis_survivor_scan "$target_app" "$cap_survivors_file"
+/usr/bin/awk -F '|' -v command="/bin/sh $TMPDIR/noetaxis-watchdog-leaked/stubborn.sh" '$1 == 8102 { print $1 "|" command; next } { print }' "$NOETAXIS_SIM/procs" > "$cap_dir/procs.new"
+/bin/mv "$cap_dir/procs.new" "$NOETAXIS_SIM/procs"
+/usr/bin/awk -F '|' '$1 == 8102 { print $1 "|/bin/sh"; next } { print }' "$NOETAXIS_SIM/executables" > "$cap_dir/exe.new"
+/bin/mv "$cap_dir/exe.new" "$NOETAXIS_SIM/executables"
+update_kill_survivors=1
+noetaxis_update_survivors "$target_app"`, { scripts, input: "kill survivors 8102 8101\n" });
+}
+
+test("fixture exclusion wins over recorded bundle ancestry after an exec transition", darwin, async (t) => {
+	const world = await makeWorld(t, "teardown-fixture-transition", { running: false, extraProcs: branch });
+	const result = transitionToFixture(world);
+	assert.equal(result.status, 56, result.stdout + result.stderr);
+	assert.deepEqual(signals(await world.calls()), []);
+	assert.match(result.stderr, /Leaked installer test fixtures/);
+});
+
+test("mutation: stale bundle history cannot override the fixture exclusion", darwin, async (t) => {
+	const scripts = await mutatedScripts(t, "survivors.sh", 'FILENAME == ARGV[1] { if (rank[$2] > rank[kind[$1]]) kind[$1] = $2; next }', 'FILENAME == ARGV[1] { kind[$1] = $2; next }');
+	const world = await makeWorld(t, "teardown-fixture-priority-mutant", { running: false, extraProcs: branch });
+	const result = transitionToFixture(world, scripts);
+	assert.equal(result.status, 0, result.stdout + result.stderr);
+	assert.ok(signals(await world.calls()).includes("kill -TERM 8102"), "the fixture exclusion assertion rejects the mutation");
+});
+
+test("a fixture child mentioning the app also keeps the fixture exclusion", darwin, async (t) => {
+	const world = await makeWorld(t, "teardown-fixture-child", { running: false, extraProcs: [
+		orphan(8101, { command: "/bin/sh <TMP>/noetaxis-watchdog-leaked/stubborn.sh" }),
+		{ ...branch[0], pid: 8102, ppid: 8101 },
+	] });
+	const result = survivorCall(world, 'update_kill_survivors=1; noetaxis_update_survivors "$target_app"', { input: "kill survivors 8102 8101\n" });
+	assert.equal(result.status, 56, result.stdout + result.stderr);
+	assert.deepEqual(signals(await world.calls()), []);
+	assert.match(result.stderr.split("Leaked installer test fixtures")[1], /pid 8102/);
+});
+
+test("unreadable identity of a still-present orphan blocks instead of disappearing from the scan", darwin, async (t) => {
+	const world = await makeWorld(t, "teardown-unreadable-orphan", { running: false, extraProcs: [orphan()], cfg: { info_fails_8101: true } });
+	const result = survivorCall(world, 'update_kill_survivors=1; noetaxis_update_survivors "$target_app"', { input: "kill survivors 8101\n" });
+	assert.equal(result.status, 56, result.stdout + result.stderr);
+	assert.match(result.stderr, /Cannot verify survivor pid 8101/);
+	assert.deepEqual(signals(await world.calls()), []);
+});
+
+test("an anchored orphan parent does not hide its independently verified bundle child", darwin, async (t) => {
+	const world = await makeWorld(t, "teardown-orphan-owned-child", { running: false, extraProcs: [
+		orphan(8601),
+		{ ...branch[0], pid: 8602, ppid: 8601 },
+	] });
+	const result = survivorCall(world, 'update_kill_survivors=1; noetaxis_update_survivors "$target_app"', { input: "kill survivors 8602 8601\n" });
+	assert.equal(result.status, 0, result.stdout + result.stderr);
+	assert.deepEqual(signals(await world.calls()), ["kill -TERM 8602", "kill -TERM 8601"]);
+});
+
 test("respawn after KILL is reported and final rescan refuses", darwin, async (t) => {
 	const world = await makeWorld(t, "teardown-respawn", { running: false, extraProcs: [orphan()], cfg: { stubborn: "8101\n" } });
 	await world.setCfg("respawn_on_kill", `/bin/sh ${world.home}/.ao/data/worktrees/respawner.sh`);
