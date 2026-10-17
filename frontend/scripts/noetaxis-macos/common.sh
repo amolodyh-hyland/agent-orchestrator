@@ -355,7 +355,7 @@ noetaxis_bundle_descendant_processes() {
 			[[ "$status" -eq 44 ]] || continue
 			session_id="$(noetaxis_deleted_process_bundle_session "$app_path" "$pid")" || continue
 			[[ "$(noetaxis_process_info "$pid")" == "$info" ]] || continue
-			printf '%s\t%s\t%s\t%s\tdeleted executable; identity unproven\n' "$pid" "$start" "$session_id" "$command_line"
+			printf '%s\t%s\t%s\t%s\tdeleted executable; identity unproven\n' "$pid" "$start" "$session_id" "${command_line//$'\t'/ }"
 			continue
 		fi
 		noetaxis_executable_path_is_in_bundle "$app_path" "$executable" && continue

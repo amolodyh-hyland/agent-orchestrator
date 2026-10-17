@@ -71,13 +71,16 @@ test("a surviving deleted executable stops before desktop quit even with force",
 });
 
 test("deleted descendants without live-session coverage cannot be bypassed with force", darwin, async (t) => {
-	const world = await makeWorld(t, "enoent-uncovered", { extraProcs: tree("unknown", 4003) });
+	const extraProcs = tree("unknown", 4003);
+	extraProcs[1].command += "\t--diagnostic";
+	const world = await makeWorld(t, "enoent-uncovered", { extraProcs });
 	const result = world.update(["--yes", "--end-sessions", "--force"]);
 	assert.equal(result.status, 56, result.stdout + result.stderr);
 	assert.match(result.stderr, /no confirmed live-session coverage/);
 	assert.match(result.stderr, /pid 8002.*session unknown/);
 	assert.deepEqual(exits(await world.calls()), []);
 	assert.deepEqual(signals(await world.calls()), []);
+	assert.ok(!(await world.calls()).some((line) => /^osascript/.test(line)));
 });
 
 test("EPERM and malformed executable paths remain foreign despite a bundle parent", darwin, async (t) => {
