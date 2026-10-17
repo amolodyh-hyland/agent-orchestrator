@@ -3,6 +3,19 @@
 # real process, app, daemon, or network: the "process table" is a text file.
 SIM="${NOETAXIS_SIM:?NOETAXIS_SIM must point at the simulation directory}"
 
+sim_unlock() { if [[ "${SIM_LOCKED:-0}" -eq 1 ]]; then /bin/rmdir "$SIM/.table-lock"; SIM_LOCKED=0; fi; }
+sim_lock() {
+	[[ "${SIM_LOCKED:-0}" -ne 1 ]] || return 0
+	local attempt=0
+	until /bin/mkdir "$SIM/.table-lock" 2>/dev/null; do
+		attempt=$((attempt + 1)); [[ "$attempt" -lt 1000 ]] || exit 1
+		/bin/sleep 0.01
+	done
+	SIM_LOCKED=1
+}
+sim_lock
+trap sim_unlock EXIT
+
 sim_log() { printf '%s\n' "$*" >> "$SIM/calls.log"; }
 sim_has() { [[ -e "$SIM/cfg/$1" ]]; }
 sim_value() { cat "$SIM/cfg/$1" 2>/dev/null || true; }

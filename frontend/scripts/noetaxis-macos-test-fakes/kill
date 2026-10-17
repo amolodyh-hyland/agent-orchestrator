@@ -2,11 +2,25 @@
 # Fake kill. Only a plain "-TERM <pid>" is legitimate; anything else marks the run as forbidden.
 . "${NOETAXIS_FAKES:?}/sim-lib.sh"
 sim_log "kill $*"
-if [[ "$1" != -TERM || $# -ne 2 ]]; then
+if [[ ( "$1" != -TERM && ( "$1" != -KILL || "${NOETAXIS_CONFIRMED_SURVIVOR:-0}" != 1 ) ) || $# -ne 2 ]]; then
 	sim_log "FORBIDDEN signal: $*"
 	: > "$SIM/FORBIDDEN"
 	exit 0
 fi
 pid="$2"
-if /usr/bin/grep -qxF "$pid" "$SIM/cfg/stubborn" 2>/dev/null; then exit 0; fi
+if [[ "$1" == -TERM ]]; then
+	if [[ -f "$SIM/cfg/survivor_exec_after_term_$pid" ]]; then
+		new_exe="$(sim_value "survivor_exec_after_term_$pid")"
+		/usr/bin/awk -F '|' -v pid="$pid" -v executable="$new_exe" '$1 == pid { print $1 "|" executable; next } { print }' "$SIM/executables" > "$SIM/executables.tmp"
+		/bin/mv "$SIM/executables.tmp" "$SIM/executables"
+	fi
+	if [[ -f "$SIM/cfg/survivor_reuse_after_term_$pid" ]]; then printf 'Tue Oct 13 00:00:00 2026\n' > "$SIM/cfg/lstart_$pid"; fi
+	if [[ -f "$SIM/cfg/survivor_cwd_after_term_$pid" ]]; then
+		new_cwd="$(sim_value "survivor_cwd_after_term_$pid")"
+		/usr/bin/awk -F '|' -v pid="$pid" -v cwd="$new_cwd" '$1 == pid { print $1 "|" cwd; next } { print }' "$SIM/cwds" > "$SIM/cwds.tmp"
+		/bin/mv "$SIM/cwds.tmp" "$SIM/cwds"
+	fi
+	if /usr/bin/grep -qxF "$pid" "$SIM/cfg/stubborn" 2>/dev/null; then exit 0; fi
+fi
 sim_remove_pid "$pid"
+if [[ "$1" == -KILL && -f "$SIM/cfg/respawn_on_kill" ]]; then sim_add_proc "$(sim_value respawn_on_kill)" >/dev/null; fi

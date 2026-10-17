@@ -4,8 +4,9 @@
 # rolls back automatically when the new app does not come up healthy.
 #
 # Safety rules this file enforces (each one has a test):
-#   - It only ever sends SIGTERM, only through noetaxis_signal_own_pid, only with --force,
-#     and only to a process whose command path starts with this bundle's path and whose
+#   - --force sends SIGTERM through noetaxis_signal_own_pid. The separately typed
+#     --kill-survivors path lives in survivors.sh and rechecks each identity before TERM/KILL.
+#     --force applies only to a process whose command path starts with this bundle's path and whose
 #     current executable vnode is verified under <app>/Contents/. A lookalike path (another copy of AO, an editor with a file open
 #     inside the bundle) is listed and refused, never signalled.
 #   - Sessions are never ended without --end-sessions, and by default live sessions make the
@@ -46,6 +47,7 @@ cap_schema_before=""
 cap_processes_file=""
 cap_agent_processes_file=""
 cap_hosts_file=""
+cap_survivors_file=""
 cap_hostless=""
 update_sessions_unverifiable=""
 update_sessions_changed=""
@@ -189,7 +191,7 @@ noetaxis_describe_processes() {
 	/usr/bin/awk -F '\t' -v app="${target_app:-}" 'NF >= 2 { c = $2; if (app != "" && index(c, app) == 1) c = "<app>" substr(c, length(app) + 1); if (length(c) > 150) c = substr(c, 1, 147) "..."; printf "      pid %s  %s\n", $1, c }'
 }
 
-# The only place that signals a process: SIGTERM, only to a process that is still one of
+# The --force signal site: SIGTERM, only to a process that is still one of
 # this bundle's own at the moment of the signal. Every call is logged.
 # The set of processes the user approved: those of the bundle when the plan was captured (or, in a
 # rollback, when the rollback began). A process that appeared later, such as the chat host of a
@@ -244,10 +246,17 @@ noetaxis_update_agent_processes_gone() {
 noetaxis_update_wait_agent_processes() {
 	local app_path="$1" session_ids="${2:-}"
 	[[ -n "$(noetaxis_update_agent_processes_remaining "$app_path" "$session_ids")" ]] || return 0
+	if [[ "${update_kill_survivors:-0}" -eq 1 ]] && ! /usr/bin/awk -F '\t' '$NF == "deleted executable; identity unproven" { found = 1 } END { exit !found }' "$cap_agent_processes_file"; then
+		noetaxis_update_say 'Verified session-agent survivors will be listed for a separate typed --kill-survivors confirmation after the desktop quits.'
+		return 0
+	fi
 	noetaxis_update_step "Waiting for agent processes of live sessions to exit"
 	if noetaxis_wait_until "agent processes of live sessions to exit" "$update_stop_timeout" noetaxis_update_agent_processes_gone "$app_path" "$session_ids"; then return 0; fi
 	noetaxis_error "Agent processes of live sessions are still running after the wait; they were not signalled:"
 	noetaxis_update_agent_processes_remaining "$app_path" "$session_ids" | noetaxis_describe_processes >&2
+	if [[ -n "${cap_survivors_file:-}" ]]; then
+		noetaxis_survivor_scan "$app_path" "$cap_dir/survivors-current.tsv" && noetaxis_survivor_report "$cap_dir/survivors-current.tsv" || true
+	fi
 	printf 'End the listed session agents yourself through the app or "ao session exit-agent <id> --project <project>", then rerun. --force never signals these agent PIDs.\n' >&2
 	return 56
 }
@@ -256,13 +265,13 @@ noetaxis_update_wait_agent_processes() {
 # as a word. "pid<TAB>start<TAB>command" lines.
 noetaxis_update_session_hosts() {
 	local app_path="$1" id="$2" pid command_line
-	while IFS=$'\t' read -r pid command_line; do
-		[[ -n "$pid" ]] || continue
-		[[ "$(noetaxis_process_kind "$app_path" "$command_line")" == chat-host ]] || continue
-		case " $command_line " in
-			*" $id "*) printf '%s\t%s\t%s\n' "$pid" "$(noetaxis_process_start "$pid")" "$command_line" ;;
-		esac
-	done < <(noetaxis_own_bundle_processes "$app_path")
+	for pid in $(pgrep -if "$(noetaxis_regex_escape "$app_path/Contents/Resources/daemon/ao chat-host $id ")" 2>/dev/null || true); do
+		[[ "$pid" =~ ^[0-9]+$ ]] || continue
+		command_line="$(ps -ww -o command= -p "$pid" 2>/dev/null || true)"
+		noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" "Resources/daemon/ao chat-host $id " || continue
+		noetaxis_process_executable_matches_path "$app_path/Contents/Resources/daemon/ao" "$pid" || continue
+		printf '%s\t%s\t%s\n' "$pid" "$(noetaxis_process_start "$pid")" "$command_line"
+	done
 }
 
 noetaxis_update_print_unapproved() {
@@ -352,7 +361,7 @@ noetaxis_update_list_sessions_json() {
 # Parse a sessions JSON file into a tab separated list of the live (not terminated) sessions.
 # Returns 1 when the file is not the expected document.
 noetaxis_update_parse_live_sessions() {
-	local file="$1" out="$2" count index terminated id project role status activity name created harness branch issue
+	local file="$1" out="$2" only_id="${3:-}" count index terminated id project role status activity name created harness branch issue
 	# A session is live when it is not terminated and its agent has not exited: only then does
 	# an agent process (a chat host or terminal runtime) stand to be interrupted.
 	: > "$out"
@@ -364,10 +373,11 @@ noetaxis_update_parse_live_sessions() {
 	[[ "$count" =~ ^[0-9]+$ ]] || return 1
 	index=0
 	while [[ "$index" -lt "$count" ]]; do
+		id="$(noetaxis_json_get "$file" "data.$index.id" || true)"
+		if [[ -n "$only_id" && "$id" != "$only_id" ]]; then index=$((index + 1)); continue; fi
 		terminated="$(noetaxis_json_get "$file" "data.$index.isTerminated" || printf 'false')"
 		activity="$(noetaxis_json_get "$file" "data.$index.activity" || true)"
 		if [[ "$terminated" != true && "$activity" != exited ]]; then
-			id="$(noetaxis_json_get "$file" "data.$index.id" || true)"
 			project="$(noetaxis_json_get "$file" "data.$index.projectId" || true)"
 			role="$(noetaxis_json_get "$file" "data.$index.role" || true)"
 			status="$(noetaxis_json_get "$file" "data.$index.status" || true)"
@@ -405,7 +415,7 @@ noetaxis_update_capture_sessions() {
 # Everything here only reads. The daemon has to be up to list sessions; when it is not,
 # the session list is skipped and the process list says what is still alive.
 noetaxis_update_capture_state() {
-	local app_path="$1" dir="$2" standalone_json standalone_status stack_filter
+	local app_path="$1" dir="$2" standalone_json standalone_status stack_filter pid started command_line id
 	cap_dir="$dir"
 	cap_live_file="$dir/live-sessions.tsv"
 	cap_processes_file="$dir/processes.txt"
@@ -420,6 +430,8 @@ noetaxis_update_capture_state() {
 	noetaxis_own_bundle_processes "$app_path" > "$cap_processes_file" || true
 	update_approved_file="$dir/approved-processes.tsv"
 	noetaxis_update_snapshot_processes "$app_path" > "$update_approved_file" || true
+	cap_survivors_file="$dir/survivors-before.tsv"
+	: > "$cap_survivors_file"
 
 	cap_daemon_state="none"
 	if [[ -x "$cap_cli" ]]; then
@@ -456,10 +468,14 @@ noetaxis_update_capture_state() {
 	# it had when the plan was captured. Re-checked right before each exit-agent.
 	cap_hosts_file="$dir/confirmed-hosts.tsv"
 	: > "$cap_hosts_file"
-	while IFS="$noetaxis_sep" read -r id project role status activity name created harness branch issue; do
-		[[ -n "$id" ]] || continue
-		noetaxis_update_session_hosts "$app_path" "$id" | /usr/bin/sed "s/^/$id\t/" >> "$cap_hosts_file" || true
-	done < "$cap_live_file"
+	while IFS=$'\t' read -r pid started command_line; do
+		[[ "$(noetaxis_process_kind "$app_path" "$command_line")" == chat-host ]] || continue
+		id="${command_line#*/Contents/Resources/daemon/ao chat-host }"
+		id="${id%% *}"
+		if /usr/bin/awk -F "$noetaxis_sep" -v id="$id" '$1 == id { found = 1 } END { exit !found }' "$cap_live_file"; then
+			printf '%s\t%s\t%s\t%s\n' "$id" "$pid" "$started" "$command_line" >> "$cap_hosts_file"
+		fi
+	done < "$update_approved_file"
 	# Sessions with no host process of the bundle (a TUI agent run by a terminal runtime): the updater
 	# cannot see their agent process, so only the session record pins their identity.
 	cap_hostless=""
@@ -552,6 +568,9 @@ noetaxis_update_print_plan() {
 	host_count="$(noetaxis_own_pids_of_kind "$app_path" chat-host | /usr/bin/awk 'END { print NR }')"
 	other_count="$(noetaxis_own_pids_of_kind "$app_path" helper | /usr/bin/awk 'END { print NR }')"
 	printf '\nUpdate plan\n'
+	if [[ "${update_kill_survivors:-0}" -eq 1 ]]; then
+		printf '  --kill-survivors: a separate typed PID confirmation is required after quit; TERM then KILL only for verified bundle descendants or anchored AO orphans. --yes does not confirm it.\n'
+	fi
 	printf '  Agent processes of live sessions (%s):\n' "$(/usr/bin/awk 'END { print NR }' "$cap_agent_processes_file")"
 	/usr/bin/awk -F '\t' '{ label = ""; if ($5 != "") label = " [" $5 "; session " ($3 == "" ? "unknown" : $3) "]"; printf "      pid %s  %s%s\n", $1, $4, label }' "$cap_agent_processes_file"
 	printf '  Install:   %s -> %s\n             in %s\n' "$cap_old_version" "$new_version" "$app_path"
@@ -565,7 +584,7 @@ noetaxis_update_print_plan() {
 		if [[ "$update_manual_quit" -eq 1 ]]; then
 			printf '    2. the desktop app (%s process(es)): you click "Quit AO Completely" in the menu bar; this script waits up to %ss\n' "$desktop_count" "$update_quit_timeout"
 		else
-			printf '    2. the desktop app (%s process(es)): this script clicks "Quit AO Completely" in the menu bar tray (needs Accessibility permission; if it cannot, it waits up to %ss for you to click it)\n' "$desktop_count" "$update_quit_timeout"
+			printf '    2. the desktop app (%s process(es)): this script clicks "Quit AO Completely" in the menu bar tray (needs both System Events Automation and Accessibility permission; if it cannot, it waits up to %ss for you to click it)\n' "$desktop_count" "$update_quit_timeout"
 		fi
 	else
 		printf '    2. the desktop app: not running\n'
@@ -646,6 +665,12 @@ noetaxis_update_preflight_refusals() {
 		printf '%s\n' "$foreign" | noetaxis_describe_processes >&2
 		return 21
 	fi
+	noetaxis_survivor_scan "$app_path" "$cap_survivors_file" || return 56
+	if /usr/bin/awk -F "$noetaxis_sep" '$1 == "c" || ($1 == "b" && flag != 1) { found = 1 } END { exit !found }' flag="${update_kill_survivors:-0}" "$cap_survivors_file"; then
+		noetaxis_survivor_report "$cap_survivors_file"
+		noetaxis_error 'Orphans or leaked test fixtures need cleanup before updating. Use the listed commands; --kill-survivors can handle only verified bundle/AO identities after a typed confirmation.'
+		return 56
+	fi
 	if [[ -n "$cap_identity_detail" ]]; then
 		noetaxis_error "Refusing to act on a daemon that is not this bundle's: $cap_identity_detail. The bundled ao controls whichever AO daemon owns ~/.ao's run file, so ending sessions or stopping it here would hit that other copy. Nothing was stopped. Quit the other AO copy (or fix the daemon), then rerun."
 		return 57
@@ -721,7 +746,7 @@ noetaxis_update_session_unchanged() {
 		noetaxis_update_session_detail="it was not in the confirmed plan"
 		return 1
 	fi
-	if ! noetaxis_update_list_sessions_json "$cap_dir/sessions-each.json" || ! noetaxis_update_parse_live_sessions "$cap_dir/sessions-each.json" "$cap_dir/live-each.tsv"; then
+	if ! noetaxis_update_list_sessions_json "$cap_dir/sessions-each.json" || ! noetaxis_update_parse_live_sessions "$cap_dir/sessions-each.json" "$cap_dir/live-each.tsv" "$id"; then
 		noetaxis_update_session_detail="the session list could not be read again"
 		return 1
 	fi
@@ -759,10 +784,49 @@ noetaxis_update_host_unchanged() {
 	[[ "$expected" == "$now" ]]
 }
 
+update_session_jobs=()
+update_pool_failed=0
+update_pool_timed_out=0
+update_pool_ended=0
+update_pool_fatal=0
+update_survivors_prompted=0
+noetaxis_update_join_session_jobs() {
+	local job id project role status_code output child
+	for job in ${update_session_jobs[@]+"${update_session_jobs[@]}"}; do
+		read -r child < "$job/pid"
+		wait "$child" || true
+		IFS="$noetaxis_sep" read -r id project role < "$job/session"
+		status_code=1
+		[[ ! -f "$job/status" ]] || read -r status_code < "$job/status"
+		output="$(/bin/cat "$job/output" 2>/dev/null || true)"
+		if [[ "$status_code" -eq 0 ]]; then
+			printf '%s\n' "$id" >> "$cap_dir/ended-agent-ids.txt"
+			update_pool_ended=$((update_pool_ended + 1))
+			update_sessions_ended=1
+			noetaxis_update_say "agent of $id [$project] $role stopped: $output"
+			noetaxis_update_append noetaxis_update_summary_stopped "session $id: agent stopped (ao session exit-agent; session and worktree kept)"
+		elif [[ "$status_code" -eq 51 ]]; then
+			noetaxis_update_say "SKIPPED $id [$project]: $output"
+			noetaxis_update_append update_sessions_changed "$id [$project]: $output"
+		elif [[ "$status_code" -eq 57 ]]; then
+			update_pool_fatal=57
+			noetaxis_error "Stopped before ending $id: $output"
+		else
+			update_pool_failed=$((update_pool_failed + 1))
+			[[ "$status_code" -ne 142 ]] || update_pool_timed_out=$((update_pool_timed_out + 1))
+			noetaxis_update_say "FAILED to end $id [$project]: ${output:-exit $status_code}$([[ "$status_code" -eq 142 ]] && printf ' (timed out)')"
+		fi
+	done
+	update_session_jobs=()
+}
+
 noetaxis_update_end_sessions() {
-	local id project role status activity name created harness branch issue output status_code failed=0 total=0 ended=0 timed_out=0
+	local id project role status activity name created harness branch issue output status_code total=0 job
+	local workers="${NOETAXIS_SESSION_WORKERS:-8}"
+	[[ "$workers" =~ ^[1-8]$ ]] || { noetaxis_error 'Session worker limit must be 1 through 8.'; return 2; }
+	update_pool_failed=0; update_pool_timed_out=0; update_pool_ended=0; update_pool_fatal=0
 	: > "$cap_dir/ended-agent-ids.txt"
-	noetaxis_update_step "Ending $cap_live_count live session(s)"
+	noetaxis_update_step "Ending $cap_live_count live session(s), up to $workers concurrently"
 	while IFS="$noetaxis_sep" read -r id project role status activity name created harness branch issue; do
 		[[ -n "$id" ]] || continue
 		total=$((total + 1))
@@ -780,43 +844,46 @@ noetaxis_update_end_sessions() {
 			noetaxis_update_append update_sessions_changed "$id [$project]: $noetaxis_update_session_detail"
 			continue
 		fi
-		# ...and the daemon behind the shared run file must still be this bundle's, checked AFTER that
-		# list was read and immediately before the call, so nothing can change in between.
-		if ! noetaxis_update_verify_daemon "$target_app"; then
-			noetaxis_error "Stopped before ending $id: $noetaxis_update_identity_detail. Sessions ended so far stay ended; the app and daemon were not touched."
-			noetaxis_update_wait_agent_processes "$target_app" "$cap_dir/ended-agent-ids.txt" || return $?
-			return 57
-		fi
-		# The daemon check above is a blocking call, and the session's host can change while it runs. So
-		# the very last check before the call reads the host from the local process table only: no ao
-		# call, no RPC, no wait between it and the exit-agent line.
-		if ! noetaxis_update_host_unchanged "$id"; then
-			noetaxis_update_say "SKIPPED $id [$project]: host replaced during the daemon check"
-			noetaxis_update_append update_sessions_changed "$id [$project]: host replaced during the daemon check"
-			continue
-		fi
-		status_code=0
-		output="$(noetaxis_bounded 90 "$cap_cli" session exit-agent "$id" ${project:+--project "$project"} 2>&1)" || status_code=$?
-		if [[ "$status_code" -eq 0 ]]; then
-			printf '%s\n' "$id" >> "$cap_dir/ended-agent-ids.txt"
-			ended=$((ended + 1))
-			update_sessions_ended=1
-			noetaxis_update_say "agent of $id [$project] $role stopped: $output"
-			noetaxis_update_append noetaxis_update_summary_stopped "session $id: agent stopped (ao session exit-agent; session and worktree kept)"
-		else
-			failed=$((failed + 1))
-			[[ "$status_code" -ne 142 ]] || timed_out=$((timed_out + 1))
-			noetaxis_update_say "FAILED to end $id [$project]: ${output:-exit $status_code}$([[ "$status_code" -eq 142 ]] && printf ' (timed out)')"
+		job="$cap_dir/exit-job-$total"
+		/bin/mkdir "$job"
+		printf '%s%s%s%s%s\n' "$id" "$noetaxis_sep" "$project" "$noetaxis_sep" "$role" > "$job/session"
+		noetaxis_update_say "ending agent of $id [$project] (bounded pool)"
+		(
+			trap - EXIT INT TERM HUP
+			status_code=0
+			# The daemon check is followed by the final local host check, then exit-agent with no intervening RPC or wait.
+			if ! noetaxis_update_verify_daemon "$target_app"; then
+				status_code=57; output="$noetaxis_update_identity_detail"
+			else
+				if ! noetaxis_update_host_unchanged "$id"; then
+					status_code=51; output='host replaced during the daemon check'
+				else
+					output="$(noetaxis_bounded 90 "$cap_cli" session exit-agent "$id" ${project:+--project "$project"} 2>&1)" || status_code=$?
+				fi
+			fi
+			printf '%s' "$output" > "$job/output"
+			printf '%s\n' "$status_code" > "$job/status"
+		) &
+		printf '%s\n' "$!" > "$job/pid"
+		update_session_jobs+=("$job")
+		if [[ "${#update_session_jobs[@]}" -ge "$workers" ]]; then
+			noetaxis_update_join_session_jobs
+			if [[ "$update_pool_fatal" -ne 0 ]]; then
+				noetaxis_update_wait_agent_processes "$target_app" "$cap_dir/ended-agent-ids.txt" || return $?
+				return "$update_pool_fatal"
+			fi
 		fi
 	done < "$cap_live_file"
+	noetaxis_update_join_session_jobs
 	noetaxis_update_wait_agent_processes "$target_app" "$cap_dir/ended-agent-ids.txt" || return $?
+	[[ "$update_pool_fatal" -eq 0 ]] || return "$update_pool_fatal"
 	if [[ -n "$update_sessions_changed" ]]; then
 		noetaxis_error "Session(s) changed since the plan was confirmed and were not touched (the app and daemon were not touched either; rerun to see a new plan):"
 		printf '%s\n' "$update_sessions_changed" | /usr/bin/sed 's/^/      /' >&2
 		return 51
 	fi
-	if [[ "$failed" -gt 0 ]]; then
-		noetaxis_error "$failed of $total session(s) could not be ended (their agents were not stopped$([[ "$timed_out" -gt 0 ]] && printf '; %s helper call(s) timed out' "$timed_out"). The app and daemon were not touched."
+	if [[ "$update_pool_failed" -gt 0 ]]; then
+		noetaxis_error "$update_pool_failed of $total session(s) could not be ended (their agents were not stopped$([[ "$update_pool_timed_out" -gt 0 ]] && printf '; %s helper call(s) timed out' "$update_pool_timed_out"). The app and daemon were not touched."
 		return 53
 	fi
 	if ! noetaxis_wait_until "the daemon to report no live sessions" "$update_stop_timeout" noetaxis_update_no_live_sessions; then
@@ -877,7 +944,7 @@ noetaxis_update_quit_app() {
 			if [[ "$status_code" -eq 0 ]]; then
 				noetaxis_update_say "clicked \"Quit AO Completely\" for pid $main_pid"
 			else
-				noetaxis_update_say "could not click the tray item (${output:-exit $status_code}). Click the Agent Orchestrator icon in the menu bar and choose \"Quit AO Completely\" (or its translation in your language) yourself. Scripting it needs Accessibility/Automation permission for your terminal."
+				noetaxis_update_say "could not click the tray item (${output:-exit $status_code}). Both permissions are required: System Settings > Privacy & Security > Automation > <terminal> > System Events, and System Settings > Privacy & Security > Accessibility > <terminal>. Click the Agent Orchestrator icon in the menu bar and choose \"Quit AO Completely\" (or its translation) yourself, then rerun. Updating works when the desktop app is already quit; scripting permission is not needed in that case."
 			fi
 		fi
 	else
@@ -900,7 +967,7 @@ noetaxis_update_quit_app() {
 	fi
 	noetaxis_error "The desktop app is still running after ${update_quit_timeout}s:"
 	noetaxis_own_pids_of_kind "$app_path" desktop | noetaxis_describe_processes >&2
-	printf 'Nothing was installed. Choose "Quit AO Completely" in the menu bar yourself and rerun%s. No process was force-killed.\n' "$([[ "$update_force" -eq 1 ]] && printf '' || printf ', or rerun with --force to send SIGTERM')" >&2
+	printf 'Nothing was installed. Choose "Quit AO Completely" in the menu bar yourself and rerun; updating works with the desktop app already quit. For tray scripting grant BOTH Automation > <terminal> > System Events and Accessibility > <terminal> under System Settings > Privacy & Security%s. No process was force-killed.\n' "$([[ "$update_force" -eq 1 ]] && printf '' || printf ', or rerun with --force to send SIGTERM')" >&2
 	return 54
 }
 
@@ -959,11 +1026,13 @@ noetaxis_update_helpers_gone() {
 noetaxis_update_stop_helpers() {
 	local app_path="$1" cli pid command_line foreign
 	cli="$app_path/Contents/Resources/daemon/ao"
+	if [[ "${update_kill_survivors:-0}" -eq 1 ]]; then noetaxis_update_survivors "$app_path" || return $?; fi
 	noetaxis_update_wait_agent_processes "$app_path" || return $?
 	foreign="$(noetaxis_foreign_bundle_processes "$app_path")"
 	if [[ -n "$foreign" ]]; then
 		noetaxis_error "Processes are no longer verifiably part of this bundle; they were not signalled:"
 		printf '%s\n' "$foreign" | noetaxis_describe_processes >&2
+		noetaxis_survivor_scan "$app_path" "$cap_dir/survivors-current.tsv" && noetaxis_survivor_report "$cap_dir/survivors-current.tsv" || true
 		return 56
 	fi
 	if noetaxis_update_helpers_gone "$app_path"; then
@@ -989,6 +1058,7 @@ noetaxis_update_stop_helpers() {
 	noetaxis_own_pids_of_kind "$app_path" any | noetaxis_describe_processes >&2
 	noetaxis_foreign_bundle_processes "$app_path" | noetaxis_describe_processes >&2
 	noetaxis_update_print_unapproved "$app_path"
+	noetaxis_survivor_scan "$app_path" "$cap_dir/survivors-current.tsv" && noetaxis_survivor_report "$cap_dir/survivors-current.tsv" || true
 	printf 'Nothing was installed and AO is stopped. Reopen it (open -a "%s"), end the sessions (--end-sessions with the daemon up), or rerun with --force to SIGTERM these processes (their conversations end). No process was force-killed.\n' "$app_path" >&2
 	return 56
 }
@@ -1038,8 +1108,11 @@ noetaxis_update_stop_all() {
 		fi
 	fi
 	noetaxis_update_quit_app "$app_path" || return $?
-	noetaxis_update_stop_daemon "$app_path" || return $?
+	if ! noetaxis_update_stop_daemon "$app_path"; then
+		if [[ "${update_kill_survivors:-0}" -eq 1 ]]; then noetaxis_update_survivors "$app_path" || return $?; else return 55; fi
+	fi
 	noetaxis_update_stop_helpers "$app_path" || return $?
+	noetaxis_update_survivors "$app_path" || return $?
 	if noetaxis_shipit_running; then
 		noetaxis_update_step "Waiting for ShipIt (the updater) to finish"
 		if ! noetaxis_wait_until "ShipIt to exit" "$update_stop_timeout" noetaxis_update_shipit_gone; then
@@ -1369,7 +1442,7 @@ noetaxis_update_exit_report() {
 		20) meaning="refused: running inside an AO session (use --detached)" ;;
 		21) meaning="refused: other processes block the install" ;;
 		22) meaning="refused: ShipIt is running" ;;
-		50) meaning="cancelled by you, nothing changed" ;;
+		50) meaning="cancelled by you, nothing changed"; [[ "$update_survivors_prompted" -eq 0 ]] || meaning="survivor teardown cancelled; no survivor signal sent; nothing installed" ;;
 		51) meaning="refused: live sessions (use --end-sessions)" ;;
 		52) meaning="refused: session list unavailable" ;;
 		53) meaning="a session could not be ended" ;;
@@ -1467,6 +1540,7 @@ noetaxis_update_reopen_previous() {
 
 # EXIT handler of update mode: the summary, then the temporary capture directory goes.
 noetaxis_update_exit_handler() {
+	noetaxis_update_join_session_jobs
 	noetaxis_update_exit_report "$1"
 	if [[ -n "${update_capture_dir:-}" && -d "$update_capture_dir" ]]; then
 		/bin/rm -rf "$update_capture_dir"

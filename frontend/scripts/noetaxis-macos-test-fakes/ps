@@ -1,6 +1,16 @@
 #!/bin/bash
 . "${NOETAXIS_FAKES:?}/sim-lib.sh"
 pid="${@: -1}"
+if [[ "$*" == *'-axo '* ]]; then
+	sim_tick
+	while IFS='|' read -r row command; do
+		[[ -n "$row" ]] || continue
+		parent="$(sim_ppid_of "$row")"
+		if [[ -f "$SIM/cfg/lstart_$row" ]]; then start="$(cat "$SIM/cfg/lstart_$row")"; else start="Mon Oct 12 00:00:$(printf '%02d' "$((row % 60))") 2026"; fi
+		printf '%s %s %s %s\n' "$row" "$parent" "$start" "$command"
+	done < "$SIM/procs"
+	exit 0
+fi
 case "$*" in
 	*pid=*ppid=*lstart=*command=*)
 		sim_tick

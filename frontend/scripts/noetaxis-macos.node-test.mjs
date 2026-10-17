@@ -1,6 +1,6 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { fixtureRoot, fixtureSpawn as spawn, fixtureSpawnSync as spawnSync } from "./noetaxis-macos-fixture-registry.mjs";
 import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -44,12 +44,9 @@ async function testRoot(t, label, retain = false) {
 		root = path.join(retainedBase, `${label}-${Date.now()}-${process.pid}`);
 		await mkdir(root, { recursive: true });
 		console.log(`Retained test artifacts: ${root}`);
+		await fixtureRoot(t, label, { root, retain: true });
 	} else {
-		root = await mkdtemp(path.join(os.tmpdir(), `${label}-`));
-		t.after(async () => {
-			await makeWritable(root);
-			await rm(root, { recursive: true, force: true });
-		});
+		root = await fixtureRoot(t, `${label}-`);
 	}
 	return root;
 }
@@ -438,9 +435,8 @@ test("a port 3001 listener with no bundle process is only a warning, and an AO d
 	const otherApp = path.join(f.root, "Elsewhere/Agent Orchestrator.app");
 	const runner = path.join(otherApp, "Contents/Resources/daemon/ao");
 	await mkdir(path.dirname(runner), { recursive: true });
-	await writeFile(runner, "#!/bin/sh\n/bin/sleep 30\n", { mode: 0o755 });
-	const child = spawn("/bin/sh", [runner, "daemon"], { stdio: "ignore", detached: true });
-	t.after(() => { try { process.kill(-child.pid); } catch {} });
+	await writeFile(runner, '#!/bin/sh\nwhile [ -e "$NOETAXIS_FIXTURE_ROOT/.fixture-alive" ]; do /bin/sleep 0.1; done\n', { mode: 0o755 });
+	spawn("/bin/sh", [runner, "daemon"], { stdio: "ignore", detached: true });
 	await new Promise((resolve) => setTimeout(resolve, 300));
 	const realEnv = { ...env, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" };
 	const other = execute("/bin/bash", [installScript, "--allow-ao-session", "--dry-run", f.sourceApp], { cwd: repoRoot, env: realEnv });
@@ -449,9 +445,8 @@ test("a port 3001 listener with no bundle process is only a warning, and an AO d
 	const backupApp = path.join(f.home, "ao-backups/20261010-000000/Agent Orchestrator-0.13.4-20261010-000000-1.app.bak");
 	const backupRunner = path.join(backupApp, "Contents/Resources/daemon/ao");
 	await mkdir(path.dirname(backupRunner), { recursive: true });
-	await writeFile(backupRunner, "#!/bin/sh\n/bin/sleep 30\n", { mode: 0o755 });
-	const backupChild = spawn("/bin/sh", [backupRunner, "daemon"], { stdio: "ignore", detached: true });
-	t.after(() => { try { process.kill(-backupChild.pid); } catch {} });
+	await writeFile(backupRunner, '#!/bin/sh\nwhile [ -e "$NOETAXIS_FIXTURE_ROOT/.fixture-alive" ]; do /bin/sleep 0.1; done\n', { mode: 0o755 });
+	spawn("/bin/sh", [backupRunner, "daemon"], { stdio: "ignore", detached: true });
 	await new Promise((resolve) => setTimeout(resolve, 300));
 	await writeFile(lsof, "#!/bin/sh\nprintf 'p9876\\n'\n", { mode: 0o755 });
 	const fromBackup = execute("/bin/bash", [installScript, "--allow-ao-session", "--dry-run", f.sourceApp], { cwd: repoRoot, env: { ...realEnv, NOETAXIS_LSOF: lsof } });
@@ -548,7 +543,9 @@ test("rollback and the PKG preinstall apply the same background-process prefligh
 
 test("schema check reads a WAL database that has no -wal/-shm files and never fails", { skip: process.platform !== "darwin" }, async (t) => {
 	const root = await testRoot(t, "noetaxis-schema-test");
-	const database = path.join(root, "ao.db");
+	const dataDir = path.join(root, "data");
+	await mkdir(dataDir);
+	const database = path.join(dataDir, "ao.db");
 	const setup = execute("/usr/bin/sqlite3", [database, "pragma journal_mode=wal; create table goose_db_version (version_id integer, is_applied integer); insert into goose_db_version values (190,1);"]);
 	assert.equal(setup.status, 0, setup.stderr);
 	await rm(`${database}-wal`, { force: true });
@@ -557,7 +554,7 @@ test("schema check reads a WAL database that has no -wal/-shm files and never fa
 	const readable = check(database);
 	assert.equal(readable.status, 0, readable.stderr);
 	assert.match(readable.stdout, /SQLite schema version: 190/);
-	assert.deepEqual((await readdir(root)).sort(), ["ao.db"]);
+	assert.deepEqual((await readdir(dataDir)).sort(), ["ao.db"]);
 	const unreadable = check(path.join(root, "missing.db"));
 	assert.equal(unreadable.status, 0, unreadable.stderr);
 	assert.match(unreadable.stdout, /could not be read/);
@@ -851,6 +848,10 @@ test("native PKG structure is verifiable without running Installer", { skip: pro
 	await makeApp(sourceApp, version, revision);
 	const artifacts = await buildPackages({ appPath: sourceApp, outputDir, version, revision, createDiskImage: false });
 	assert.ok(artifacts.fileCount >= 3);
+	assert.equal(artifacts.installerDir, path.join(outputDir, "installer"));
+	assert.equal(artifacts.checksumsPath, path.join(outputDir, "SHA256SUMS"));
+	assert.deepEqual(await readFile(path.join(artifacts.installerDir, "survivors.sh")), await readFile(path.join(scriptDir, "noetaxis-macos/survivors.sh")));
+	assert.match(await readFile(artifacts.checksumsPath, "utf8"), new RegExp(path.basename(artifacts.pkgPath).replaceAll(".", "\\.")));
 	const signature = execute("/usr/sbin/pkgutil", ["--check-signature", artifacts.pkgPath]);
 	assert.match(`${signature.stdout}\n${signature.stderr}`, /no signature|not signed|unsigned/i);
 	const expanded = path.join(root, "expanded");

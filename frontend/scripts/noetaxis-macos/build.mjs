@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildPackages } from "./package-artifacts.mjs";
+import { buildPackages, writeArtifactChecksums } from "./package-artifacts.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../../..");
@@ -307,9 +307,12 @@ export async function buildNoetaxis(options) {
 			`Manifest: ${packaged.manifestPath} (${packaged.fileCount} regular files)`,
 			`PKG: ${packaged.pkgPath}`,
 			`DMG: ${packaged.dmgPath}`,
+			`Installer: ${packaged.installerDir}`,
+			`Checksums: ${packaged.checksumsPath}`,
 			"",
 		].join("\n");
 		await writeFile(path.join(outputDir, "BUILD-INFO.txt"), buildInfo, "utf8");
+		await writeArtifactChecksums(outputDir);
 		console.log(`Build complete: ${outputDir}`);
 		console.log(`Version: ${version}`);
 		console.log(`AO revision: ${commit}`);

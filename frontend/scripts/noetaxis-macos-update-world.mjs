@@ -3,13 +3,13 @@
 // binaries that read and write a text "process table". Nothing here can reach a real
 // process, daemon, app, port, Keychain or URL handler.
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
 import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { closeSync, existsSync, openSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeManifest } from "./noetaxis-macos/package-artifacts.mjs";
+import { fixtureRoot, fixtureSpawn as spawn, fixtureSpawnSync as spawnSync } from "./noetaxis-macos-fixture-registry.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const realScriptsDir = path.join(here, "noetaxis-macos");
@@ -69,7 +69,7 @@ export async function copyFakeScripts(sourceDir, destination) {
 	}
 	const commonFile = path.join(destination, "common.sh");
 	const original = await readFile(commonFile, "utf8");
-	const fake = original.replaceAll("noetaxis_bounded 5 /usr/bin/python3", fakeProcPidPath);
+	const fake = original.replaceAll("noetaxis_bounded 5 /usr/bin/python3", fakeProcPidPath).replace('/bin/sleep "${NOETAXIS_TEST_PAUSE_SECONDS:-20}" &', '/usr/bin/perl -e \'my $end = time + $ARGV[0]; while (-f "$ENV{NOETAXIS_FIXTURE_ROOT}/.fixture-alive" && time < $end) { select(undef, undef, undef, 0.05); }\' "${NOETAXIS_TEST_PAUSE_SECONDS:-20}" &');
 	assert.notEqual(fake, original, "fake worlds must use their executable-vnode lookup");
 	await writeFile(commonFile, fake);
 	await cp(path.join(sourceDir, "pkg-scripts"), path.join(destination, "pkg-scripts"), { recursive: true });
@@ -98,11 +98,7 @@ function fixtureExecutable(command, app, explicit = "") {
  *   extraProcs commands added to the process table
  */
 export async function makeWorld(t, label, options = {}) {
-	const root = await mkdtemp(path.join(os.tmpdir(), `noetaxis-update-${label}-`));
-	t.after(async () => {
-		await makeWritable(root);
-		await rm(root, { recursive: true, force: true });
-	});
+	const root = await fixtureRoot(t, `noetaxis-update-${label}-`);
 	const home = path.join(root, "home");
 	const appsDir = path.join(root, "Applications");
 	const sim = path.join(root, "sim");
@@ -147,13 +143,16 @@ export async function makeWorld(t, label, options = {}) {
 		for (const session of sessions) if (!session.terminated && session.host) procs.push({ command: `${targetApp}/Contents/Resources/daemon/ao chat-host ${session.id} ${home}/.ao/data ${home}/.ao/worktrees`, ppid: 4003 });
 	}
 	for (const extra of options.extraProcs ?? []) procs.push(typeof extra === "string" ? { command: extra } : extra);
-	const rows = procs.map((row, index) => ({ ...row, command: row.command.replaceAll("<APP>", targetApp), pid: row.pid ?? 4001 + index, ppid: row.ppid ?? 1 }));
+	const expand = (value) => value.replaceAll("<APP>", targetApp).replaceAll("<AO>", path.join(home, ".ao")).replaceAll("<TMP>", tmp).replaceAll("<HOME>", home);
+	const rows = procs.map((row, index) => ({ ...row, command: expand(row.command), cwd: expand(row.cwd ?? "/"), pid: row.pid ?? 4001 + index, ppid: row.ppid ?? 1 }));
 	for (const row of rows) {
 		row.executable = fixtureExecutable(row.command, targetApp, row.executable);
 		if (row.executable.startsWith("/")) await mkdir(path.dirname(row.executable), { recursive: true });
+		if (row.cwd.startsWith(`${root}/`)) await mkdir(row.cwd, { recursive: true });
 	}
 	await writeFile(path.join(sim, "procs"), rows.map(({ pid, command }) => `${pid}|${command}\n`).join(""));
 	await writeFile(path.join(sim, "ppids"), rows.map(({ pid, ppid }) => `${pid}|${ppid}\n`).join(""));
+	await writeFile(path.join(sim, "cwds"), rows.map(({ pid, cwd }) => `${pid}|${cwd}\n`).join(""));
 	await writeFile(path.join(sim, "executables"), rows.map(({ pid, executable }) => `${pid}|${executable}\n`).join("") + "*|/bin/bash\n");
 	await writeFile(path.join(sim, "agents"), rows.filter((row) => row.session).map(({ pid, session }) => `${pid}|${session}\n`).join(""));
 	await writeFile(path.join(sim, "text-mappings"), rows.flatMap(({ pid, mappings }) => (mappings ?? []).map((name) => `${pid}|${name.replaceAll("<APP>", targetApp)}\n`)).join(""));
@@ -173,7 +172,9 @@ export async function makeWorld(t, label, options = {}) {
 		NOETAXIS_FAKE_EXECUTABLES: path.join(sim, "executables"),
 		NOETAXIS_TEST_SCRIPTS_DIR: scriptsDir,
 		NOETAXIS_POLL_INTERVAL: "0.05",
+		NOETAXIS_SESSION_WORKERS: "1",
 		NOETAXIS_LSOF: path.join(fakesDir, "lsof"),
+		NOETAXIS_LAUNCHCTL: path.join(fakesDir, "launchctl"),
 		NOETAXIS_KILL: path.join(fakesDir, "kill"),
 		NOETAXIS_PS: path.join(fakesDir, "ps"),
 		NOETAXIS_OSASCRIPT: path.join(fakesDir, "osascript"),
@@ -206,24 +207,17 @@ export async function makeWorld(t, label, options = {}) {
 			const errPath = `${outPath}.err`;
 			const outFd = openSync(outPath, "w");
 			const errFd = openSync(errPath, "w");
-			// A sampler that wakes after 120 s while the script is still running and records which
-			// processes of this world are alive and what they wait on (the post-timeout list is taken
-			// after they were killed and shows nothing).
-			const samplePath = `${outPath}.sample`;
-			const sampler = spawn("/bin/sh", ["-c", `/bin/sleep 120; /bin/ps -axo pid,ppid,stat,wchan,etime,command | /usr/bin/grep -F "${root}" > "${samplePath}"`], { stdio: "ignore" });
 			let result;
 			try {
 				result = spawnSync(path.join(scriptsDir, script), args, { cwd, input, env: { ...env, ...extraEnv }, timeout, killSignal: "SIGKILL", encoding: "utf8", stdio: ["pipe", outFd, errFd] });
 			} finally {
-				sampler.kill();
 				closeSync(outFd);
 				closeSync(errFd);
 			}
 			const stdout = readFileSync(outPath, "utf8");
 			const stderr = readFileSync(errPath, "utf8");
 			if (result.error) {
-				const alive = execute("/bin/ps", ["-axo", "pid,ppid,stat,etime,command"]).stdout.split("\n").filter((line) => line.includes(root)).join("\n");
-				result.error.message += `\nstdout so far:\n${stdout}\nstderr so far:\n${stderr}\nprocesses still alive under this world after the kill:\n${alive}\nsample taken at 120 s (pid ppid stat wchan etime command):\n${existsSync(samplePath) ? readFileSync(samplePath, "utf8") : "(no sample: the script ended before 120 s or the sampler was starved)"}`;
+				result.error.message += `\nstdout so far:\n${stdout}\nstderr so far:\n${stderr}`;
 				throw result.error;
 			}
 			return { status: result.status, signal: result.signal, stdout, stderr };

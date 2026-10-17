@@ -4,6 +4,7 @@ set -euo pipefail
 script_dir="$(cd "$(/usr/bin/dirname "$0")" && pwd)"
 . "$script_dir/common.sh"
 . "$script_dir/update-lib.sh"
+. "$script_dir/survivors.sh"
 
 dry_run=0
 allow_ao_session=0
@@ -13,6 +14,8 @@ update_mode=0
 update_yes=0
 update_end_sessions=0
 update_force=0
+update_kill_survivors=0
+update_survivors_confirmed=0
 update_restore_sessions=0
 update_restart_multica_daemon=0
 update_restart_multica_stack=0
@@ -59,6 +62,10 @@ automatically if the new app is not healthy. The app argument defaults to
                              live (resumes the exited agents)
   --force                    SIGTERM (never SIGKILL) processes of THIS bundle, only those in the confirmed plan, that
                              survive the waits; each one is logged
+  --kill-survivors           after quitting AO, list verified bundle descendants and anchored
+                             ~/.ao/ orphans; require a separate typed PID confirmation, then
+                             TERM, bounded wait, identity recheck, KILL. --yes does not confirm it.
+                             Deleted/unverified executables and test fixtures are never included.
   --manual-quit              do not script the tray item; wait for you to click
                              "Quit AO Completely"
   --restart-multica-daemon   restart a standalone multica CLI daemon that was running
@@ -101,12 +108,13 @@ while [[ $# -gt 0 ]]; do
 		--update)
 			update_mode=1
 			;;
-		--yes|--end-sessions|--restore-sessions|--force|--manual-quit|--restart-multica-daemon|--restart-multica-stack|--rollback-restore-db|--detached)
+		--yes|--end-sessions|--restore-sessions|--force|--kill-survivors|--manual-quit|--restart-multica-daemon|--restart-multica-stack|--rollback-restore-db|--detached)
 			case "$1" in
 				--yes) update_yes=1 ;;
 				--end-sessions) update_end_sessions=1 ;;
 				--restore-sessions) update_restore_sessions=1 ;;
 				--force) update_force=1 ;;
+				--kill-survivors) update_kill_survivors=1 ;;
 				--manual-quit) update_manual_quit=1 ;;
 				--restart-multica-daemon) update_restart_multica_daemon=1 ;;
 				--restart-multica-stack) update_restart_multica_stack=1 ;;
@@ -150,6 +158,10 @@ if [[ "$update_mode" -eq 0 && -n "$update_flag_given" ]]; then
 	exit 2
 fi
 if [[ "$update_mode" -eq 1 ]]; then
+	if [[ "$update_kill_survivors" -eq 1 && "$update_detached" -eq 1 ]]; then
+		noetaxis_error '--kill-survivors requires an interactive typed PID confirmation; it cannot be combined with --detached.'
+		exit 2
+	fi
 	if [[ "$allow_background" -eq 1 ]]; then
 		noetaxis_error "--update stops the background processes itself; --allow-background-processes does not apply."
 		exit 2
@@ -293,6 +305,7 @@ old_moved=0
 backup_dir=""
 noetaxis_install_cleanup() {
 	local exit_status=$?
+	if [[ "$update_mode" -eq 1 ]]; then noetaxis_update_join_session_jobs; fi
 	# Complete once the new app is in place, even if the signal landed before the flag was set.
 	if [[ "$old_moved" -eq 1 && ! -e "$staged_app" && -d "$target_app" ]]; then
 		install_complete=1
@@ -376,6 +389,14 @@ if ! noetaxis_write_backup_record "$backup_dir" "$old_app_backup" "$old_version"
 	exit 35
 fi
 noetaxis_test_pause after-record
+if [[ "$update_mode" -eq 1 ]]; then
+	noetaxis_survivor_scan "$target_app" "$cap_dir/survivors-final.tsv" || exit 56
+	if [[ -s "$cap_dir/survivors-final.tsv" ]]; then
+		noetaxis_survivor_report "$cap_dir/survivors-final.tsv"
+		noetaxis_error 'Final survivor scan is not empty. The app was not swapped; no newly appeared PID is adopted or signalled.'
+		exit 56
+	fi
+fi
 old_app_path="$backup_dir/$old_app_backup"
 if [[ "$old_app_backup" != NONE ]] && ! noetaxis_run_privileged /bin/mv "$target_app" "$backup_dir/$old_app_backup"; then
 	/bin/rm -f "$backup_dir/BACKUP_COMPLETE"
