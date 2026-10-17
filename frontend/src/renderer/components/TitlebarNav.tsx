@@ -79,9 +79,8 @@ export function TitlebarNav({
   const topClass = isMac ? "top-0" : "top-0.75";
   const heightClass = "h-traffic-light-clearance";
 
-  // With the sidebar open the brand sits where the history arrows would be;
-  // collapsed, the arrows take its place.
-  const arrowsVisible = !showBrand;
+  // History controls stay in the fixed cluster in both sidebar states. The
+  // brand follows them and stays part of the window-drag region.
   const prefersReducedMotion = useReducedMotion();
   const transition = prefersReducedMotion ? { duration: 0 } : SHELL_PANEL_SPRING;
 
@@ -130,65 +129,51 @@ export function TitlebarNav({
       >
         <PanelLeft className="size-icon-lg" aria-hidden="true" />
       </TitlebarButton>
-      {/* The brand and the history arrows trade places by animating width, on the
-          same spring as the sidebar, so the brand closes with the sidebar edge.
-          The hidden side collapses to width 0 and is inert, so it never leaves an
-          invisible no-drag hole in the window-drag region. */}
-      <div className="flex items-center">
-        <motion.div
-          animate={{ width: showBrand ? "auto" : 0, opacity: showBrand ? 1 : 0 }}
-          aria-hidden={showBrand ? undefined : true}
-          className="overflow-hidden"
-          data-slot="titlebar-brand"
-          initial={false}
-          inert={!showBrand}
-          transition={transition}
+      <TitlebarButton
+        disabled={historyLocked || !canGoBack}
+        label={t("titlebar.goBack")}
+        onClick={() => router.history.back()}
+        title={t("titlebar.goBack")}
+      >
+        <ArrowLeft className="size-icon-lg" aria-hidden="true" />
+      </TitlebarButton>
+      <TitlebarButton
+        disabled={historyLocked || !canGoForward}
+        label={t("titlebar.goForward")}
+        onClick={() => router.history.forward()}
+        title={t("titlebar.goForward")}
+      >
+        <ArrowRight className="size-icon-lg" aria-hidden="true" />
+      </TitlebarButton>
+      {/* The brand animates its width on the same spring as the sidebar, so it
+          closes with the sidebar edge. The hidden brand collapses to width 0 and
+          is inert, so it never leaves an invisible no-drag hole in the
+          window-drag region. */}
+      <motion.div
+        animate={{ width: showBrand ? "auto" : 0, opacity: showBrand ? 1 : 0 }}
+        aria-hidden={showBrand ? undefined : true}
+        className="overflow-hidden"
+        data-slot="titlebar-brand"
+        initial={false}
+        inert={!showBrand}
+        transition={transition}
+      >
+        {/* Not a button on purpose. Only the label opts out of window drag (for
+            the build-info tooltip); the rest of the row stays draggable. */}
+        <span
+          className="inline-flex select-none items-center gap-1.5 translate-y-0.5 whitespace-nowrap text-base font-semibold leading-tight tracking-tight-lg text-foreground"
+          data-sidebar-brand=""
+          ref={brandRef}
+          style={{ maxWidth: brandMaxWidth }}
         >
-          {/* Not a button on purpose. Only the label opts out of window drag (for
-              the build-info tooltip); the rest of the row stays draggable. */}
-          <span
-            className="inline-flex select-none items-center gap-1.5 translate-y-0.5 whitespace-nowrap text-base font-semibold leading-tight tracking-tight-lg text-foreground"
-            data-sidebar-brand=""
-            ref={brandRef}
-            style={{ maxWidth: brandMaxWidth }}
-          >
-            <BuildInfoTooltip>
-              <span className="inline-flex min-w-0 items-center gap-1.5">
-                <AOMascot className="h-5.5 w-5.5 shrink-0" />
-                <span className="min-w-0 truncate" data-brand-label="">Orchestrator.inc</span>
-              </span>
-            </BuildInfoTooltip>
-          </span>
-        </motion.div>
-        <motion.div
-          animate={{ width: arrowsVisible ? "auto" : 0, opacity: arrowsVisible ? 1 : 0 }}
-          aria-hidden={arrowsVisible ? undefined : true}
-          className="overflow-hidden"
-          data-slot="titlebar-history"
-          initial={false}
-          inert={!arrowsVisible}
-          transition={transition}
-        >
-          <div className="flex items-center gap-1">
-            <TitlebarButton
-              disabled={historyLocked || !canGoBack}
-              label={t("titlebar.goBack")}
-              onClick={() => router.history.back()}
-              title={t("titlebar.goBack")}
-            >
-              <ArrowLeft className="size-icon-lg" aria-hidden="true" />
-            </TitlebarButton>
-            <TitlebarButton
-              disabled={historyLocked || !canGoForward}
-              label={t("titlebar.goForward")}
-              onClick={() => router.history.forward()}
-              title={t("titlebar.goForward")}
-            >
-              <ArrowRight className="size-icon-lg" aria-hidden="true" />
-            </TitlebarButton>
-          </div>
-        </motion.div>
-      </div>
+          <BuildInfoTooltip>
+            <span className="inline-flex min-w-0 items-center gap-1.5">
+              <AOMascot className="h-5.5 w-5.5 shrink-0" />
+              <span className="min-w-0 truncate" data-brand-label="">Orchestrator.inc</span>
+            </span>
+          </BuildInfoTooltip>
+        </span>
+      </motion.div>
     </div>
   );
 }
