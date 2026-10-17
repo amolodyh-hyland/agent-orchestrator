@@ -172,6 +172,14 @@ test("mutation: collapsing ENOENT into a generic failure loses the descendant", 
 	assert.equal(world.update(["--dry-run", "--end-sessions"], { scriptsDir: mutant }).status, 21);
 });
 
+test("mutation: promoting EPERM to ENOENT incorrectly permits session teardown", darwin, async (t) => {
+	const mutant = await mutatedScripts(t, "common.sh", '[[ "$status" -eq 44 ]] && return 44; return 1;', 'return 44;');
+	const extraProcs = tree();
+	extraProcs[1].executable = "!EPERM";
+	const world = await makeWorld(t, "enoent-eperm-mutant", { sessions: [{ id: "s1" }], extraProcs });
+	assert.equal(world.update(["--dry-run", "--end-sessions"], { scriptsDir: mutant }).status, 0);
+});
+
 test("mutation: granting the ENOENT exception without ancestry lets an orphan pass", darwin, async (t) => {
 	const mutant = await mutatedScripts(t, "common.sh", /noetaxis_deleted_process_bundle_session\(\) \{[\s\S]*?\n\}/, 'noetaxis_deleted_process_bundle_session() {\n\tprintf s1\n}');
 	const world = await makeWorld(t, "enoent-no-walk-mutant", { sessions: [{ id: "s1" }], extraProcs: [{ pid: 8301, ppid: 1, session: "s1", command, executable: "!ENOENT" }] });
