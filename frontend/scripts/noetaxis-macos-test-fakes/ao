@@ -88,6 +88,7 @@ case "$1" in
 				first=1
 				while IFS='|' read -r id project role status activity terminated name created; do
 					[[ -n "$id" ]] || continue
+					if [[ "$role" == orchestrator && " $* " != *' --all '* && " $* " != *' -a '* ]]; then continue; fi
 					[[ "$first" -eq 1 ]] || printf ','
 					first=0
 					printf '{"id":"%s","projectId":"%s","role":"%s","displayName":"%s","status":"%s","activity":"%s","isTerminated":%s,"harness":"claude","branch":"ao/%s","prs":[],"createdAt":"%s","updatedAt":"2026-10-01T00:00:00Z"}' "$id" "$project" "$role" "$(sim_json_escape "$name")" "$status" "$activity" "$terminated" "$id" "${created:-2026-10-01T00:00:00Z}"

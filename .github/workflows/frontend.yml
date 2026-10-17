@@ -81,7 +81,7 @@ jobs:
         with:
           node-version: 24
       - name: Test the one-command update flow against fakes
-        run: node --test scripts/noetaxis-macos-update.node-test.mjs
+        run: node --test scripts/noetaxis-macos-update*.node-test.mjs
 
   test:
     runs-on: ubuntu-latest
