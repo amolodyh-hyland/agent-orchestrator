@@ -229,6 +229,9 @@ noetaxis_update_agent_processes_remaining() {
 		info="$(noetaxis_process_info "$pid")" || continue
 		IFS=$'\t' read -r actual parent current_start current_command <<< "$info"
 		if [[ "$actual" == "$pid" && "$current_start" == "$started" ]]; then
+			if [[ "$command_line" == *$'\tdeleted executable; identity unproven' ]]; then
+				current_command="[deleted executable; identity unproven; session ${session_id:-unknown}] $current_command"
+			fi
 			printf '%s\t%s\n' "$pid" "$current_command"
 		fi
 	done < "$cap_agent_processes_file"
@@ -245,6 +248,7 @@ noetaxis_update_wait_agent_processes() {
 	if noetaxis_wait_until "agent processes of live sessions to exit" "$update_stop_timeout" noetaxis_update_agent_processes_gone "$app_path" "$session_ids"; then return 0; fi
 	noetaxis_error "Agent processes of live sessions are still running after the wait; they were not signalled:"
 	noetaxis_update_agent_processes_remaining "$app_path" "$session_ids" | noetaxis_describe_processes >&2
+	printf 'End the listed session agents yourself through the app or "ao session exit-agent <id> --project <project>", then rerun. --force never signals these agent PIDs.\n' >&2
 	return 56
 }
 
@@ -549,7 +553,7 @@ noetaxis_update_print_plan() {
 	other_count="$(noetaxis_own_pids_of_kind "$app_path" helper | /usr/bin/awk 'END { print NR }')"
 	printf '\nUpdate plan\n'
 	printf '  Agent processes of live sessions (%s):\n' "$(/usr/bin/awk 'END { print NR }' "$cap_agent_processes_file")"
-	/usr/bin/awk -F '\t' '{ printf "      pid %s  %s\n", $1, $4 }' "$cap_agent_processes_file"
+	/usr/bin/awk -F '\t' '{ label = ""; if ($5 != "") label = " [" $5 "; session " ($3 == "" ? "unknown" : $3) "]"; printf "      pid %s  %s%s\n", $1, $4, label }' "$cap_agent_processes_file"
 	printf '  Install:   %s -> %s\n             in %s\n' "$cap_old_version" "$new_version" "$app_path"
 	printf '\n  Will be STOPPED, in this order:\n'
 	if [[ "$update_end_sessions" -eq 1 && "$cap_live_count" -gt 0 ]]; then
@@ -635,7 +639,7 @@ noetaxis_update_print_plan() {
 
 # Refusals that happen before anything is stopped. Prints the reason and returns the exit code.
 noetaxis_update_preflight_refusals() {
-	local app_path="$1" foreign host_count
+	local app_path="$1" foreign host_count deleted uncovered
 	foreign="$(noetaxis_foreign_bundle_processes "$app_path")"
 	if [[ -n "$foreign" ]]; then
 		noetaxis_error "Processes that mention $app_path/Contents/ but are not part of this bundle are running (another copy of AO whose path ends the same way, or a tool with a file open inside the app). Update mode never signals them, and they would block the install. Quit them yourself and rerun:"
@@ -645,6 +649,20 @@ noetaxis_update_preflight_refusals() {
 	if [[ -n "$cap_identity_detail" ]]; then
 		noetaxis_error "Refusing to act on a daemon that is not this bundle's: $cap_identity_detail. The bundled ao controls whichever AO daemon owns ~/.ao's run file, so ending sessions or stopping it here would hit that other copy. Nothing was stopped. Quit the other AO copy (or fix the daemon), then rerun."
 		return 57
+	fi
+	deleted="$(/usr/bin/awk -F '\t' '$5 == "deleted executable; identity unproven" { printf "      pid %s  session %s: %s\n", $1, ($3 == "" ? "unknown" : $3), $5 }' "$cap_agent_processes_file")"
+	if [[ -n "$deleted" ]]; then
+		uncovered="$(/usr/bin/awk -F '\t' 'FILENAME == ARGV[1] { hosts[$1] = 1; next } $5 == "deleted executable; identity unproven" && !($3 in hosts) { print $1 }' "$cap_hosts_file" "$cap_agent_processes_file")"
+		if [[ "$cap_sessions_status" != ok || -n "$uncovered" ]]; then
+			noetaxis_error 'Deleted executable; identity unproven: these descendants have no confirmed live-session coverage and verified chat host. Nothing was stopped. End the listed agents yourself using the app or "ao session exit-agent <id> --project <project>", then rerun. Unknown sessions must be identified by the user. --force cannot bypass this refusal; these PIDs are never signalled:'
+			printf '%s\n' "$deleted" >&2
+			return 56
+		fi
+		if [[ "$update_end_sessions" -ne 1 ]]; then
+			noetaxis_error 'Deleted executable; identity unproven: rerun with --end-sessions to end these confirmed sessions through exit-agent (including orchestrators), or end their agents yourself and rerun. Nothing was stopped; --force never signals these PIDs:'
+			printf '%s\n' "$deleted" >&2
+			return 51
+		fi
 	fi
 	if [[ "$cap_sessions_status" == failed && "$update_force" -ne 1 ]]; then
 		noetaxis_error "The AO daemon is running (state: $cap_daemon_state) but its session list could not be read$([[ "$cap_sessions_rc" -eq 142 ]] && printf ' (the call timed out)') (see $cap_dir/sessions.json.err), so live sessions cannot be identified. Nothing was stopped. Fix the daemon or rerun with --force to continue without the list (--force may SIGTERM chat hosts of this bundle afterwards)."
