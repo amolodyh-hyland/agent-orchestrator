@@ -183,12 +183,14 @@ noetaxis_normalized_file_path() {
 	printf '%s/%s' "$directory" "$(/usr/bin/basename "$1")"
 }
 
+# Status 44 is reserved for proc_pidpath ENOENT; every other lookup failure stays unverified.
 noetaxis_process_executable_path() {
-	local pid="$1" output
+	local pid="$1" output status
 	[[ "$pid" =~ ^[0-9]+$ ]] || return 1
 	# proc_pidpath reads p_textvp; argv, ps comm and lsof txt mappings are not executable identity.
 	output="$(noetaxis_bounded 5 /usr/bin/python3 -I -S -c '
 import ctypes
+import errno
 import os
 import sys
 try:
@@ -198,14 +200,14 @@ try:
     lookup.argtypes = (ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32)
     lookup.restype = ctypes.c_int
     if lookup(int(sys.argv[1]), buffer, len(buffer)) <= 0:
-        raise OSError(ctypes.get_errno(), "proc_pidpath failed")
+        sys.exit(44 if ctypes.get_errno() == errno.ENOENT else 1)
     result = os.fsdecode(buffer.value)
     if not result.startswith("/") or "\n" in result or "\r" in result:
         raise ValueError("invalid executable path")
     sys.stdout.write(result)
 except Exception:
     sys.exit(1)
-' "$pid" 2>/dev/null && printf '\001')" || return 1
+' "$pid" 2>/dev/null && printf '\001')" || { status=$?; [[ "$status" -eq 44 ]] && return 44; return 1; }
 	[[ "$output" == *$'\001' ]] || return 1
 	output="${output%$'\001'}"
 	noetaxis_normalized_file_path "$output"
@@ -285,13 +287,53 @@ noetaxis_process_bundle_session_id() {
 	return 1
 }
 
+noetaxis_deleted_process_bundle_session() {
+	local app_path="$1" pid="$2" info current parent started command_line executable initial row
+	local depth=0 visited=" $2 " owned=0 session_id="" host=0
+	local -a chain=()
+	initial="$(noetaxis_process_info "$pid")" || return 1
+	chain+=("$initial")
+	IFS=$'\t' read -r current parent started command_line <<< "$initial"
+	current="$parent"
+	while [[ "$current" =~ ^[0-9]+$ && "$current" -gt 1 && "$depth" -lt 64 && "$visited" != *" $current "* ]]; do
+		visited="$visited$current "
+		info="$(noetaxis_process_info "$current")" || return 1
+		executable="$(noetaxis_process_executable_path "$current")" || return 1
+		[[ "$(noetaxis_process_info "$current")" == "$info" ]] || return 1
+		chain+=("$info")
+		IFS=$'\t' read -r current parent started command_line <<< "$info"
+		if noetaxis_executable_path_is_in_bundle "$app_path" "$executable"; then
+			owned=1
+			if [[ "$executable" -ef "$app_path/Contents/Resources/daemon/ao" ]] && noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" 'Resources/daemon/ao chat-host '; then
+				session_id="${command_line#*/Contents/Resources/daemon/ao chat-host }"
+				session_id="${session_id%% *}"
+				host=1
+				break
+			fi
+		fi
+		current="$parent"
+		depth=$((depth + 1))
+	done
+	[[ "$owned" -eq 1 && ( "$host" -eq 1 || "$current" -eq 1 ) ]] || return 1
+	for row in "${chain[@]}"; do
+		[[ "$(noetaxis_process_info "${row%%$'\t'*}")" == "$row" ]] || return 1
+	done
+	printf '%s' "$session_id"
+}
+
 noetaxis_foreign_bundle_processes() {
-	local app_path="$1" pid executable info actual parent start command_line
+	local app_path="$1" pid executable info actual parent start command_line status
 	for pid in $(pgrep -if "$(noetaxis_regex_escape "$app_path/Contents/")" 2>/dev/null || true); do
 		[[ "$pid" =~ ^[0-9]+$ && "$pid" -ne "$$" ]] || continue
 		info="$(noetaxis_process_info "$pid")" || { printf '%s\t<unverified process identity>\n' "$pid"; continue; }
 		IFS=$'\t' read -r actual parent start command_line <<< "$info"
-		executable="$(noetaxis_process_executable_path "$pid")" || { printf '%s\t<unverified executable path>\n' "$pid"; continue; }
+		if executable="$(noetaxis_process_executable_path "$pid")"; then :
+		else
+			status=$?
+			if [[ "$status" -eq 44 ]] && noetaxis_deleted_process_bundle_session "$app_path" "$pid" >/dev/null && [[ "$(noetaxis_process_info "$pid")" == "$info" ]]; then continue; fi
+			printf '%s\t<unverified executable path>\n' "$pid"
+			continue
+		fi
 		if noetaxis_executable_path_is_in_bundle "$app_path" "$executable"; then
 			noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" && continue
 		elif noetaxis_process_has_bundle_ancestor "$app_path" "$pid"; then
@@ -302,12 +344,20 @@ noetaxis_foreign_bundle_processes() {
 }
 
 noetaxis_bundle_descendant_processes() {
-	local app_path="$1" pid executable info actual parent start command_line session_id
+	local app_path="$1" pid executable info actual parent start command_line session_id status
 	for pid in $(pgrep -if "$(noetaxis_regex_escape "$app_path/Contents/")" 2>/dev/null || true); do
 		[[ "$pid" =~ ^[0-9]+$ && "$pid" -ne "$$" ]] || continue
 		info="$(noetaxis_process_info "$pid")" || continue
 		IFS=$'\t' read -r actual parent start command_line <<< "$info"
-		executable="$(noetaxis_process_executable_path "$pid")" || continue
+		if executable="$(noetaxis_process_executable_path "$pid")"; then :
+		else
+			status=$?
+			[[ "$status" -eq 44 ]] || continue
+			session_id="$(noetaxis_deleted_process_bundle_session "$app_path" "$pid")" || continue
+			[[ "$(noetaxis_process_info "$pid")" == "$info" ]] || continue
+			printf '%s\t%s\t%s\t%s\tdeleted executable; identity unproven\n' "$pid" "$start" "$session_id" "$command_line"
+			continue
+		fi
 		noetaxis_executable_path_is_in_bundle "$app_path" "$executable" && continue
 		noetaxis_process_has_bundle_ancestor "$app_path" "$pid" || continue
 		session_id="$(noetaxis_process_bundle_session_id "$app_path" "$pid" || true)"
@@ -481,6 +531,10 @@ noetaxis_assert_idle() {
 	if [[ -n "$descendants" ]]; then
 		count="$(printf '%s\n' "$descendants" | /usr/bin/awk 'END { print NR }')"
 		printf 'Agent processes of live sessions (%s):\n%s\n' "$count" "$descendants" >&2
+		if printf '%s\n' "$descendants" | /usr/bin/awk -F '\t' '$5 == "deleted executable; identity unproven" { found = 1 } END { exit !found }'; then
+			noetaxis_error 'Deleted executable; identity unproven: end the listed session agents yourself and rerun, or use update.sh --end-sessions with a confirmed live session and chat host. These PIDs are never signalled, and --allow-background-processes cannot override this refusal.'
+			return 21
+		fi
 		if [[ "$allow_background" -ne 1 ]]; then return 21; fi
 	fi
 	if noetaxis_desktop_running "$app_path"; then

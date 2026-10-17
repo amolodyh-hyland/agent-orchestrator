@@ -15,8 +15,12 @@ if [[ -z "$executable" && -f "${NOETAXIS_SIM:-}/procs" ]]; then
 	done < "$NOETAXIS_SIM/procs"
 fi
 if [[ -z "$executable" && "$fixture_process" -eq 0 ]]; then executable="$fallback"; fi
+[[ "$executable" == '!ENOENT' ]] && exit 44
 [[ -n "$executable" && "$executable" != '!'* ]] || exit 1
 executable="${executable//<APP>/${APPS_DIR:-}/Agent Orchestrator.app}"
+if [[ -f "${NOETAXIS_SIM:-}/cfg/proc_path_start_transition_$pid" ]]; then
+	/bin/cp "$NOETAXIS_SIM/cfg/proc_path_start_transition_$pid" "$NOETAXIS_SIM/cfg/lstart_$pid"
+fi
 transition="${NOETAXIS_SIM:-}/cfg/proc_path_transition_$pid"
 if [[ -f "$transition" ]]; then
 	IFS='|' read -r after next < "$transition"
