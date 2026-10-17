@@ -123,6 +123,35 @@ test("typed teardown sends TERM then KILL children first and final scan must be 
 	assert.deepEqual(await world.procs(), []);
 });
 
+test("signal order uses PPID relationships even when the displayed ancestry chains are capped", darwin, async (t) => {
+	const world = await makeWorld(t, "teardown-order-cap", { running: false });
+	const file = path.join(world.sim, "order-input");
+	await writeFile(file, [
+		["a", "9002", "1", "start", "/bin/sh", "parent", "capped", "/", "1"],
+		["a", "8001", "9002", "start", "/bin/sh", "child", "capped", "/", "1"],
+		["a", "7001", "8001", "start", "/bin/sh", "grandchild", "capped", "/", "1"],
+	].map((row) => row.join(sep)).join("\n") + "\n");
+	const result = survivorCall(world, 'noetaxis_survivor_order "$cap_dir/order-input" "$cap_dir/order-output"; /bin/cat "$cap_dir/order-output"');
+	assert.equal(result.status, 0, result.stdout + result.stderr);
+	assert.deepEqual(result.stdout.trim().split("\n").map((line) => line.split(sep)[1]), ["7001", "8001", "9002"]);
+	const scripts = await mutatedScripts(t, "survivors.sh", '!done[p] && children[p] == 0', '!done[p]');
+	const broken = survivorCall(world, 'noetaxis_survivor_order "$cap_dir/order-input" "$cap_dir/order-output"; /bin/cat "$cap_dir/order-output"', { scripts });
+	assert.equal(broken.status, 0, broken.stdout + broken.stderr);
+	assert.notDeepEqual(broken.stdout.trim().split("\n").map((line) => line.split(sep)[1]), ["7001", "8001", "9002"], "the order assertion catches ignoring child relationships");
+});
+
+test("a cyclic survivor inventory refuses before any signal", darwin, async (t) => {
+	const world = await makeWorld(t, "teardown-order-cycle", { running: false });
+	await writeFile(path.join(world.sim, "order-input"), [
+		["a", "8101", "8102", "start", "/bin/sh", "one", "cycle", "/", "1"],
+		["a", "8102", "8101", "start", "/bin/sh", "two", "cycle", "/", "1"],
+	].map((row) => row.join(sep)).join("\n") + "\n");
+	const result = survivorCall(world, 'noetaxis_survivor_order "$cap_dir/order-input" "$cap_dir/order-output"');
+	assert.equal(result.status, 56, result.stdout + result.stderr);
+	assert.match(result.stderr, /cycle or invalid inventory/);
+	assert.deepEqual(signals(await world.calls()), []);
+});
+
 test("changed executable or start time after TERM is never KILLed and stops the run", darwin, async (t) => {
 	for (const change of [{ survivor_exec_after_term_8101: "/bin/other" }, { survivor_reuse_after_term_8101: true }]) {
 		const world = await makeWorld(t, "teardown-identity", { running: false, extraProcs: [orphan()], cfg: { stubborn: "8101\n", ...change } });

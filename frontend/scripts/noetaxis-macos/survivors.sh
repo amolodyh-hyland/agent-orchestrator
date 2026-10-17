@@ -10,16 +10,16 @@ noetaxis_process_cwd() {
 }
 
 noetaxis_ao_marker() {
-	local command_line="$1" cwd="$2" home="${ao_home:-$(noetaxis_ao_home)}" directory
+	local command_line="$1" cwd="$2" marker_home="${ao_home:-$(noetaxis_ao_home)}" directory
 	if [[ "$cwd" == /* && -d "$cwd" ]]; then
 		directory="$(cd -P "$cwd" && pwd -P)" || return 1
 		while [[ -n "$directory" ]]; do
-			[[ "$directory" -ef "$home" ]] && return 0
+			[[ "$directory" -ef "$marker_home" ]] && return 0
 			directory="${directory%/*}"
 		done
 	fi
 	[[ "$command_line" != *'/../'* && "$command_line" != *'/./'* ]] || return 1
-	printf '%s\n' "$command_line" | /usr/bin/grep -E "(^|[[:space:]\"'=])$(noetaxis_regex_escape "$home/")" >/dev/null
+	printf '%s\n' "$command_line" | /usr/bin/grep -E "(^|[[:space:]\"'=])$(noetaxis_regex_escape "$marker_home/")" >/dev/null
 }
 
 noetaxis_fixture_marker() {
@@ -163,6 +163,20 @@ noetaxis_survivor_targets_gone() {
 	done < "$1"
 }
 
+noetaxis_survivor_order() {
+	/usr/bin/awk -F "$noetaxis_sep" '
+		{ row[$2] = $0; parent[$2] = $3; count++ }
+		END {
+			for (p in row) if (parent[p] in row) children[parent[p]]++
+			for (n = 0; n < count; n++) {
+				leaf = ""
+				for (p in row) if (!done[p] && children[p] == 0 && (leaf == "" || p + 0 > leaf + 0)) leaf = p
+				if (leaf == "") exit 1
+				print row[leaf]; done[leaf] = 1; children[parent[leaf]]--
+			}
+		}' "$1" > "$2" || { noetaxis_error 'Cannot order the survivor parent relationships safely (cycle or invalid inventory). Nothing was signalled.'; return 56; }
+}
+
 noetaxis_update_survivors() {
 	local app_path="$1" file="$cap_dir/survivors-current.tsv" ordered="$cap_dir/survivors-approved.tsv" answer expected ids signal kind pid parent started executable command_line chain cwd eligible
 	noetaxis_survivor_scan "$app_path" "$file" || return 56
@@ -176,7 +190,7 @@ noetaxis_update_survivors() {
 		noetaxis_error '--kill-survivors cannot signal unverified/deleted executable PIDs or test fixtures outside the bundle/AO anchors. End those manually first; nothing was signalled.'
 		return 56
 	fi
-	/usr/bin/awk -F "$noetaxis_sep" '{ depth = split($7, parts, " -> "); print depth "\t" $0 }' "$file" | /usr/bin/sort -rn | /usr/bin/cut -f2- > "$ordered" || return 56
+	noetaxis_survivor_order "$file" "$ordered" || return 56
 	ids="$(/usr/bin/awk -F "$noetaxis_sep" '{ printf "%s%s", (NR == 1 ? "" : " "), $2 }' "$ordered")" || return 56
 	expected="kill survivors $ids"
 	update_survivors_prompted=1
