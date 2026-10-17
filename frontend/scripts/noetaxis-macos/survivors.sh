@@ -142,9 +142,10 @@ noetaxis_survivor_signal() {
 	local signal="$1"; shift
 	[[ "${update_kill_survivors:-0}" -eq 1 && "${update_survivors_confirmed:-0}" -eq 1 && ( "$signal" == TERM || "$signal" == KILL ) ]] || return 1
 	[[ "$1" != c ]] || return 1
-	noetaxis_update_say "SIG$signal to verified survivor pid $2 (typed --kill-survivors confirmation)"
+	noetaxis_update_say "checking survivor pid $2 before SIG$signal (typed --kill-survivors confirmation)"
 	noetaxis_survivor_matches "$@" || return 1
-	NOETAXIS_CONFIRMED_SURVIVOR=1 "${NOETAXIS_KILL:-/bin/kill}" "-$signal" "$2"
+	NOETAXIS_CONFIRMED_SURVIVOR=1 "${NOETAXIS_KILL:-/bin/kill}" "-$signal" "$2" || return 1
+	noetaxis_update_say "SIG$signal sent to verified survivor pid $2"
 }
 
 noetaxis_survivor_targets_gone() {

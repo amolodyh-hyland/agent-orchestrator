@@ -129,6 +129,8 @@ test("changed executable or start time after TERM is never KILLed and stops the 
 		const result = survivorCall(world, 'update_kill_survivors=1; noetaxis_update_survivors "$target_app"', { input: "kill survivors 8101\n" });
 		assert.equal(result.status, 56, result.stdout + result.stderr);
 		assert.deepEqual(signals(await world.calls()), ["kill -TERM 8101"]);
+		assert.match(result.stdout, /SIGTERM sent to verified survivor pid 8101/);
+		assert.doesNotMatch(result.stdout, /SIGKILL sent to verified survivor/);
 		assert.match(result.stderr, /Final survivor scan is not empty/);
 	}
 });
