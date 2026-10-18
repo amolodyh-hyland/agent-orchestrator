@@ -32,7 +32,7 @@ noetaxis_ao_marker() {
 		$anchor = normalize($anchor);
 		$anchor =~ s{/$}{};
 		$command = normalize($command);
-		exit 0 if $command =~ m{(?:^|[\s\x22\x27=;|&()<>])\Q$anchor\E(?=/|$|[\s\x22\x27=;|&()<>])};
+		exit 0 if $command =~ m{(?:^|[\s\x22\x27=;|&()<>])\Q$anchor\E(?=/|$)};
 		exit 1;
 	' "$marker_home" "$command_line"
 }

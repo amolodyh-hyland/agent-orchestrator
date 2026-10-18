@@ -122,17 +122,20 @@ test("orphan anchors normalize paths and reject parent traversal at every argume
 		"du --path=<AO>/.. --all", "du <AO>/../outside", "du <AO>//..//outside",
 		"sh -c 'du <AO>/..; echo done'", "du <AO>/data/..", "du <AO>/./..",
 		"du <AO>/data/../../outside", "du <AO>/data /outside/..", "du <HOME>/.ao-lookalike/file",
+		"du <AO>;other", "du <AO>-x", "du <AO>x", "du <AO> other",
+		"du '<AO> other'", 'du "<AO>;other"',
 	];
 	const world = await makeWorld(t, "teardown-traversal", { running: false, extraProcs: [
 		...excluded.map((command, n) => orphan(8500 + n, { command })),
 		orphan(8600, { command: "du <HOME>//.ao/./data//worktrees/file" }),
+		orphan(8601, { command: "du <AO>" }),
 	] });
 	const scan = 'noetaxis_survivor_scan "$target_app" "$cap_survivors_file"; /bin/cat "$cap_survivors_file"';
 	const result = survivorCall(world, scan);
 	assert.equal(result.status, 0, result.stdout + result.stderr);
-	assert.deepEqual(result.stdout.trim().split("\n").map((line) => line.split(sep)[1]), ["8600"]);
+	assert.deepEqual(result.stdout.trim().split("\n").map((line) => line.split(sep)[1]), ["8600", "8601"]);
 	const recheck = survivorCall(world, `update_kill_survivors=1; update_survivors_confirmed=1
-for pid in {8500..8511}; do
+for pid in {8500..${8500 + excluded.length - 1}}; do
  info="$(noetaxis_process_info "$pid")"
  IFS=$'\\t' read -r pid parent started command_line <<< "$info"
  executable="$(noetaxis_process_executable_path "$pid")"
@@ -155,6 +158,10 @@ if noetaxis_ao_marker "du $HOME/a home/.ao/.." /; then exit 99; fi`);
 		assert.equal(ids.includes("8500"), !expected, "the exclusion assertion catches a missing traversal guard");
 		assert.equal(ids.includes("8600"), !expected, "the inclusion assertion catches missing normalization");
 	}
+	const scripts = await mutatedScripts(t, "survivors.sh", '\\Q$anchor\\E(?=/|$)', '\\Q$anchor\\E(?=/|$|[\\s\\x22\\x27=;|&()<>])');
+	const siblings = survivorCall(world, scan, { scripts });
+	assert.equal(siblings.status, 0, siblings.stdout + siblings.stderr);
+	assert.match(siblings.stdout, /8512/, "the sibling exclusion catches accepting a delimiter after .ao");
 });
 
 test("survivors require exact typed PID confirmation; --yes and wrong answers never signal", darwin, async (t) => {
