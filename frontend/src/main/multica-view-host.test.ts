@@ -133,7 +133,8 @@ async function setup(initial: MulticaSettings = local(URL), overrides: Partial<M
 	const daemonDispose = vi.fn();
 	const notifications = {
 		showNotification: vi.fn(),
-		reportAuthSession: vi.fn(),
+		reportAuthSession: vi.fn(() => false),
+		hasActiveSession: vi.fn(() => false),
 		setBadge: vi.fn(),
 		reset: vi.fn(),
 	};

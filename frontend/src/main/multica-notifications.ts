@@ -24,6 +24,8 @@ export type MulticaNotifications = {
 	showNotification: (value: unknown) => void;
 	/** Returns true when the report invalidated the session. */
 	reportAuthSession: (value: unknown) => boolean;
+	/** True when an account was established before the next auth report. */
+	hasActiveSession: () => boolean;
 	setBadge: (value: unknown) => void;
 	/** The view went away: forget the account, invalidate banners, zero the badge contribution. */
 	reset: () => void;
@@ -104,6 +106,7 @@ export function createMulticaNotifications(options: MulticaNotificationsOptions)
 			}
 			return invalidated;
 		},
+		hasActiveSession: () => auth.hasActiveSession(),
 		setBadge: (value) => {
 			const count = typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 			if (auth.isSignedOut() && count > 0) return;

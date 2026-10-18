@@ -46,7 +46,7 @@ export type MulticaDesktopBridgeOptions = {
 	/** Delivers a main-to-renderer message to the Multica view. */
 	send: (channel: string, payload?: unknown) => void;
 	/** Receives Multica's notification, auth-session and badge messages. */
-	notifications: Pick<MulticaNotifications, "showNotification" | "reportAuthSession" | "setBadge">;
+	notifications: Pick<MulticaNotifications, "showNotification" | "reportAuthSession" | "hasActiveSession" | "setBadge">;
 	/** Queues renderer-bound links before the renderer subscribes. */
 	initialPending?: ReadonlyArray<readonly [channel: string, payloads: readonly unknown[]]>;
 };
@@ -184,10 +184,14 @@ export function createMulticaDesktopBridge(options: MulticaDesktopBridgeOptions)
 		[
 			"auth:session-state",
 			(event, value) => {
-				if (options.isMulticaSender(event.sender) && options.notifications.reportAuthSession(value)) {
-					// Invalidation makes any queued inbox click belong to the previous account.
-					pending.delete("inbox:open");
-				}
+				if (!options.isMulticaSender(event.sender)) return;
+				const hadActiveSession = options.notifications.hasActiveSession();
+				if (!options.notifications.reportAuthSession(value)) return;
+				// Invalidation makes queued account-bound destinations stale.
+				pending.delete("inbox:open");
+				// A cold-start issue link must survive the initial signed-out report
+				// and the login it triggered, but not leave an established account.
+				if (hadActiveSession) pending.delete("issue:open");
 			},
 		],
 		[

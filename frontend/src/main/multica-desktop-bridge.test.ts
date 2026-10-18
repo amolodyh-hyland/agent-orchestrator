@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { createMulticaAuthSession } from "./multica-auth-session";
 import { createMulticaDesktopBridge, multicaBridgeChannels, type MulticaDesktopBridgeOptions } from "./multica-desktop-bridge";
 
 const MULTICA = { id: 10 };
@@ -59,9 +60,11 @@ function setup(overrides: Partial<MulticaDesktopBridgeOptions> = {}) {
 	const openExternal = vi.fn(async (_url: string) => undefined);
 	const send = vi.fn();
 	const daemon = fakeDaemon();
+	const auth = createMulticaAuthSession();
 	const notificationFakes = {
 		showNotification: vi.fn(),
-		reportAuthSession: vi.fn(() => false),
+		reportAuthSession: vi.fn((value: unknown) => auth.report(value)),
+		hasActiveSession: vi.fn(() => auth.hasActiveSession()),
 		setBadge: vi.fn(),
 	};
 	const notifications = overrides.notifications ?? notificationFakes;
@@ -379,6 +382,35 @@ describe("multica desktop bridge: main-to-renderer messages", () => {
 		ipc.send("main-renderer:channel-state", MULTICA, { channel: "auth:token", ready: true });
 
 		expect(send).toHaveBeenCalledExactlyOnceWith("auth:token", "token-1");
+	});
+
+	it.each([
+		["sign-out", null],
+		["account switch", "user-2"],
+	])("clears a queued issue link when an established session is invalidated by %s", (_name, nextUser) => {
+		const { bridge, ipc, send, notificationFakes } = setup();
+		ipc.send("auth:session-state", MULTICA, "user-1");
+
+		bridge.dispatch("issue:open", { slug: "acme", issueId: "MUL-1" });
+		ipc.send("auth:session-state", MULTICA, nextUser);
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "issue:open", ready: true });
+
+		expect(notificationFakes.hasActiveSession).toHaveBeenCalledTimes(2);
+		expect(notificationFakes.reportAuthSession).toHaveBeenLastCalledWith(nextUser);
+		expect(send).not.toHaveBeenCalled();
+	});
+
+	it("preserves a queued issue link through the initial signed-out report and login", () => {
+		const { bridge, ipc, send, notificationFakes } = setup();
+		bridge.dispatch("issue:open", { slug: "acme", issueId: "MUL-1" });
+
+		ipc.send("auth:session-state", MULTICA, null);
+		ipc.send("auth:session-state", MULTICA, "user-1");
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "issue:open", ready: true });
+
+		expect(notificationFakes.reportAuthSession).toHaveBeenNthCalledWith(1, null);
+		expect(notificationFakes.reportAuthSession).toHaveBeenNthCalledWith(2, "user-1");
+		expect(send).toHaveBeenCalledExactlyOnceWith("issue:open", { slug: "acme", issueId: "MUL-1" });
 	});
 
 	it("clears pending messages for only the requested channel", () => {

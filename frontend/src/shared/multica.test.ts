@@ -326,6 +326,8 @@ describe("parseMulticaDeepLink", () => {
 			"multica://-acme/issues/1",
 			"multica://acme/issues/../../evil",
 			"multica://acme/issues/%E0%A4%A",
+			`multica://${"a".repeat(64)}/issues/MUL-1`,
+			`multica://acme/issues/${"i".repeat(257)}`,
 			"not a url",
 		]) {
 			expect(parseMulticaDeepLink(input)).toBeNull();
