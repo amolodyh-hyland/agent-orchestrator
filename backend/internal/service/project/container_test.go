@@ -38,7 +38,7 @@ func TestCreateContainerUsesScratchWithoutGitAndPersistsInstructions(t *testing.
 		_ = store.Close()
 		t.Fatalf("create Project container: %v", err)
 	}
-	if created.ID == "" || created.ID == created.Name {
+	if created.ID == "" || string(created.ID) == created.Name {
 		t.Fatalf("container id = %q, want opaque stable id", created.ID)
 	}
 	if created.Kind != domain.ProjectKindScratch || created.Path != emptyDir || created.Repo != "" || created.DefaultBranch != "" {
