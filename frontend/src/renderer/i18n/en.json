@@ -1,4 +1,9 @@
 {
+	"chat.composer.codeBlock": "Code block",
+	"chat.composer.editMarkdown": "Edit markdown",
+	"chat.composer.inlineCode": "Inline code",
+	"chat.composer.markdownPreview": "Markdown preview",
+	"chat.composer.previewMarkdown": "Preview markdown",
 	"settings.harness.health.detectedCredential": "Detected credential",
 	"settings.harness.health.keychain": "System keychain",
 	"settings.harness.health.checkFailed": "Could not complete the check. Try again or copy diagnostics.",
@@ -525,6 +530,8 @@
 	"createProject.projectFolder": "Project folder",
 	"createProject.repoCannotImport": "Repository cannot be imported",
 	"createProject.retry": "Retry",
+	"shortcut.format-code-block": "Format as code block",
+	"shortcut.format-inline-code": "Format as inline code",
 	"terminal.sessionLoader.workspace": "Creating the workspace",
 	"terminal.sessionLoader.worker": "Connecting to the worker",
 	"terminal.sessionLoader.repositoryAgent": "Preparing your repository and agent",

@@ -1,4 +1,9 @@
 {
+	"chat.composer.codeBlock": "コードブロック",
+	"chat.composer.editMarkdown": "Markdown を編集",
+	"chat.composer.inlineCode": "インラインコード",
+	"chat.composer.markdownPreview": "Markdown プレビュー",
+	"chat.composer.previewMarkdown": "Markdown をプレビュー",
 	"settings.harness.health.detectedCredential": "検出された認証情報",
 	"settings.harness.health.keychain": "システムキーチェーン",
 	"settings.harness.health.checkFailed": "チェックを完了できませんでした。再試行するか、診断情報をコピーしてください。",
@@ -528,6 +533,8 @@
 	"createProject.projectSuggestWorkspace": "AO に子リポジトリを個別のプロジェクトとして扱わせたい場合は、このフォルダーをワークスペースとしてインポートしてください。選択したルートフォルダーだけを初期化したい場合は、プロジェクトとして続行してください。",
 	"createProject.repoCannotImport": "リポジトリをインポートできません",
 	"createProject.retry": "再試行",
+	"shortcut.format-code-block": "コードブロックとして書式設定",
+	"shortcut.format-inline-code": "インラインコードとして書式設定",
 	"terminal.sessionLoader.workspace": "ワークスペースを作成中",
 	"terminal.sessionLoader.worker": "ワーカーに接続しています",
 	"terminal.sessionLoader.repositoryAgent": "リポジトリとエージェントを準備しています",

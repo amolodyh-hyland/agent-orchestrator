@@ -1,10 +1,12 @@
 import { appI18n } from "../../i18n/instance";
 import { purgeFileAttachmentsForSession } from "../../hooks/useFileAttachments";
 import { act, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
+import { appShortcutBus } from "../../test/app-shortcut-bus";
 import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { Activity, Profiler } from "react";
 import { describe, expect, it, vi } from "vitest";
+import { $getRoot, $isTextNode, type LexicalEditor } from "lexical";
 import { ChatComposer } from "./ChatComposer";
 import { sendReferenceToChat } from "../../lib/chat-context-bus";
 import { attachmentURL } from "./messageAttachments";
@@ -75,6 +77,18 @@ async function typeInComposer(field: HTMLElement, text: string) {
 
 function composerWireText(field: HTMLElement): string {
 	return lexicalEditorText(field);
+}
+
+function selectComposerText(field: HTMLElement, start: number, end: number): void {
+	const lexical = (field as HTMLElement & { __lexicalEditor?: LexicalEditor }).__lexicalEditor;
+	if (!lexical) throw new Error("Expected a Lexical editor");
+	act(() => {
+		lexical.update(() => {
+			const node = $getRoot().getFirstDescendant();
+			if (!$isTextNode(node)) throw new Error("Expected composer text");
+			node.select(start, end);
+		}, { discrete: true });
+	});
 }
 
 function clipboardData(files: File[]) {
@@ -356,6 +370,59 @@ describe("send keys", () => {
 		await typeInComposer(field, "two");
 		expect(onSend).not.toHaveBeenCalled();
 		expect(composerWireText(field)).toBe("one\ntwo");
+	});
+
+	it("wraps selected text in inline-code Markdown with Ctrl+E and sends it unchanged", async () => {
+		const { onSend, field } = renderComposer();
+		await typeInComposer(field, "sample");
+		selectComposerText(field, 0, 6);
+		await userEvent.keyboard("{Control>}e{/Control}");
+
+		expect(composerWireText(field)).toBe("`sample`");
+		await userEvent.keyboard("{Enter}");
+		expect(onSend).toHaveBeenCalledWith("`sample`");
+	});
+
+	it("wraps code in a fenced block, previews it, and keeps Shift+Enter inside the fence", async () => {
+		const { onSend, field } = renderComposer();
+		await typeInComposer(field, "const x = 1;");
+		selectComposerText(field, 0, 12);
+		await userEvent.keyboard("{Control>}{Shift>}k{/Shift}{/Control}");
+		await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+
+		const markdown = "```\nconst x = 1;\n\n```";
+		expect(composerWireText(field)).toBe(markdown);
+		await userEvent.click(screen.getByRole("button", { name: "Preview markdown" }));
+		expect(
+			screen.getByRole("region", { name: "Markdown preview" }).querySelector("pre code"),
+		).toHaveTextContent("const x = 1;");
+		await userEvent.click(screen.getByRole("button", { name: "Edit markdown" }));
+		await waitFor(() => expect(field).toHaveFocus());
+		await userEvent.keyboard("{Enter}");
+		expect(onSend).toHaveBeenCalledWith(markdown);
+		await waitFor(() => expect(screen.getByRole("button", { name: "Preview markdown" })).toBeInTheDocument());
+	});
+
+	it("puts code fences on separate lines when wrapping a selection inside prose", async () => {
+		const { field } = renderComposer();
+		const text = "before:const x = 1;:after";
+		await typeInComposer(field, text);
+		selectComposerText(field, 7, 19);
+		await userEvent.keyboard("{Control>}{Shift>}k{/Shift}{/Control}");
+
+		expect(composerWireText(field)).toBe("before:\n```\nconst x = 1;\n```\n:after");
+	});
+
+	it("previews raw inline and fenced Markdown", async () => {
+		const markdown = "Run `npm test`.\n\n```ts\nconst x = 1;\n```";
+		render(<ChatComposer onSend={vi.fn()} draftSeed={{ id: "markdown-preview", text: markdown }} />);
+		const field = screen.getByLabelText("Message the agent");
+		await waitFor(() => expect(composerWireText(field)).toBe(markdown));
+		await userEvent.click(screen.getByRole("button", { name: "Preview markdown" }));
+
+		const preview = screen.getByRole("region", { name: "Markdown preview" });
+		expect(within(preview).getByText("npm test").tagName).toBe("CODE");
+		expect(within(preview).getByText("const x = 1;").closest("pre")).not.toBeNull();
 	});
 
 	it("refuses to send an empty message: there is no keystroke concept here", async () => {
@@ -2335,6 +2402,49 @@ describe("attachments", () => {
 });
 
 /* ---- disabled and busy states ------------------------------------------- */
+
+describe("code formatting shortcut guards", () => {
+	it("ignores the shortcuts while previewing markdown", async () => {
+		const { field } = renderComposer();
+		await typeInComposer(field, "sample");
+		selectComposerText(field, 0, 6);
+		await userEvent.click(screen.getByRole("button", { name: "Preview markdown" }));
+		await userEvent.keyboard("{Control>}e{/Control}");
+		await userEvent.keyboard("{Control>}{Shift>}k{/Shift}{/Control}");
+
+		expect(composerWireText(field)).toBe("sample");
+	});
+
+	it("ignores the shortcuts while the editor is disabled, even with focus elsewhere in the form", async () => {
+		const onSend = vi.fn();
+		const view = render(<ChatComposer onSend={onSend} />);
+		const field = screen.getByLabelText("Message the agent") as HTMLElement;
+		await typeInComposer(field, "sample");
+		selectComposerText(field, 0, 6);
+		view.rerender(<ChatComposer onSend={onSend} disabled />);
+		const previewButton = screen.getByRole("button", { name: "Preview markdown" });
+		previewButton.focus();
+		expect(previewButton).toHaveFocus();
+
+		act(() => appShortcutBus.emit({ id: "format-inline-code" }));
+		act(() => appShortcutBus.emit({ id: "format-code-block" }));
+
+		expect(composerWireText(field)).toBe("sample");
+	});
+
+	it("ignores the shortcuts during IME composition", async () => {
+		const { field } = renderComposer();
+		await typeInComposer(field, "sample");
+		fireEvent.compositionStart(field);
+		await userEvent.keyboard("{Control>}e{/Control}");
+		await userEvent.keyboard("{Control>}{Shift>}k{/Shift}{/Control}");
+		expect(composerWireText(field)).toBe("sample");
+
+		fireEvent.compositionEnd(field);
+		await userEvent.keyboard("{Control>}e{/Control}");
+		expect(composerWireText(field)).toBe("sample``");
+	});
+});
 
 describe("unavailable states", () => {
 	it("explains a stopped controller and refuses to send", async () => {
