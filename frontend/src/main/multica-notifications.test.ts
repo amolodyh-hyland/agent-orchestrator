@@ -204,6 +204,18 @@ describe("Multica notifications", () => {
 		expect(freshService.reportAuthSession(null)).toBe(true);
 	});
 
+	it("reports whether an account session is established", () => {
+		const { service } = setup();
+
+		expect(service.hasActiveSession()).toBe(false);
+		service.reportAuthSession(null);
+		expect(service.hasActiveSession()).toBe(false);
+		service.reportAuthSession("u1");
+		expect(service.hasActiveSession()).toBe(true);
+		service.reportAuthSession(null);
+		expect(service.hasActiveSession()).toBe(false);
+	});
+
 	it("clears the badge only when a reported session is invalidated", () => {
 		const { service, setBadge } = setup();
 		service.reportAuthSession("u1");
