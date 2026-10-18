@@ -68,6 +68,7 @@ import {
 	workspaceQueryKeyForHost,
 } from "../hooks/useWorkspaceQuery";
 import { subscribeChatReveal } from "../lib/chat-context-bus";
+import { useUnsavedLeaveGuard } from "../hooks/useUnsavedLeaveGuard";
 import {
 	readAONavigationLocationForHref,
 	subscribeNavigationRestore,
@@ -520,16 +521,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const [dirtyFilesBySession, setDirtyFilesBySession] = useState<Record<string, Record<string, true>>>({});
 	const dirtyFiles = dirtyFilesBySession[uiSessionId] ?? {};
 	const activeFileDirty = Boolean(fileTabs.activePath && dirtyFiles[fileTabs.activePath]);
+	// Back/Forward restore a history entry by unmounting the open editor, which would drop
+	// its unsaved draft. The shell asks through this guard before it moves (and after a pop
+	// it did not start), not through a router blocker.
+	useUnsavedLeaveGuard(activeFileDirty, t("files.unsavedLeaveConfirm"));
 	useBlocker({
-		disabled: chatDraftBoundaries.length === 0 && !activeFileDirty,
+		disabled: chatDraftBoundaries.length === 0,
 		enableBeforeUnload: chatDraftBoundaries.length > 0,
-		shouldBlockFn: async (navigation?: { action?: string }) => {
-			// Back/Forward restore a history entry by unmounting the open editor, which
-			// would drop its unsaved draft, so leaving a dirty file asks first.
-			if (activeFileDirty && (navigation?.action === "BACK" || navigation?.action === "FORWARD" || navigation?.action === "GO")) {
-				if (!window.confirm(t("files.unsavedLeaveConfirm"))) return true;
-			}
-			if (chatDraftBoundaries.length === 0) return false;
+		shouldBlockFn: async () => {
 			const decision = await confirmUnsafeDraftLeave();
 			if (decision.kind === "cancelled") {
 				if (hostId && developerMode && !remoteHostsEnabled) setRemoteHosts(true);

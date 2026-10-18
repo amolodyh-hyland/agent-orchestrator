@@ -208,7 +208,41 @@ export function consumeSuppressedMulticaHistoryChange(active: boolean): boolean 
 	return false;
 }
 
+let unsavedLeaveGuard: (() => string | null) | null = null;
+let skipPopGuardUntil = 0;
+
+/** Registers the check that says whether leaving the current view would lose unsaved edits. */
+export function setUnsavedLeaveGuard(guard: (() => string | null) | null): () => void {
+	unsavedLeaveGuard = guard;
+	return () => {
+		if (unsavedLeaveGuard === guard) unsavedLeaveGuard = null;
+	};
+}
+
+export function confirmLeaveUnsavedWork(): boolean {
+	const message = unsavedLeaveGuard?.();
+	return message ? window.confirm(message) : true;
+}
+
+/**
+ * Asks before moving, so a cancelled Back/Forward never moves the history at all.
+ * The pop it causes is already confirmed and must not be asked about again.
+ */
+export function traverseHistory(history: { back: () => void; forward: () => void }, direction: "back" | "forward"): void {
+	if (!confirmLeaveUnsavedWork()) return;
+	skipPopGuardUntil = Date.now() + SUPPRESSED_MULTICA_CHANGE_TTL_MS;
+	history[direction]();
+}
+
+export function consumePopGuardSkip(): boolean {
+	const skip = skipPopGuardUntil > Date.now();
+	skipPopGuardUntil = 0;
+	return skip;
+}
+
 export function resetNavigationHistoryForTests(): void {
+	unsavedLeaveGuard = null;
+	skipPopGuardUntil = 0;
 	restoreListeners.clear();
 	closedTopbarSessionIds.clear();
 	suppressedMulticaChanges.length = 0;

@@ -1,6 +1,8 @@
 import { useEffect } from "react";
 import { useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
 import {
+	confirmLeaveUnsavedWork,
+	consumePopGuardSkip,
 	consumeSuppressedMulticaHistoryChange,
 	historyIndex,
 	isTopbarSessionClosed,
@@ -42,6 +44,8 @@ export function NavigationHistorySync() {
 		let previousHref = history.location.href;
 		let previousIndex = historyIndex(history.location.state);
 		let historyTip = previousIndex ?? 0;
+		// Set while a refused pop is being undone: the pop that returns to this entry is ours.
+		let revertingToIndex: number | null = null;
 
 		const unsubscribeSettings = useUiStore.subscribe((state, previous) => {
 			if (applyingHistoryRestore || state.settingsModal === previous.settingsModal) return;
@@ -62,6 +66,7 @@ export function NavigationHistorySync() {
 			const routeChanged = location.href !== previousHref;
 			previousHref = location.href;
 			const index = historyIndex(location.state);
+			const leftIndex = previousIndex;
 			const knownHistoryTip = historyTip;
 			const isTraversal = action.type !== "PUSH" && action.type !== "REPLACE";
 			const direction = index !== null && previousIndex !== null && index < previousIndex ? -1 : 1;
@@ -87,6 +92,18 @@ export function NavigationHistorySync() {
 			}
 
 			if (!isTraversal) return;
+
+			if (revertingToIndex !== null && index === revertingToIndex) {
+				revertingToIndex = null;
+				return;
+			}
+			// A pop the shell did not start (mouse button, OS shortcut) has already moved. If it
+			// would drop unsaved edits and the user refuses, return to the exact entry left.
+			if (!consumePopGuardSkip() && index !== null && leftIndex !== null && index !== leftIndex && !confirmLeaveUnsavedWork()) {
+				revertingToIndex = leftIndex;
+				history.go(leftIndex - index);
+				return;
+			}
 
 			const restored = readAONavigationLocationForHref(location.state, location.href);
 			const sessionId = restored?.sessionView?.sessionId ?? sessionIdFromHistoryHref(location.href);

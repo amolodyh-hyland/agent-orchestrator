@@ -11,7 +11,7 @@ import { SessionTopbarProvider } from "./SessionTopbarPortal";
 import { TooltipProvider } from "./ui/tooltip";
 import type { SessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import type { BrowserTabsState, BrowserAgentActivityState } from "../../main/browser-view-host";
-import { notifyNavigationRestore } from "../lib/navigation-history";
+import { confirmLeaveUnsavedWork, notifyNavigationRestore } from "../lib/navigation-history";
 import { inspectorIsOpen, rememberedFileDisplayMode, useUiStore, type InspectorView } from "../stores/ui-store";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
@@ -96,7 +96,7 @@ const routeBlockerState = vi.hoisted(() => ({
 		| {
 				disabled: boolean;
 				enableBeforeUnload: boolean;
-				shouldBlockFn: (navigation?: { action?: string }) => boolean | Promise<boolean>;
+				shouldBlockFn: () => boolean | Promise<boolean>;
 			}
 		| undefined,
 }));
@@ -2337,33 +2337,21 @@ describe("SessionView", () => {
 	it.each([
 		["local", "mark file dirty", "session-file-workspace"],
 		["cloud", "mark cloud file dirty", "cloud-file-workspace"],
-	])("asks before Back or Forward leaves a %s file with unsaved edits", async (kind, dirtyButton, paneId) => {
+	])("guards leaving a %s file with unsaved edits", async (kind, dirtyButton, paneId) => {
 		if (kind === "cloud") workerSession("sess-1").cloud = { orgId: "cloud-org", sandboxProvider: "docker" };
 		workerSession("sess-1").mode = "chat";
 		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
-		const confirm = vi.spyOn(window, "confirm");
+		const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
 		render(<SessionView sessionId="sess-1" />);
-		expect(routeBlockerState.options).toMatchObject({ disabled: true });
+		expect(confirmLeaveUnsavedWork()).toBe(true);
+		expect(confirm).not.toHaveBeenCalled();
 
 		fireEvent.click(screen.getByRole("button", { name: "open files" }));
 		fireEvent.click(screen.getByRole("button", { name: kind === "cloud" ? "open cloud file" : "select src/App.tsx" }));
 		await screen.findByTestId(paneId);
 		fireEvent.click(screen.getByRole("button", { name: dirtyButton }));
-		expect(routeBlockerState.options).toMatchObject({ disabled: false });
-
-		// Cancelling blocks the traversal, so the editor and its draft stay mounted.
-		confirm.mockReturnValueOnce(false);
-		await expect(routeBlockerState.options!.shouldBlockFn({ action: "BACK" })).resolves.toBe(true);
+		expect(confirmLeaveUnsavedWork()).toBe(false);
 		expect(confirm).toHaveBeenCalledWith("This file has unsaved changes. Leave and discard them?");
-		expect(screen.getByTestId(paneId)).toBeInTheDocument();
-
-		confirm.mockReturnValueOnce(true);
-		await expect(routeBlockerState.options!.shouldBlockFn({ action: "FORWARD" })).resolves.toBe(false);
-		expect(confirm).toHaveBeenCalledTimes(2);
-
-		// A push (for example opening another tab) is not a history traversal.
-		await expect(routeBlockerState.options!.shouldBlockFn({ action: "PUSH" })).resolves.toBe(false);
-		expect(confirm).toHaveBeenCalledTimes(2);
 		confirm.mockRestore();
 	});
 
