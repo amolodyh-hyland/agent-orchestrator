@@ -20,18 +20,19 @@ noetaxis_ao_marker() {
 	fi
 	/usr/bin/perl -e '
 		my ($anchor, $command) = @ARGV;
-		# ps joins argv without preserving its boundaries. Treat shell delimiters conservatively,
-		# reject parent traversal even at the end of an argument, then compare normalized paths.
-		my @paths = grep { m{^/} } split(/[\s\x22\x27=;|&()<>]+/, $command);
-		exit 1 if grep { m{(?:^|/)\.\.(?:/|$)} } @paths;
+		# ps joins argv without preserving its boundaries. Keep spaces inside the known home
+		# path, reject parent traversal at argument boundaries, then normalize before matching.
+		exit 1 if $command =~ m{(?:^|[/\s\x22\x27=;|&()<>])\.\.(?=/|$|[\s\x22\x27=;|&()<>])};
 		sub normalize {
-			return "/" . join("/", grep { length && $_ ne "." } split(m{/+}, shift));
+			my $path = shift;
+			$path =~ s{/+}{/}g;
+			1 while $path =~ s{/\.(?=/|$|[\s\x22\x27=;|&()<>])}{}g;
+			return $path;
 		}
 		$anchor = normalize($anchor);
-		for my $path (@paths) {
-			$path = normalize($path);
-			exit 0 if $path eq $anchor || index($path, "$anchor/") == 0;
-		}
+		$anchor =~ s{/$}{};
+		$command = normalize($command);
+		exit 0 if $command =~ m{(?:^|[\s\x22\x27=;|&()<>])\Q$anchor\E(?=/|$|[\s\x22\x27=;|&()<>])};
 		exit 1;
 	' "$marker_home" "$command_line"
 }

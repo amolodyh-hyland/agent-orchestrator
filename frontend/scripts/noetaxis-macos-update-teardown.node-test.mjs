@@ -140,9 +140,13 @@ for pid in {8500..8511}; do
 done`);
 	assert.equal(recheck.status, 0, recheck.stdout + recheck.stderr);
 	assert.deepEqual(signals(await world.calls()), []);
+	const spaces = survivorCall(world, `ao_home="$HOME/a home/.ao"
+noetaxis_ao_marker "du $HOME/a home//.ao/./data" /
+if noetaxis_ao_marker "du $HOME/a home/.ao/.." /; then exit 99; fi`);
+	assert.equal(spaces.status, 0, spaces.stdout + spaces.stderr);
 	for (const [search, replacement, expected] of [
-		['exit 1 if grep { m{(?:^|/)\\.\\.(?:/|$)} } @paths;', '# traversal guard removed', false],
-		['$path = normalize($path);', '# normalization removed', true],
+		[/^\t\texit 1 if \$command =~ .+;$/m, '# traversal guard removed', false],
+		['$command = normalize($command);', '# normalization removed', true],
 	]) {
 		const scripts = await mutatedScripts(t, "survivors.sh", search, replacement);
 		const broken = survivorCall(world, scan, { scripts });
