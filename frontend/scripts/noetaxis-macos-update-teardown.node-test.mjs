@@ -60,7 +60,17 @@ for n in {1..17}; do printf 's%s%sproject%sworker%sactive%sworking%sname%screate
 noetaxis_update_session_unchanged() { return 0; }
 noetaxis_update_verify_daemon() { printf 'verify %s\\n' "$id" >> "$cap_dir/order"; }
 noetaxis_update_host_unchanged() { printf 'host %s\\n' "$id" >> "$cap_dir/order"; }
-noetaxis_bounded() { printf 'start %s\\n' "$id" >> "$cap_dir/order"; /bin/sleep 0.3; printf 'end %s\\n' "$id" >> "$cap_dir/order"; }
+noetaxis_bounded() {
+ local target=$(( ((\${id#s} - 1) / 8 + 1) * 8 )) attempt
+ [[ "$target" -le 17 ]] || target=17
+ printf 'start %s\\n' "$id" >> "$cap_dir/order"
+ for attempt in {1..200}; do
+  [[ "$(/usr/bin/grep -c '^start ' "$cap_dir/order")" -lt "$target" ]] || break
+  /bin/sleep 0.05
+ done
+ [[ "$(/usr/bin/grep -c '^start ' "$cap_dir/order")" -ge "$target" ]] || return 1
+ printf 'end %s\\n' "$id" >> "$cap_dir/order"
+}
 noetaxis_update_wait_agent_processes() { return 0; }
 noetaxis_update_no_live_sessions() { return 0; }
 unset NOETAXIS_SESSION_WORKERS
