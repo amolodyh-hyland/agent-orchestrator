@@ -16,14 +16,14 @@ import type { MulticaNotifications } from "./multica-notifications";
 // Every handler still checks the sender as a second line of defence.
 //
 // What is real: app info, locale, runtime config, freeze breadcrumb, external
-// links, deep-link delivery (auth token, invite), notifications, account session,
-// badge, and a minimal daemon surface backed by the installed multica CLI.
+// links, deep-link delivery (auth token, invite, issue), notifications, account
+// session, badge, and a minimal daemon surface backed by the installed multica CLI.
 
 const CHANNEL_STATE_CHANNEL = "main-renderer:channel-state";
 
 // Messages the renderer only accepts after it has installed the matching
 // listener; a page finishing its load is not enough (React subscribes later).
-const MAIN_RENDERER_CHANNELS = new Set(["auth:token", "invite:open", "inbox:open", "settings:open", "tab:select-by-shortcut"]);
+const MAIN_RENDERER_CHANNELS = new Set(["auth:token", "invite:open", "issue:open", "inbox:open", "settings:open", "tab:select-by-shortcut"]);
 
 const MAX_PENDING_PER_CHANNEL = 8;
 
@@ -46,8 +46,8 @@ export type MulticaDesktopBridgeOptions = {
 	/** Delivers a main-to-renderer message to the Multica view. */
 	send: (channel: string, payload?: unknown) => void;
 	/** Receives Multica's notification, auth-session and badge messages. */
-	notifications: Pick<MulticaNotifications, "showNotification" | "reportAuthSession" | "setBadge">;
-	/** Queues safe deep links and auth tokens before the renderer subscribes. */
+	notifications: Pick<MulticaNotifications, "showNotification" | "reportAuthSession" | "hasActiveSession" | "setBadge">;
+	/** Queues renderer-bound links before the renderer subscribes. */
 	initialPending?: ReadonlyArray<readonly [channel: string, payloads: readonly unknown[]]>;
 };
 
@@ -184,10 +184,14 @@ export function createMulticaDesktopBridge(options: MulticaDesktopBridgeOptions)
 		[
 			"auth:session-state",
 			(event, value) => {
-				if (options.isMulticaSender(event.sender) && options.notifications.reportAuthSession(value)) {
-					// Invalidation makes any queued inbox click belong to the previous account.
-					pending.delete("inbox:open");
-				}
+				if (!options.isMulticaSender(event.sender)) return;
+				const hadActiveSession = options.notifications.hasActiveSession();
+				if (!options.notifications.reportAuthSession(value)) return;
+				// Invalidation makes queued account-bound destinations stale.
+				pending.delete("inbox:open");
+				// A cold-start issue link must survive the initial signed-out report
+				// and the login it triggered, but not leave an established account.
+				if (hadActiveSession) pending.delete("issue:open");
 			},
 		],
 		[
