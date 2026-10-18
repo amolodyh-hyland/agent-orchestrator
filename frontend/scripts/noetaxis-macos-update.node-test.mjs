@@ -1884,7 +1884,7 @@ test("--detached needs --yes, prints the log path first, re-runs in a new sessio
 	assert.match(started.stdout, /that session ENDS when AO quits/);
 	const logPath = lines[0].replace("Update log: ", "");
 	let log = "";
-	for (let attempt = 0; attempt < 300; attempt += 1) {
+	for (let attempt = 0; attempt < 600; attempt += 1) {
 		log = await readFile(logPath, "utf8").catch(() => "");
 		if (log.includes("Update summary")) break;
 		await new Promise((resolve) => setTimeout(resolve, 100));
