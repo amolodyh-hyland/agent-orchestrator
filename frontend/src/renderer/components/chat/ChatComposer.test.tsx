@@ -1,6 +1,7 @@
 import { appI18n } from "../../i18n/instance";
 import { purgeFileAttachmentsForSession } from "../../hooks/useFileAttachments";
 import { act, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
+import { appShortcutBus } from "../../test/app-shortcut-bus";
 import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { Activity, Profiler } from "react";
@@ -2414,13 +2415,21 @@ describe("code formatting shortcut guards", () => {
 		expect(composerWireText(field)).toBe("sample");
 	});
 
-	it("ignores the shortcuts while the editor is disabled", async () => {
-		const { field } = renderComposer({ disabled: true });
-		const wrapped = composerWireText(field);
-		await userEvent.keyboard("{Control>}e{/Control}");
-		await userEvent.keyboard("{Control>}{Shift>}k{/Shift}{/Control}");
+	it("ignores the shortcuts while the editor is disabled, even with focus elsewhere in the form", async () => {
+		const onSend = vi.fn();
+		const view = render(<ChatComposer onSend={onSend} />);
+		const field = screen.getByLabelText("Message the agent") as HTMLElement;
+		await typeInComposer(field, "sample");
+		selectComposerText(field, 0, 6);
+		view.rerender(<ChatComposer onSend={onSend} disabled />);
+		const previewButton = screen.getByRole("button", { name: "Preview markdown" });
+		previewButton.focus();
+		expect(previewButton).toHaveFocus();
 
-		expect(composerWireText(field)).toBe(wrapped);
+		act(() => appShortcutBus.emit({ id: "format-inline-code" }));
+		act(() => appShortcutBus.emit({ id: "format-code-block" }));
+
+		expect(composerWireText(field)).toBe("sample");
 	});
 
 	it("ignores the shortcuts during IME composition", async () => {
