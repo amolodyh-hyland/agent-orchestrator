@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { chmod, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { execute, makeWorld, mutatedScripts, oldVersion, realScriptsDir } from "./noetaxis-macos-update-world.mjs";
-import { assertNoFixtureProcesses, cleanupFixtureProcesses, fixtureProcesses, fixtureRoot, fixtureSpawn } from "./noetaxis-macos-fixture-registry.mjs";
+import { assertNoFixtureProcesses, cleanupFixtureProcesses, fixtureProcesses, fixtureRoot, fixtureSpawn, readFixtureIdentity, signalFixtureProcess } from "./noetaxis-macos-fixture-registry.mjs";
 import { writeArtifactChecksums, writeInstallerArtifacts } from "./noetaxis-macos/package-artifacts.mjs";
 
 const darwin = { skip: process.platform !== "darwin" };
@@ -426,6 +426,8 @@ waitpid($child, 0);`, marker], { env: { ...process.env, TMPDIR: root }, stdio: "
 	const grandchild = Number((await readFile(marker, "utf8")).trim());
 	assert.notEqual(grandchild, parent.pid);
 	assert.ok(fixtureProcesses(root).includes(grandchild));
+	const registration = (await readFile(path.join(root, ".fixture-identities"), "utf8")).trim().split("\n").map(JSON.parse).filter((identity) => identity.pid === grandchild).at(-1);
+	assert.deepEqual(registration, readFixtureIdentity(grandchild), "registration captures start time, executable and full arguments before cleanup");
 	assert.throws(() => assertNoFixtureProcesses(root), /Fixture processes survived cleanup/);
 	await cleanupFixtureProcesses(root);
 	assertNoFixtureProcesses(root);
@@ -454,6 +456,59 @@ test("broken-watchdog fake ao grandchildren honor the lease; removing that check
 		assertNoFixtureProcesses(world.root);
 		assert.throws(() => process.kill(pid, 0), /ESRCH/);
 		assert.deepEqual(signals(await world.calls()), [], "fixture cleanup never uses the product signal inventory");
+	}
+});
+
+test("fixture signal guards reject reused PIDs, exec transitions, argument changes and unreadable identities", async (t) => {
+	const expected = { pid: 900_000_001, start: ["123", "456"], executable: "/fixture/stubborn", command: ["stubborn", "fixture"] };
+	const changed = [
+		{ ...expected, start: ["124", "456"] }, { ...expected, executable: "/foreign/stubborn" },
+		{ ...expected, command: ["stubborn", "foreign"] }, undefined, {},
+	];
+	for (const signal of ["SIGTERM", "SIGKILL"]) {
+		for (const current of changed) {
+			const sent = [];
+			assert.equal(signalFixtureProcess(expected, signal, { readIdentity: () => current, sendSignal: (...args) => sent.push(args) }), false);
+			assert.deepEqual(sent, []);
+		}
+		const sent = [];
+		assert.equal(signalFixtureProcess(expected, signal, { readIdentity: () => ({ ...expected }), sendSignal: (...args) => sent.push(args) }), true);
+		assert.deepEqual(sent, [[expected.pid, signal]]);
+	}
+	const root = await fixtureRoot(t, "noetaxis-watchdog-identity-mutant-");
+	const source = await readFile(new URL("./noetaxis-macos-fixture-registry.mjs", import.meta.url), "utf8");
+	const mutant = source.replace('if (!sameFixtureIdentity(expected, readIdentity(expected.pid))) return false;', '');
+	assert.notEqual(mutant, source);
+	const file = path.join(root, "registry-mutant.mjs");
+	await writeFile(file, mutant);
+	const broken = await import(pathToFileURL(file).href);
+	const sent = [];
+	assert.equal(broken.signalFixtureProcess(expected, "SIGKILL", { readIdentity: () => changed[0], sendSignal: (...args) => sent.push(args) }), true);
+	assert.equal(sent.length, 1, "the no-signal assertion catches removing the adjacent identity recheck");
+});
+
+test("fixture cleanup ignores stale registrations and rechecks immediately before TERM and KILL", async (t) => {
+	const expected = { pid: 900_000_001, start: ["123", "456"], executable: "/fixture/stubborn", command: ["stubborn", "fixture"] };
+	const reused = { ...expected, start: ["124", "456"] };
+	for (const stage of ["historical", "TERM", "KILL"]) {
+		const root = await fixtureRoot(t, `noetaxis-watchdog-identity-${stage}-`);
+		await writeFile(path.join(root, ".fixture-identities"), JSON.stringify(expected) + "\n");
+		let inventories = 0; let reads = 0; let changed = stage === "historical"; let dead = false;
+		const sent = [];
+		await cleanupFixtureProcesses(root, {
+			isAlive: () => { inventories++; reads = 0; return !dead; },
+			readIdentity: () => {
+				reads++;
+				if (changed) return reused;
+				if (reads === 2 && inventories === (stage === "TERM" ? 1 : 21)) {
+					changed = true;
+					return stage === "TERM" ? reused : { ...expected, executable: "/foreign/stubborn" };
+				}
+				return expected;
+			},
+			sendSignal: (pid, signal) => { sent.push([pid, signal]); if (signal === "SIGKILL") dead = true; },
+		});
+		assert.deepEqual(sent, stage === "KILL" ? [[expected.pid, "SIGTERM"]] : [], stage);
 	}
 });
 
