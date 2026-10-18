@@ -88,6 +88,7 @@ export function fixtureProcesses(root, { readIdentity = readFixtureIdentity, isA
 		const expected = records.get(pid);
 		const current = readIdentity(pid);
 		// A reused PID is foreign. Unreadable or exec-changed fixtures remain visible but cannot be signalled.
+		if (!current) return isAlive(pid);
 		return !expected || !validIdentity(current) || JSON.stringify(expected.start) === JSON.stringify(current.start);
 	});
 }

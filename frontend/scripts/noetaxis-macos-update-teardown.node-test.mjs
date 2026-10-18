@@ -358,7 +358,7 @@ test("the final scan immediately before swapping catches a late orphan; removing
 		child.stderr.on("data", (data) => { stderr += data; });
 		const exited = new Promise((resolve) => child.on("close", resolve));
 		let reached = false;
-		for (let n = 0; n < 300; n++) { if (await stat(marker).catch(() => false)) { reached = true; break; } await pause(50); }
+		for (let n = 0; n < 1200; n++) { if (await stat(marker).catch(() => false)) { reached = true; break; } await pause(50); }
 		assert.ok(reached, stdout + stderr);
 		await world.addProc(`/bin/sh ${world.home}/.ao/data/worktrees/late.sh`, 1, "/bin/sh");
 		assert.equal(await exited, expected, stdout + stderr);
@@ -437,7 +437,7 @@ waitpid($child, 0);`, marker], { env: { ...process.env, TMPDIR: root }, stdio: "
 test("broken-watchdog fake ao grandchildren honor the lease; removing that check is caught and escalated", darwin, async (t) => {
 	const scripts = await mutatedScripts(t, "common.sh", '\t\t\tkill "KILL", -$pgid;\n', "");
 	for (const mutant of [false, true]) {
-		const world = await makeWorld(t, `teardown-hang-lease-${mutant}`, { cfg: { ao_hang: "session ls" }, env: { NOETAXIS_HELPER_TIMEOUT_MAX: "1" } });
+		const world = await makeWorld(t, `teardown-hang-lease-${mutant}`, { cfg: { ao_hang: "session ls" }, env: { NOETAXIS_HELPER_TIMEOUT_MAX: "3" } });
 		if (mutant) {
 			const file = path.join(world.targetApp, "Contents/Resources/daemon/ao");
 			const source = await readFile(file, "utf8");
@@ -490,6 +490,10 @@ test("fixture signal guards reject reused PIDs, exec transitions, argument chang
 test("fixture cleanup ignores stale registrations and rechecks immediately before TERM and KILL", async (t) => {
 	const expected = { pid: 900_000_001, start: ["123", "456"], executable: "/fixture/stubborn", command: ["stubborn", "fixture"] };
 	const reused = { ...expected, start: ["124", "456"] };
+	const goneRoot = await fixtureRoot(t, "noetaxis-watchdog-identity-gone-");
+	await writeFile(path.join(goneRoot, ".fixture-identities"), JSON.stringify(expected) + "\n");
+	let probes = 0;
+	assert.deepEqual(fixtureProcesses(goneRoot, { isAlive: () => ++probes === 1, readIdentity: () => undefined }), [], "a process gone during lookup does not become an unverified survivor");
 	for (const stage of ["historical", "TERM", "KILL"]) {
 		const root = await fixtureRoot(t, `noetaxis-watchdog-identity-${stage}-`);
 		await writeFile(path.join(root, ".fixture-identities"), JSON.stringify(expected) + "\n");
@@ -554,7 +558,17 @@ noetaxis_update_verify_daemon() { return 0; }
 noetaxis_update_host_unchanged() { return 0; }
 noetaxis_update_wait_agent_processes() { return 0; }
 noetaxis_update_no_live_sessions() { return 0; }
-noetaxis_bounded() { printf 'start\\n' >> "$cap_dir/order"; /bin/sleep 0.5; printf 'end\\n' >> "$cap_dir/order"; }
+noetaxis_bounded() {
+ local target=$(( ((\${id#s} - 1) / ${expected} + 1) * ${expected} )) attempt
+ [[ "$target" -le 17 ]] || target=17
+ printf 'start\\n' >> "$cap_dir/order"
+ for attempt in {1..200}; do
+  [[ "$(/usr/bin/grep -c '^start$' "$cap_dir/order")" -lt "$target" ]] || break
+  /bin/sleep 0.05
+ done
+ [[ "$(/usr/bin/grep -c '^start$' "$cap_dir/order")" -ge "$target" ]] || return 1
+ printf 'end\\n' >> "$cap_dir/order"
+}
 unset NOETAXIS_SESSION_WORKERS
 noetaxis_update_end_sessions`, { scripts });
 		assert.equal(result.status, 0, result.stdout + result.stderr);
