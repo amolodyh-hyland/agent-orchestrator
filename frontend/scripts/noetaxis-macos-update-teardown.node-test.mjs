@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execute, makeWorld, mutatedScripts, oldVersion, realScriptsDir } from "./noetaxis-macos-update-world.mjs";
@@ -386,6 +386,53 @@ test('cleanup on ${mode}', {timeout: 500}, async (t) => {
 		const pid = Number(result.stdout.match(/FIXTURE_PID=(\d+)/)?.[1]);
 		assert.ok(pid > 0, result.stdout + result.stderr);
 		assert.throws(() => process.kill(pid, 0), /ESRCH/);
+	}
+});
+
+test("fixture cleanup escalates to registered detached grandchildren that ignore TERM and the lease", darwin, async (t) => {
+	const root = await fixtureRoot(t, "noetaxis-watchdog-grandchild-");
+	const marker = path.join(root, "grandchild.pid");
+	const parent = fixtureSpawn("/usr/bin/perl", ["-e", `use POSIX ();
+my $child = fork(); die $! unless defined $child;
+if (!$child) {
+ POSIX::setsid(); $SIG{TERM} = "IGNORE";
+ open(my $f, ">", $ARGV[0]) or die $!; print $f "$$\\n"; close($f);
+ for (1 .. 3000) { select(undef, undef, undef, 0.1); }
+ exit 1;
+}
+waitpid($child, 0);`, marker], { env: { ...process.env, TMPDIR: root }, stdio: "ignore" });
+	for (let n = 0; n < 100 && !(await stat(marker).catch(() => false)); n++) await pause(20);
+	const grandchild = Number((await readFile(marker, "utf8")).trim());
+	assert.notEqual(grandchild, parent.pid);
+	assert.ok(fixtureProcesses(root).includes(grandchild));
+	assert.throws(() => assertNoFixtureProcesses(root), /Fixture processes survived cleanup/);
+	await cleanupFixtureProcesses(root);
+	assertNoFixtureProcesses(root);
+	assert.throws(() => process.kill(grandchild, 0), /ESRCH/);
+});
+
+test("broken-watchdog fake ao grandchildren honor the lease; removing that check is caught and escalated", darwin, async (t) => {
+	const scripts = await mutatedScripts(t, "common.sh", '\t\t\tkill "KILL", -$pgid;\n', "");
+	for (const mutant of [false, true]) {
+		const world = await makeWorld(t, `teardown-hang-lease-${mutant}`, { cfg: { ao_hang: "session ls" }, env: { NOETAXIS_HELPER_TIMEOUT_MAX: "1" } });
+		if (mutant) {
+			const file = path.join(world.targetApp, "Contents/Resources/daemon/ao");
+			const source = await readFile(file, "utf8");
+			const changed = source.replace('[[ -f "${NOETAXIS_FIXTURE_ROOT:?}/.fixture-alive" ]] || break', ': # lease check removed');
+			assert.notEqual(changed, source);
+			await writeFile(file, changed);
+		}
+		const result = world.update(["--yes"], { scriptsDir: scripts });
+		assert.equal(result.status, 52, result.stdout + result.stderr);
+		const pid = Number((await readFile(path.join(world.sim, "hung.pid"), "utf8")).trim());
+		assert.ok(fixtureProcesses(world.root).includes(pid), "the broken watchdog leaves a registered grandchild");
+		await rm(path.join(world.root, ".fixture-alive"));
+		for (let n = 0; n < 15 && fixtureProcesses(world.root).includes(pid); n++) await pause(100);
+		assert.equal(fixtureProcesses(world.root).includes(pid), mutant, "the lease-exit assertion catches a fake that ignores its lease");
+		await cleanupFixtureProcesses(world.root);
+		assertNoFixtureProcesses(world.root);
+		assert.throws(() => process.kill(pid, 0), /ESRCH/);
+		assert.deepEqual(signals(await world.calls()), [], "fixture cleanup never uses the product signal inventory");
 	}
 });
 

@@ -12,8 +12,11 @@ if [[ -f "$SIM/cfg/ao_hang" && "$*" == *"$(sim_value ao_hang)"* ]]; then
 	sim_unlock
 	trap '' TERM
 	printf '%s' "$$" > "$SIM/hung.pid"
-	# Bounded even though it is meant to be killed: a leftover hung fake must not live forever.
-	for _ in $(seq 1 300); do /bin/sleep 1; done
+	# The test lease also ends this fake when a deliberately broken watchdog misses it.
+	for _ in $(seq 1 3000); do
+		[[ -f "${NOETAXIS_FIXTURE_ROOT:?}/.fixture-alive" ]] || break
+		/bin/sleep 0.1
+	done
 	exit 1
 fi
 

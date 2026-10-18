@@ -39,7 +39,7 @@ export function fixtureProcesses(root) {
 		for (const line of readFileSync(path.join(root, name), "utf8").split("\n")) if (/^\d+$/.test(line)) ids.add(Number(line));
 	}
 	for (const child of roots.get(root)?.children ?? []) if (child.exitCode === null && child.signalCode === null && child.pid) ids.add(child.pid);
-	return [...ids].filter((pid) => pid !== process.pid && alive(pid));
+	return [...ids].filter((pid) => pid > 1 && pid !== process.pid && alive(pid));
 }
 
 export function assertNoFixtureProcesses(root) {
@@ -49,14 +49,18 @@ export function assertNoFixtureProcesses(root) {
 
 export async function cleanupFixtureProcesses(root) {
 	await rm(path.join(root, ".fixture-alive"), { force: true });
-	for (const child of roots.get(root)?.children ?? []) {
-		if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
-	}
+	const terminated = new Set();
 	let quiet = 0;
 	for (let attempt = 0; attempt < 100; attempt++) {
-		if (!fixtureProcesses(root).length) { if (++quiet === 3) return; } else quiet = 0;
-		if (attempt === 20) for (const child of roots.get(root)?.children ?? []) {
-			if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+		const pids = fixtureProcesses(root);
+		if (!pids.length) { if (++quiet === 3) return; } else quiet = 0;
+		// Forks register in the private root before exec, including detached grandchildren.
+		// Re-read during cleanup so a late fork cannot escape the escalation deadline.
+		for (const pid of pids.reverse()) {
+			const signal = attempt >= 20 ? "SIGKILL" : !terminated.has(pid) ? "SIGTERM" : undefined;
+			if (!signal) continue;
+			try { process.kill(pid, signal); } catch (error) { if (error.code !== "ESRCH") throw error; }
+			terminated.add(pid);
 		}
 		await pause(100);
 	}
