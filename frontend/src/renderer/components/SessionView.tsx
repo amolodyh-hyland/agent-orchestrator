@@ -1219,16 +1219,28 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				...current,
 				[uiSessionId]: openSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, target.path),
 			}));
-			const request = target.request ?? centerFileRequestsBySession[uiSessionId]?.[target.path];
+			const existing = centerFileRequestsBySession[uiSessionId]?.[target.path];
+			const request = target.request ?? existing;
 			if (request) {
-				const key = nextCenterFileRequestKey();
-				setCenterFileRequestsBySession((current) => ({
-					...current,
-					[uiSessionId]: {
-						...current[uiSessionId],
-						[target.path]: { ...request, key },
-					},
-				}));
+				// A new key resets the pane's editor and draft. An entry that differs from the
+				// open file only in inspector or other non-file state keeps the key, and an
+				// unsaved draft is never discarded by a history restore.
+				const sameFileRequest = existing
+					&& existing.commitSha === request.commitSha
+					&& existing.editing === request.editing
+					&& existing.line === request.line
+					&& existing.scope === request.scope;
+				const keepKey = existing && (sameFileRequest || dirtyFilesBySession[uiSessionId]?.[target.path]);
+				if (!keepKey || sameFileRequest) {
+					const key = keepKey ? existing.key : nextCenterFileRequestKey();
+					setCenterFileRequestsBySession((current) => ({
+						...current,
+						[uiSessionId]: {
+							...current[uiSessionId],
+							[target.path]: { ...request, key },
+						},
+					}));
+				}
 			}
 		} else {
 			setFileTabsBySession((current) => ({
@@ -1245,7 +1257,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			}
 		}
 		pendingNavigationRestoreRef.current = null;
-	}, [centerFileRequestsBySession, fileTabsBySession, hostId, sessionId, setActiveShellTerminal, setInspectorOpenForSession, setInspectorViewForSession, uiSessionId]);
+	}, [centerFileRequestsBySession, dirtyFilesBySession, fileTabsBySession, hostId, sessionId, setActiveShellTerminal, setInspectorOpenForSession, setInspectorViewForSession, uiSessionId]);
 	useEffect(() => subscribeNavigationRestore((location) => {
 		if (!location.sessionView) {
 			pendingNavigationRestoreRef.current = null;

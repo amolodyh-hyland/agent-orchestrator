@@ -48,6 +48,24 @@ describe("CloudFileContentPane", () => {
 		expect(await screen.findByRole("button", { name: "Save" })).toBeInTheDocument();
 	});
 
+	it("keeps an unsaved draft when the parent re-renders with the same request key", async () => {
+		const client = { getWorkspaceReviewFile: vi.fn().mockResolvedValue(detail) } as unknown as CloudCpClient;
+		const onDirtyChange = vi.fn();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const pane = (props: Partial<React.ComponentProps<typeof CloudFileContentPane>>) => <QueryClientProvider client={queryClient}><TooltipProvider><CloudFileContentPane annotation={annotation} baseUrl="https://cloud.test" client={client} initialMode="file" initialRequestKey={1} onDirtyChange={onDirtyChange} orgId="org-1" path="README.md" sessionId="session-1" split={false} {...props} /></TooltipProvider></QueryClientProvider>;
+		const view = render(pane({}));
+		await userEvent.click(await screen.findByRole("button", { name: "Edit file" }));
+		const editor = screen.getByRole("textbox", { name: "Edit README.md" }).querySelector<HTMLElement>(".cm-content");
+		await userEvent.click(editor!);
+		await userEvent.keyboard("x");
+		await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true));
+
+		view.rerender(pane({}));
+		expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
+		view.rerender(pane({ initialRequestKey: 2 }));
+		await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument());
+	});
+
 	it("saves edits with the current fingerprint and reports dirty state", async () => {
 		const updateWorkspaceReviewFile = vi.fn().mockResolvedValue({ ...detail, content: "# Changed", fileFingerprint: "fp-2" });
 		const client = { getWorkspaceReviewFile: vi.fn().mockResolvedValue(detail), updateWorkspaceReviewFile } as unknown as CloudCpClient;

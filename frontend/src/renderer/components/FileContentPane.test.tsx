@@ -437,6 +437,24 @@ describe("FileContentPane", () => {
 		expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
 	});
 
+	it("keeps an unsaved draft when the request key is unchanged and resets it for a new key", async () => {
+		getMock.mockResolvedValue({
+			data: {
+				sessionId: "sess-1", path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 18, binary: false, deleted: false, editable: true,
+				content: "export const x = 1;\n", contentTruncated: false, diff: "@@ -0,0 +1,1 @@\n+export const x = 1;\n", diffTruncated: false,
+				workspaceVersion: "workspace-1", fileFingerprint: "file-1",
+			},
+		});
+		const pane = (requestKey: number) => <FileContentPane annotation={noopAnnotation()} initialMode="file" initialRequestKey={requestKey} path="src/App.tsx" sessionId="sess-1" split={false} />;
+		const view = renderWithQuery(pane(1));
+		await userEvent.click(await screen.findByRole("button", { name: "Edit file" }));
+		await userEvent.type(screen.getByRole("textbox", { name: "Edit src/App.tsx" }), "x");
+
+		view.rerender(<QueryClientProvider client={new QueryClient()}><TooltipProvider>{pane(1)}</TooltipProvider></QueryClientProvider>);
+		expect(screen.getByRole("textbox", { name: "Edit src/App.tsx" })).toBeInTheDocument();
+		expect(screen.getByTestId("unsaved-file-indicator")).toBeInTheDocument();
+	});
+
 	it.each([
 		["Command+S", { metaKey: true }],
 		["Control+S", { ctrlKey: true }],
