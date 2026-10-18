@@ -435,24 +435,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const developerMode = useUiStore((state) => state.developerMode);
 	const remoteHostsEnabled = useUiStore((state) => state.remoteHosts);
 	const setRemoteHosts = useUiStore((state) => state.setRemoteHosts);
-	useBlocker({
-		disabled: chatDraftBoundaries.length === 0,
-		enableBeforeUnload: chatDraftBoundaries.length > 0,
-		shouldBlockFn: async () => {
-			const decision = await confirmUnsafeDraftLeave();
-			if (decision.kind === "cancelled") {
-				if (hostId && developerMode && !remoteHostsEnabled) setRemoteHosts(true);
-				return true;
-			}
-			if (decision.kind === "confirmed") {
-				// Route navigation is the boundary itself, so confirmed in-flight file
-				// work can be invalidated now. Interface switches defer this until the
-				// exact durable transition reports completed.
-				discardCapturedPendingFileAttachments(decision.pendingAttachments);
-			}
-			return false;
-		},
-	});
 	useEffect(() => {
 		aoBridge.app.setChatDraftRisk?.(chatDraftBoundaries, chatDraftDialogCopy(chatDraftBoundaries));
 	}, [chatDraftBoundaries, t]);
@@ -537,6 +519,31 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const fileTabs = fileTabsBySession[uiSessionId] ?? EMPTY_SESSION_FILE_TABS;
 	const [dirtyFilesBySession, setDirtyFilesBySession] = useState<Record<string, Record<string, true>>>({});
 	const dirtyFiles = dirtyFilesBySession[uiSessionId] ?? {};
+	const activeFileDirty = Boolean(fileTabs.activePath && dirtyFiles[fileTabs.activePath]);
+	useBlocker({
+		disabled: chatDraftBoundaries.length === 0 && !activeFileDirty,
+		enableBeforeUnload: chatDraftBoundaries.length > 0,
+		shouldBlockFn: async (navigation?: { action?: string }) => {
+			// Back/Forward restore a history entry by unmounting the open editor, which
+			// would drop its unsaved draft, so leaving a dirty file asks first.
+			if (activeFileDirty && (navigation?.action === "BACK" || navigation?.action === "FORWARD" || navigation?.action === "GO")) {
+				if (!window.confirm(t("files.unsavedLeaveConfirm"))) return true;
+			}
+			if (chatDraftBoundaries.length === 0) return false;
+			const decision = await confirmUnsafeDraftLeave();
+			if (decision.kind === "cancelled") {
+				if (hostId && developerMode && !remoteHostsEnabled) setRemoteHosts(true);
+				return true;
+			}
+			if (decision.kind === "confirmed") {
+				// Route navigation is the boundary itself, so confirmed in-flight file
+				// work can be invalidated now. Interface switches defer this until the
+				// exact durable transition reports completed.
+				discardCapturedPendingFileAttachments(decision.pendingAttachments);
+			}
+			return false;
+		},
+	});
 	const [centerFileRequestsBySession, setCenterFileRequestsBySession] = useState<
 		Record<string, Record<string, CenterFileOpenRequest>>
 	>({});

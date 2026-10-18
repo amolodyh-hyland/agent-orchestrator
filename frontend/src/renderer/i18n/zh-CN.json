@@ -2509,6 +2509,7 @@
 	"files.editFile": "Edit file",
 	"files.saveFile": "Save",
 	"files.cancelEditing": "Cancel",
+	"files.unsavedLeaveConfirm": "This file has unsaved changes. Leave and discard them?",
 	"files.editFileLabel": "Edit {{file}}",
 	"files.saveError": "Unable to save workspace file",
 	"files.preview": "预览",
