@@ -298,6 +298,17 @@ describe("parseMulticaDeepLink", () => {
 		expect(parseMulticaDeepLink("multica://invite/9f1c-2")).toEqual({ channel: "invite:open", payload: "9f1c-2" });
 	});
 
+	it("extracts a workspace issue link using the Multica deep-link payload", () => {
+		expect(parseMulticaDeepLink("multica://acme-web-2/issues/MUL%20123?comment=c1")).toEqual({
+			channel: "issue:open",
+			payload: { slug: "acme-web-2", issueId: "MUL 123" },
+		});
+		expect(parseMulticaDeepLink("multica://Acme/issues/MUL-1")).toEqual({
+			channel: "issue:open",
+			payload: { slug: "acme", issueId: "MUL-1" },
+		});
+	});
+
 	it("ignores other schemes, hosts, paths and empty or oversized values", () => {
 		for (const input of [
 			"https://auth/callback?token=abc",
@@ -307,6 +318,14 @@ describe("parseMulticaDeepLink", () => {
 			"multica://auth/elsewhere?token=abc",
 			"multica://invite/",
 			`multica://auth/callback?token=${"a".repeat(9000)}`,
+			"multica://acme/issues",
+			"multica://acme/issues/",
+			"multica://acme/projects/p-1",
+			"multica://acme/issues/MUL-1/comments",
+			"multica://Not_A_Slug/issues/1",
+			"multica://-acme/issues/1",
+			"multica://acme/issues/../../evil",
+			"multica://acme/issues/%E0%A4%A",
 			"not a url",
 		]) {
 			expect(parseMulticaDeepLink(input)).toBeNull();

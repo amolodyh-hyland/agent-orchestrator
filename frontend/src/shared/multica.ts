@@ -322,15 +322,19 @@ export type MulticaSetSettingsResult =
 
 export const MULTICA_DEEP_LINK_PROTOCOL = "multica:";
 
-export type MulticaDeepLink = { channel: "auth:token" | "invite:open"; payload: string };
+export type MulticaDeepLink =
+	| { channel: "auth:token" | "invite:open"; payload: string }
+	| { channel: "issue:open"; payload: { slug: string; issueId: string } };
 
 const MAX_DEEP_LINK_TOKEN_LENGTH = 8192;
 const INVITE_ID = /^[A-Za-z0-9_.-]{1,128}$/;
+const WORKSPACE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 /**
- * Parses the two deep links Multica's desktop handles: the sign-in callback
- * `multica://auth/callback?token=<jwt>` and `multica://invite/<id>`. Anything
- * else, including malformed input, is ignored.
+ * Parses the deep links Multica's desktop handles: the sign-in callback
+ * `multica://auth/callback?token=<jwt>`, `multica://invite/<id>`, and
+ * `multica://<slug>/issues/<id>`. Anything else, including malformed input,
+ * is ignored.
  */
 export function parseMulticaDeepLink(raw: string): MulticaDeepLink | null {
 	let url: URL;
@@ -352,6 +356,17 @@ export function parseMulticaDeepLink(raw: string): MulticaDeepLink | null {
 			return null;
 		}
 		return INVITE_ID.test(id) ? { channel: "invite:open", payload: id } : null;
+	}
+	const slug = url.hostname.toLowerCase();
+	const segments = url.pathname.split("/").filter(Boolean);
+	if (WORKSPACE_SLUG.test(slug) && segments.length === 2 && segments[0] === "issues") {
+		let issueId: string;
+		try {
+			issueId = decodeURIComponent(segments[1]);
+		} catch {
+			return null;
+		}
+		return issueId ? { channel: "issue:open", payload: { slug, issueId } } : null;
 	}
 	return null;
 }

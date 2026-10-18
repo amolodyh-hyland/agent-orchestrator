@@ -1375,6 +1375,18 @@ describe("multica view host: a stale document after a URL change", () => {
 });
 
 describe("multica view host: deep links", () => {
+	it("surfaces Multica and delivers a workspace issue link after the renderer subscribes", async () => {
+		const t = await setup();
+
+		expect(t.host.handleDeepLink("multica://acme/issues/MUL-123")).toBe(true);
+		expect(t.host.getState().active).toBe(true);
+		expect(t.view().webContents.send).not.toHaveBeenCalled();
+
+		t.view().webContents.ipc.emit("main-renderer:channel-state", t.multicaEvent(), { channel: "issue:open", ready: true });
+
+		expect(t.view().webContents.send).toHaveBeenCalledExactlyOnceWith("issue:open", { slug: "acme", issueId: "MUL-123" });
+	});
+
 	it("holds a sign-in token until the renderer subscribes, then delivers it and surfaces Multica", async () => {
 		const t = await setup();
 		t.host.setActive(true);
@@ -1476,6 +1488,7 @@ describe("multica view host: deep links", () => {
 
 		const unconfigured = await setup(local(""));
 		expect(unconfigured.host.handleDeepLink("multica://auth/callback?token=abc")).toBe(false);
+		expect(unconfigured.host.handleDeepLink("multica://acme/issues/MUL-1")).toBe(false);
 	});
 });
 

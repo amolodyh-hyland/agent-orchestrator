@@ -105,6 +105,8 @@ Stubbed: `daemonAPI.openLogFile`, `window:open-issue`, `window:close`, immersive
 
 `multica://` deep links are only routed when something hands them to AO (`open-url`, `second-instance`, launch argv). AO does not register itself as the OS handler for `multica://`.
 
+Workspace issue links (`multica://<slug>/issues/<id>`) are forwarded to the embedded Multica view on `issue:open`. The view surfaces when the link arrives, and the Multica renderer switches to the linked workspace and issue after its listener is ready.
+
 ## Issue links
 
 An AO session can be linked to Multica issues. Nothing changes in the Multica repo or its backend.

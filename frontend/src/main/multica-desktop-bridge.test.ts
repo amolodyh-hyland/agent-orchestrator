@@ -307,6 +307,7 @@ describe("multica desktop bridge: main-to-renderer messages", () => {
 			initialPending: [
 				["auth:token", ["token-1"]],
 				["invite:open", [{ inviteId: "invite-1" }]],
+				["issue:open", [{ slug: "acme", issueId: "MUL-1" }]],
 				["inbox:open", [{ itemId: "item-1" }]],
 			],
 		});
@@ -315,6 +316,7 @@ describe("multica desktop bridge: main-to-renderer messages", () => {
 		expect(snapshot).toEqual([
 			["auth:token", ["token-1"]],
 			["invite:open", [{ inviteId: "invite-1" }]],
+			["issue:open", [{ slug: "acme", issueId: "MUL-1" }]],
 		]);
 		snapshot[0][1][0] = "changed";
 		snapshot[0][1].push("extra");
@@ -322,9 +324,14 @@ describe("multica desktop bridge: main-to-renderer messages", () => {
 
 		ipc.send("main-renderer:channel-state", MULTICA, { channel: "auth:token", ready: true });
 		expect(send).toHaveBeenCalledExactlyOnceWith("auth:token", "token-1");
-		expect(bridge.pendingSnapshot()).toEqual([["invite:open", [{ inviteId: "invite-1" }]]]);
+		expect(bridge.pendingSnapshot()).toEqual([
+			["invite:open", [{ inviteId: "invite-1" }]],
+			["issue:open", [{ slug: "acme", issueId: "MUL-1" }]],
+		]);
 
 		ipc.send("main-renderer:channel-state", MULTICA, { channel: "invite:open", ready: true });
+		expect(bridge.pendingSnapshot()).toEqual([["issue:open", [{ slug: "acme", issueId: "MUL-1" }]]]);
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "issue:open", ready: true });
 		expect(bridge.pendingSnapshot()).toEqual([]);
 	});
 
@@ -412,6 +419,15 @@ describe("multica desktop bridge: main-to-renderer messages", () => {
 		bridge.dispatch("auth:token", "t2");
 		expect(send).toHaveBeenLastCalledWith("auth:token", "t2");
 		expect(send).toHaveBeenCalledTimes(2);
+	});
+
+	it("delivers a queued issue link after the renderer announces its listener", () => {
+		const issue = { slug: "acme", issueId: "MUL-1" };
+		const { bridge, ipc, send } = setup({ initialPending: [["issue:open", [issue]]] });
+
+		ipc.send("main-renderer:channel-state", MULTICA, { channel: "issue:open", ready: true });
+
+		expect(send).toHaveBeenCalledExactlyOnceWith("issue:open", issue);
 	});
 
 	it("runs whenReady synchronously once the channel is already ready", () => {

@@ -16,14 +16,14 @@ import type { MulticaNotifications } from "./multica-notifications";
 // Every handler still checks the sender as a second line of defence.
 //
 // What is real: app info, locale, runtime config, freeze breadcrumb, external
-// links, deep-link delivery (auth token, invite), notifications, account session,
-// badge, and a minimal daemon surface backed by the installed multica CLI.
+// links, deep-link delivery (auth token, invite, issue), notifications, account
+// session, badge, and a minimal daemon surface backed by the installed multica CLI.
 
 const CHANNEL_STATE_CHANNEL = "main-renderer:channel-state";
 
 // Messages the renderer only accepts after it has installed the matching
 // listener; a page finishing its load is not enough (React subscribes later).
-const MAIN_RENDERER_CHANNELS = new Set(["auth:token", "invite:open", "inbox:open", "settings:open", "tab:select-by-shortcut"]);
+const MAIN_RENDERER_CHANNELS = new Set(["auth:token", "invite:open", "issue:open", "inbox:open", "settings:open", "tab:select-by-shortcut"]);
 
 const MAX_PENDING_PER_CHANNEL = 8;
 
@@ -47,7 +47,7 @@ export type MulticaDesktopBridgeOptions = {
 	send: (channel: string, payload?: unknown) => void;
 	/** Receives Multica's notification, auth-session and badge messages. */
 	notifications: Pick<MulticaNotifications, "showNotification" | "reportAuthSession" | "setBadge">;
-	/** Queues safe deep links and auth tokens before the renderer subscribes. */
+	/** Queues renderer-bound links before the renderer subscribes. */
 	initialPending?: ReadonlyArray<readonly [channel: string, payloads: readonly unknown[]]>;
 };
 

@@ -1,5 +1,5 @@
 {
-  "multicaCommit": "b2561aad61055dd9937fc08f6497846b1458d018",
+  "multicaCommit": "7a03a8f1f66d7bfdfc27a6668e1539ea66cf05e0",
   "preload": "apps/desktop/src/preload/index.ts",
   "globals": [
     "daemonAPI",
@@ -40,6 +40,7 @@
       "onCloseActiveTab",
       "onInboxOpen",
       "onInviteOpen",
+      "onIssueOpen",
       "onNavigationGesture",
       "onOpenSettings",
       "onSelectTabShortcut",
@@ -212,6 +213,11 @@
     {
       "api": "desktopAPI.onInviteOpen",
       "channel": "invite:open",
+      "kind": "on"
+    },
+    {
+      "api": "desktopAPI.onIssueOpen",
+      "channel": "issue:open",
       "kind": "on"
     },
     {
