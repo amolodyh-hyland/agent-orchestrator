@@ -268,6 +268,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"DomainSessionProvisionStep":      "SessionProvisionStep",
 	"DomainSessionBranchState":        "SessionBranchState",
 	"DomainProjectConfig":             "ProjectConfig",
+	"DomainProjectInstructions":       "ProjectInstructions",
 	"DomainTrackerIntakeConfig":       "TrackerIntakeConfig",
 	"ControllersTriggerReviewRequest": "TriggerReviewRequest",
 	"DomainContainerReapConfig":       "ContainerReapConfig",
@@ -570,6 +571,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ProjectSummary":                    "ProjectSummary",
 	"ProjectDegraded":                   "DegradedProject",
 	"ProjectAddInput":                   "AddProjectInput",
+	"ProjectCreateContainerInput":       "CreateProjectContainerInput",
 	"ProjectCloneInput":                 "CloneProjectInput",
 	"ProjectClonePreparationResult":     "ClonePreparationResult",
 	"ProjectInitializeRepositoryInput":  "InitializeRepositoryInput",
@@ -2444,6 +2446,17 @@ func projectOperations() []operation {
 			method: http.MethodPost, path: "/api/v1/projects", id: "addProject", tag: "projects",
 			summary: "Register a new project from a git repository path",
 			reqBody: projectsvc.AddInput{},
+			resps: []respUnit{
+				{http.StatusCreated, controllers.ProjectResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/projects/containers", id: "createProjectContainer", tag: "projects",
+			summary: "Create a durable Project without a Git repository",
+			reqBody: projectsvc.CreateContainerInput{},
 			resps: []respUnit{
 				{http.StatusCreated, controllers.ProjectResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},

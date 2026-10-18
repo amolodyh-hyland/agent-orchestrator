@@ -14,7 +14,7 @@ import (
 )
 
 const archiveProject = `-- name: ArchiveProject :execrows
-UPDATE projects SET archived_at = ? WHERE id = ? AND archived_at IS NULL
+UPDATE projects SET archived_at = ?, metadata_revision = metadata_revision + 1 WHERE id = ? AND archived_at IS NULL
 `
 
 type ArchiveProjectParams struct {
@@ -42,7 +42,7 @@ func (q *Queries) CountProjectsIncludingArchived(ctx context.Context) (int64, er
 }
 
 const findProjectByPath = `-- name: FindProjectByPath :one
-SELECT id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind
+SELECT id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind, metadata_revision, instructions_json
 FROM projects WHERE path = ? AND archived_at IS NULL
 `
 
@@ -58,12 +58,14 @@ func (q *Queries) FindProjectByPath(ctx context.Context, path string) (Project, 
 		&i.ArchivedAt,
 		&i.Config,
 		&i.Kind,
+		&i.MetadataRevision,
+		&i.InstructionsJson,
 	)
 	return i, err
 }
 
 const getProject = `-- name: GetProject :one
-SELECT id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind
+SELECT id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind, metadata_revision, instructions_json
 FROM projects WHERE id = ?
 `
 
@@ -79,12 +81,14 @@ func (q *Queries) GetProject(ctx context.Context, id domain.ProjectID) (Project,
 		&i.ArchivedAt,
 		&i.Config,
 		&i.Kind,
+		&i.MetadataRevision,
+		&i.InstructionsJson,
 	)
 	return i, err
 }
 
 const listProjects = `-- name: ListProjects :many
-SELECT id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind
+SELECT id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind, metadata_revision, instructions_json
 FROM projects WHERE archived_at IS NULL ORDER BY id
 `
 
@@ -106,6 +110,8 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 			&i.ArchivedAt,
 			&i.Config,
 			&i.Kind,
+			&i.MetadataRevision,
+			&i.InstructionsJson,
 		); err != nil {
 			return nil, err
 		}
@@ -139,18 +145,24 @@ func (q *Queries) PinProjectSessionPermissions(ctx context.Context, arg PinProje
 
 const updateProjectSettings = `-- name: UpdateProjectSettings :execrows
 UPDATE projects
-SET display_name = ?, config = ?
+SET display_name = ?, config = ?, instructions_json = ?, metadata_revision = metadata_revision + 1
 WHERE id = ? AND archived_at IS NULL
 `
 
 type UpdateProjectSettingsParams struct {
-	DisplayName string
-	Config      sql.NullString
-	ID          domain.ProjectID
+	DisplayName      string
+	Config           sql.NullString
+	InstructionsJson string
+	ID               domain.ProjectID
 }
 
 func (q *Queries) UpdateProjectSettings(ctx context.Context, arg UpdateProjectSettingsParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, updateProjectSettings, arg.DisplayName, arg.Config, arg.ID)
+	result, err := q.db.ExecContext(ctx, updateProjectSettings,
+		arg.DisplayName,
+		arg.Config,
+		arg.InstructionsJson,
+		arg.ID,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -158,8 +170,8 @@ func (q *Queries) UpdateProjectSettings(ctx context.Context, arg UpdateProjectSe
 }
 
 const upsertImportedProject = `-- name: UpsertImportedProject :exec
-INSERT INTO projects (id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO projects (id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind, metadata_revision, instructions_json)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
     path = excluded.path,
     repo_origin_url = excluded.repo_origin_url,
@@ -167,18 +179,22 @@ ON CONFLICT (id) DO UPDATE SET
     registered_at = excluded.registered_at,
     archived_at = excluded.archived_at,
     config = excluded.config,
-    kind = excluded.kind
+    kind = excluded.kind,
+    metadata_revision = MAX(projects.metadata_revision, excluded.metadata_revision),
+    instructions_json = excluded.instructions_json
 `
 
 type UpsertImportedProjectParams struct {
-	ID            domain.ProjectID
-	Path          string
-	RepoOriginURL string
-	DisplayName   string
-	RegisteredAt  time.Time
-	ArchivedAt    sql.NullTime
-	Config        sql.NullString
-	Kind          string
+	ID               domain.ProjectID
+	Path             string
+	RepoOriginURL    string
+	DisplayName      string
+	RegisteredAt     time.Time
+	ArchivedAt       sql.NullTime
+	Config           sql.NullString
+	Kind             string
+	MetadataRevision int64
+	InstructionsJson string
 }
 
 func (q *Queries) UpsertImportedProject(ctx context.Context, arg UpsertImportedProjectParams) error {
@@ -191,31 +207,37 @@ func (q *Queries) UpsertImportedProject(ctx context.Context, arg UpsertImportedP
 		arg.ArchivedAt,
 		arg.Config,
 		arg.Kind,
+		arg.MetadataRevision,
+		arg.InstructionsJson,
 	)
 	return err
 }
 
 const upsertProject = `-- name: UpsertProject :exec
-INSERT INTO projects (id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO projects (id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind, metadata_revision, instructions_json)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
     path = excluded.path,
     repo_origin_url = excluded.repo_origin_url,
     display_name = excluded.display_name,
     archived_at = excluded.archived_at,
     config = excluded.config,
-    kind = excluded.kind
+    kind = excluded.kind,
+    metadata_revision = MAX(projects.metadata_revision, excluded.metadata_revision),
+    instructions_json = excluded.instructions_json
 `
 
 type UpsertProjectParams struct {
-	ID            domain.ProjectID
-	Path          string
-	RepoOriginURL string
-	DisplayName   string
-	RegisteredAt  time.Time
-	ArchivedAt    sql.NullTime
-	Config        sql.NullString
-	Kind          string
+	ID               domain.ProjectID
+	Path             string
+	RepoOriginURL    string
+	DisplayName      string
+	RegisteredAt     time.Time
+	ArchivedAt       sql.NullTime
+	Config           sql.NullString
+	Kind             string
+	MetadataRevision int64
+	InstructionsJson string
 }
 
 func (q *Queries) UpsertProject(ctx context.Context, arg UpsertProjectParams) error {
@@ -228,6 +250,8 @@ func (q *Queries) UpsertProject(ctx context.Context, arg UpsertProjectParams) er
 		arg.ArchivedAt,
 		arg.Config,
 		arg.Kind,
+		arg.MetadataRevision,
+		arg.InstructionsJson,
 	)
 	return err
 }

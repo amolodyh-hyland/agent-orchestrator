@@ -26,6 +26,7 @@ type ProjectsController struct {
 func (c *ProjectsController) Register(r chi.Router) {
 	r.Get("/projects", c.list)
 	r.Post("/projects", c.add)
+	r.Post("/projects/containers", c.createContainer)
 	r.Post("/projects/clone", c.clone)
 	r.Post("/projects/clone/prepare", c.prepareClone)
 	r.Post("/projects/clone/cleanup", c.cleanupPreparedClone)
@@ -117,6 +118,24 @@ func (c *ProjectsController) add(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, err := c.Mgr.Add(r.Context(), in)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusCreated, ProjectResponse{Project: p})
+}
+
+func (c *ProjectsController) createContainer(w http.ResponseWriter, r *http.Request) {
+	if c.Mgr == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/projects/containers")
+		return
+	}
+	var in projectsvc.CreateContainerInput
+	if err := decodeJSONStrict(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	p, err := c.Mgr.CreateContainer(r.Context(), in)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
