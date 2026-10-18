@@ -224,27 +224,54 @@ func (s *Store) ListProjects(ctx context.Context) ([]domain.ProjectRecord, error
 }
 
 // UpdateProjectSettings atomically updates the user-facing display name and
-// config for an active project. It returns ok=false when the project is missing
-// or archived.
-func (s *Store) UpdateProjectSettings(ctx context.Context, id, displayName string, config domain.ProjectConfig, instructions domain.ProjectInstructions) (bool, error) {
+// config for an active project. Instructions are written only when non-nil, and
+// then only if the stored revision still equals expectedRevision. It returns
+// ok=false when the project is missing, archived, or the revision check failed.
+func (s *Store) UpdateProjectSettings(ctx context.Context, id, displayName string, config domain.ProjectConfig, instructions *domain.ProjectInstructions, expectedRevision int64) (bool, error) {
 	encodedConfig, err := marshalProjectConfig(config)
 	if err != nil {
 		return false, err
 	}
-	encodedInstructions, err := marshalProjectInstructions(instructions)
-	if err != nil {
-		return false, err
+	encodedInstructions := "{}"
+	var setInstructions int64
+	if instructions != nil {
+		setInstructions = 1
+		encodedInstructions, err = marshalProjectInstructions(*instructions)
+		if err != nil {
+			return false, err
+		}
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.UpdateProjectSettings(ctx, gen.UpdateProjectSettingsParams{
 		DisplayName:      displayName,
 		Config:           encodedConfig,
+		SetInstructions:  setInstructions,
 		InstructionsJson: encodedInstructions,
 		ID:               domain.ProjectID(id),
+		ExpectedRevision: expectedRevision,
 	})
 	if err != nil {
 		return false, fmt.Errorf("update project settings %s: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
+// UpdateProjectConfig replaces only the config column of an active project and
+// bumps its revision. It returns ok=false when the project is missing or archived.
+func (s *Store) UpdateProjectConfig(ctx context.Context, id string, config domain.ProjectConfig) (bool, error) {
+	encodedConfig, err := marshalProjectConfig(config)
+	if err != nil {
+		return false, err
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.UpdateProjectConfig(ctx, gen.UpdateProjectConfigParams{
+		Config: encodedConfig,
+		ID:     domain.ProjectID(id),
+	})
+	if err != nil {
+		return false, fmt.Errorf("update project config %s: %w", id, err)
 	}
 	return rows > 0, nil
 }
@@ -397,15 +424,9 @@ func (s *Store) SetProjectPermissions(ctx context.Context, id string, permission
 		if err != nil {
 			return err
 		}
-		instructions, err := marshalProjectInstructions(row.Instructions)
-		if err != nil {
-			return err
-		}
-		rows, err := q.UpdateProjectSettings(ctx, gen.UpdateProjectSettingsParams{
-			DisplayName:      row.DisplayName,
-			Config:           config,
-			InstructionsJson: instructions,
-			ID:               domain.ProjectID(id),
+		rows, err := q.UpdateProjectConfig(ctx, gen.UpdateProjectConfigParams{
+			Config: config,
+			ID:     domain.ProjectID(id),
 		})
 		updated = rows > 0
 		return err

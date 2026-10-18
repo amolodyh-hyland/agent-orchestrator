@@ -143,25 +143,54 @@ func (q *Queries) PinProjectSessionPermissions(ctx context.Context, arg PinProje
 	return err
 }
 
+const updateProjectConfig = `-- name: UpdateProjectConfig :execrows
+UPDATE projects
+SET config = ?, metadata_revision = metadata_revision + 1
+WHERE id = ? AND archived_at IS NULL
+`
+
+type UpdateProjectConfigParams struct {
+	Config sql.NullString
+	ID     domain.ProjectID
+}
+
+func (q *Queries) UpdateProjectConfig(ctx context.Context, arg UpdateProjectConfigParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateProjectConfig, arg.Config, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const updateProjectSettings = `-- name: UpdateProjectSettings :execrows
 UPDATE projects
-SET display_name = ?, config = ?, instructions_json = ?, metadata_revision = metadata_revision + 1
-WHERE id = ? AND archived_at IS NULL
+SET display_name = ?1,
+    config = ?2,
+    instructions_json = CASE WHEN CAST(?3 AS INTEGER) <> 0 THEN ?4 ELSE instructions_json END,
+    metadata_revision = metadata_revision + 1
+WHERE id = ?5 AND archived_at IS NULL
+  AND (CAST(?3 AS INTEGER) = 0 OR MAX(metadata_revision, 1) = ?6)
 `
 
 type UpdateProjectSettingsParams struct {
 	DisplayName      string
 	Config           sql.NullString
+	SetInstructions  int64
 	InstructionsJson string
 	ID               domain.ProjectID
+	ExpectedRevision int64
 }
 
+// Instructions are written only when set_instructions is true, and then only if
+// the stored revision still equals expected_revision (compare-and-swap).
 func (q *Queries) UpdateProjectSettings(ctx context.Context, arg UpdateProjectSettingsParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, updateProjectSettings,
 		arg.DisplayName,
 		arg.Config,
+		arg.SetInstructions,
 		arg.InstructionsJson,
 		arg.ID,
+		arg.ExpectedRevision,
 	)
 	if err != nil {
 		return 0, err

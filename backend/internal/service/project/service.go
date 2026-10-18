@@ -814,10 +814,8 @@ func (m *Service) UpdateSettings(ctx context.Context, id domain.ProjectID, in Up
 	if !ok || !row.ArchivedAt.IsZero() {
 		return Project{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
 	}
-	instructions := row.Instructions
 	if in.Instructions != nil {
-		instructions = *in.Instructions
-		if err := instructions.Validate(); err != nil {
+		if err := in.Instructions.Validate(); err != nil {
 			return Project{}, apierr.Invalid("INVALID_PROJECT_INSTRUCTIONS", err.Error(), nil)
 		}
 	}
@@ -832,17 +830,26 @@ func (m *Service) UpdateSettings(ctx context.Context, id domain.ProjectID, in Up
 	if err := in.Config.ValidateCanonicalRepository(row.RepoOriginURL); err != nil {
 		return Project{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
 	}
-	updated, err := m.store.UpdateProjectSettings(ctx, string(id), inDisplayName, in.Config, instructions)
+	updated, err := m.store.UpdateProjectSettings(ctx, string(id), inDisplayName, in.Config, in.Instructions, normalizedProjectRevision(row.Revision))
 	if err != nil {
 		return Project{}, apierr.Internal("PROJECT_SETTINGS_UPDATE_FAILED", "Failed to update project settings")
 	}
 	if !updated {
-		return Project{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
+		// Zero rows means the project vanished or, when instructions were sent,
+		// another write advanced the revision after this request read it.
+		current, ok, err := m.store.GetProject(ctx, string(id))
+		if err != nil {
+			return Project{}, apierr.Internal("PROJECT_LOAD_FAILED", "Failed to load project")
+		}
+		if !ok || !current.ArchivedAt.IsZero() {
+			return Project{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
+		}
+		return Project{}, apierr.Conflict("PROJECT_REVISION_CONFLICT", "The project changed since it was read; reload and retry", nil)
 	}
-	row.DisplayName = inDisplayName
-	row.Config = in.Config
-	row.Instructions = instructions
-	row.Revision = nextProjectRevision(row.Revision)
+	row, ok, err = m.store.GetProject(ctx, string(id))
+	if err != nil || !ok {
+		return Project{}, apierr.Internal("PROJECT_LOAD_FAILED", "Failed to load project")
+	}
 	m.modelScopeChanged(row.ID)
 	return m.projectFromRow(ctx, row), nil
 }
@@ -877,10 +884,16 @@ func (m *Service) SetConfig(ctx context.Context, id domain.ProjectID, in SetConf
 	if err := in.Config.ValidateCanonicalRepository(row.RepoOriginURL); err != nil {
 		return Project{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
 	}
-	row.Config = in.Config
-	row.Revision = nextProjectRevision(row.Revision)
-	if err := m.store.UpsertProject(ctx, row); err != nil {
+	updated, err := m.store.UpdateProjectConfig(ctx, string(id), in.Config)
+	if err != nil {
 		return Project{}, apierr.Internal("PROJECT_CONFIG_UPDATE_FAILED", "Failed to update project config")
+	}
+	if !updated {
+		return Project{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
+	}
+	row, ok, err = m.store.GetProject(ctx, string(id))
+	if err != nil || !ok {
+		return Project{}, apierr.Internal("PROJECT_LOAD_FAILED", "Failed to load project")
 	}
 	m.modelScopeChanged(row.ID)
 	return m.projectFromRow(ctx, row), nil

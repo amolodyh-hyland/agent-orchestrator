@@ -41,8 +41,19 @@ SELECT id, path, repo_origin_url, display_name, registered_at, archived_at, conf
 FROM projects WHERE path = ? AND archived_at IS NULL;
 
 -- name: UpdateProjectSettings :execrows
+-- Instructions are written only when set_instructions is true, and then only if
+-- the stored revision still equals expected_revision (compare-and-swap).
 UPDATE projects
-SET display_name = ?, config = ?, instructions_json = ?, metadata_revision = metadata_revision + 1
+SET display_name = sqlc.arg(display_name),
+    config = sqlc.arg(config),
+    instructions_json = CASE WHEN CAST(sqlc.arg(set_instructions) AS INTEGER) <> 0 THEN sqlc.arg(instructions_json) ELSE instructions_json END,
+    metadata_revision = metadata_revision + 1
+WHERE id = sqlc.arg(id) AND archived_at IS NULL
+  AND (CAST(sqlc.arg(set_instructions) AS INTEGER) = 0 OR MAX(metadata_revision, 1) = sqlc.arg(expected_revision));
+
+-- name: UpdateProjectConfig :execrows
+UPDATE projects
+SET config = ?, metadata_revision = metadata_revision + 1
 WHERE id = ? AND archived_at IS NULL;
 
 -- name: ArchiveProject :execrows
