@@ -187,6 +187,7 @@ const terminalPaneState = vi.hoisted(() => ({
 vi.mock("../../lib/bridge", () => ({
 	aoBridge: {
 		app: {
+			onShortcut: () => () => undefined,
 			onPreviousTabShortcut: (listener: () => void) => {
 				previousTabListeners.add(listener);
 				return () => previousTabListeners.delete(listener);

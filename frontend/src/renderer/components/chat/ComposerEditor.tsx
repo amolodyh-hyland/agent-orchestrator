@@ -77,6 +77,8 @@ export type ComposerEditorHandle = {
 	setText(text: string, caret?: "start" | "end"): void;
 	/** Where a collapsed caret sits relative to the whole text; undefined for a range. */
 	caretBoundary(): { atStart: boolean; atEnd: boolean } | undefined;
+	wrapInlineCode(): boolean;
+	wrapCodeBlock(): boolean;
 	insertToken(trigger: ComposerTrigger, value: string): void;
 	/** Inserts a file reference chip at the caret (or the end) that sends `wire`. */
 	insertReference(path: string, display: string, wire: string): void;
@@ -408,6 +410,93 @@ function $removeImageTokens(remove: (path: string) => boolean): void {
 	}
 }
 
+function $documentOffsetForPoint(targetNode: LexicalNode, pointOffset: number): number | undefined {
+	let offset = 0;
+	let found = false;
+	const visit = (node: LexicalNode): void => {
+		if (found) return;
+		if (node.getKey() === targetNode.getKey()) {
+			if ($isTextNode(node)) offset += pointOffset;
+			else if ($isElementNode(node)) {
+				for (const child of node.getChildren().slice(0, pointOffset)) offset += child.getTextContent().length;
+			}
+			found = true;
+			return;
+		}
+		if ($isElementNode(node)) {
+			for (const child of node.getChildren()) visit(child);
+		} else {
+			offset += node.getTextContent().length;
+		}
+	};
+	const rootChildren = $getRoot().getChildren();
+	for (const [index, child] of rootChildren.entries()) {
+		visit(child);
+		if (found) return offset;
+		if (index < rootChildren.length - 1) offset += 1;
+	}
+	return undefined;
+}
+
+function $wrapSelectionWithMarkdown(opening: string, closing: string, codeBlock = false): boolean {
+	let selection = $getSelection();
+	if (!$isRangeSelection(selection)) {
+		$getRoot().selectEnd();
+		selection = $getSelection();
+	}
+	if (!$isRangeSelection(selection)) return false;
+	if (!selection.isCollapsed() && selection.getNodes().some((node) => node instanceof ComposerTokenNode)) return false;
+
+	let selectedText = selection.getTextContent();
+	let openingText = opening;
+	let closingText = closing;
+	if (codeBlock) {
+		const anchorOffset = $documentOffsetForPoint(selection.anchor.getNode(), selection.anchor.offset);
+		const focusOffset = $documentOffsetForPoint(selection.focus.getNode(), selection.focus.offset);
+		if (anchorOffset !== undefined && focusOffset !== undefined) {
+			const source = $serializeComposer();
+			const start = Math.min(anchorOffset, focusOffset);
+			const end = Math.max(anchorOffset, focusOffset);
+			const before = source.slice(0, start);
+			const after = source.slice(end);
+			selectedText = source.slice(start, end);
+			openingText = `${before && !before.endsWith("\n") ? "\n" : ""}${opening}`;
+			closingText = `${closing}${after && !after.startsWith("\n") ? "\n" : ""}`;
+		}
+	}
+	$addUpdateTag(HISTORY_PUSH_TAG);
+	selection.insertText(`${openingText}${selectedText}${closingText}`);
+
+	const insertedSelection = $getSelection();
+	if (!$isRangeSelection(insertedSelection)) return true;
+	const anchorNode = insertedSelection.anchor.getNode();
+	if (!$isTextNode(anchorNode)) return true;
+
+	if (codeBlock) {
+		const closingStart = anchorNode.getTextContent().lastIndexOf("```", insertedSelection.anchor.offset);
+		if (closingStart > 0) {
+			anchorNode.select(closingStart - 1, closingStart - 1);
+			return true;
+		}
+		const parent = anchorNode.getParent();
+		const previousSibling = anchorNode.getPreviousSibling();
+		if (parent && previousSibling?.getTextContent() === "\n") {
+			const offset = parent.getChildren().findIndex((node) => node.getKey() === previousSibling.getKey());
+			if (offset >= 0) parent.select(offset, offset);
+			return true;
+		}
+		const previousParagraph = parent?.getPreviousSibling();
+		if ($isElementNode(previousParagraph)) previousParagraph.selectEnd();
+		return true;
+	}
+
+	if (!selectedText) {
+		const offset = insertedSelection.anchor.offset - closing.length;
+		anchorNode.select(offset, offset);
+	}
+	return true;
+}
+
 function editorSnapshot(): ComposerEditorSnapshot {
 	const text = $serializeComposer();
 	const selection = $getSelection();
@@ -479,6 +568,22 @@ const EditorBridge = forwardRef<
 					discrete: true,
 					tag: PROGRAMMATIC_TEXT_UPDATE_TAG,
 				});
+			},
+			wrapInlineCode: () => {
+				if (editor.isComposing()) return false;
+				let applied = false;
+				editor.update(() => {
+					applied = $wrapSelectionWithMarkdown("`", "`");
+				}, { discrete: true });
+				return applied;
+			},
+			wrapCodeBlock: () => {
+				if (editor.isComposing()) return false;
+				let applied = false;
+				editor.update(() => {
+					applied = $wrapSelectionWithMarkdown("```\n", "\n```", true);
+				}, { discrete: true });
+				return applied;
 			},
 			insertToken: (trigger, value) => {
 				editor.update(() => {
