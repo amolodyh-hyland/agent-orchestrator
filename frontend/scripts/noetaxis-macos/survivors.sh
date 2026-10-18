@@ -18,8 +18,22 @@ noetaxis_ao_marker() {
 			directory="${directory%/*}"
 		done
 	fi
-	[[ "$command_line" != *'/../'* && "$command_line" != *'/./'* ]] || return 1
-	printf '%s\n' "$command_line" | /usr/bin/grep -E "(^|[[:space:]\"'=])$(noetaxis_regex_escape "$marker_home/")" >/dev/null
+	/usr/bin/perl -e '
+		my ($anchor, $command) = @ARGV;
+		# ps joins argv without preserving its boundaries. Treat shell delimiters conservatively,
+		# reject parent traversal even at the end of an argument, then compare normalized paths.
+		my @paths = grep { m{^/} } split(/[\s\x22\x27=;|&()<>]+/, $command);
+		exit 1 if grep { m{(?:^|/)\.\.(?:/|$)} } @paths;
+		sub normalize {
+			return "/" . join("/", grep { length && $_ ne "." } split(m{/+}, shift));
+		}
+		$anchor = normalize($anchor);
+		for my $path (@paths) {
+			$path = normalize($path);
+			exit 0 if $path eq $anchor || index($path, "$anchor/") == 0;
+		}
+		exit 1;
+	' "$marker_home" "$command_line"
 }
 
 noetaxis_fixture_marker() {

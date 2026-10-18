@@ -106,6 +106,43 @@ test("survivor inventory groups verified descendants, anchored orphans and leake
 	assert.match(result.stderr, /noetaxis_survivor_matches/);
 });
 
+test("orphan anchors normalize paths and reject parent traversal at every argument boundary, including signal rechecks", darwin, async (t) => {
+	const excluded = [
+		"du -a <AO>/..", "du '<AO>/..'", 'du "<AO>/.."',
+		"du --path=<AO>/.. --all", "du <AO>/../outside", "du <AO>//..//outside",
+		"sh -c 'du <AO>/..; echo done'", "du <AO>/data/..", "du <AO>/./..",
+		"du <AO>/data/../../outside", "du <AO>/data /outside/..", "du <HOME>/.ao-lookalike/file",
+	];
+	const world = await makeWorld(t, "teardown-traversal", { running: false, extraProcs: [
+		...excluded.map((command, n) => orphan(8500 + n, { command })),
+		orphan(8600, { command: "du <HOME>//.ao/./data//worktrees/file" }),
+	] });
+	const scan = 'noetaxis_survivor_scan "$target_app" "$cap_survivors_file"; /bin/cat "$cap_survivors_file"';
+	const result = survivorCall(world, scan);
+	assert.equal(result.status, 0, result.stdout + result.stderr);
+	assert.deepEqual(result.stdout.trim().split("\n").map((line) => line.split(sep)[1]), ["8600"]);
+	const recheck = survivorCall(world, `update_kill_survivors=1; update_survivors_confirmed=1
+for pid in {8500..8511}; do
+ info="$(noetaxis_process_info "$pid")"
+ IFS=$'\\t' read -r pid parent started command_line <<< "$info"
+ executable="$(noetaxis_process_executable_path "$pid")"
+ if noetaxis_survivor_signal TERM b "$pid" "$parent" "$started" "$executable" "$command_line" "$pid -> 1" / 1; then exit 99; fi
+done`);
+	assert.equal(recheck.status, 0, recheck.stdout + recheck.stderr);
+	assert.deepEqual(signals(await world.calls()), []);
+	for (const [search, replacement, expected] of [
+		['exit 1 if grep { m{(?:^|/)\\.\\.(?:/|$)} } @paths;', '# traversal guard removed', false],
+		['$path = normalize($path);', '# normalization removed', true],
+	]) {
+		const scripts = await mutatedScripts(t, "survivors.sh", search, replacement);
+		const broken = survivorCall(world, scan, { scripts });
+		assert.equal(broken.status, 0, broken.stdout + broken.stderr);
+		const ids = broken.stdout.trim().split("\n").map((line) => line.split(sep)[1]);
+		assert.equal(ids.includes("8500"), !expected, "the exclusion assertion catches a missing traversal guard");
+		assert.equal(ids.includes("8600"), !expected, "the inclusion assertion catches missing normalization");
+	}
+});
+
 test("survivors require exact typed PID confirmation; --yes and wrong answers never signal", darwin, async (t) => {
 	for (const input of ["", "yes\n", "kill survivors 9999\n"]) {
 		const world = await makeWorld(t, "teardown-confirm", { running: false, extraProcs: [orphan()] });
