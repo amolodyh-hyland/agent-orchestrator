@@ -56,6 +56,11 @@ UPDATE projects
 SET config = ?, metadata_revision = metadata_revision + 1
 WHERE id = ? AND archived_at IS NULL;
 
+-- name: BackfillProjectOriginURL :execrows
+UPDATE projects
+SET repo_origin_url = ?, metadata_revision = metadata_revision + 1
+WHERE id = ? AND archived_at IS NULL AND repo_origin_url = '';
+
 -- name: ArchiveProject :execrows
 UPDATE projects SET archived_at = ?, metadata_revision = metadata_revision + 1 WHERE id = ? AND archived_at IS NULL;
 

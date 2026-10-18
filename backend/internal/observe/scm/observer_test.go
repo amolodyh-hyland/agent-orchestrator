@@ -79,14 +79,16 @@ func (s *fakeStore) GetProject(_ context.Context, id string) (domain.ProjectReco
 	return p, ok, nil
 }
 
-func (s *fakeStore) UpsertProject(_ context.Context, row domain.ProjectRecord) error {
+func (s *fakeStore) BackfillProjectOriginURL(_ context.Context, id, originURL string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.projects == nil {
-		s.projects = map[string]domain.ProjectRecord{}
+	p, ok := s.projects[id]
+	if !ok || p.RepoOriginURL != "" {
+		return false, nil
 	}
-	s.projects[row.ID] = row
-	return nil
+	p.RepoOriginURL = originURL
+	s.projects[id] = p
+	return true, nil
 }
 
 func (s *fakeStore) ListWorkspaceRepos(_ context.Context, projectID string) ([]domain.WorkspaceRepoRecord, error) {

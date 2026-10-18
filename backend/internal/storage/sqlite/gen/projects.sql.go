@@ -30,6 +30,25 @@ func (q *Queries) ArchiveProject(ctx context.Context, arg ArchiveProjectParams) 
 	return result.RowsAffected()
 }
 
+const backfillProjectOriginURL = `-- name: BackfillProjectOriginURL :execrows
+UPDATE projects
+SET repo_origin_url = ?, metadata_revision = metadata_revision + 1
+WHERE id = ? AND archived_at IS NULL AND repo_origin_url = ''
+`
+
+type BackfillProjectOriginURLParams struct {
+	RepoOriginURL string
+	ID            domain.ProjectID
+}
+
+func (q *Queries) BackfillProjectOriginURL(ctx context.Context, arg BackfillProjectOriginURLParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, backfillProjectOriginURL, arg.RepoOriginURL, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const countProjectsIncludingArchived = `-- name: CountProjectsIncludingArchived :one
 SELECT COUNT(*) FROM projects
 `

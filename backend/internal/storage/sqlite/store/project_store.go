@@ -276,6 +276,22 @@ func (s *Store) UpdateProjectConfig(ctx context.Context, id string, config domai
 	return rows > 0, nil
 }
 
+// BackfillProjectOriginURL sets repo_origin_url on an active project that has
+// none, leaving every other column untouched. It returns ok=false when the
+// project is missing, archived, or already has an origin.
+func (s *Store) BackfillProjectOriginURL(ctx context.Context, id, originURL string) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.BackfillProjectOriginURL(ctx, gen.BackfillProjectOriginURLParams{
+		RepoOriginURL: originURL,
+		ID:            domain.ProjectID(id),
+	})
+	if err != nil {
+		return false, fmt.Errorf("backfill project origin %s: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
 // CountProjectsIncludingArchived returns all registry rows, including projects
 // the user archived. It is intentionally separate from ListProjects so first-run
 // seeding does not recreate Scratch after any project has existed.
