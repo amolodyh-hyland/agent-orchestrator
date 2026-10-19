@@ -19,6 +19,7 @@ import {
 import { usePierreFileHighlightReady } from "../hooks/usePierreFileHighlight";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
+import { getFileDraft, setFileDraft } from "../lib/file-draft-store";
 import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
@@ -127,6 +128,9 @@ export function FileContentPane({
 	const singleView = source.kind === "artifact";
 	const [editing, setEditing] = useState(false);
 	const [draft, setDraft] = useState("");
+	// The draft the editor is seeded with when a stored draft is restored on remount.
+	const [restoredDraft, setRestoredDraft] = useState<string | null>(null);
+	const draftSessionKey = source.kind === "workspace" ? uiSessionId : `${uiSessionId}:${source.kind}`;
 	const [saving, setSaving] = useState(false);
 	const [saveError, setSaveError] = useState("");
 	// Warm syntax highlighting without withholding readable file contents.
@@ -173,18 +177,29 @@ export function FileContentPane({
 	// Editing resets with the file or request, not with a mode the pane reported
 	// to its parent: choosing Edit from Diff must not cancel the edit it starts.
 	useEffect(() => {
-		setEditing(initialEditing);
-		setDraft("");
+		const saved = getFileDraft(draftSessionKey, path);
+		setEditing(initialEditing || saved !== undefined);
+		setDraft(saved ?? "");
+		setRestoredDraft(saved ?? null);
+		if (saved !== undefined) setMode("file");
 		setSaveError("");
-	}, [commitSha, hostId, initialEditing, initialRequestKey, path, scope, sessionId, source, uiSessionId]);
+	}, [commitSha, draftSessionKey, hostId, initialEditing, initialRequestKey, path, scope, sessionId, source, uiSessionId]);
 	const selectMode = (next: FileViewMode) => {
 		setMode(next);
 		if (rememberDisplayMode && path) setFileDisplayMode(uiSessionId, path, next, initialRequestKey);
 		onModeChange?.(next);
 	};
 	useEffect(() => {
-		if (initialEditing && query.data) setDraft(query.data.content);
-	}, [initialEditing, initialRequestKey, path, query.data]);
+		if (initialEditing && query.data && getFileDraft(draftSessionKey, path) === undefined) setDraft(query.data.content);
+	}, [draftSessionKey, initialEditing, initialRequestKey, path, query.data]);
+	const changeDraft = useCallback((content: string) => {
+		setDraft(content);
+		setFileDraft(draftSessionKey, path, content === query.data?.content ? null : content);
+	}, [draftSessionKey, path, query.data?.content]);
+	const discardDraft = useCallback(() => {
+		setFileDraft(draftSessionKey, path, null);
+		setRestoredDraft(null);
+	}, [draftSessionKey, path]);
 	useEffect(() => {
 		onDirtyChange?.(hasUnsavedChanges);
 	}, [hasUnsavedChanges, onDirtyChange]);
@@ -211,6 +226,7 @@ export function FileContentPane({
 				});
 				// The session's artifact list carries each file's modified time.
 				await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
+				discardDraft();
 				setEditing(false);
 				setDraft("");
 				setMode(initialMode);
@@ -237,6 +253,7 @@ export function FileContentPane({
 					"files-review-end-of-file",
 				].includes(String(queryKey[0])),
 			});
+			discardDraft();
 			setEditing(false);
 			setDraft("");
 		} catch (error) {
@@ -244,7 +261,7 @@ export function FileContentPane({
 		} finally {
 			setSaving(false);
 		}
-	}, [commitSha, draft, initialMode, path, query.data, queryClient, saving, scope, sessionId, source, hostId, t]);
+	}, [commitSha, discardDraft, draft, initialMode, path, query.data, queryClient, saving, scope, sessionId, source, hostId, t]);
 	useEffect(() => {
 		if (!editing) return;
 		const onSaveShortcut = (event: KeyboardEvent) => {
@@ -319,10 +336,10 @@ export function FileContentPane({
 	const fileView = (
 		<CompleteFileView
 			annotation={newerLiveText ? { ...annotation, begin: () => {} } : annotation}
-			detail={displayDetail}
+			detail={editing && restoredDraft !== null ? { ...displayDetail, content: restoredDraft } : displayDetail}
 			editing={editing && effectiveMode === "file"}
 			revealLine={initialLine ? { line: initialLine, requestKey: initialRequestKey } : undefined}
-			onEditChange={setDraft}
+			onEditChange={changeDraft}
 			onContentReady={onContentReady}
 			onRevealLineConsumed={onInitialLineConsumed}
 			scope={scope}
@@ -341,6 +358,7 @@ export function FileContentPane({
 		setEditing(true);
 	};
 	const cancelEditing = () => {
+		discardDraft();
 		setEditing(false);
 		setDraft("");
 		setSaveError("");

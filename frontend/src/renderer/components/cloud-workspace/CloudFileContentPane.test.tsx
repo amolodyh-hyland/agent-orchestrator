@@ -5,7 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resetFileDraftsForTests } from "../../lib/file-draft-store";
 import type { CloudCpClient } from "../../lib/cloud-cp";
 import type { FileAnnotationModel } from "../WorkspaceDiffView";
 import { TooltipProvider } from "../ui/tooltip";
@@ -23,6 +24,8 @@ function renderPane(client: CloudCpClient, props: Partial<React.ComponentProps<t
 }
 
 describe("CloudFileContentPane", () => {
+	beforeEach(() => resetFileDraftsForTests());
+
 	it("switches between diff, complete file, and rendered Markdown", async () => {
 		const client = { getWorkspaceReviewFile: vi.fn().mockResolvedValue(detail) } as unknown as CloudCpClient;
 		const onModeChange = vi.fn();
@@ -48,7 +51,7 @@ describe("CloudFileContentPane", () => {
 		expect(await screen.findByRole("button", { name: "Save" })).toBeInTheDocument();
 	});
 
-	it("keeps an unsaved draft when the parent re-renders with the same request key", async () => {
+	it("keeps an unsaved draft when the parent re-renders with the same or a new request key", async () => {
 		const client = { getWorkspaceReviewFile: vi.fn().mockResolvedValue(detail) } as unknown as CloudCpClient;
 		const onDirtyChange = vi.fn();
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -62,8 +65,9 @@ describe("CloudFileContentPane", () => {
 
 		view.rerender(pane({}));
 		expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
+		// A new request for the same file re-seeds the editor from the stored draft, not the saved text.
 		view.rerender(pane({ initialRequestKey: 2 }));
-		await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument());
+		expect(await screen.findByRole("button", { name: "Save" })).toBeEnabled();
 	});
 
 	it("saves edits with the current fingerprint and reports dirty state", async () => {

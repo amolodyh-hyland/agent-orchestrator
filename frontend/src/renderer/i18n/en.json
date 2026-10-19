@@ -2754,7 +2754,7 @@
 	"files.editFile": "Edit file",
 	"files.saveFile": "Save",
 	"files.cancelEditing": "Cancel",
-	"files.unsavedLeaveConfirm": "This file has unsaved changes. Leave and discard them?",
+	"files.unsavedLeaveConfirm": "This file has unsaved changes. Your draft is kept and comes back when you return. Leave now?",
 	"files.editFileLabel": "Edit {{file}}",
 	"files.saveError": "Unable to save workspace file",
 	"files.preview": "Preview",

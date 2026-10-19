@@ -69,6 +69,7 @@ import {
 } from "../hooks/useWorkspaceQuery";
 import { subscribeChatReveal } from "../lib/chat-context-bus";
 import { useUnsavedLeaveGuard } from "../hooks/useUnsavedLeaveGuard";
+import { cloudDraftSessionKey, draftedFilePaths } from "../lib/file-draft-store";
 import {
 	readAONavigationLocationForHref,
 	subscribeNavigationRestore,
@@ -521,10 +522,21 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const [dirtyFilesBySession, setDirtyFilesBySession] = useState<Record<string, Record<string, true>>>({});
 	const dirtyFiles = dirtyFilesBySession[uiSessionId] ?? {};
 	const activeFileDirty = Boolean(fileTabs.activePath && dirtyFiles[fileTabs.activePath]);
-	// Back/Forward restore a history entry by unmounting the open editor, which would drop
-	// its unsaved draft. The shell asks through this guard before it moves (and after a pop
-	// it did not start), not through a router blocker.
 	useUnsavedLeaveGuard(activeFileDirty, t("files.unsavedLeaveConfirm"));
+	// Unsaved edits outlive this view (see file-draft-store): reopen their files so the editors
+	// remount with the drafts.
+	const draftSessionKey = session?.cloud ? cloudDraftSessionKey(session.cloud.orgId, sessionId) : uiSessionId;
+	const draftsReopenedForRef = useRef<string | null>(null);
+	useEffect(() => {
+		if (draftsReopenedForRef.current === draftSessionKey) return;
+		draftsReopenedForRef.current = draftSessionKey;
+		const paths = draftedFilePaths(draftSessionKey);
+		if (paths.length === 0) return;
+		setFileTabsBySession((current) => ({
+			...current,
+			[uiSessionId]: paths.reduce(openSessionFile, current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS),
+		}));
+	}, [draftSessionKey, uiSessionId]);
 	useBlocker({
 		disabled: chatDraftBoundaries.length === 0,
 		enableBeforeUnload: chatDraftBoundaries.length > 0,

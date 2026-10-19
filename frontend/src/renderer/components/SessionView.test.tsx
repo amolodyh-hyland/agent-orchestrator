@@ -11,6 +11,7 @@ import { SessionTopbarProvider } from "./SessionTopbarPortal";
 import { TooltipProvider } from "./ui/tooltip";
 import type { SessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import type { BrowserTabsState, BrowserAgentActivityState } from "../../main/browser-view-host";
+import { resetFileDraftsForTests, setFileDraft } from "../lib/file-draft-store";
 import { confirmLeaveUnsavedWork, notifyNavigationRestore } from "../lib/navigation-history";
 import { inspectorIsOpen, rememberedFileDisplayMode, useUiStore, type InspectorView } from "../stores/ui-store";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
@@ -2351,8 +2352,17 @@ describe("SessionView", () => {
 		await screen.findByTestId(paneId);
 		fireEvent.click(screen.getByRole("button", { name: dirtyButton }));
 		expect(confirmLeaveUnsavedWork()).toBe(false);
-		expect(confirm).toHaveBeenCalledWith("This file has unsaved changes. Leave and discard them?");
+		expect(confirm).toHaveBeenCalledWith("This file has unsaved changes. Your draft is kept and comes back when you return. Leave now?");
 		confirm.mockRestore();
+	});
+
+	it("reopens a file that has an unsaved draft when the session view mounts again", async () => {
+		workerSession("sess-1").mode = "chat";
+		setFileDraft("sess-1", "src/App.tsx", "export const x = 2;");
+		render(<SessionView sessionId="sess-1" />);
+
+		expect(await screen.findByTestId("session-file-workspace")).toHaveTextContent("src/App.tsx");
+		resetFileDraftsForTests();
 	});
 
 	it("does not replay a consumed chat line request after session navigation", async () => {

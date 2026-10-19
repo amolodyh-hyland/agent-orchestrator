@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resetFileDraftsForTests } from "../lib/file-draft-store";
 import { useUiStore } from "../stores/ui-store";
 import { EMPTY_TOPBAR_TABS, findSession } from "../lib/topbar-tabs";
 import { useTopbarTabsStore } from "../stores/topbar-tabs-store";
@@ -51,6 +52,7 @@ function noopAnnotation(): FileAnnotationModel {
 
 describe("FileContentPane", () => {
 	beforeEach(() => {
+		resetFileDraftsForTests();
 		localStorage.clear();
 		useTopbarTabsStore.setState({
 			tabs: EMPTY_TOPBAR_TABS,
