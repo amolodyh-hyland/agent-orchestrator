@@ -209,7 +209,8 @@ export function consumeSuppressedMulticaHistoryChange(active: boolean): boolean 
 }
 
 let unsavedLeaveGuard: (() => string | null) | null = null;
-let skipPopGuardUntil = 0;
+let popAuthorization: { from: number; to: number } | null = null;
+let knownHistoryTip: number | null = null;
 
 /** Registers the check that says whether leaving the current view would lose unsaved edits. */
 export function setUnsavedLeaveGuard(guard: (() => string | null) | null): () => void {
@@ -224,25 +225,50 @@ export function confirmLeaveUnsavedWork(): boolean {
 	return message ? window.confirm(message) : true;
 }
 
+/** The shell's sync reports the highest entry reachable with Forward; null while unknown. */
+export function reportHistoryTip(tip: number | null): void {
+	knownHistoryTip = tip;
+}
+
+type TraversableHistory = { location: { state: unknown }; back: () => void; forward: () => void };
+
 /**
- * Asks before moving, so a cancelled Back/Forward never moves the history at all.
- * The pop it causes is already confirmed and must not be asked about again.
+ * Asks before moving, so a refused Back/Forward never moves the history at all. The
+ * confirmation authorizes exactly the pop from this entry to its neighbour; the sync
+ * consumes it on the first history event, whether or not that event matches.
  */
-export function traverseHistory(history: { back: () => void; forward: () => void }, direction: "back" | "forward"): void {
+export function traverseHistory(history: TraversableHistory, direction: "back" | "forward"): void {
+	const from = historyIndex(history.location.state);
+	if (from === null) {
+		if (confirmLeaveUnsavedWork()) history[direction]();
+		return;
+	}
+	if (direction === "back") {
+		if (from <= 0) return;
+	} else if (knownHistoryTip === null) {
+		// The tip is unknown, so this may not move. Nothing is authorized; a pop that does
+		// happen is asked about by the sync.
+		history.forward();
+		return;
+	} else if (from >= knownHistoryTip) {
+		return;
+	}
 	if (!confirmLeaveUnsavedWork()) return;
-	skipPopGuardUntil = Date.now() + SUPPRESSED_MULTICA_CHANGE_TTL_MS;
+	popAuthorization = { from, to: from + (direction === "back" ? -1 : 1) };
 	history[direction]();
 }
 
-export function consumePopGuardSkip(): boolean {
-	const skip = skipPopGuardUntil > Date.now();
-	skipPopGuardUntil = 0;
-	return skip;
+/** True only for the pop `traverseHistory` authorized. Any history event clears the authorization. */
+export function consumePopAuthorization(from: number | null, to: number | null): boolean {
+	const authorization = popAuthorization;
+	popAuthorization = null;
+	return authorization !== null && authorization.from === from && authorization.to === to;
 }
 
 export function resetNavigationHistoryForTests(): void {
 	unsavedLeaveGuard = null;
-	skipPopGuardUntil = 0;
+	popAuthorization = null;
+	knownHistoryTip = null;
 	restoreListeners.clear();
 	closedTopbarSessionIds.clear();
 	suppressedMulticaChanges.length = 0;

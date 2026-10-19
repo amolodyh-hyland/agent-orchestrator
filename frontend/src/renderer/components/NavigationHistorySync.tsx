@@ -2,12 +2,13 @@ import { useEffect } from "react";
 import { useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
 import {
 	confirmLeaveUnsavedWork,
-	consumePopGuardSkip,
+	consumePopAuthorization,
 	consumeSuppressedMulticaHistoryChange,
 	historyIndex,
 	isTopbarSessionClosed,
 	markTopbarSessionOpened,
 	notifyNavigationRestore,
+	reportHistoryTip,
 	readAONavigationLocationForHref,
 	sessionIdFromHistoryHref,
 	writeAONavigationLocation,
@@ -46,6 +47,7 @@ export function NavigationHistorySync() {
 		let historyTip = previousIndex ?? 0;
 		// Set while a refused pop is being undone: the pop that returns to this entry is ours.
 		let revertingToIndex: number | null = null;
+		reportHistoryTip(historyTip);
 
 		const unsubscribeSettings = useUiStore.subscribe((state, previous) => {
 			if (applyingHistoryRestore || state.settingsModal === previous.settingsModal) return;
@@ -73,6 +75,8 @@ export function NavigationHistorySync() {
 			if (action.type === "PUSH" && index !== null) historyTip = index;
 			else if (index !== null) historyTip = Math.max(historyTip, index);
 			previousIndex = index;
+			reportHistoryTip(historyTip);
+			const authorizedPop = consumePopAuthorization(leftIndex, index);
 
 			if (routeChanged && (action.type === "PUSH" || action.type === "REPLACE") && !isHostRoute(location.href)) {
 				const sessionId = sessionIdFromHistoryHref(location.href);
@@ -99,7 +103,7 @@ export function NavigationHistorySync() {
 			}
 			// A pop the shell did not start (mouse button, OS shortcut) has already moved. If it
 			// would drop unsaved edits and the user refuses, return to the exact entry left.
-			if (!consumePopGuardSkip() && index !== null && leftIndex !== null && index !== leftIndex && !confirmLeaveUnsavedWork()) {
+			if (!authorizedPop && index !== null && leftIndex !== null && index !== leftIndex && !confirmLeaveUnsavedWork()) {
 				revertingToIndex = leftIndex;
 				history.go(leftIndex - index);
 				return;
@@ -132,6 +136,7 @@ export function NavigationHistorySync() {
 			unsubscribeSettings();
 			unsubscribeMultica();
 			unsubscribeHistory();
+			reportHistoryTip(null);
 		};
 	}, [navigate, router]);
 

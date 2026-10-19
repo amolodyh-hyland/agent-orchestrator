@@ -24,6 +24,23 @@ vi.mock("./ReadOnlyFileView", () => ({
 
 const annotation: FileAnnotationModel = { targets: [], status: "idle", error: "", begin: vi.fn(), draftFor: () => "", statusFor: () => "idle", setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn() };
 
+const renderPane = (onDirtyChange: (dirty: boolean) => void) => (
+	<FileContentPane annotation={annotation} initialMode="file" initialRequestKey={1} onDirtyChange={onDirtyChange} path="src/App.tsx" sessionId="sess-1" split={false} />
+);
+const EDITOR = "Edit src/App.tsx";
+
+async function editDraft() {
+	getMock.mockResolvedValue({
+		data: {
+			sessionId: "sess-1", path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 18, binary: false, deleted: false, editable: true,
+			content: "export const x = 1;\n", contentTruncated: false, diff: "@@ -0,0 +1,1 @@\n+export const x = 1;\n", diffTruncated: false,
+			workspaceVersion: "workspace-1", fileFingerprint: "file-1",
+		},
+	});
+	await userEvent.click(await screen.findByRole("button", { name: "Edit file" }));
+	await userEvent.type(screen.getByRole("textbox", { name: EDITOR }), " // DRAFT");
+}
+
 async function openDirtyEditor() {
 	getMock.mockResolvedValue({
 		data: {
@@ -32,18 +49,15 @@ async function openDirtyEditor() {
 			workspaceVersion: "workspace-1", fileFingerprint: "file-1",
 		},
 	});
-	const history = await renderUnsavedFileHistory((onDirtyChange) => (
-		<FileContentPane annotation={annotation} initialMode="file" initialRequestKey={1} onDirtyChange={onDirtyChange} path="src/App.tsx" sessionId="sess-1" split={false} />
-	));
-	await userEvent.click(await screen.findByRole("button", { name: "Edit file" }));
-	await userEvent.type(screen.getByRole("textbox", { name: "Edit src/App.tsx" }), " // draft");
-	await history.click("toggle inspector");
+	const history = await renderUnsavedFileHistory(renderPane);
+	await history.click("open file");
+	await editDraft();
 	await history.click("toggle inspector");
 	expect(history.index()).toBe(2);
 	return history;
 }
 
-const draft = () => (screen.getByRole("textbox", { name: "Edit src/App.tsx" }) as HTMLTextAreaElement).value;
+const draft = () => (screen.getByRole("textbox", { name: EDITOR }) as HTMLTextAreaElement).value;
 
 describe("unsaved local file edits across real hash-history traversal", () => {
 	let confirm: ReturnType<typeof vi.spyOn>;
@@ -56,39 +70,53 @@ describe("unsaved local file edits across real hash-history traversal", () => {
 		await history.click("Go back");
 		expect(confirm).toHaveBeenCalledWith(LEAVE_MESSAGE);
 		expect(history.index()).toBe(2);
-		expect(draft()).toContain("// draft");
+		expect(draft()).toContain("DRAFT");
 
 		confirm.mockReturnValueOnce(true);
 		await history.click("Go back");
 		await history.waitForIndex(1);
-		expect(draft()).toContain("// draft");
+		expect(draft()).toContain("DRAFT");
 	});
 
-	it("confirmed Back and Forward move one entry each and apply the entry", async () => {
+	it("a cancelled Back that would unmount the pane keeps the editor and its draft", async () => {
 		const history = await openDirtyEditor();
 		confirm.mockReturnValue(true);
 		await history.click("Go back");
 		await history.waitForIndex(1);
-		expect(screen.getByTestId("inspector")).toHaveTextContent("true");
+		confirm.mockReset().mockReturnValueOnce(false);
+		await history.click("Go back");
+		expect(history.index()).toBe(1);
+		expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
+		expect(draft()).toContain("DRAFT");
+	});
+
+	it("a confirmed Back to Chat unmounts the pane and Forward brings back a fresh editor", async () => {
+		const history = await openDirtyEditor();
+		confirm.mockReturnValue(true);
+		await history.click("Go back");
+		await history.click("Go back");
+		await history.waitForIndex(0);
+		expect(screen.getByTestId("chat")).toBeInTheDocument();
+		expect(screen.queryByRole("textbox", { name: EDITOR })).not.toBeInTheDocument();
 		await history.click("Go forward");
-		await history.waitForIndex(2);
-		expect(screen.getByTestId("inspector")).toHaveTextContent("false");
-		expect(draft()).toContain("// draft");
+		await history.waitForIndex(1);
+		expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
+		expect(screen.queryByRole("textbox", { name: EDITOR })).not.toBeInTheDocument();
 	});
 
 	it("cancelled Forward mid-stack neither advances nor moves, and keeps the draft", async () => {
 		const history = await openDirtyEditor();
 		confirm.mockReturnValue(true);
 		await history.click("Go back");
-		await history.click("Go back");
-		await history.waitForIndex(0);
+		await history.waitForIndex(1);
 		confirm.mockReset().mockReturnValueOnce(false);
 		await history.click("Go forward");
-		expect(history.index()).toBe(0);
-		expect(draft()).toContain("// draft");
+		expect(history.index()).toBe(1);
+		expect(draft()).toContain("DRAFT");
 		confirm.mockReturnValueOnce(true);
 		await history.click("Go forward");
-		await history.waitForIndex(1);
+		await history.waitForIndex(2);
+		expect(draft()).toContain("DRAFT");
 	});
 
 	it("cancelled Forward into the tip stays put and does not swallow the next Back", async () => {
@@ -99,7 +127,6 @@ describe("unsaved local file edits across real hash-history traversal", () => {
 		confirm.mockReset().mockReturnValueOnce(false);
 		await history.click("Go forward");
 		expect(history.index()).toBe(1);
-		expect(draft()).toContain("// draft");
 		confirm.mockReturnValueOnce(true);
 		await history.click("Go back");
 		await history.waitForIndex(0);
@@ -112,7 +139,7 @@ describe("unsaved local file edits across real hash-history traversal", () => {
 		await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
 		await history.settle();
 		await history.waitForIndex(2);
-		expect(draft()).toContain("// draft");
+		expect(draft()).toContain("DRAFT");
 
 		confirm.mockReturnValueOnce(true);
 		window.history.back();
@@ -122,15 +149,35 @@ describe("unsaved local file edits across real hash-history traversal", () => {
 		await waitFor(() => expect(confirm).toHaveBeenCalledTimes(3));
 		await history.settle();
 		await history.waitForIndex(1);
-		confirm.mockReturnValueOnce(true);
+		confirm.mockReturnValueOnce(false);
 		window.history.back();
-		await history.waitForIndex(0);
-		expect(draft()).toContain("// draft");
+		await waitFor(() => expect(confirm).toHaveBeenCalledTimes(4));
+		await history.settle();
+		await history.waitForIndex(1);
+		expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
+		expect(draft()).toContain("DRAFT");
+	});
+
+	it("a Forward that cannot move leaves no authorization behind for a later browser Back", async () => {
+		const history = await renderUnsavedFileHistory(renderPane);
+		await history.click("open file");
+		expect(history.index()).toBe(1);
+		// Clean file at the tip: the Forward shortcut has nowhere to go.
+		await history.traverse("forward");
+		expect(history.index()).toBe(1);
+		await editDraft();
+		confirm.mockReturnValueOnce(false);
+		window.history.back();
+		await waitFor(() => expect(confirm).toHaveBeenCalledWith(LEAVE_MESSAGE));
+		await history.settle();
+		await history.waitForIndex(1);
+		expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
+		expect(draft()).toContain("DRAFT");
 	});
 
 	it("does not ask when the file is clean", async () => {
-		const history = await renderUnsavedFileHistory(() => null);
-		await history.click("toggle inspector");
+		const history = await renderUnsavedFileHistory(renderPane);
+		await history.click("open file");
 		await history.click("Go back");
 		await history.waitForIndex(0);
 		expect(confirm).not.toHaveBeenCalled();

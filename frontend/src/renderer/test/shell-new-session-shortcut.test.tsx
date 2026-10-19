@@ -91,7 +91,7 @@ const shellMocks = vi.hoisted(() => {
 			return () => state.appShortcutListeners.delete(listener);
 		}),
 		router: {
-			history: { canGoBack: vi.fn(() => true), back: vi.fn(), forward: vi.fn() },
+			history: { canGoBack: vi.fn(() => true), back: vi.fn(), forward: vi.fn(), location: { state: { __TSR_index: 1 } } },
 			subscribe: vi.fn(() => () => {}),
 		},
 		getPathForFile: vi.fn((file: File) => `/dropped/${file.name}`),

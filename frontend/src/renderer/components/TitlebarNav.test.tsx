@@ -36,6 +36,8 @@ vi.mock("../lib/platform", () => ({
 describe("TitlebarNav", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		// A real stack with an entry behind it, so Back has somewhere to go.
+		history.location.state.__TSR_index = 1;
 		availability.canGoBack = false;
 		useUiStore.setState({ isSidebarOpen: true });
 		useMulticaStore.setState({ view: { active: false, status: "ready", url: "https://multica.test" }, isLoaded: true });
