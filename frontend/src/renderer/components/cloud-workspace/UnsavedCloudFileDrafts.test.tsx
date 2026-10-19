@@ -24,6 +24,9 @@ const editorContent = () => screen.getByRole("textbox", { name: EDITOR }).queryS
 describeUnsavedFileDrafts("cloud", {
 	draftSessionKey: cloudDraftSessionKey("org-1", "session-1"),
 	path: "README.md",
+	prepareAgain: async () => {
+		getWorkspaceReviewFile.mockReset().mockResolvedValue(detail);
+	},
 	baseFingerprint: "fp-1",
 	savedFingerprint: "fp-2",
 	prepare: () => {

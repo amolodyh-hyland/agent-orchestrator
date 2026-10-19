@@ -1,13 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { createHashHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider, useRouter } from "@tanstack/react-router";
-import { useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NavigationHistorySync } from "../components/NavigationHistorySync";
 import { TitlebarNav } from "../components/TitlebarNav";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { useUnsavedLeaveGuard } from "../hooks/useUnsavedLeaveGuard";
-import { draftedFilePaths, getFileDraft, resetFileDraftsForTests, UNKNOWN_FILE_BASE } from "../lib/file-draft-store";
+import { clearSessionFileDrafts, draftedFilePaths, getFileDraft, MAX_FILE_DRAFTS, resetFileDraftsForTests, setFileDraft, UNKNOWN_FILE_BASE, unstoredFileDraftReasonFor } from "../lib/file-draft-store";
 import { resetNavigationHistoryForTests, traverseHistory } from "../lib/navigation-history";
 import { useUiStore } from "../stores/ui-store";
 
@@ -16,10 +16,11 @@ export const LEAVE_MESSAGE = "This file has unsaved changes. Your draft is kept 
 
 // Mirrors SessionView: the file tab is open when the user opened it or when an unsaved draft
 // exists for the session, and the dirty pane arms the same leave guard.
-function SessionRoute({ draftSessionKey, renderPane }: { draftSessionKey: string; renderPane: (onDirtyChange: (dirty: boolean) => void) => ReactNode }) {
+function SessionRoute({ draftSessionKey, filePath, renderPane }: { draftSessionKey: string; filePath: string; renderPane: (onDirtyChange: (dirty: boolean) => void) => ReactNode }) {
 	const [fileOpen, setFileOpen] = useState(() => draftedFilePaths(draftSessionKey).length > 0);
 	const [dirty, setDirty] = useState(false);
-	useUnsavedLeaveGuard(dirty, LEAVE_MESSAGE, LEAVE_TOO_LARGE_MESSAGE);
+	const isUnstored = useCallback(() => unstoredFileDraftReasonFor(draftSessionKey, filePath) !== null, [draftSessionKey, filePath]);
+	useUnsavedLeaveGuard(dirty, LEAVE_MESSAGE, LEAVE_TOO_LARGE_MESSAGE, isUnstored);
 	return (
 		<>
 			<button onClick={() => setFileOpen(true)} type="button">open file</button>
@@ -42,13 +43,13 @@ function Shell() {
 }
 
 /** Real hash history and routes (a session route and a board route), the shell history sync and the title bar buttons around a real file pane. */
-export async function renderUnsavedFileDrafts(draftSessionKey: string, renderPane: (onDirtyChange: (dirty: boolean) => void) => ReactNode) {
+export async function renderUnsavedFileDrafts(draftSessionKey: string, filePath: string, renderPane: (onDirtyChange: (dirty: boolean) => void) => ReactNode) {
 	// With the sidebar closed the title bar shows its history arrows instead of the brand.
 	useUiStore.setState({ isSidebarOpen: false });
 	window.history.replaceState(null, "", "#/board");
 	const rootRoute = createRootRoute({ component: Shell });
 	const boardRoute = createRoute({ getParentRoute: () => rootRoute, path: "/board", component: () => <p data-testid="board">board</p> });
-	const sessionRoute = createRoute({ getParentRoute: () => rootRoute, path: "/session", component: () => <SessionRoute draftSessionKey={draftSessionKey} renderPane={renderPane} /> });
+	const sessionRoute = createRoute({ getParentRoute: () => rootRoute, path: "/session", component: () => <SessionRoute draftSessionKey={draftSessionKey} filePath={filePath} renderPane={renderPane} /> });
 	const router = createRouter({ history: createHashHistory(), routeTree: rootRoute.addChildren([boardRoute, sessionRoute]) });
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	render(<QueryClientProvider client={queryClient}><TooltipProvider><RouterProvider router={router} /></TooltipProvider></QueryClientProvider>);
@@ -80,6 +81,8 @@ export type DraftPaneDriver = {
 	save: () => Promise<void>;
 	discard: () => Promise<void>;
 	prepare: () => void;
+	/** Resets the mocks so the file loads fresh again after a save. */
+	prepareAgain: () => Promise<void>;
 	/** Types more text into the open editor. */
 	typeMore: (text: string) => Promise<void>;
 	/** Makes the next save wait; the returned function lets the server answer it. */
@@ -106,7 +109,7 @@ export function describeUnsavedFileDrafts(name: string, driver: DraftPaneDriver)
 		afterEach(() => { confirm.mockRestore(); resetNavigationHistoryForTests(); resetFileDraftsForTests(); });
 
 		async function openDirty() {
-			const history = await renderUnsavedFileDrafts(driver.draftSessionKey, driver.renderPane);
+			const history = await renderUnsavedFileDrafts(driver.draftSessionKey, driver.path, driver.renderPane);
 			await history.click("open file");
 			await driver.editDraft();
 			expect(driver.draft()).toContain(DRAFT_TEXT);
@@ -217,6 +220,41 @@ export function describeUnsavedFileDrafts(name: string, driver: DraftPaneDriver)
 			expect(driver.draft()).toContain(DRAFT_TEXT);
 			await driver.startSave();
 			await waitFor(() => expect(driver.lastSaveExpectedFingerprint()).toBe(driver.baseFingerprint));
+		});
+
+		it("saves a draft whose text was refused for lack of room against the fingerprint it started from", async () => {
+			for (let index = 0; index < MAX_FILE_DRAFTS; index += 1) setFileDraft("other", `f${index}.ts`, "kept", "fp");
+			const history = await openDirty();
+			// The text is not kept, but the record of what the edit started from is.
+			expect(getFileDraft(driver.draftSessionKey, driver.path)).toMatchObject({ content: null, reason: "capacity", baseFingerprint: driver.baseFingerprint });
+			expect(await screen.findByRole("alert")).toHaveTextContent("Too many unsaved drafts");
+			driver.externalChange();
+			await act(() => history.queryClient.invalidateQueries());
+			await driver.startSave();
+			await waitFor(() => expect(driver.lastSaveExpectedFingerprint()).toBe(driver.baseFingerprint));
+			expect(draftedFilePaths("other")).toHaveLength(MAX_FILE_DRAFTS);
+		});
+
+		it("clears the refusal with a successful save or a discard, leaving no discard warning behind", async () => {
+			for (let index = 0; index < MAX_FILE_DRAFTS; index += 1) setFileDraft("other", `f${index}.ts`, "kept", "fp");
+			let history = await openDirty();
+			await driver.save();
+			expect(getFileDraft(driver.draftSessionKey, driver.path)).toBeUndefined();
+			expect(unstoredFileDraftReasonFor(driver.draftSessionKey, driver.path)).toBeNull();
+
+			// A later edit, with room again, is kept and leaving asks the ordinary question.
+			clearSessionFileDrafts("other");
+			await driver.prepareAgain();
+			await history.click("go to board");
+			await history.click("Go back");
+			await history.waitForIndex(1);
+			history = history;
+			await history.click("open file");
+			await driver.editDraft();
+			expect(getFileDraft(driver.draftSessionKey, driver.path)).toMatchObject({ reason: null });
+			confirm.mockReturnValueOnce(false);
+			await history.click("Go back");
+			expect(confirm).toHaveBeenLastCalledWith(LEAVE_MESSAGE);
 		});
 
 		it("clears the draft on save", async () => {

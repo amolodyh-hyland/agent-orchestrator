@@ -34,6 +34,9 @@ const editor = () => screen.getByRole("textbox", { name: EDITOR }) as HTMLTextAr
 describeUnsavedFileDrafts("local", {
 	draftSessionKey: "sess-1",
 	path: "src/App.tsx",
+	prepareAgain: async () => {
+		getMock.mockReset().mockResolvedValue({ data: loaded });
+	},
 	baseFingerprint: "file-1",
 	savedFingerprint: "file-2",
 	prepare: () => {
@@ -75,7 +78,7 @@ describe("a local draft too large to keep", () => {
 		const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
 		resetFileDraftsForTests();
 		getMock.mockReset().mockResolvedValue({ data: loaded });
-		const history = await renderUnsavedFileDrafts("sess-1", (onDirtyChange) => (
+		const history = await renderUnsavedFileDrafts("sess-1", "src/App.tsx", (onDirtyChange) => (
 			<FileContentPane annotation={annotation} initialMode="file" initialRequestKey={1} onDirtyChange={onDirtyChange} path="src/App.tsx" sessionId="sess-1" split={false} />
 		));
 		await history.click("open file");
@@ -83,7 +86,7 @@ describe("a local draft too large to keep", () => {
 		fireEvent.change(editor(), { target: { value: "x".repeat(MAX_FILE_DRAFT_CHARS + 1) } });
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("too large to keep");
-		expect(getFileDraft("sess-1", "src/App.tsx")).toBeUndefined();
+		expect(getFileDraft("sess-1", "src/App.tsx")).toMatchObject({ content: null, reason: "size" });
 		await history.click("Go back");
 		expect(confirm).toHaveBeenCalledWith(LEAVE_TOO_LARGE_MESSAGE);
 		expect(history.index()).toBe(1);
@@ -98,7 +101,7 @@ describe("a local draft refused for lack of room", () => {
 		resetFileDraftsForTests();
 		for (let index = 0; index < MAX_FILE_DRAFTS; index += 1) setFileDraft("other", `f${index}.ts`, `kept ${index}`, "fp");
 		getMock.mockReset().mockResolvedValue({ data: loaded });
-		const history = await renderUnsavedFileDrafts("sess-1", (onDirtyChange) => (
+		const history = await renderUnsavedFileDrafts("sess-1", "src/App.tsx", (onDirtyChange) => (
 			<FileContentPane annotation={annotation} initialMode="file" initialRequestKey={1} onDirtyChange={onDirtyChange} path="src/App.tsx" sessionId="sess-1" split={false} />
 		));
 		await history.click("open file");
@@ -106,7 +109,7 @@ describe("a local draft refused for lack of room", () => {
 		await userEvent.type(editor(), " // typed");
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("Too many unsaved drafts");
-		expect(getFileDraft("sess-1", "src/App.tsx")).toBeUndefined();
+		expect(getFileDraft("sess-1", "src/App.tsx")).toMatchObject({ content: null, reason: "capacity" });
 		expect(draftedFilePaths("other")).toHaveLength(MAX_FILE_DRAFTS);
 		expect(getFileDraft("other", "f0.ts")?.content).toBe("kept 0");
 		await history.click("Go back");

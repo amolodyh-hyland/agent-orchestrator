@@ -4,15 +4,14 @@ import {
 	clearSessionFileDrafts,
 	draftedFilePaths,
 	getFileDraft,
-	hasUnstoredFileDraft,
 	MAX_FILE_DRAFT_CHARS,
 	MAX_FILE_DRAFT_TOTAL_CHARS,
 	MAX_FILE_DRAFTS,
-	unstoredFileDraftReason,
-	unstoredFileDraftReasonFor,
 	rebaseFileDraft,
 	resetFileDraftsForTests,
 	setFileDraft,
+	UNKNOWN_FILE_BASE,
+	unstoredFileDraftReasonFor,
 } from "./file-draft-store";
 
 afterEach(resetFileDraftsForTests);
@@ -22,7 +21,7 @@ describe("file draft store", () => {
 		const first = setFileDraft("s", "a.ts", "one", "fp-1");
 		const second = setFileDraft("s", "a.ts", "two", "fp-2");
 		expect(second).toBeGreaterThan(first!);
-		expect(getFileDraft("s", "a.ts")).toEqual({ content: "two", baseFingerprint: "fp-1", revision: second });
+		expect(getFileDraft("s", "a.ts")).toEqual({ content: "two", reason: null, baseFingerprint: "fp-1", revision: second });
 	});
 
 	it("clears a saved revision but never newer edits", () => {
@@ -42,41 +41,50 @@ describe("file draft store", () => {
 		expect(getFileDraft("s", "a.ts")?.baseFingerprint).toBe("fp-2");
 	});
 
-	it("does not keep a draft over the per-entry limit, drops its stale version and says so", () => {
+	it("drops the text of a draft over the per-entry limit but keeps its record and base", () => {
 		setFileDraft("s", "a.ts", "small", "fp-1");
-		expect(setFileDraft("s", "a.ts", "x".repeat(MAX_FILE_DRAFT_CHARS + 1), "fp-1")).toBeNull();
-		expect(getFileDraft("s", "a.ts")).toBeUndefined();
-		expect(hasUnstoredFileDraft()).toBe(true);
-		setFileDraft("s", "a.ts", "small again", "fp-1");
-		expect(hasUnstoredFileDraft()).toBe(false);
+		const revision = setFileDraft("s", "a.ts", "x".repeat(MAX_FILE_DRAFT_CHARS + 1), "fp-9");
+		expect(getFileDraft("s", "a.ts")).toEqual({ content: null, reason: "size", baseFingerprint: "fp-1", revision });
+		expect(unstoredFileDraftReasonFor("s", "a.ts")).toBe("size");
+		expect(draftedFilePaths("s")).toEqual([]);
+		setFileDraft("s", "a.ts", "small again", "fp-9");
+		expect(getFileDraft("s", "a.ts")).toMatchObject({ content: "small again", reason: null, baseFingerprint: "fp-1" });
 	});
 
-	it("refuses a new draft past the count limit and keeps every draft already stored", () => {
+	it("an unknown base survives an oversize edit and a shrink", () => {
+		setFileDraft("s", "a.ts", "text", "fp-1");
+		rebaseFileDraft("s", "a.ts", "fp-1", UNKNOWN_FILE_BASE);
+		setFileDraft("s", "a.ts", "x".repeat(MAX_FILE_DRAFT_CHARS + 1), "fp-2");
+		setFileDraft("s", "a.ts", "short", "fp-2");
+		expect(getFileDraft("s", "a.ts")?.baseFingerprint).toBe(UNKNOWN_FILE_BASE);
+	});
+
+	it("refuses the text of a new draft past the count limit, keeps every stored text and its own record", () => {
 		for (let index = 0; index < MAX_FILE_DRAFTS; index += 1) setFileDraft("s", `f${index}.ts`, "x", "fp");
-		expect(setFileDraft("s", "new.ts", "typed", "fp")).toBeNull();
-		expect(getFileDraft("s", "new.ts")).toBeUndefined();
+		setFileDraft("s", "new.ts", "typed", "fp-new");
+		expect(getFileDraft("s", "new.ts")).toMatchObject({ content: null, reason: "capacity", baseFingerprint: "fp-new" });
 		expect(unstoredFileDraftReasonFor("s", "new.ts")).toBe("capacity");
-		expect(unstoredFileDraftReason()).toBe("capacity");
 		expect(draftedFilePaths("s")).toHaveLength(MAX_FILE_DRAFTS);
 		expect(getFileDraft("s", "f0.ts")?.content).toBe("x");
-		// A stored draft can still be edited, and a refused one is kept once room appears.
-		expect(setFileDraft("s", "f0.ts", "xx", "fp")).not.toBeNull();
-		clearSessionFileDrafts("s");
-		setFileDraft("s", "f0.ts", "x", "fp");
-		expect(setFileDraft("s", "new.ts", "typed", "fp")).not.toBeNull();
-		expect(unstoredFileDraftReasonFor("s", "new.ts")).toBeNull();
+		// A stored draft can still be edited, and the refused one is kept once room appears.
+		expect(getFileDraft("s", "f0.ts")).toBeDefined();
+		setFileDraft("s", "f0.ts", "xx", "fp");
+		expect(getFileDraft("s", "f0.ts")?.content).toBe("xx");
+		clearFileDraftIfRevision("s", "f1.ts", getFileDraft("s", "f1.ts")!.revision);
+		setFileDraft("s", "new.ts", "typed more", "fp-new");
+		expect(getFileDraft("s", "new.ts")).toMatchObject({ content: "typed more", reason: null, baseFingerprint: "fp-new" });
 	});
 
-	it("refuses a draft that would pass the total size limit without dropping stored ones", () => {
+	it("refuses the text of a draft that would pass the total size limit without dropping stored ones", () => {
 		const chunk = "y".repeat(MAX_FILE_DRAFT_CHARS);
 		const fits = Math.floor(MAX_FILE_DRAFT_TOTAL_CHARS / MAX_FILE_DRAFT_CHARS);
-		for (let index = 0; index < fits; index += 1) expect(setFileDraft("s", `big${index}.ts`, chunk, "fp")).not.toBeNull();
-		expect(setFileDraft("s", "one-more.ts", "z", "fp")).toBeNull();
+		for (let index = 0; index < fits; index += 1) setFileDraft("s", `big${index}.ts`, chunk, "fp");
+		setFileDraft("s", "one-more.ts", "z", "fp");
 		expect(unstoredFileDraftReasonFor("s", "one-more.ts")).toBe("capacity");
 		for (let index = 0; index < fits; index += 1) expect(getFileDraft("s", `big${index}.ts`)?.content).toBe(chunk);
 	});
 
-	it("clears every draft of one session, including its artifact variant, and no other", () => {
+	it("clears every record of one session, including its artifact variant, and no other", () => {
 		setFileDraft("s1", "a.ts", "1", "fp");
 		setFileDraft("s1:artifact", "b.md", "2", "fp");
 		setFileDraft("s10", "a.ts", "3", "fp");

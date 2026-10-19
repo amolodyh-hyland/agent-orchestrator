@@ -193,7 +193,7 @@ export function FileContentPane({
 		const restoreId = `${draftSessionKey}|${path}|${initialRequestKey}`;
 		if (restoredForRef.current === restoreId) return;
 		const saved = getFileDraft(draftSessionKey, path);
-		if (!saved || commitSha || !data.editable || !data.fileFingerprint || (source.kind === "artifact" && source.readOnly)) return;
+		if (!saved || saved.content === null || commitSha || !data.editable || !data.fileFingerprint || (source.kind === "artifact" && source.readOnly)) return;
 		restoredForRef.current = restoreId;
 		setEditing(true);
 		setDraft(saved.content);
@@ -207,13 +207,17 @@ export function FileContentPane({
 		onModeChange?.(next);
 	};
 	useEffect(() => {
-		if (initialEditing && query.data && !getFileDraft(draftSessionKey, path)) setDraft(query.data.content);
+		if (initialEditing && query.data && getFileDraft(draftSessionKey, path)?.content == null) setDraft(query.data.content);
 	}, [draftSessionKey, initialEditing, initialRequestKey, path, query.data]);
 	const changeDraft = useCallback((content: string) => {
 		setDraft(content);
 		draftRef.current = content;
 		if (commitSha) return;
-		setFileDraft(draftSessionKey, path, content === query.data?.content ? null : content, query.data?.fileFingerprint);
+		// Back to the saved text is no draft, unless dropping the record would hide that the file
+		// has changed since the edit started.
+		const record = getFileDraft(draftSessionKey, path);
+		const hidesConflict = record?.baseFingerprint !== undefined && record.baseFingerprint !== query.data?.fileFingerprint;
+		setFileDraft(draftSessionKey, path, content === query.data?.content && !hidesConflict ? null : content, query.data?.fileFingerprint);
 	}, [commitSha, draftSessionKey, path, query.data?.content, query.data?.fileFingerprint]);
 	const discardDraft = useCallback(() => {
 		setFileDraft(draftSessionKey, path, null);
@@ -390,6 +394,8 @@ export function FileContentPane({
 		/>
 	);
 	const beginEditing = () => {
+		// A record left by an earlier edit whose text was not kept starts from a stale base.
+		discardDraft();
 		selectMode("file");
 		cancelFileAnnotations(annotation, (target) => target.surface !== "review" && target.path === detail.path);
 		setDraft(detail.content);

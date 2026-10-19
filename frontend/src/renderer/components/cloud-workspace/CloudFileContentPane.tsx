@@ -75,7 +75,7 @@ export function CloudFileContentPane({
 		const restoreId = `${draftSessionKey}|${path}|${initialRequestKey}`;
 		if (restoredForRef.current === restoreId) return;
 		const saved = getFileDraft(draftSessionKey, path);
-		if (!saved || commitSha || !detail.editable || !detail.fileFingerprint) return;
+		if (!saved || saved.content === null || commitSha || !detail.editable || !detail.fileFingerprint) return;
 		restoredForRef.current = restoreId;
 		setEditing(true);
 		setDraft(saved.content);
@@ -83,12 +83,16 @@ export function CloudFileContentPane({
 		setRestoredDraft(saved.content);
 		setMode("file");
 	}, [commitSha, detail, draftSessionKey, initialRequestKey, path]);
-	useEffect(() => { if (initialEditing && detail && !getFileDraft(draftSessionKey, path)) setDraft(detail.content); }, [detail, draftSessionKey, initialEditing, initialRequestKey, path]);
+	useEffect(() => { if (initialEditing && detail && getFileDraft(draftSessionKey, path)?.content == null) setDraft(detail.content); }, [detail, draftSessionKey, initialEditing, initialRequestKey, path]);
 	const changeDraft = useCallback((content: string) => {
 		setDraft(content);
 		draftRef.current = content;
 		if (commitSha) return;
-		setFileDraft(draftSessionKey, path, content === detail?.content ? null : content, detail?.fileFingerprint);
+		// Back to the saved text is no draft, unless dropping the record would hide that the file
+		// has changed since the edit started.
+		const record = getFileDraft(draftSessionKey, path);
+		const hidesConflict = record?.baseFingerprint !== undefined && record.baseFingerprint !== detail?.fileFingerprint;
+		setFileDraft(draftSessionKey, path, content === detail?.content && !hidesConflict ? null : content, detail?.fileFingerprint);
 	}, [commitSha, detail?.content, detail?.fileFingerprint, draftSessionKey, path]);
 	const discardDraft = useCallback(() => {
 		setFileDraft(draftSessionKey, path, null);
@@ -139,7 +143,7 @@ export function CloudFileContentPane({
 			<Button aria-selected={effectiveMode === "file"} disabled={editing} onClick={() => selectMode("file")} role="tab" size="sm" variant={effectiveMode === "file" ? "secondary" : "ghost"}>{t("files.fileView")}</Button>
 			{renderedAvailable ? <Button aria-selected={effectiveMode === "rendered"} disabled={editing} onClick={() => selectMode("rendered")} role="tab" size="sm" variant={effectiveMode === "rendered" ? "secondary" : "ghost"}>{t("files.rendered")}</Button> : null}
 		</div>
-		{editing ? <div className="ml-auto flex gap-1"><Button aria-label={t("files.cancelEditing")} disabled={saving} onClick={() => { discardDraft(); setEditing(false); setDraft(""); setSaveError(""); }} size="sm" variant="ghost"><X />{t("files.cancelEditing")}</Button><Button aria-label={t("files.saveFile")} disabled={saving || !hasUnsavedChanges} onClick={() => void save()} size="sm" variant="primary">{saving ? <LoaderCircle className="animate-spin" /> : <Save />}{t("files.saveFile")}</Button></div> : <><Button aria-label={t("files.editFile")} className="ml-auto" disabled={!detail.editable || !detail.fileFingerprint || Boolean(commitSha)} onClick={() => { cancelFileAnnotations(annotation, (target) => target.surface !== "review" && target.path === path); selectMode("file"); setDraft(detail.content); setEditing(true); }} size="icon-sm" variant="ghost"><Pencil /></Button><Button aria-label={t("files.addFeedback")} onClick={() => annotation.begin({ path: detail.path, previousPath: detail.previousPath, side: "file", scope, surface: "focused", workspaceVersion: detail.workspaceVersion, fileFingerprint: detail.fileFingerprint })} size="icon-sm" variant="ghost"><MessageSquarePlus /></Button></>}
+		{editing ? <div className="ml-auto flex gap-1"><Button aria-label={t("files.cancelEditing")} disabled={saving} onClick={() => { discardDraft(); setEditing(false); setDraft(""); setSaveError(""); }} size="sm" variant="ghost"><X />{t("files.cancelEditing")}</Button><Button aria-label={t("files.saveFile")} disabled={saving || !hasUnsavedChanges} onClick={() => void save()} size="sm" variant="primary">{saving ? <LoaderCircle className="animate-spin" /> : <Save />}{t("files.saveFile")}</Button></div> : <><Button aria-label={t("files.editFile")} className="ml-auto" disabled={!detail.editable || !detail.fileFingerprint || Boolean(commitSha)} onClick={() => { cancelFileAnnotations(annotation, (target) => target.surface !== "review" && target.path === path); discardDraft(); selectMode("file"); setDraft(detail.content); setEditing(true); }} size="icon-sm" variant="ghost"><Pencil /></Button><Button aria-label={t("files.addFeedback")} onClick={() => annotation.begin({ path: detail.path, previousPath: detail.previousPath, side: "file", scope, surface: "focused", workspaceVersion: detail.workspaceVersion, fileFingerprint: detail.fileFingerprint })} size="icon-sm" variant="ghost"><MessageSquarePlus /></Button></>}
 		{wholeFileAnnotationTarget ? <div className="absolute right-2 top-full z-50 w-[min(32rem,calc(100%-1rem))]"><FileAnnotationComposer annotation={annotation} target={wholeFileAnnotationTarget} /></div> : null}
 	</div>;
 	return <div className="relative min-w-0">{tabs}<EditProvider createEditor={createEditor}>{effectiveMode === "diff" ? <CloudDiffFile annotation={annotation} baseUrl={baseUrl} client={client} commitSha={commitSha} file={detail} onActiveSelectionChange={() => undefined} orgId={orgId} patch={detail.diff} scope={scope} sessionId={sessionId} split={split && (detail.status === "modified" || detail.status === "renamed")} workspaceVersion={detail.workspaceVersion} fallback={<PanelMessage>{t("files.diffUnavailable")}</PanelMessage>} /> : effectiveMode === "rendered" ? <MarkdownFileView content={detail.content} filePath={path} sessionId={sessionId} truncated={detail.contentTruncated} version={query.dataUpdatedAt} /> : <CompleteCloudFileView annotation={annotation} baseUrl={baseUrl} client={client} commitSha={commitSha} detail={editing && restoredDraft !== null ? { ...detail, content: restoredDraft } : detail} editing={editing} onEditChange={changeDraft} orgId={orgId} revealLine={initialLine ? { line: initialLine, requestKey: initialRequestKey } : undefined} scope={scope} sessionId={sessionId} />}</EditProvider>{saveError || draftNotice ? <p className="border-t border-error/40 bg-error/10 px-3 py-2 text-xs text-error" role="alert">{saveError || draftNotice}</p> : null}<FileAnnotationSendBar annotation={annotation} className="sticky bottom-0 z-20" surface="focused" /></div>;
