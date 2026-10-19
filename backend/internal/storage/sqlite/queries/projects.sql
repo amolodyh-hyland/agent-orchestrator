@@ -1,4 +1,6 @@
 -- name: UpsertProject :exec
+-- A conflicting row is a reactivation or re-registration: durable instructions
+-- survive an empty incoming value and the revision always advances.
 INSERT INTO projects (id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind, metadata_revision, instructions_json)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
@@ -8,10 +10,17 @@ ON CONFLICT (id) DO UPDATE SET
     archived_at = excluded.archived_at,
     config = excluded.config,
     kind = excluded.kind,
-    metadata_revision = MAX(projects.metadata_revision, excluded.metadata_revision),
-    instructions_json = excluded.instructions_json;
+    metadata_revision = MAX(projects.metadata_revision, excluded.metadata_revision) + 1,
+    instructions_json = CASE WHEN excluded.instructions_json = '{}' THEN projects.instructions_json ELSE excluded.instructions_json END;
+
+-- name: InsertProjectIfAbsent :execrows
+INSERT INTO projects (id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind, metadata_revision, instructions_json)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (id) DO NOTHING;
 
 -- name: UpsertImportedProject :exec
+-- The import is an authoritative replacement of an existing row, so the
+-- revision advances past both the target and the source.
 INSERT INTO projects (id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind, metadata_revision, instructions_json)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
@@ -22,7 +31,7 @@ ON CONFLICT (id) DO UPDATE SET
     archived_at = excluded.archived_at,
     config = excluded.config,
     kind = excluded.kind,
-    metadata_revision = MAX(projects.metadata_revision, excluded.metadata_revision),
+    metadata_revision = MAX(projects.metadata_revision, excluded.metadata_revision) + 1,
     instructions_json = excluded.instructions_json;
 
 -- name: GetProject :one

@@ -27,6 +27,41 @@ func (s *Store) UpsertProject(ctx context.Context, r domain.ProjectRecord) error
 	return upsertProject(ctx, s.qw, r, config, instructions)
 }
 
+// InsertProjectIfAbsent inserts a project only when no row with its id exists
+// (active or archived) and reports whether it inserted.
+func (s *Store) InsertProjectIfAbsent(ctx context.Context, r domain.ProjectRecord) (bool, error) {
+	config, err := marshalProjectConfig(r.Config)
+	if err != nil {
+		return false, err
+	}
+	instructions, err := marshalProjectInstructions(r.Instructions)
+	if err != nil {
+		return false, err
+	}
+	revision := r.Revision
+	if revision < 1 {
+		revision = 1
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.InsertProjectIfAbsent(ctx, gen.InsertProjectIfAbsentParams{
+		ID:               domain.ProjectID(r.ID),
+		Path:             r.Path,
+		RepoOriginURL:    r.RepoOriginURL,
+		DisplayName:      r.DisplayName,
+		RegisteredAt:     r.RegisteredAt,
+		ArchivedAt:       nullTime(r.ArchivedAt),
+		Config:           config,
+		Kind:             string(r.Kind.WithDefault()),
+		MetadataRevision: revision,
+		InstructionsJson: instructions,
+	})
+	if err != nil {
+		return false, fmt.Errorf("insert project %s: %w", r.ID, err)
+	}
+	return rows > 0, nil
+}
+
 // UpsertWorkspaceProject inserts or replaces a workspace project and its child
 // repository registry in one transaction. The child set is authoritative.
 func (s *Store) UpsertWorkspaceProject(ctx context.Context, r domain.ProjectRecord, repos []domain.WorkspaceRepoRecord) error {

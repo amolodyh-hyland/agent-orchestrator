@@ -106,6 +106,44 @@ func (q *Queries) GetProject(ctx context.Context, id domain.ProjectID) (Project,
 	return i, err
 }
 
+const insertProjectIfAbsent = `-- name: InsertProjectIfAbsent :execrows
+INSERT INTO projects (id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind, metadata_revision, instructions_json)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (id) DO NOTHING
+`
+
+type InsertProjectIfAbsentParams struct {
+	ID               domain.ProjectID
+	Path             string
+	RepoOriginURL    string
+	DisplayName      string
+	RegisteredAt     time.Time
+	ArchivedAt       sql.NullTime
+	Config           sql.NullString
+	Kind             string
+	MetadataRevision int64
+	InstructionsJson string
+}
+
+func (q *Queries) InsertProjectIfAbsent(ctx context.Context, arg InsertProjectIfAbsentParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertProjectIfAbsent,
+		arg.ID,
+		arg.Path,
+		arg.RepoOriginURL,
+		arg.DisplayName,
+		arg.RegisteredAt,
+		arg.ArchivedAt,
+		arg.Config,
+		arg.Kind,
+		arg.MetadataRevision,
+		arg.InstructionsJson,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const listProjects = `-- name: ListProjects :many
 SELECT id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind, metadata_revision, instructions_json
 FROM projects WHERE archived_at IS NULL ORDER BY id
@@ -228,7 +266,7 @@ ON CONFLICT (id) DO UPDATE SET
     archived_at = excluded.archived_at,
     config = excluded.config,
     kind = excluded.kind,
-    metadata_revision = MAX(projects.metadata_revision, excluded.metadata_revision),
+    metadata_revision = MAX(projects.metadata_revision, excluded.metadata_revision) + 1,
     instructions_json = excluded.instructions_json
 `
 
@@ -245,6 +283,8 @@ type UpsertImportedProjectParams struct {
 	InstructionsJson string
 }
 
+// The import is an authoritative replacement of an existing row, so the
+// revision advances past both the target and the source.
 func (q *Queries) UpsertImportedProject(ctx context.Context, arg UpsertImportedProjectParams) error {
 	_, err := q.db.ExecContext(ctx, upsertImportedProject,
 		arg.ID,
@@ -271,8 +311,8 @@ ON CONFLICT (id) DO UPDATE SET
     archived_at = excluded.archived_at,
     config = excluded.config,
     kind = excluded.kind,
-    metadata_revision = MAX(projects.metadata_revision, excluded.metadata_revision),
-    instructions_json = excluded.instructions_json
+    metadata_revision = MAX(projects.metadata_revision, excluded.metadata_revision) + 1,
+    instructions_json = CASE WHEN excluded.instructions_json = '{}' THEN projects.instructions_json ELSE excluded.instructions_json END
 `
 
 type UpsertProjectParams struct {
@@ -288,6 +328,8 @@ type UpsertProjectParams struct {
 	InstructionsJson string
 }
 
+// A conflicting row is a reactivation or re-registration: durable instructions
+// survive an empty incoming value and the revision always advances.
 func (q *Queries) UpsertProject(ctx context.Context, arg UpsertProjectParams) error {
 	_, err := q.db.ExecContext(ctx, upsertProject,
 		arg.ID,

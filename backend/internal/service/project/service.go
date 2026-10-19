@@ -312,6 +312,11 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 		if err := m.store.UpsertWorkspaceProject(ctx, row, repos); err != nil {
 			return Project{}, apierr.Internal("PROJECT_ADD_FAILED", "Failed to register workspace project")
 		}
+		// Reactivating an archived id keeps its durable metadata, so report the
+		// persisted row rather than the one built for this request.
+		if row, err = m.persistedProject(ctx, row.ID); err != nil {
+			return Project{}, err
+		}
 		m.modelScopeChanged(row.ID)
 		if in.ClonePreparationID != "" {
 			removeClonePreparationMarker(path)
@@ -361,12 +366,23 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 	if err := m.store.UpsertProject(ctx, row); err != nil {
 		return Project{}, apierr.Internal("PROJECT_ADD_FAILED", "Failed to register project")
 	}
+	if row, err = m.persistedProject(ctx, row.ID); err != nil {
+		return Project{}, err
+	}
 	if in.ClonePreparationID != "" {
 		removeClonePreparationMarker(path)
 	}
 	m.modelScopeChanged(row.ID)
 	m.emitProjectAdded(ctx, row, projectCountBefore == 0)
 	return m.projectFromRow(ctx, row), nil
+}
+
+func (m *Service) persistedProject(ctx context.Context, id string) (domain.ProjectRecord, error) {
+	row, ok, err := m.store.GetProject(ctx, id)
+	if err != nil || !ok {
+		return domain.ProjectRecord{}, apierr.Internal("PROJECT_LOAD_FAILED", "Failed to load project")
+	}
+	return row, nil
 }
 
 // CreateContainer registers a durable Project without running Git commands.

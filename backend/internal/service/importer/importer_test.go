@@ -24,9 +24,12 @@ func (f *fakeStore) GetProject(_ context.Context, id string) (domain.ProjectReco
 	r, ok := f.projects[id]
 	return r, ok, nil
 }
-func (f *fakeStore) UpsertProject(_ context.Context, r domain.ProjectRecord) error {
+func (f *fakeStore) InsertProjectIfAbsent(_ context.Context, r domain.ProjectRecord) (bool, error) {
+	if _, ok := f.projects[r.ID]; ok {
+		return false, nil
+	}
 	f.projects[r.ID] = r
-	return nil
+	return true, nil
 }
 
 func writeLegacyRoot(t *testing.T) string {

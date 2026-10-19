@@ -110,3 +110,31 @@ func TestUpdateSettingsInstructionsConflictOnStaleRevision(t *testing.T) {
 		t.Fatalf("project after conflict = %#v, want newer instructions at revision 2", result.Project)
 	}
 }
+
+func TestAddReactivatedArchivedProjectKeepsInstructionsAndAdvancesRevision(t *testing.T) {
+	ctx := context.Background()
+	m := newManager(t)
+	repo := gitRepo(t)
+	id := "ao"
+	if _, err := m.Add(ctx, project.AddInput{Path: repo, ProjectID: &id}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	instructions := domain.ProjectInstructions{Shared: "durable"}
+	if _, err := m.UpdateSettings(ctx, "ao", project.UpdateSettingsInput{DisplayName: "ao", Instructions: &instructions}); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	if _, err := m.Remove(ctx, "ao"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	readded, err := m.Add(ctx, project.AddInput{Path: repo, ProjectID: &id})
+	if err != nil {
+		t.Fatalf("re-Add: %v", err)
+	}
+	if readded.Instructions == nil || *readded.Instructions != instructions {
+		t.Fatalf("re-added instructions = %#v, want %#v", readded.Instructions, instructions)
+	}
+	// Add (1), settings (2), archive (3), reactivation (4).
+	if readded.Revision != 4 {
+		t.Fatalf("re-added revision = %d, want 4", readded.Revision)
+	}
+}
