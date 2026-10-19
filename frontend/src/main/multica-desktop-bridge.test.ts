@@ -455,7 +455,7 @@ describe("multica desktop bridge: main-to-renderer messages", () => {
 
 	it("delivers a queued issue link after the renderer announces its listener", () => {
 		const issue = { slug: "acme", issueId: "MUL-1" };
-		const { bridge, ipc, send } = setup({ initialPending: [["issue:open", [issue]]] });
+		const { ipc, send } = setup({ initialPending: [["issue:open", [issue]]] });
 
 		ipc.send("main-renderer:channel-state", MULTICA, { channel: "issue:open", ready: true });
 
