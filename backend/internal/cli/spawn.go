@@ -357,7 +357,7 @@ func (c *commandContext) resolveProjectFromCWD(ctx context.Context) (projectDeta
 }
 
 func isScratchProject(project projectDetails) bool {
-	return project.ID == "scratch" && project.Kind == "scratch"
+	return project.Kind == "scratch"
 }
 
 func normalizeProjectMatchPath(path string) (string, error) {

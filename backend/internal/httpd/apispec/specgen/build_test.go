@@ -65,6 +65,22 @@ func TestBuild_CodexSwitchContractIsRedactedAndOnlyMountedRoutesAreDocumented(t 
 	}
 }
 
+func TestBuild_ProjectContainerCreationContract(t *testing.T) {
+	got, err := specgen.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	var doc struct {
+		Paths map[string]map[string]any `yaml:"paths"`
+	}
+	if err := yaml.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("parse generated OpenAPI: %v", err)
+	}
+	if _, ok := doc.Paths["/api/v1/projects/containers"]["post"]; !ok {
+		t.Fatal("durable Project container POST path is missing from generated contract")
+	}
+}
+
 // TestBuild_MatchesEmbedded is the drift guard: the committed (embedded)
 // openapi.yaml must equal fresh Build() output. If this fails, run
 // `go generate ./...` and commit the result.

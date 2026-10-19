@@ -16,6 +16,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
@@ -38,6 +39,7 @@ type Manager interface {
 
 	// Add registers a new project from a git repository path.
 	Add(ctx context.Context, in AddInput) (Project, error)
+	CreateContainer(ctx context.Context, in CreateContainerInput) (Project, error)
 
 	// Clone checks out a remote git repository and registers the resulting
 	// local repository as a project.
@@ -143,11 +145,13 @@ func (m *Service) List(ctx context.Context) ([]Summary, error) {
 	out := make([]Summary, 0, len(projects))
 	for _, row := range projects {
 		folderMissing := false
-		exists, err := folderExists(row.Path)
-		if err != nil {
-			m.logger.Warn("project: stat failed", "path", row.Path, "error", err)
-		} else {
-			folderMissing = !exists
+		if row.Path != "" {
+			exists, err := folderExists(row.Path)
+			if err != nil {
+				m.logger.Warn("project: stat failed", "path", row.Path, "error", err)
+			} else {
+				folderMissing = !exists
+			}
 		}
 		out = append(out, Summary{
 			ID:                domain.ProjectID(row.ID),
@@ -308,6 +312,11 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 		if err := m.store.UpsertWorkspaceProject(ctx, row, repos); err != nil {
 			return Project{}, apierr.Internal("PROJECT_ADD_FAILED", "Failed to register workspace project")
 		}
+		// Reactivating an archived id keeps its durable metadata, so report the
+		// persisted row rather than the one built for this request.
+		if row, err = m.persistedProject(ctx, row.ID); err != nil {
+			return Project{}, err
+		}
 		m.modelScopeChanged(row.ID)
 		if in.ClonePreparationID != "" {
 			removeClonePreparationMarker(path)
@@ -357,11 +366,113 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 	if err := m.store.UpsertProject(ctx, row); err != nil {
 		return Project{}, apierr.Internal("PROJECT_ADD_FAILED", "Failed to register project")
 	}
+	if row, err = m.persistedProject(ctx, row.ID); err != nil {
+		return Project{}, err
+	}
 	if in.ClonePreparationID != "" {
 		removeClonePreparationMarker(path)
 	}
 	m.modelScopeChanged(row.ID)
 	m.emitProjectAdded(ctx, row, projectCountBefore == 0)
+	return m.projectFromRow(ctx, row), nil
+}
+
+func (m *Service) persistedProject(ctx context.Context, id string) (domain.ProjectRecord, error) {
+	row, ok, err := m.store.GetProject(ctx, id)
+	if err != nil || !ok {
+		return domain.ProjectRecord{}, apierr.Internal("PROJECT_LOAD_FAILED", "Failed to load project")
+	}
+	return row, nil
+}
+
+// CreateContainer registers a durable Project without running Git commands.
+func (m *Service) CreateContainer(ctx context.Context, in CreateContainerInput) (Project, error) {
+	displayName := strings.TrimSpace(in.DisplayName)
+	if displayName == "" {
+		return Project{}, apierr.Invalid("DISPLAY_NAME_REQUIRED", "Display name is required", nil)
+	}
+	if utf8.RuneCountInString(displayName) > maxDisplayNameLen {
+		return Project{}, apierr.Invalid("DISPLAY_NAME_TOO_LONG", fmt.Sprintf("Display name must be %d characters or fewer", maxDisplayNameLen), nil)
+	}
+	if err := in.Instructions.Validate(); err != nil {
+		return Project{}, apierr.Invalid("INVALID_PROJECT_INSTRUCTIONS", err.Error(), nil)
+	}
+
+	path := ""
+	if strings.TrimSpace(in.Path) != "" {
+		var err error
+		path, err = normalizePath(in.Path)
+		if err != nil {
+			return Project{}, err
+		}
+		if err := ensureDirectoryPath(path); err != nil {
+			return Project{}, err
+		}
+		if hasGitMetadataInAncestors(path) {
+			return Project{}, apierr.Invalid("GIT_PROJECT_NOT_SUPPORTED", "Choose a folder outside a Git repository for a non-repository Project", map[string]any{"path": path})
+		}
+	}
+
+	m.addMu.Lock()
+	defer m.addMu.Unlock()
+
+	activeProjects, err := m.store.ListProjects(ctx)
+	if err != nil {
+		return Project{}, apierr.Internal("PROJECT_LOAD_FAILED", "Failed to load project")
+	}
+	if path != "" {
+		existing, registered, err := m.store.FindProjectByPath(ctx, path)
+		if err != nil {
+			return Project{}, apierr.Internal("PROJECT_LOAD_FAILED", "Failed to load project")
+		}
+		if !registered {
+			selectedInfo, statErr := os.Stat(path)
+			if statErr != nil {
+				return Project{}, apierr.Invalid("INVALID_PATH", "Selected folder could not be read", map[string]any{"path": path})
+			}
+			for _, candidate := range activeProjects {
+				if candidate.Path == "" {
+					continue
+				}
+				registeredInfo, statErr := os.Stat(candidate.Path)
+				if statErr == nil && os.SameFile(selectedInfo, registeredInfo) {
+					existing, registered = candidate, true
+					break
+				}
+			}
+		}
+		if registered {
+			return Project{}, apierr.Conflict("PATH_ALREADY_REGISTERED", "A project at this path is already registered", map[string]any{
+				"existingProjectId": existing.ID,
+			})
+		}
+	}
+
+	id := uuid.NewString()
+	for {
+		_, exists, err := m.store.GetProject(ctx, id)
+		if err != nil {
+			return Project{}, apierr.Internal("PROJECT_LOAD_FAILED", "Failed to load project")
+		}
+		if !exists {
+			break
+		}
+		id = uuid.NewString()
+	}
+	row := domain.ProjectRecord{
+		ID:           id,
+		Path:         path,
+		DisplayName:  displayName,
+		RegisteredAt: m.clock().UTC(),
+		Kind:         domain.ProjectKindScratch,
+		Revision:     1,
+		Instructions: in.Instructions,
+	}
+	if err := m.store.UpsertProject(ctx, row); err != nil {
+		return Project{}, apierr.Internal("PROJECT_CREATE_FAILED", "Failed to create Project")
+	}
+	m.modelScopeChanged(row.ID)
+	m.emitProjectAdded(ctx, row, len(activeProjects) == 0)
 	return m.projectFromRow(ctx, row), nil
 }
 
@@ -719,6 +830,11 @@ func (m *Service) UpdateSettings(ctx context.Context, id domain.ProjectID, in Up
 	if !ok || !row.ArchivedAt.IsZero() {
 		return Project{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
 	}
+	if in.Instructions != nil {
+		if err := in.Instructions.Validate(); err != nil {
+			return Project{}, apierr.Invalid("INVALID_PROJECT_INSTRUCTIONS", err.Error(), nil)
+		}
+	}
 	if utf8.RuneCountInString(inDisplayName) > maxDisplayNameLen && inDisplayName != strings.TrimSpace(projectDisplayName(row)) {
 		return Project{}, apierr.Invalid("DISPLAY_NAME_TOO_LONG", fmt.Sprintf("Display name must be %d characters or fewer", maxDisplayNameLen), nil)
 	}
@@ -730,15 +846,26 @@ func (m *Service) UpdateSettings(ctx context.Context, id domain.ProjectID, in Up
 	if err := in.Config.ValidateCanonicalRepository(row.RepoOriginURL); err != nil {
 		return Project{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
 	}
-	updated, err := m.store.UpdateProjectSettings(ctx, string(id), inDisplayName, in.Config)
+	updated, err := m.store.UpdateProjectSettings(ctx, string(id), inDisplayName, in.Config, in.Instructions, normalizedProjectRevision(row.Revision))
 	if err != nil {
 		return Project{}, apierr.Internal("PROJECT_SETTINGS_UPDATE_FAILED", "Failed to update project settings")
 	}
 	if !updated {
-		return Project{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
+		// Zero rows means the project vanished or, when instructions were sent,
+		// another write advanced the revision after this request read it.
+		current, ok, err := m.store.GetProject(ctx, string(id))
+		if err != nil {
+			return Project{}, apierr.Internal("PROJECT_LOAD_FAILED", "Failed to load project")
+		}
+		if !ok || !current.ArchivedAt.IsZero() {
+			return Project{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
+		}
+		return Project{}, apierr.Conflict("PROJECT_REVISION_CONFLICT", "The project changed since it was read; reload and retry", nil)
 	}
-	row.DisplayName = inDisplayName
-	row.Config = in.Config
+	row, ok, err = m.store.GetProject(ctx, string(id))
+	if err != nil || !ok {
+		return Project{}, apierr.Internal("PROJECT_LOAD_FAILED", "Failed to load project")
+	}
 	m.modelScopeChanged(row.ID)
 	return m.projectFromRow(ctx, row), nil
 }
@@ -773,9 +900,16 @@ func (m *Service) SetConfig(ctx context.Context, id domain.ProjectID, in SetConf
 	if err := in.Config.ValidateCanonicalRepository(row.RepoOriginURL); err != nil {
 		return Project{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
 	}
-	row.Config = in.Config
-	if err := m.store.UpsertProject(ctx, row); err != nil {
+	updated, err := m.store.UpdateProjectConfig(ctx, string(id), in.Config)
+	if err != nil {
 		return Project{}, apierr.Internal("PROJECT_CONFIG_UPDATE_FAILED", "Failed to update project config")
+	}
+	if !updated {
+		return Project{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
+	}
+	row, ok, err = m.store.GetProject(ctx, string(id))
+	if err != nil || !ok {
+		return Project{}, apierr.Internal("PROJECT_LOAD_FAILED", "Failed to load project")
 	}
 	m.modelScopeChanged(row.ID)
 	return m.projectFromRow(ctx, row), nil
@@ -862,11 +996,13 @@ func (m *Service) suggestID(ctx context.Context, base domain.ProjectID) domain.P
 func (m *Service) projectFromRow(ctx context.Context, row domain.ProjectRecord) Project {
 	kind := row.Kind.WithDefault()
 	folderMissing := false
-	exists, err := folderExists(row.Path)
-	if err != nil {
-		m.logger.Warn("project: stat failed", "path", row.Path, "error", err)
-	} else {
-		folderMissing = !exists
+	if row.Path != "" {
+		exists, err := folderExists(row.Path)
+		if err != nil {
+			m.logger.Warn("project: stat failed", "path", row.Path, "error", err)
+		} else {
+			folderMissing = !exists
+		}
 	}
 	defaultBranch := ""
 	if kind != domain.ProjectKindScratch {
@@ -886,12 +1022,28 @@ func (m *Service) projectFromRow(ctx context.Context, row domain.ProjectRecord) 
 		Kind:          kind,
 		Path:          row.Path,
 		Repo:          row.RepoOriginURL,
+		Revision:      normalizedProjectRevision(row.Revision),
 		DefaultBranch: defaultBranch,
 		Agent:         string(m.defaultHarness),
 		FolderMissing: folderMissing,
 	}
 	p.Config = projectConfigPtr(row.Config)
+	if !row.Instructions.IsZero() {
+		instructions := row.Instructions
+		p.Instructions = &instructions
+	}
 	return p
+}
+
+func normalizedProjectRevision(revision int64) int64 {
+	if revision < 1 {
+		return 1
+	}
+	return revision
+}
+
+func nextProjectRevision(revision int64) int64 {
+	return normalizedProjectRevision(revision) + 1
 }
 
 func projectConfigPtr(projectConfig domain.ProjectConfig) *domain.ProjectConfig {
@@ -973,6 +1125,18 @@ func isBareGitRepository(ctx context.Context, path string) bool {
 func hasGitMetadata(path string) bool {
 	_, err := os.Lstat(filepath.Join(path, ".git"))
 	return err == nil || !errors.Is(err, os.ErrNotExist)
+}
+
+func hasGitMetadataInAncestors(path string) bool {
+	for current := comparablePath(path); ; current = filepath.Dir(current) {
+		if hasGitMetadata(current) {
+			return true
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return false
+		}
+	}
 }
 
 func normalizeGitReportedPath(base, reported string) string {

@@ -16,16 +16,18 @@ type Summary struct {
 
 // Project is the full read-model returned by GET /api/v1/projects/{id}.
 type Project struct {
-	ID             domain.ProjectID      `json:"id"`
-	Name           string                `json:"name"`
-	Kind           domain.ProjectKind    `json:"kind" enum:"single_repo,workspace,scratch"`
-	Path           string                `json:"path"`
-	Repo           string                `json:"repo"`
-	DefaultBranch  string                `json:"defaultBranch"`
-	Agent          string                `json:"agent,omitempty"`
-	Config         *domain.ProjectConfig `json:"config,omitempty"`
-	WorkspaceRepos []WorkspaceRepo       `json:"workspaceRepos,omitempty"`
-	FolderMissing  bool                  `json:"folderMissing"`
+	ID             domain.ProjectID            `json:"id"`
+	Name           string                      `json:"name"`
+	Kind           domain.ProjectKind          `json:"kind" enum:"single_repo,workspace,scratch"`
+	Path           string                      `json:"path"`
+	Repo           string                      `json:"repo"`
+	Revision       int64                       `json:"revision"`
+	Instructions   *domain.ProjectInstructions `json:"instructions,omitempty"`
+	DefaultBranch  string                      `json:"defaultBranch"`
+	Agent          string                      `json:"agent,omitempty"`
+	Config         *domain.ProjectConfig       `json:"config,omitempty"`
+	WorkspaceRepos []WorkspaceRepo             `json:"workspaceRepos,omitempty"`
+	FolderMissing  bool                        `json:"folderMissing"`
 }
 
 // Degraded is returned in place of Project when project config failed to load.

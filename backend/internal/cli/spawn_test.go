@@ -612,12 +612,15 @@ func TestSpawnStandaloneRejectsProjectOnlyOptions(t *testing.T) {
 
 func TestSpawnScratchRejectsGitOnlyFlags(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		args    []string
-		wantErr string
+		name      string
+		projectID string
+		args      []string
+		wantErr   string
 	}{
-		{name: "branch", args: []string{"spawn", "--project", "scratch", "--agent", "codex", "--name", "Scratch Task", "--branch", "feature/x"}, wantErr: "scratch projects do not support --branch"},
-		{name: "claim pr", args: []string{"spawn", "--project", "scratch", "--agent", "codex", "--name", "Scratch Task", "--claim-pr", "142"}, wantErr: "scratch projects do not support --claim-pr"},
+		{name: "branch", projectID: "scratch", args: []string{"spawn", "--project", "scratch", "--agent", "codex", "--name", "Scratch Task", "--branch", "feature/x"}, wantErr: "scratch projects do not support --branch"},
+		{name: "claim pr", projectID: "scratch", args: []string{"spawn", "--project", "scratch", "--agent", "codex", "--name", "Scratch Task", "--claim-pr", "142"}, wantErr: "scratch projects do not support --claim-pr"},
+		{name: "container branch", projectID: "9d28acb9-8fa6-468d-890e-6d136711ac20", args: []string{"spawn", "--project", "9d28acb9-8fa6-468d-890e-6d136711ac20", "--agent", "codex", "--name", "Planning", "--branch", "feature/x"}, wantErr: "scratch projects do not support --branch"},
+		{name: "container claim pr", projectID: "9d28acb9-8fa6-468d-890e-6d136711ac20", args: []string{"spawn", "--project", "9d28acb9-8fa6-468d-890e-6d136711ac20", "--agent", "codex", "--name", "Planning", "--claim-pr", "142"}, wantErr: "scratch projects do not support --claim-pr"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := setConfigEnv(t)
@@ -626,8 +629,8 @@ func TestSpawnScratchRejectsGitOnlyFlags(t *testing.T) {
 				appendPrimaryRequest(&requests, r)
 				w.Header().Set("Content-Type", "application/json")
 				switch {
-				case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/scratch":
-					_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"scratch","name":"Scratch","kind":"scratch","path":"/ao/scratch","config":{"worker":{"agent":"codex"}}}}`)
+				case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/"+tc.projectID:
+					_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"`+tc.projectID+`","name":"Scratch","kind":"scratch","path":"","config":{"worker":{"agent":"codex"}}}}`)
 				default:
 					http.NotFound(w, r)
 				}
@@ -639,7 +642,7 @@ func TestSpawnScratchRejectsGitOnlyFlags(t *testing.T) {
 			if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("err=%v exit=%d, want %q", err, ExitCode(err), tc.wantErr)
 			}
-			want := []string{"GET /api/v1/projects/scratch"}
+			want := []string{"GET /api/v1/projects/" + tc.projectID}
 			if !reflect.DeepEqual(requests, want) {
 				t.Fatalf("requests=%#v want %#v", requests, want)
 			}

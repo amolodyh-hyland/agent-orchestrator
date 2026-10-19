@@ -3,6 +3,7 @@ package scm
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -160,5 +161,65 @@ func TestPoll_ExistingAndExplicitAttachmentsStayStable(t *testing.T) {
 		if got, err := store.ListPRsBySession(ctx, other.ID); err != nil || len(got) != 0 {
 			t.Fatalf("attachment reassigned to matching session: %+v, %v", got, err)
 		}
+	}
+}
+
+// racingProjectStore commits a competing write right after discovery reads the
+// project, i.e. before the origin backfill's Git probe result is persisted.
+type racingProjectStore struct {
+	Store
+	after func()
+}
+
+func (s *racingProjectStore) GetProject(ctx context.Context, id string) (domain.ProjectRecord, bool, error) {
+	row, ok, err := s.Store.GetProject(ctx, id)
+	if s.after != nil {
+		after := s.after
+		s.after = nil
+		after()
+	}
+	return row, ok, err
+}
+
+func TestDiscoverSubjects_OriginBackfillKeepsConcurrentInstructions(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	if out, err := exec.Command("git", "init", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+	if out, err := exec.Command("git", "-C", dir, "remote", "add", "origin", "https://github.com/o/r.git").CombinedOutput(); err != nil {
+		t.Fatalf("git remote add: %v (%s)", err, out)
+	}
+	store := sqlitetest.MustOpen(t)
+	now := time.Unix(1_800_000_000, 0).UTC()
+	if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "p", Path: dir, RegisteredAt: now, Revision: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateSession(ctx, domain.SessionRecord{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessFake,
+		Activity:  domain.Activity{State: domain.ActivityActive, LastActivityAt: now},
+		Metadata:  domain.SessionMetadata{Branch: "feat", WorkspacePath: t.TempDir()},
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	newer := domain.ProjectInstructions{Shared: "newer"}
+	racing := &racingProjectStore{Store: store}
+	racing.after = func() {
+		if ok, err := store.UpdateProjectSettings(ctx, "p", "p", domain.ProjectConfig{}, &newer, 1); err != nil || !ok {
+			t.Errorf("concurrent instructions update ok=%v err=%v", ok, err)
+		}
+	}
+	provider := &fakeProvider{}
+	obs := New(provider, racing, nil, Config{Logger: quietSlog(), Clock: func() time.Time { return now }, ScopedIdentityResolver: provider})
+	if _, _, err := obs.discoverSubjects(ctx); err != nil {
+		t.Fatalf("discoverSubjects: %v", err)
+	}
+	got, ok, err := store.GetProject(ctx, "p")
+	if err != nil || !ok {
+		t.Fatalf("get project: ok=%v err=%v", ok, err)
+	}
+	if got.RepoOriginURL != "https://github.com/o/r.git" || got.Instructions != newer || got.Revision != 3 {
+		t.Fatalf("project after backfill = origin %q instructions %#v revision %d, want origin set, newer instructions, revision 3", got.RepoOriginURL, got.Instructions, got.Revision)
 	}
 }

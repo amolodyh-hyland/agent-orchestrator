@@ -19,6 +19,13 @@ type AddInput struct {
 	ClonePreparationID string                `json:"clonePreparationId,omitempty"`
 }
 
+// CreateContainerInput creates a Project without registering or initializing a Git repository.
+type CreateContainerInput struct {
+	DisplayName  string                     `json:"displayName" minLength:"1" maxLength:"100"`
+	Path         string                     `json:"path,omitempty"`
+	Instructions domain.ProjectInstructions `json:"instructions,omitempty"`
+}
+
 // CloneInput is the body shape for POST /api/v1/projects/clone. The daemon
 // derives the checkout directory name from RemoteURL and creates it directly
 // beneath DestinationParent before registering the resulting project.
@@ -55,10 +62,12 @@ type InitializeRepositoryResult struct {
 }
 
 // UpdateSettingsInput is the body shape for PUT /api/v1/projects/{id}. It
-// atomically replaces the user-facing display name and per-project config.
+// atomically replaces the user-facing display name, per-project config, and
+// optional durable instructions.
 type UpdateSettingsInput struct {
-	DisplayName string               `json:"displayName" minLength:"1" maxLength:"100"`
-	Config      domain.ProjectConfig `json:"config"`
+	DisplayName  string                      `json:"displayName" minLength:"1" maxLength:"100"`
+	Config       domain.ProjectConfig        `json:"config"`
+	Instructions *domain.ProjectInstructions `json:"instructions,omitempty"`
 }
 
 // SetConfigInput is the body shape for PUT /api/v1/projects/{id}/config. Config

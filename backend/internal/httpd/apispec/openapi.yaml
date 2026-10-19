@@ -3228,6 +3228,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
         "500":
           content:
             application/json:
@@ -3566,6 +3572,43 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Internal Server Error
       summary: Clone a project without registering it so Git setup can be completed
+      tags:
+      - projects
+  /api/v1/projects/containers:
+    post:
+      operationId: createProjectContainer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProjectContainerInput'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Create a durable Project without a Git repository
       tags:
       - projects
   /api/v1/projects/initialize:
@@ -14032,6 +14075,19 @@ components:
       required:
       - side
       type: object
+    CreateProjectContainerInput:
+      properties:
+        displayName:
+          maxLength: 100
+          minLength: 1
+          type: string
+        instructions:
+          $ref: '#/components/schemas/ProjectInstructions'
+        path:
+          type: string
+      required:
+      - displayName
+      type: object
     CreateReportRequest:
       properties:
         message:
@@ -15857,6 +15913,8 @@ components:
           type: boolean
         id:
           type: string
+        instructions:
+          $ref: '#/components/schemas/ProjectInstructions'
         kind:
           enum:
           - single_repo
@@ -15869,6 +15927,9 @@ components:
           type: string
         repo:
           type: string
+        revision:
+          format: int64
+          type: integer
         workspaceRepos:
           items:
             $ref: '#/components/schemas/WorkspaceRepo'
@@ -15879,6 +15940,7 @@ components:
       - kind
       - path
       - repo
+      - revision
       - defaultBranch
       - folderMissing
       type: object
@@ -15955,6 +16017,15 @@ components:
       required:
       - status
       - project
+      type: object
+    ProjectInstructions:
+      properties:
+        coordinator:
+          type: string
+        shared:
+          type: string
+        worker:
+          type: string
       type: object
     ProjectOrDegraded:
       oneOf:
@@ -18745,6 +18816,8 @@ components:
           maxLength: 100
           minLength: 1
           type: string
+        instructions:
+          $ref: '#/components/schemas/ProjectInstructions'
       required:
       - displayName
       - config

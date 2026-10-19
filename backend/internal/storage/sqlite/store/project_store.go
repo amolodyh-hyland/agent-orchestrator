@@ -18,9 +18,48 @@ func (s *Store) UpsertProject(ctx context.Context, r domain.ProjectRecord) error
 	if err != nil {
 		return err
 	}
+	instructions, err := marshalProjectInstructions(r.Instructions)
+	if err != nil {
+		return err
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return upsertProject(ctx, s.qw, r, config)
+	return upsertProject(ctx, s.qw, r, config, instructions)
+}
+
+// InsertProjectIfAbsent inserts a project only when no row with its id exists
+// (active or archived) and reports whether it inserted.
+func (s *Store) InsertProjectIfAbsent(ctx context.Context, r domain.ProjectRecord) (bool, error) {
+	config, err := marshalProjectConfig(r.Config)
+	if err != nil {
+		return false, err
+	}
+	instructions, err := marshalProjectInstructions(r.Instructions)
+	if err != nil {
+		return false, err
+	}
+	revision := r.Revision
+	if revision < 1 {
+		revision = 1
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.InsertProjectIfAbsent(ctx, gen.InsertProjectIfAbsentParams{
+		ID:               domain.ProjectID(r.ID),
+		Path:             r.Path,
+		RepoOriginURL:    r.RepoOriginURL,
+		DisplayName:      r.DisplayName,
+		RegisteredAt:     r.RegisteredAt,
+		ArchivedAt:       nullTime(r.ArchivedAt),
+		Config:           config,
+		Kind:             string(r.Kind.WithDefault()),
+		MetadataRevision: revision,
+		InstructionsJson: instructions,
+	})
+	if err != nil {
+		return false, fmt.Errorf("insert project %s: %w", r.ID, err)
+	}
+	return rows > 0, nil
 }
 
 // UpsertWorkspaceProject inserts or replaces a workspace project and its child
@@ -30,8 +69,12 @@ func (s *Store) UpsertWorkspaceProject(ctx context.Context, r domain.ProjectReco
 	if err != nil {
 		return err
 	}
+	instructions, err := marshalProjectInstructions(r.Instructions)
+	if err != nil {
+		return err
+	}
 	return s.writeWorkspaceProject(ctx, "upsert workspace project", r, repos, func(q *gen.Queries) error {
-		return upsertProject(ctx, q, r, config)
+		return upsertProject(ctx, q, r, config, instructions)
 	})
 }
 
@@ -42,8 +85,12 @@ func (s *Store) ImportWorkspaceProject(ctx context.Context, r domain.ProjectReco
 	if err != nil {
 		return err
 	}
+	instructions, err := marshalProjectInstructions(r.Instructions)
+	if err != nil {
+		return err
+	}
 	return s.writeWorkspaceProject(ctx, "import workspace project", r, repos, func(q *gen.Queries) error {
-		return importProject(ctx, q, r, config)
+		return importProject(ctx, q, r, config, instructions)
 	})
 }
 
@@ -95,21 +142,27 @@ func (s *Store) ListWorkspaceRepos(ctx context.Context, projectID string) ([]dom
 	return out, nil
 }
 
-func upsertProject(ctx context.Context, q *gen.Queries, r domain.ProjectRecord, config sql.NullString) error {
+func upsertProject(ctx context.Context, q *gen.Queries, r domain.ProjectRecord, config sql.NullString, instructions string) error {
 	kind := r.Kind.WithDefault()
+	revision := r.Revision
+	if revision < 1 {
+		revision = 1
+	}
 	return q.UpsertProject(ctx, gen.UpsertProjectParams{
-		ID:            domain.ProjectID(r.ID),
-		Path:          r.Path,
-		RepoOriginURL: r.RepoOriginURL,
-		DisplayName:   r.DisplayName,
-		RegisteredAt:  r.RegisteredAt,
-		ArchivedAt:    nullTime(r.ArchivedAt),
-		Config:        config,
-		Kind:          string(kind),
+		ID:               domain.ProjectID(r.ID),
+		Path:             r.Path,
+		RepoOriginURL:    r.RepoOriginURL,
+		DisplayName:      r.DisplayName,
+		RegisteredAt:     r.RegisteredAt,
+		ArchivedAt:       nullTime(r.ArchivedAt),
+		Config:           config,
+		Kind:             string(kind),
+		MetadataRevision: revision,
+		InstructionsJson: instructions,
 	})
 }
 
-func importProject(ctx context.Context, q *gen.Queries, r domain.ProjectRecord, config sql.NullString) error {
+func importProject(ctx context.Context, q *gen.Queries, r domain.ProjectRecord, config sql.NullString, instructions string) error {
 	existingByID, err := q.GetProject(ctx, domain.ProjectID(r.ID))
 	if err == nil {
 		if existingByID.ArchivedAt.Valid {
@@ -150,15 +203,21 @@ func importProject(ctx context.Context, q *gen.Queries, r domain.ProjectRecord, 
 	}
 
 	kind := r.Kind.WithDefault()
+	revision := r.Revision
+	if revision < 1 {
+		revision = 1
+	}
 	return q.UpsertImportedProject(ctx, gen.UpsertImportedProjectParams{
-		ID:            domain.ProjectID(r.ID),
-		Path:          r.Path,
-		RepoOriginURL: r.RepoOriginURL,
-		DisplayName:   r.DisplayName,
-		RegisteredAt:  r.RegisteredAt,
-		ArchivedAt:    nullTime(r.ArchivedAt),
-		Config:        config,
-		Kind:          string(kind),
+		ID:               domain.ProjectID(r.ID),
+		Path:             r.Path,
+		RepoOriginURL:    r.RepoOriginURL,
+		DisplayName:      r.DisplayName,
+		RegisteredAt:     r.RegisteredAt,
+		ArchivedAt:       nullTime(r.ArchivedAt),
+		Config:           config,
+		Kind:             string(kind),
+		MetadataRevision: revision,
+		InstructionsJson: instructions,
 	})
 }
 
@@ -200,22 +259,70 @@ func (s *Store) ListProjects(ctx context.Context) ([]domain.ProjectRecord, error
 }
 
 // UpdateProjectSettings atomically updates the user-facing display name and
-// config for an active project. It returns ok=false when the project is missing
-// or archived.
-func (s *Store) UpdateProjectSettings(ctx context.Context, id, displayName string, config domain.ProjectConfig) (bool, error) {
+// config for an active project. Instructions are written only when non-nil, and
+// then only if the stored revision still equals expectedRevision. It returns
+// ok=false when the project is missing, archived, or the revision check failed.
+func (s *Store) UpdateProjectSettings(ctx context.Context, id, displayName string, config domain.ProjectConfig, instructions *domain.ProjectInstructions, expectedRevision int64) (bool, error) {
+	encodedConfig, err := marshalProjectConfig(config)
+	if err != nil {
+		return false, err
+	}
+	encodedInstructions := "{}"
+	var setInstructions int64
+	if instructions != nil {
+		setInstructions = 1
+		encodedInstructions, err = marshalProjectInstructions(*instructions)
+		if err != nil {
+			return false, err
+		}
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.UpdateProjectSettings(ctx, gen.UpdateProjectSettingsParams{
+		DisplayName:      displayName,
+		Config:           encodedConfig,
+		SetInstructions:  setInstructions,
+		InstructionsJson: encodedInstructions,
+		ID:               domain.ProjectID(id),
+		ExpectedRevision: expectedRevision,
+	})
+	if err != nil {
+		return false, fmt.Errorf("update project settings %s: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
+// UpdateProjectConfig replaces only the config column of an active project and
+// bumps its revision. It returns ok=false when the project is missing or archived.
+func (s *Store) UpdateProjectConfig(ctx context.Context, id string, config domain.ProjectConfig) (bool, error) {
 	encodedConfig, err := marshalProjectConfig(config)
 	if err != nil {
 		return false, err
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	rows, err := s.qw.UpdateProjectSettings(ctx, gen.UpdateProjectSettingsParams{
-		ID:          domain.ProjectID(id),
-		DisplayName: displayName,
-		Config:      encodedConfig,
+	rows, err := s.qw.UpdateProjectConfig(ctx, gen.UpdateProjectConfigParams{
+		Config: encodedConfig,
+		ID:     domain.ProjectID(id),
 	})
 	if err != nil {
-		return false, fmt.Errorf("update project settings %s: %w", id, err)
+		return false, fmt.Errorf("update project config %s: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
+// BackfillProjectOriginURL sets repo_origin_url on an active project that has
+// none, leaving every other column untouched. It returns ok=false when the
+// project is missing, archived, or already has an origin.
+func (s *Store) BackfillProjectOriginURL(ctx context.Context, id, originURL string) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.BackfillProjectOriginURL(ctx, gen.BackfillProjectOriginURLParams{
+		RepoOriginURL: originURL,
+		ID:            domain.ProjectID(id),
+	})
+	if err != nil {
+		return false, fmt.Errorf("backfill project origin %s: %w", id, err)
 	}
 	return rows > 0, nil
 }
@@ -253,12 +360,36 @@ func projectRowFromGen(p gen.Project) domain.ProjectRecord {
 		DisplayName:   p.DisplayName,
 		RegisteredAt:  p.RegisteredAt,
 		Kind:          domain.ProjectKind(p.Kind).WithDefault(),
+		Revision:      p.MetadataRevision,
+		Instructions:  unmarshalProjectInstructions(p.InstructionsJson),
 		Config:        unmarshalProjectConfig(p.Config),
 	}
 	if p.ArchivedAt.Valid {
 		r.ArchivedAt = p.ArchivedAt.Time
 	}
 	return r
+}
+
+func marshalProjectInstructions(instructions domain.ProjectInstructions) (string, error) {
+	if instructions.IsZero() {
+		return "{}", nil
+	}
+	data, err := json.Marshal(instructions)
+	if err != nil {
+		return "", fmt.Errorf("marshal project instructions: %w", err)
+	}
+	return string(data), nil
+}
+
+func unmarshalProjectInstructions(raw string) domain.ProjectInstructions {
+	if raw == "" || raw == "{}" {
+		return domain.ProjectInstructions{}
+	}
+	var instructions domain.ProjectInstructions
+	if err := json.Unmarshal([]byte(raw), &instructions); err != nil {
+		return domain.ProjectInstructions{}
+	}
+	return instructions
 }
 
 // marshalProjectConfig encodes the typed per-project config into the nullable
@@ -339,11 +470,15 @@ func (s *Store) SetProjectPermissions(ctx context.Context, id string, permission
 		row.Config.AgentConfig.Permissions = permissions
 		row.Config.Worker.AgentConfig.Permissions = ""
 		row.Config.Orchestrator.AgentConfig.Permissions = ""
+		row.Revision++
 		config, err := marshalProjectConfig(row.Config)
 		if err != nil {
 			return err
 		}
-		rows, err := q.UpdateProjectSettings(ctx, gen.UpdateProjectSettingsParams{ID: domain.ProjectID(id), DisplayName: row.DisplayName, Config: config})
+		rows, err := q.UpdateProjectConfig(ctx, gen.UpdateProjectConfigParams{
+			Config: config,
+			ID:     domain.ProjectID(id),
+		})
 		updated = rows > 0
 		return err
 	})
