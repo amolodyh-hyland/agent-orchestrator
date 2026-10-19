@@ -1,6 +1,10 @@
 package domain
 
-import "time"
+import (
+	"fmt"
+	"time"
+	"unicode/utf8"
+)
 
 const (
 	// ProjectKindSingleRepo is the existing one-repository project shape.
@@ -33,9 +37,36 @@ type ProjectRecord struct {
 	RegisteredAt  time.Time
 	ArchivedAt    time.Time
 	Kind          ProjectKind
+	Revision      int64
+	Instructions  ProjectInstructions
 	// Config holds the typed per-project configuration AO resolves at spawn. An
 	// IsZero value means unset.
 	Config ProjectConfig
+}
+
+// ProjectInstructions contains durable context guidance scoped by session role.
+type ProjectInstructions struct {
+	Shared      string `json:"shared,omitempty"`
+	Worker      string `json:"worker,omitempty"`
+	Coordinator string `json:"coordinator,omitempty"`
+}
+
+const maxProjectInstructionBytes = 64 * 1024
+
+// IsZero reports whether the Project has any shared or role-scoped instructions.
+func (i ProjectInstructions) IsZero() bool {
+	return i.Shared == "" && i.Worker == "" && i.Coordinator == ""
+}
+
+// Validate checks the UTF-8 and total-size limits for one Project revision.
+func (i ProjectInstructions) Validate() error {
+	if !utf8.ValidString(i.Shared) || !utf8.ValidString(i.Worker) || !utf8.ValidString(i.Coordinator) {
+		return fmt.Errorf("project instructions must be valid UTF-8")
+	}
+	if len(i.Shared)+len(i.Worker)+len(i.Coordinator) > maxProjectInstructionBytes {
+		return fmt.Errorf("project instructions must be %d KiB or smaller in total", maxProjectInstructionBytes/1024)
+	}
+	return nil
 }
 
 // GitStatus tracks whether a workspace child is a usable git repository

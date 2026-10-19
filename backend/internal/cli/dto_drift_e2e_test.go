@@ -146,6 +146,10 @@ func (f *fakeProjectManager) Add(_ context.Context, in projectsvc.AddInput) (pro
 	return projectsvc.Project{ID: id, Path: in.Path}, nil
 }
 
+func (f *fakeProjectManager) CreateContainer(_ context.Context, in projectsvc.CreateContainerInput) (projectsvc.Project, error) {
+	return projectsvc.Project{ID: "container", Name: in.DisplayName, Path: in.Path}, nil
+}
+
 func (f *fakeProjectManager) Clone(_ context.Context, in projectsvc.CloneInput) (projectsvc.Project, error) {
 	return projectsvc.Project{ID: "cloned", Repo: in.RemoteURL}, nil
 }

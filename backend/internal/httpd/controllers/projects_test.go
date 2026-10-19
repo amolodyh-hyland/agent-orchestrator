@@ -199,6 +199,75 @@ func TestProjectsAPI_ListAddGet(t *testing.T) {
 
 }
 
+func TestProjectsAPI_CreateContainerWithoutGit(t *testing.T) {
+	srv := newTestServer(t)
+	emptyDir := filepath.Join(t.TempDir(), "empty-project")
+	if err := os.Mkdir(emptyDir, 0o755); err != nil {
+		t.Fatalf("create empty project folder: %v", err)
+	}
+
+	body, status, headers := doRequest(t, srv, "POST", "/api/v1/projects/containers",
+		`{"displayName":"Planning","path":`+quote(emptyDir)+`,"instructions":{"shared":"Shared context","worker":"Worker context","coordinator":"Coordinator context"}}`)
+	if status != http.StatusCreated {
+		t.Fatalf("POST Project container = %d, want 201; body=%s", status, body)
+	}
+	assertJSON(t, headers)
+	var created struct {
+		Project projectBody `json:"project"`
+	}
+	mustJSON(t, body, &created)
+	if created.Project.ID == "" || created.Project.Kind != string(domain.ProjectKindScratch) || created.Project.Path != emptyDir || created.Project.Repo != "" || created.Project.DefaultBranch != "" {
+		t.Fatalf("created Project = %#v", created.Project)
+	}
+	if created.Project.Revision != 1 || created.Project.Instructions == nil || *created.Project.Instructions != (domain.ProjectInstructions{
+		Shared: "Shared context", Worker: "Worker context", Coordinator: "Coordinator context",
+	}) {
+		t.Fatalf("created Project metadata = revision %d, instructions %#v", created.Project.Revision, created.Project.Instructions)
+	}
+	if entries, err := os.ReadDir(emptyDir); err != nil || len(entries) != 0 {
+		t.Fatalf("Project creation modified the empty folder: entries=%v err=%v", entries, err)
+	}
+
+	body, status, _ = doRequest(t, srv, "GET", "/api/v1/projects/"+created.Project.ID, "")
+	if status != http.StatusOK {
+		t.Fatalf("GET created Project = %d, want 200; body=%s", status, body)
+	}
+	var loaded struct {
+		Status  string      `json:"status"`
+		Project projectBody `json:"project"`
+	}
+	mustJSON(t, body, &loaded)
+	if loaded.Status != "ok" || loaded.Project.ID != created.Project.ID || loaded.Project.Revision != created.Project.Revision {
+		t.Fatalf("GET created Project = %#v", loaded)
+	}
+
+	updatedInstructions := `{"shared":"Updated context"}`
+	body, status, _ = doRequest(t, srv, "PUT", "/api/v1/projects/"+created.Project.ID,
+		`{"displayName":"Planning updated","config":{},"instructions":`+updatedInstructions+`}`)
+	if status != http.StatusOK {
+		t.Fatalf("PUT Project instructions = %d, want 200; body=%s", status, body)
+	}
+	var updated struct {
+		Project projectBody `json:"project"`
+	}
+	mustJSON(t, body, &updated)
+	if updated.Project.Revision != 2 || updated.Project.Instructions == nil || updated.Project.Instructions.Shared != "Updated context" {
+		t.Fatalf("updated Project = %#v", updated.Project)
+	}
+
+	body, status, _ = doRequest(t, srv, "POST", "/api/v1/projects/containers", `{"displayName":"No execution resource"}`)
+	if status != http.StatusCreated {
+		t.Fatalf("POST pathless Project container = %d, want 201; body=%s", status, body)
+	}
+	var pathless struct {
+		Project projectBody `json:"project"`
+	}
+	mustJSON(t, body, &pathless)
+	if pathless.Project.Path != "" || pathless.Project.Kind != string(domain.ProjectKindScratch) || pathless.Project.Revision != 1 {
+		t.Fatalf("pathless Project = %#v", pathless.Project)
+	}
+}
+
 func TestProjectsAPI_UpdateSettings(t *testing.T) {
 	srv := newTestServer(t)
 	repo := gitRepo(t, "legacy-project")
@@ -532,6 +601,10 @@ type projectBody struct {
 	DefaultBranch string `json:"defaultBranch"`
 
 	Agent string `json:"agent"`
+
+	Kind         string                      `json:"kind"`
+	Revision     int64                       `json:"revision"`
+	Instructions *domain.ProjectInstructions `json:"instructions"`
 }
 
 type errorBody struct {

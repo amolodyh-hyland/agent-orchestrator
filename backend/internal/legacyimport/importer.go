@@ -19,7 +19,7 @@ import (
 // and legacy files stay the sole source of truth.
 type Store interface {
 	GetProject(ctx context.Context, id string) (domain.ProjectRecord, bool, error)
-	UpsertProject(ctx context.Context, r domain.ProjectRecord) error
+	InsertProjectIfAbsent(ctx context.Context, r domain.ProjectRecord) (bool, error)
 }
 
 // Options configure one import run.
@@ -141,20 +141,27 @@ func Run(ctx context.Context, store Store, opts Options) (Report, error) {
 }
 
 func importProject(ctx context.Context, store Store, record domain.ProjectRecord, dryRun bool, rep *Report) error {
-	_, exists, err := store.GetProject(ctx, record.ID)
-	if err != nil {
-		return fmt.Errorf("lookup project %s: %w", record.ID, err)
+	if dryRun {
+		_, exists, err := store.GetProject(ctx, record.ID)
+		if err != nil {
+			return fmt.Errorf("lookup project %s: %w", record.ID, err)
+		}
+		if exists {
+			rep.ProjectsSkipped++
+		} else {
+			rep.ProjectsImported++
+		}
+		return nil
 	}
-	if exists {
+	// Insert-if-absent is atomic, so a project created by a concurrent request
+	// between the existence check and the write is never overwritten.
+	inserted, err := store.InsertProjectIfAbsent(ctx, record)
+	if err != nil {
+		return fmt.Errorf("write project %s: %w", record.ID, err)
+	}
+	if !inserted {
 		rep.ProjectsSkipped++
 		return nil
-	}
-	if dryRun {
-		rep.ProjectsImported++
-		return nil
-	}
-	if err := store.UpsertProject(ctx, record); err != nil {
-		return fmt.Errorf("write project %s: %w", record.ID, err)
 	}
 	rep.ProjectsImported++
 	return nil

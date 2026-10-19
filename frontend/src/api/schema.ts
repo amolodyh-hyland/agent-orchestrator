@@ -1806,6 +1806,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/containers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create a durable Project without a Git repository */
+        post: operations["createProjectContainer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/initialize": {
         parameters: {
             query?: never;
@@ -5507,6 +5524,11 @@ export interface components {
         CreateConversationSideChatResponse: {
             side: components["schemas"]["SideConversation"];
         };
+        CreateProjectContainerInput: {
+            displayName: string;
+            instructions?: components["schemas"]["ProjectInstructions"];
+            path?: string;
+        };
         CreateReportRequest: {
             message?: string;
             note?: string;
@@ -6193,11 +6215,14 @@ export interface components {
             defaultBranch: string;
             folderMissing: boolean;
             id: string;
+            instructions?: components["schemas"]["ProjectInstructions"];
             /** @enum {string} */
             kind: "single_repo" | "workspace" | "scratch";
             name: string;
             path: string;
             repo: string;
+            /** Format: int64 */
+            revision: number;
             workspaceRepos?: components["schemas"]["WorkspaceRepo"][];
         };
         ProjectClonePreparationCleanupInput: {
@@ -6230,6 +6255,11 @@ export interface components {
             project: components["schemas"]["ProjectOrDegraded"];
             /** @enum {string} */
             status: "ok" | "degraded";
+        };
+        ProjectInstructions: {
+            coordinator?: string;
+            shared?: string;
+            worker?: string;
         };
         ProjectOrDegraded: components["schemas"]["Project"] | components["schemas"]["DegradedProject"];
         ProjectResponse: {
@@ -7395,6 +7425,7 @@ export interface components {
         UpdateProjectSettingsInput: {
             config: components["schemas"]["ProjectConfig"];
             displayName: string;
+            instructions?: components["schemas"]["ProjectInstructions"];
         };
         UpdateSessionInterfaceRequest: {
             /** @enum {string} */
@@ -13135,6 +13166,15 @@ export interface operations {
                     "application/json": components["schemas"]["APIError"];
                 };
             };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
             /** @description Internal Server Error */
             500: {
                 headers: {
@@ -13596,6 +13636,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClonePreparationResult"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    createProjectContainer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateProjectContainerInput"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectResponse"];
                 };
             };
             /** @description Bad Request */

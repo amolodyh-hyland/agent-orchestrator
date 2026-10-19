@@ -14,7 +14,7 @@ import (
 )
 
 const archiveProject = `-- name: ArchiveProject :execrows
-UPDATE projects SET archived_at = ? WHERE id = ? AND archived_at IS NULL
+UPDATE projects SET archived_at = ?, metadata_revision = metadata_revision + 1 WHERE id = ? AND archived_at IS NULL
 `
 
 type ArchiveProjectParams struct {
@@ -24,6 +24,25 @@ type ArchiveProjectParams struct {
 
 func (q *Queries) ArchiveProject(ctx context.Context, arg ArchiveProjectParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, archiveProject, arg.ArchivedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const backfillProjectOriginURL = `-- name: BackfillProjectOriginURL :execrows
+UPDATE projects
+SET repo_origin_url = ?, metadata_revision = metadata_revision + 1
+WHERE id = ? AND archived_at IS NULL AND repo_origin_url = ''
+`
+
+type BackfillProjectOriginURLParams struct {
+	RepoOriginURL string
+	ID            domain.ProjectID
+}
+
+func (q *Queries) BackfillProjectOriginURL(ctx context.Context, arg BackfillProjectOriginURLParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, backfillProjectOriginURL, arg.RepoOriginURL, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -42,7 +61,7 @@ func (q *Queries) CountProjectsIncludingArchived(ctx context.Context) (int64, er
 }
 
 const findProjectByPath = `-- name: FindProjectByPath :one
-SELECT id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind
+SELECT id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind, metadata_revision, instructions_json
 FROM projects WHERE path = ? AND archived_at IS NULL
 `
 
@@ -58,12 +77,14 @@ func (q *Queries) FindProjectByPath(ctx context.Context, path string) (Project, 
 		&i.ArchivedAt,
 		&i.Config,
 		&i.Kind,
+		&i.MetadataRevision,
+		&i.InstructionsJson,
 	)
 	return i, err
 }
 
 const getProject = `-- name: GetProject :one
-SELECT id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind
+SELECT id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind, metadata_revision, instructions_json
 FROM projects WHERE id = ?
 `
 
@@ -79,12 +100,52 @@ func (q *Queries) GetProject(ctx context.Context, id domain.ProjectID) (Project,
 		&i.ArchivedAt,
 		&i.Config,
 		&i.Kind,
+		&i.MetadataRevision,
+		&i.InstructionsJson,
 	)
 	return i, err
 }
 
+const insertProjectIfAbsent = `-- name: InsertProjectIfAbsent :execrows
+INSERT INTO projects (id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind, metadata_revision, instructions_json)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (id) DO NOTHING
+`
+
+type InsertProjectIfAbsentParams struct {
+	ID               domain.ProjectID
+	Path             string
+	RepoOriginURL    string
+	DisplayName      string
+	RegisteredAt     time.Time
+	ArchivedAt       sql.NullTime
+	Config           sql.NullString
+	Kind             string
+	MetadataRevision int64
+	InstructionsJson string
+}
+
+func (q *Queries) InsertProjectIfAbsent(ctx context.Context, arg InsertProjectIfAbsentParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertProjectIfAbsent,
+		arg.ID,
+		arg.Path,
+		arg.RepoOriginURL,
+		arg.DisplayName,
+		arg.RegisteredAt,
+		arg.ArchivedAt,
+		arg.Config,
+		arg.Kind,
+		arg.MetadataRevision,
+		arg.InstructionsJson,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const listProjects = `-- name: ListProjects :many
-SELECT id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind
+SELECT id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind, metadata_revision, instructions_json
 FROM projects WHERE archived_at IS NULL ORDER BY id
 `
 
@@ -106,6 +167,8 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 			&i.ArchivedAt,
 			&i.Config,
 			&i.Kind,
+			&i.MetadataRevision,
+			&i.InstructionsJson,
 		); err != nil {
 			return nil, err
 		}
@@ -137,20 +200,55 @@ func (q *Queries) PinProjectSessionPermissions(ctx context.Context, arg PinProje
 	return err
 }
 
-const updateProjectSettings = `-- name: UpdateProjectSettings :execrows
+const updateProjectConfig = `-- name: UpdateProjectConfig :execrows
 UPDATE projects
-SET display_name = ?, config = ?
+SET config = ?, metadata_revision = metadata_revision + 1
 WHERE id = ? AND archived_at IS NULL
 `
 
-type UpdateProjectSettingsParams struct {
-	DisplayName string
-	Config      sql.NullString
-	ID          domain.ProjectID
+type UpdateProjectConfigParams struct {
+	Config sql.NullString
+	ID     domain.ProjectID
 }
 
+func (q *Queries) UpdateProjectConfig(ctx context.Context, arg UpdateProjectConfigParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateProjectConfig, arg.Config, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateProjectSettings = `-- name: UpdateProjectSettings :execrows
+UPDATE projects
+SET display_name = ?1,
+    config = ?2,
+    instructions_json = CASE WHEN CAST(?3 AS INTEGER) <> 0 THEN ?4 ELSE instructions_json END,
+    metadata_revision = metadata_revision + 1
+WHERE id = ?5 AND archived_at IS NULL
+  AND (CAST(?3 AS INTEGER) = 0 OR MAX(metadata_revision, 1) = ?6)
+`
+
+type UpdateProjectSettingsParams struct {
+	DisplayName      string
+	Config           sql.NullString
+	SetInstructions  int64
+	InstructionsJson string
+	ID               domain.ProjectID
+	ExpectedRevision int64
+}
+
+// Instructions are written only when set_instructions is true, and then only if
+// the stored revision still equals expected_revision (compare-and-swap).
 func (q *Queries) UpdateProjectSettings(ctx context.Context, arg UpdateProjectSettingsParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, updateProjectSettings, arg.DisplayName, arg.Config, arg.ID)
+	result, err := q.db.ExecContext(ctx, updateProjectSettings,
+		arg.DisplayName,
+		arg.Config,
+		arg.SetInstructions,
+		arg.InstructionsJson,
+		arg.ID,
+		arg.ExpectedRevision,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -158,8 +256,8 @@ func (q *Queries) UpdateProjectSettings(ctx context.Context, arg UpdateProjectSe
 }
 
 const upsertImportedProject = `-- name: UpsertImportedProject :exec
-INSERT INTO projects (id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO projects (id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind, metadata_revision, instructions_json)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
     path = excluded.path,
     repo_origin_url = excluded.repo_origin_url,
@@ -167,20 +265,26 @@ ON CONFLICT (id) DO UPDATE SET
     registered_at = excluded.registered_at,
     archived_at = excluded.archived_at,
     config = excluded.config,
-    kind = excluded.kind
+    kind = excluded.kind,
+    metadata_revision = MAX(projects.metadata_revision, excluded.metadata_revision) + 1,
+    instructions_json = excluded.instructions_json
 `
 
 type UpsertImportedProjectParams struct {
-	ID            domain.ProjectID
-	Path          string
-	RepoOriginURL string
-	DisplayName   string
-	RegisteredAt  time.Time
-	ArchivedAt    sql.NullTime
-	Config        sql.NullString
-	Kind          string
+	ID               domain.ProjectID
+	Path             string
+	RepoOriginURL    string
+	DisplayName      string
+	RegisteredAt     time.Time
+	ArchivedAt       sql.NullTime
+	Config           sql.NullString
+	Kind             string
+	MetadataRevision int64
+	InstructionsJson string
 }
 
+// The import is an authoritative replacement of an existing row, so the
+// revision advances past both the target and the source.
 func (q *Queries) UpsertImportedProject(ctx context.Context, arg UpsertImportedProjectParams) error {
 	_, err := q.db.ExecContext(ctx, upsertImportedProject,
 		arg.ID,
@@ -191,33 +295,41 @@ func (q *Queries) UpsertImportedProject(ctx context.Context, arg UpsertImportedP
 		arg.ArchivedAt,
 		arg.Config,
 		arg.Kind,
+		arg.MetadataRevision,
+		arg.InstructionsJson,
 	)
 	return err
 }
 
 const upsertProject = `-- name: UpsertProject :exec
-INSERT INTO projects (id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO projects (id, path, repo_origin_url, display_name, registered_at, archived_at, config, kind, metadata_revision, instructions_json)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
     path = excluded.path,
     repo_origin_url = excluded.repo_origin_url,
     display_name = excluded.display_name,
     archived_at = excluded.archived_at,
     config = excluded.config,
-    kind = excluded.kind
+    kind = excluded.kind,
+    metadata_revision = MAX(projects.metadata_revision, excluded.metadata_revision) + 1,
+    instructions_json = CASE WHEN excluded.instructions_json = '{}' THEN projects.instructions_json ELSE excluded.instructions_json END
 `
 
 type UpsertProjectParams struct {
-	ID            domain.ProjectID
-	Path          string
-	RepoOriginURL string
-	DisplayName   string
-	RegisteredAt  time.Time
-	ArchivedAt    sql.NullTime
-	Config        sql.NullString
-	Kind          string
+	ID               domain.ProjectID
+	Path             string
+	RepoOriginURL    string
+	DisplayName      string
+	RegisteredAt     time.Time
+	ArchivedAt       sql.NullTime
+	Config           sql.NullString
+	Kind             string
+	MetadataRevision int64
+	InstructionsJson string
 }
 
+// A conflicting row is a reactivation or re-registration: durable instructions
+// survive an empty incoming value and the revision always advances.
 func (q *Queries) UpsertProject(ctx context.Context, arg UpsertProjectParams) error {
 	_, err := q.db.ExecContext(ctx, upsertProject,
 		arg.ID,
@@ -228,6 +340,8 @@ func (q *Queries) UpsertProject(ctx context.Context, arg UpsertProjectParams) er
 		arg.ArchivedAt,
 		arg.Config,
 		arg.Kind,
+		arg.MetadataRevision,
+		arg.InstructionsJson,
 	)
 	return err
 }

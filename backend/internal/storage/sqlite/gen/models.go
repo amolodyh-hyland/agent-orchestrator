@@ -566,14 +566,16 @@ type PRURLAlias struct {
 }
 
 type Project struct {
-	ID            domain.ProjectID
-	Path          string
-	RepoOriginURL string
-	DisplayName   string
-	RegisteredAt  time.Time
-	ArchivedAt    sql.NullTime
-	Config        sql.NullString
-	Kind          string
+	ID               domain.ProjectID
+	Path             string
+	RepoOriginURL    string
+	DisplayName      string
+	RegisteredAt     time.Time
+	ArchivedAt       sql.NullTime
+	Config           sql.NullString
+	Kind             string
+	MetadataRevision int64
+	InstructionsJson string
 }
 
 type Report struct {
