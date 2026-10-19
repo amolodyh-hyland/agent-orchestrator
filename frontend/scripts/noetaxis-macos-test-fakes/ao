@@ -9,10 +9,14 @@ version() { /usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$APP/C
 
 # Test hook: a helper call that hangs and ignores SIGTERM, to prove the watchdog ends it.
 if [[ -f "$SIM/cfg/ao_hang" && "$*" == *"$(sim_value ao_hang)"* ]]; then
+	sim_unlock
 	trap '' TERM
 	printf '%s' "$$" > "$SIM/hung.pid"
-	# Bounded even though it is meant to be killed: a leftover hung fake must not live forever.
-	for _ in $(seq 1 300); do /bin/sleep 1; done
+	# The test lease also ends this fake when a deliberately broken watchdog misses it.
+	for _ in $(seq 1 3000); do
+		[[ -f "${NOETAXIS_FIXTURE_ROOT:?}/.fixture-alive" ]] || break
+		/bin/sleep 0.1
+	done
 	exit 1
 fi
 
@@ -103,6 +107,12 @@ case "$1" in
 				;;
 			exit-agent)
 				id="$3"
+				if [[ -f "$SIM/cfg/exit_agent_delay" ]]; then
+					sim_log "exit-start $id"
+					delay="$(sim_value exit_agent_delay)"
+					sim_unlock; /bin/sleep "$delay"; sim_lock
+					sim_log "exit-finish $id"
+				fi
 				if [[ -e "$SIM/cfg/exit_fail_$id" ]]; then printf 'could not stop the agent of %s\n' "$id" >&2; exit 1; fi
 				/usr/bin/awk -F '|' -v OFS='|' -v id="$id" '$1 == id { $5 = "exited" } { print }' "$SIM/sessions" > "$SIM/sessions.tmp"
 				/bin/mv "$SIM/sessions.tmp" "$SIM/sessions"

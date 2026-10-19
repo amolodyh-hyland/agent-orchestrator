@@ -1,8 +1,19 @@
 #!/bin/bash
 . "${NOETAXIS_FAKES:?}/sim-lib.sh"
 pid="${@: -1}"
+if [[ "$*" == *'-axo '* ]]; then
+	sim_tick
+	while IFS='|' read -r row command; do
+		[[ -n "$row" ]] || continue
+		parent="$(sim_ppid_of "$row")"
+		if [[ -f "$SIM/cfg/lstart_$row" ]]; then start="$(cat "$SIM/cfg/lstart_$row")"; else start="Mon Oct 12 00:00:$(printf '%02d' "$((row % 60))") 2026"; fi
+		printf '%s %s %s %s\n' "$row" "$parent" "$start" "$command"
+	done < "$SIM/procs"
+	exit 0
+fi
 case "$*" in
 	*pid=*ppid=*lstart=*command=*)
+		if sim_has "info_fails_$pid"; then printf 'Operation not permitted\n' >&2; exit 2; fi
 		sim_tick
 		command="$(sim_command_of "$pid")"
 		[[ -n "$command" ]] || exit 1
@@ -23,6 +34,10 @@ case "$*" in
 	# Plain "ps -p <pid>" (the lock's liveness check): real process liveness, so the lock tests do not
 	# depend on what the host sandbox lets /bin/ps do.
 	*"-p "*)
+		if /usr/bin/awk -F '|' -v pid="$pid" '$1 == pid { found = 1 } END { exit !found }' "$SIM/executables"; then
+			[[ -n "$(sim_command_of "$pid")" ]] || exit 1
+			printf '  PID TTY           TIME CMD\n%s ??         0:00.00 x\n' "$pid"; exit 0
+		fi
 		if /bin/kill -0 "$pid" 2>/dev/null; then printf '  PID TTY           TIME CMD\n%s ??         0:00.00 x\n' "$pid"; exit 0; fi
 		exit 1
 		;;

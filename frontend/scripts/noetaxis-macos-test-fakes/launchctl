@@ -1,0 +1,3 @@
+#!/bin/bash
+[[ "$1" == list ]] || exit 1
+[[ ! -f "$NOETAXIS_SIM/respawners" ]] || /bin/cat "$NOETAXIS_SIM/respawners"
