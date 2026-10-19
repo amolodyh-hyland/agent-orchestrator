@@ -23,6 +23,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 	...await importOriginal<typeof import("@tanstack/react-router")>(),
 	useNavigate: () => vi.fn(),
 	useParams: () => ({}),
+	useRouter: () => ({ history: { location: { href: "#/", state: {} }, push: vi.fn(), replace: vi.fn() } }),
 	useBlocker: () => undefined,
 }));
 vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ ready: false, baseUrl: "", client: {} }) }));

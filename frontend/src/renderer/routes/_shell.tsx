@@ -33,8 +33,10 @@ import { useRemoteHosts } from "../hooks/useRemoteHosts";
 import { SidebarProvider } from "../components/ui/sidebar";
 import { TitlebarNav } from "../components/TitlebarNav";
 import { WindowTitlebar } from "../components/WindowTitlebar";
+import { NavigationHistorySync } from "../components/NavigationHistorySync";
 import { preloadXtermTerminal, TerminalCacheProvider } from "../components/TerminalPane";
 import { scheduleIdle } from "../lib/idle";
+import { traverseHistory } from "../lib/navigation-history";
 import { LazyChunkBoundary, LazyChunkErrorPanel } from "../components/LazyChunkBoundary";
 import { loadSessionView } from "../lib/session-view-chunk";
 import { agentModelsQueryOptions } from "../hooks/useAgentModelsQuery";
@@ -1192,9 +1194,9 @@ function ShellLayout() {
 	useAppShortcut("previous-attention-session", () => navigateSession(-1, true));
 	useAppShortcut("next-attention-session", () => navigateSession(1, true));
 	useAppShortcut("history-back", () => {
-		if (router.history.canGoBack()) router.history.back();
+		if (router.history.canGoBack()) traverseHistory(router.history, "back");
 	});
-	useAppShortcut("history-forward", () => router.history.forward());
+	useAppShortcut("history-forward", () => traverseHistory(router.history, "forward"));
 
 	// New session (⌘N / Ctrl+Shift+N) is detected in the main process and
 	// delivered here, so it fires even when focus is inside xterm or a native
@@ -1459,6 +1461,7 @@ function ShellLayout() {
 							/>
 						</div>
 						<MulticaPane />
+						<NavigationHistorySync />
 						<TopbarTabsRouteSync />
 						<TopbarTabsLifecycle />
 						</main>

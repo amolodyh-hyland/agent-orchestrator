@@ -3,6 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
+import { cloudDraftSessionKey, getFileDraft, resetFileDraftsForTests, setFileDraft } from "../lib/file-draft-store";
 import { settingsQueryKey } from "./useSettings";
 
 const { createCloudClientMock, deleteSessionMock, postMock, remotePostMock } = vi.hoisted(() => ({
@@ -83,6 +84,23 @@ beforeEach(() => {
 });
 
 describe("useTerminateSession", () => {
+	it("drops the unsaved file drafts of a terminated local or cloud session", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+		queryClient.setQueryData(settingsQueryKey, { cloudControlPlaneUrl: "https://cp.example.com" });
+		setFileDraft("session-1", "a.ts", "local", "fp-1");
+		setFileDraft("session-10", "a.ts", "other session", "fp-1");
+		setFileDraft(cloudDraftSessionKey("org-1", "session-1"), "a.ts", "cloud", "fp-1");
+		const { result } = renderHook(() => useTerminateSession(), { wrapper: wrapper(queryClient) });
+
+		await act(async () => result.current.mutateAsync(localSession));
+		await act(async () => result.current.mutateAsync({ ...localSession, cloud: { orgId: "org-1" } }));
+
+		expect(getFileDraft("session-1", "a.ts")).toBeUndefined();
+		expect(getFileDraft(cloudDraftSessionKey("org-1", "session-1"), "a.ts")).toBeUndefined();
+		expect(getFileDraft("session-10", "a.ts")?.content).toBe("other session");
+		resetFileDraftsForTests();
+	});
+
 	it("routes local sessions to the local daemon", async () => {
 		const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
 		const { result } = renderHook(() => useTerminateSession(), { wrapper: wrapper(queryClient) });

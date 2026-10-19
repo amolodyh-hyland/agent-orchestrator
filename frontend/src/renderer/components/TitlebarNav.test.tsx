@@ -1,6 +1,7 @@
 import { act, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useMulticaStore } from "../stores/multica-store";
 import { useUiStore } from "../stores/ui-store";
 import { TitlebarNav } from "./TitlebarNav";
 import { TooltipProvider } from "./ui/tooltip";
@@ -35,8 +36,11 @@ vi.mock("../lib/platform", () => ({
 describe("TitlebarNav", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		// A real stack with an entry behind it, so Back has somewhere to go.
+		history.location.state.__TSR_index = 1;
 		availability.canGoBack = false;
 		useUiStore.setState({ isSidebarOpen: true });
+		useMulticaStore.setState({ view: { active: false, status: "ready", url: "https://multica.test" }, isLoaded: true });
 	});
 
 	it.each([false, true])("keeps the same header row with sidebar open=%s", (open) => {
@@ -86,5 +90,19 @@ describe("TitlebarNav", () => {
 		rerender(<TooltipProvider><div data-slot="sidebar-container" /><TitlebarNav historyLocked /></TooltipProvider>);
 		expect(back).toBeDisabled();
 		expect(forward).toBeDisabled();
+	});
+
+	it("keeps history controls reachable and clickable after returning from Multica", () => {
+		availability.canGoBack = true;
+		const { container } = render(<TitlebarNav />);
+		act(() => useMulticaStore.setState({ view: { active: true, status: "ready", url: "https://multica.test" } }));
+		act(() => useMulticaStore.setState({ view: { active: false, status: "ready", url: "https://multica.test" } }));
+
+		const back = screen.getByRole("button", { name: "Go back" });
+		expect(container.querySelector('[data-slot="titlebar-nav"]')).toBeInTheDocument();
+		expect(back).toBeEnabled();
+		expect((back.style as CSSStyleDeclaration & { WebkitAppRegion?: string }).WebkitAppRegion).toBe("no-drag");
+		fireEvent.click(back);
+		expect(history.back).toHaveBeenCalledTimes(1);
 	});
 });

@@ -49,3 +49,13 @@ When on: a 3px accent line across every tab of the project's group plus a light 
 - Cloud task rename is not offered where no rename API exists.
 - Drag reordering of tabs is not implemented (the pure `reorderTab` model and store action exist and are tested).
 - Hot-reload note for development: the dev app rebuilds native modules for Electron on launch; run `npm rebuild better-sqlite3` before Node-based vitest runs afterwards.
+
+## Shell back and forward history
+
+The existing titlebar arrows and router history already cover route visits, including project boards, orchestrator sessions, and topbar session switches. `NavigationHistorySync` adds entries to that same per-window router history for the shell state that routes do not encode: global/project Settings modals, AO versus Multica visibility, the selected session file and display mode, reviewer/shell/session sub-tabs, and the inspector tab and open state. Multica is one location; its embedded page keeps its own internal history.
+
+History is shared across projects within one window. A topbar tab's pinned state does not create a separate location. Closing a local session tab marks its route as closed so back/forward skips it; a later direct navigation to that session opens the tab again. Restoring a file location reopens the file tab if needed. Cursor position is not captured. The center file view already remembers scroll position by session and path, and explicit line-open requests are restored.
+
+No new titlebar controls or shortcut definitions are needed. The existing buttons remain at the left of the top toolbar. macOS buttons opt out of the native drag region, and Windows controls use the titlebar's no-drag toggle class. The regression test checks that the macOS history button remains enabled, no-drag, and clickable after Multica is activated and deactivated. Real Electron/WebContentsView rendering still needs a manual app check.
+
+The existing user-overridable shortcut defaults are retained: macOS `Cmd+[` / `Cmd+]`, Windows/Linux `Alt+Left` / `Alt+Right`. The macOS bindings are distinct from `Cmd+Shift+[` / `Cmd+Shift+]` for previous/next session, `Cmd+Option+Left` / `Cmd+Option+Right` for previous/next tab, and `Cmd+Shift+E` for the Multica switch. Windows/Linux `Alt+Left` / `Alt+Right` are yielded to a focused terminal for readline word movement; `Ctrl+-` remains the menu's zoom-out shortcut. Embedded browser and Multica focus handling keep their own navigation keys out of AO's renderer history.

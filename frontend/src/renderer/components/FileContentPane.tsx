@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -19,6 +19,7 @@ import {
 import { usePierreFileHighlightReady } from "../hooks/usePierreFileHighlight";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
+import { clearFileDraftIfRevision, getFileDraft, rebaseFileDraft, setFileDraft, UNKNOWN_FILE_BASE, unstoredFileDraftReasonFor } from "../lib/file-draft-store";
 import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
@@ -68,6 +69,7 @@ export function FileContentPane({
 	initialMode = "diff",
 	initialRequestKey = 0,
 	commitSha,
+	onModeChange,
 	onDirtyChange,
 	onInitialLineConsumed,
 	onContentReady,
@@ -87,6 +89,7 @@ export function FileContentPane({
 	initialMode?: FileViewMode;
 	initialRequestKey?: number;
 	commitSha?: string;
+	onModeChange?: (mode: FileViewMode) => void;
 	onDirtyChange?: (dirty: boolean) => void;
 	onInitialLineConsumed?: (requestKey: number) => void;
 	onContentReady?: () => void;
@@ -125,6 +128,11 @@ export function FileContentPane({
 	const singleView = source.kind === "artifact";
 	const [editing, setEditing] = useState(false);
 	const [draft, setDraft] = useState("");
+	const draftRef = useRef("");
+	useEffect(() => { draftRef.current = draft; }, [draft]);
+	// The draft the editor is seeded with when a stored draft is restored on remount.
+	const [restoredDraft, setRestoredDraft] = useState<string | null>(null);
+	const draftSessionKey = source.kind === "workspace" ? uiSessionId : `${uiSessionId}:${source.kind}`;
 	const [saving, setSaving] = useState(false);
 	const [saveError, setSaveError] = useState("");
 	// Warm syntax highlighting without withholding readable file contents.
@@ -167,17 +175,59 @@ export function FileContentPane({
 	}, [onContentReady, query.data, sourceHighlightReady]);
 	useEffect(() => {
 		setMode(restoredMode());
+	}, [commitSha, hostId, initialMode, initialRequestKey, path, rememberDisplayMode, scope, sessionId, source, uiSessionId]);
+	// Editing resets with the file or request, not with a mode the pane reported
+	// to its parent: choosing Edit from Diff must not cancel the edit it starts.
+	// The draft is initialised once per opening request; a refetch only updates the base state.
+	const seededDraftRef = useRef(false);
+	useEffect(() => {
+		seededDraftRef.current = false;
 		setEditing(initialEditing);
 		setDraft("");
+		setRestoredDraft(null);
 		setSaveError("");
-	}, [commitSha, hostId, initialEditing, initialMode, initialRequestKey, path, rememberDisplayMode, scope, sessionId, source, uiSessionId]);
+	}, [commitSha, hostId, initialEditing, initialRequestKey, path, scope, sessionId, source, uiSessionId]);
+	// A stored draft returns only for the editable working file, never for a historical revision,
+	// and only once the file has loaded so its editability is known.
+	const restoredForRef = useRef<string | null>(null);
+	useEffect(() => {
+		const data = query.data;
+		if (!data || !path) return;
+		const restoreId = `${draftSessionKey}|${path}|${initialRequestKey}`;
+		if (restoredForRef.current === restoreId) return;
+		const saved = getFileDraft(draftSessionKey, path);
+		if (!saved || saved.content === null || commitSha || !data.editable || !data.fileFingerprint || (source.kind === "artifact" && source.readOnly)) return;
+		restoredForRef.current = restoreId;
+		setEditing(true);
+		setDraft(saved.content);
+		draftRef.current = saved.content;
+		setRestoredDraft(saved.content);
+		setMode("file");
+	}, [commitSha, draftSessionKey, initialRequestKey, path, query.data, source]);
 	const selectMode = (next: FileViewMode) => {
 		setMode(next);
 		if (rememberDisplayMode && path) setFileDisplayMode(uiSessionId, path, next, initialRequestKey);
+		onModeChange?.(next);
 	};
 	useEffect(() => {
-		if (initialEditing && query.data) setDraft(query.data.content);
-	}, [initialEditing, initialRequestKey, path, query.data]);
+		if (!initialEditing || !query.data || seededDraftRef.current) return;
+		seededDraftRef.current = true;
+		if (getFileDraft(draftSessionKey, path)?.content == null) setDraft(query.data.content);
+	}, [draftSessionKey, initialEditing, initialRequestKey, path, query.data]);
+	const changeDraft = useCallback((content: string) => {
+		setDraft(content);
+		draftRef.current = content;
+		if (commitSha) return;
+		// Back to the saved text is no draft, unless dropping the record would hide that the file
+		// has changed since the edit started.
+		const record = getFileDraft(draftSessionKey, path);
+		const hidesConflict = record?.baseFingerprint !== undefined && record.baseFingerprint !== query.data?.fileFingerprint;
+		setFileDraft(draftSessionKey, path, content === query.data?.content && !hidesConflict ? null : content, query.data?.fileFingerprint);
+	}, [commitSha, draftSessionKey, path, query.data?.content, query.data?.fileFingerprint]);
+	const discardDraft = useCallback(() => {
+		setFileDraft(draftSessionKey, path, null);
+		setRestoredDraft(null);
+	}, [draftSessionKey, path]);
 	useEffect(() => {
 		onDirtyChange?.(hasUnsavedChanges);
 	}, [hasUnsavedChanges, onDirtyChange]);
@@ -185,13 +235,32 @@ export function FileContentPane({
 	const saveEditing = useCallback(async () => {
 		const detail = query.data;
 		if (!path || !detail?.fileFingerprint || saving) return;
+		// The save is of this revision and text, against the fingerprint the draft started from; a
+		// restored draft whose file changed meanwhile therefore reports the usual conflict.
+		const stored = getFileDraft(draftSessionKey, path);
+		const expectedFileFingerprint = stored?.baseFingerprint ?? detail.fileFingerprint;
+		const savedText = draft;
+		// `response` is what the server read back after writing. Newer edits may build on its
+		// fingerprint only when it holds exactly the text sent; if an external tool wrote in
+		// between, the base is unknown and the next save takes the normal conflict path.
+		const finishSave = (response: { content?: string; contentTruncated?: boolean; fileFingerprint?: string }) => {
+			clearFileDraftIfRevision(draftSessionKey, path, stored?.revision);
+			const confirmed = response.content === savedText && !response.contentTruncated && Boolean(response.fileFingerprint);
+			rebaseFileDraft(draftSessionKey, path, expectedFileFingerprint, confirmed ? response.fileFingerprint : UNKNOWN_FILE_BASE);
+			// Edits typed while the save ran stay; only the saved text's editor closes.
+			if (draftRef.current !== savedText) return false;
+			setRestoredDraft(null);
+			setEditing(false);
+			setDraft("");
+			return true;
+		};
 		setSaving(true);
 		setSaveError("");
 		try {
 			if (source.kind === "artifact") {
 				const saved = await updateSessionArtifactFile({
 					content: draft,
-					expectedFileFingerprint: detail.fileFingerprint,
+					expectedFileFingerprint,
 					path,
 					sessionId,
 					hostId,
@@ -204,14 +273,12 @@ export function FileContentPane({
 				});
 				// The session's artifact list carries each file's modified time.
 				await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
-				setEditing(false);
-				setDraft("");
-				setMode(initialMode);
+				if (finishSave({ fileFingerprint: saved.fileFingerprint })) setMode(initialMode);
 				return;
 			}
 			const saved = await updateSessionWorkspaceFile({
 				content: draft,
-				expectedFileFingerprint: detail.fileFingerprint,
+				expectedFileFingerprint,
 				path,
 				sessionId,
 				hostId,
@@ -230,14 +297,13 @@ export function FileContentPane({
 					"files-review-end-of-file",
 				].includes(String(queryKey[0])),
 			});
-			setEditing(false);
-			setDraft("");
+			finishSave(saved);
 		} catch (error) {
 			setSaveError(error instanceof Error ? error.message : t("files.saveError"));
 		} finally {
 			setSaving(false);
 		}
-	}, [commitSha, draft, initialMode, path, query.data, queryClient, saving, scope, sessionId, source, hostId, t]);
+	}, [commitSha, draft, draftSessionKey, initialMode, path, query.data, queryClient, saving, scope, sessionId, source, hostId, t]);
 	useEffect(() => {
 		if (!editing) return;
 		const onSaveShortcut = (event: KeyboardEvent) => {
@@ -299,6 +365,12 @@ export function FileContentPane({
 	}
 
 	const detail = query.data;
+	// A draft that cannot be kept past this pane, or one started from a file that has since changed.
+	const storedDraft = editing ? getFileDraft(draftSessionKey, path) : undefined;
+	const unstoredReason = editing ? unstoredFileDraftReasonFor(draftSessionKey, path) : null;
+	const draftNotice = !editing ? "" : unstoredReason
+		? t(unstoredReason === "size" ? "files.draftTooLarge" : "files.draftsFull")
+		: storedDraft?.baseFingerprint && storedDraft.baseFingerprint !== detail.fileFingerprint ? t("files.draftConflict") : "";
 	const renderedAvailable = canRenderMarkdown(path, detail);
 	const hasDisplayModeChoice = !singleView && (detail.status !== "unmodified" || renderedAvailable);
 	const fileName = path.split("/").pop() || path;
@@ -312,10 +384,10 @@ export function FileContentPane({
 	const fileView = (
 		<CompleteFileView
 			annotation={newerLiveText ? { ...annotation, begin: () => {} } : annotation}
-			detail={displayDetail}
+			detail={editing && restoredDraft !== null ? { ...displayDetail, content: restoredDraft } : displayDetail}
 			editing={editing && effectiveMode === "file"}
 			revealLine={initialLine ? { line: initialLine, requestKey: initialRequestKey } : undefined}
-			onEditChange={setDraft}
+			onEditChange={changeDraft}
 			onContentReady={onContentReady}
 			onRevealLineConsumed={onInitialLineConsumed}
 			scope={scope}
@@ -327,13 +399,16 @@ export function FileContentPane({
 		/>
 	);
 	const beginEditing = () => {
-		setMode("file");
+		// A record left by an earlier edit whose text was not kept starts from a stale base.
+		discardDraft();
+		selectMode("file");
 		cancelFileAnnotations(annotation, (target) => target.surface !== "review" && target.path === detail.path);
 		setDraft(detail.content);
 		setSaveError("");
 		setEditing(true);
 	};
 	const cancelEditing = () => {
+		discardDraft();
 		setEditing(false);
 		setDraft("");
 		setSaveError("");
@@ -495,7 +570,7 @@ export function FileContentPane({
 					fileView
 				)}
 				</EditProvider>
-				{saveError ? <p className="border-t border-error/40 bg-error/10 px-3 py-2 text-xs text-error" role="alert">{saveError}</p> : null}
+				{saveError || draftNotice ? <p className="border-t border-error/40 bg-error/10 px-3 py-2 text-xs text-error" role="alert">{saveError || draftNotice}</p> : null}
 				<FileAnnotationSendBar annotation={annotation} className="sticky bottom-0 z-20" surface="focused" />
 			</div>
 		);
@@ -508,7 +583,7 @@ export function FileContentPane({
 				<MarkdownFileView content={detail.content} filePath={path} hostId={hostId} sessionId={sessionId} artifactOrigin={artifactOriginOf(source)} truncated={detail.contentTruncated} version={query.dataUpdatedAt} />
 			) : fileView}
 			</EditProvider>
-			{saveError ? <p className="border-t border-error/40 bg-error/10 px-3 py-2 text-xs text-error" role="alert">{saveError}</p> : null}
+			{saveError || draftNotice ? <p className="border-t border-error/40 bg-error/10 px-3 py-2 text-xs text-error" role="alert">{saveError || draftNotice}</p> : null}
 			<FileAnnotationSendBar annotation={annotation} className="sticky bottom-0 z-20" surface="focused" />
 		</div>
 	);

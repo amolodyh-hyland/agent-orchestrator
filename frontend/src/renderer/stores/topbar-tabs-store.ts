@@ -20,6 +20,7 @@ import {
 	type TopbarTabsState,
 } from "../lib/topbar-tabs";
 import { assignProjectColorSlot } from "../lib/project-colors";
+import { markTopbarSessionClosed, markTopbarSessionOpened } from "../lib/navigation-history";
 
 export type { TabSessionKind, TopbarGroup, TopbarTabsState } from "../lib/topbar-tabs";
 
@@ -169,12 +170,31 @@ function takePendingInteraction(sessionId: string, now: number): boolean {
 	return found;
 }
 
+function sessionIdsInTabs(tabs: TopbarTabsState): Set<string> {
+	return new Set(tabs.groups.flatMap((group) => [
+		...(group.head.sessionId ? [group.head.sessionId] : []),
+		...group.tabs.map((tab) => tab.sessionId),
+	]));
+}
+
+function updateClosedSessionHistory(previous: TopbarTabsState, next: TopbarTabsState): void {
+	const previousIds = sessionIdsInTabs(previous);
+	const nextIds = sessionIdsInTabs(next);
+	for (const sessionId of previousIds) {
+		if (!nextIds.has(sessionId)) markTopbarSessionClosed(sessionId);
+	}
+	for (const sessionId of nextIds) {
+		if (!previousIds.has(sessionId)) markTopbarSessionOpened(sessionId);
+	}
+}
+
 export const useTopbarTabsStore: UseBoundStore<StoreApi<TopbarTabsStoreState>> = create<TopbarTabsStoreState>((set, get) => {
 	const updateTabs = (update: (tabs: TopbarTabsState) => TopbarTabsState) => {
 		const current = get().tabs;
 		const tabs = update(current);
 		if (tabs === current) return;
 		persistTabs(tabs);
+		updateClosedSessionHistory(current, tabs);
 		set({ tabs });
 	};
 
@@ -187,12 +207,14 @@ export const useTopbarTabsStore: UseBoundStore<StoreApi<TopbarTabsStoreState>> =
 		lastEviction: null,
 		activateSession: (input) => {
 			const state = get();
+			markTopbarSessionOpened(input.sessionId);
 			const now = Date.now();
 			const result = activateSessionInTabs(state.tabs, { ...input, now });
 			const shouldPromote = takePendingInteraction(input.sessionId, now);
 			const tabs = shouldPromote ? markInteractedInTabs(result.state, input.sessionId) : result.state;
 			if (tabs === state.tabs) return;
 			persistTabs(tabs);
+			updateClosedSessionHistory(state.tabs, tabs);
 			set({
 				tabs,
 				...(result.evicted > 0
@@ -215,7 +237,9 @@ export const useTopbarTabsStore: UseBoundStore<StoreApi<TopbarTabsStoreState>> =
 		closeTab: (sessionId) => {
 			const result = closeTabInTabs(get().tabs, sessionId);
 			if (result.state !== get().tabs) {
+				const current = get().tabs;
 				persistTabs(result.state);
+				updateClosedSessionHistory(current, result.state);
 				set({ tabs: result.state });
 			}
 			return { nextSessionId: result.nextSessionId, closedGroupId: result.closedGroupId };

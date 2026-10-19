@@ -2,6 +2,7 @@ import { useCanGoBack, useRouter } from "@tanstack/react-router";
 import { ArrowLeft, ArrowRight, PanelLeft } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { traverseHistory } from "../lib/navigation-history";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
 import { sidebarIsVisible, useUiStore } from "../stores/ui-store";
 import { AOMascot } from "./AOMascot";
@@ -153,7 +154,7 @@ export function TitlebarNav({
       <TitlebarButton
         disabled={historyLocked || !canGoBack}
         label={t("titlebar.goBack")}
-        onClick={() => router.history.back()}
+        onClick={() => traverseHistory(router.history, "back")}
         title={t("titlebar.goBack")}
       >
         <ArrowLeft className="size-icon-lg" aria-hidden="true" />
@@ -161,7 +162,7 @@ export function TitlebarNav({
       <TitlebarButton
         disabled={historyLocked || !canGoForward}
         label={t("titlebar.goForward")}
-        onClick={() => router.history.forward()}
+        onClick={() => traverseHistory(router.history, "forward")}
         title={t("titlebar.goForward")}
       >
         <ArrowRight className="size-icon-lg" aria-hidden="true" />
