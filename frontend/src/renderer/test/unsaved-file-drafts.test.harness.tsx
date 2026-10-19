@@ -7,11 +7,11 @@ import { NavigationHistorySync } from "../components/NavigationHistorySync";
 import { TitlebarNav } from "../components/TitlebarNav";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { useUnsavedLeaveGuard } from "../hooks/useUnsavedLeaveGuard";
-import { draftedFilePaths, getFileDraft, resetFileDraftsForTests } from "../lib/file-draft-store";
+import { draftedFilePaths, getFileDraft, resetFileDraftsForTests, UNKNOWN_FILE_BASE } from "../lib/file-draft-store";
 import { resetNavigationHistoryForTests, traverseHistory } from "../lib/navigation-history";
 import { useUiStore } from "../stores/ui-store";
 
-export const LEAVE_TOO_LARGE_MESSAGE = "This file has unsaved changes that are too large to keep. Leaving will discard them. Leave anyway?";
+export const LEAVE_TOO_LARGE_MESSAGE = "This file has unsaved changes that cannot be kept. Leaving will discard them. Leave anyway?";
 export const LEAVE_MESSAGE = "This file has unsaved changes. Your draft is kept and comes back when you return. Leave now?";
 
 // Mirrors SessionView: the file tab is open when the user opened it or when an unsaved draft
@@ -83,7 +83,7 @@ export type DraftPaneDriver = {
 	/** Types more text into the open editor. */
 	typeMore: (text: string) => Promise<void>;
 	/** Makes the next save wait; the returned function lets the server answer it. */
-	deferNextSave: () => () => Promise<void>;
+	deferNextSave: (response?: "exact" | "external") => () => Promise<void>;
 	/** Clicks Save without waiting for the editor to close. */
 	startSave: () => Promise<void>;
 	/** The file changes on the server behind the draft's back. */
@@ -183,6 +183,26 @@ export function describeUnsavedFileDrafts(name: string, driver: DraftPaneDriver)
 			await history.waitForIndex(1);
 			expect(await screen.findByRole("button", { name: "Save" })).toBeEnabled();
 			expect(driver.draft()).toContain("MORE");
+		});
+
+		it("does not build newer edits on a save response that an external write changed", async () => {
+			const history = await openDirty();
+			const finishSave = driver.deferNextSave("external");
+			await driver.startSave();
+			await history.click("go to board");
+			await history.click("Go back");
+			await history.waitForIndex(1);
+			expect(await screen.findByRole("button", { name: "Save" })).toBeEnabled();
+			await driver.typeMore(" MORE");
+			await finishSave();
+			await history.settle();
+
+			// The response described content the user did not submit: the base is unknown.
+			expect(getFileDraft(driver.draftSessionKey, driver.path)?.content).toContain("MORE");
+			expect(getFileDraft(driver.draftSessionKey, driver.path)?.baseFingerprint).toBe(UNKNOWN_FILE_BASE);
+			expect(screen.getByRole("alert")).toHaveTextContent("This file changed after your draft was started.");
+			await driver.startSave();
+			await waitFor(() => expect(driver.lastSaveExpectedFingerprint()).toBe(UNKNOWN_FILE_BASE));
 		});
 
 		it("saves a restored draft against the fingerprint it started from and shows the conflict", async () => {

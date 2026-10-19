@@ -8,6 +8,8 @@ import {
 	MAX_FILE_DRAFT_CHARS,
 	MAX_FILE_DRAFT_TOTAL_CHARS,
 	MAX_FILE_DRAFTS,
+	unstoredFileDraftReason,
+	unstoredFileDraftReasonFor,
 	rebaseFileDraft,
 	resetFileDraftsForTests,
 	setFileDraft,
@@ -49,22 +51,29 @@ describe("file draft store", () => {
 		expect(hasUnstoredFileDraft()).toBe(false);
 	});
 
-	it("evicts the oldest other drafts past the count limit and never the one being written", () => {
-		for (let index = 0; index < MAX_FILE_DRAFTS + 5; index += 1) setFileDraft("s", `f${index}.ts`, "x", "fp");
+	it("refuses a new draft past the count limit and keeps every draft already stored", () => {
+		for (let index = 0; index < MAX_FILE_DRAFTS; index += 1) setFileDraft("s", `f${index}.ts`, "x", "fp");
+		expect(setFileDraft("s", "new.ts", "typed", "fp")).toBeNull();
+		expect(getFileDraft("s", "new.ts")).toBeUndefined();
+		expect(unstoredFileDraftReasonFor("s", "new.ts")).toBe("capacity");
+		expect(unstoredFileDraftReason()).toBe("capacity");
 		expect(draftedFilePaths("s")).toHaveLength(MAX_FILE_DRAFTS);
-		expect(getFileDraft("s", "f0.ts")).toBeUndefined();
-		expect(getFileDraft("s", `f${MAX_FILE_DRAFTS + 4}.ts`)).toBeDefined();
+		expect(getFileDraft("s", "f0.ts")?.content).toBe("x");
+		// A stored draft can still be edited, and a refused one is kept once room appears.
+		expect(setFileDraft("s", "f0.ts", "xx", "fp")).not.toBeNull();
+		clearSessionFileDrafts("s");
+		setFileDraft("s", "f0.ts", "x", "fp");
+		expect(setFileDraft("s", "new.ts", "typed", "fp")).not.toBeNull();
+		expect(unstoredFileDraftReasonFor("s", "new.ts")).toBeNull();
 	});
 
-	it("evicts the oldest drafts past the total size limit but keeps the current one", () => {
+	it("refuses a draft that would pass the total size limit without dropping stored ones", () => {
 		const chunk = "y".repeat(MAX_FILE_DRAFT_CHARS);
-		const needed = Math.floor(MAX_FILE_DRAFT_TOTAL_CHARS / MAX_FILE_DRAFT_CHARS) + 2;
-		for (let index = 0; index < needed; index += 1) setFileDraft("s", `big${index}.ts`, chunk, "fp");
-		expect(getFileDraft("s", "big0.ts")).toBeUndefined();
-		expect(getFileDraft("s", `big${needed - 1}.ts`)?.content).toBe(chunk);
-		let total = 0;
-		for (const path of draftedFilePaths("s")) total += getFileDraft("s", path)!.content.length;
-		expect(total).toBeLessThanOrEqual(MAX_FILE_DRAFT_TOTAL_CHARS);
+		const fits = Math.floor(MAX_FILE_DRAFT_TOTAL_CHARS / MAX_FILE_DRAFT_CHARS);
+		for (let index = 0; index < fits; index += 1) expect(setFileDraft("s", `big${index}.ts`, chunk, "fp")).not.toBeNull();
+		expect(setFileDraft("s", "one-more.ts", "z", "fp")).toBeNull();
+		expect(unstoredFileDraftReasonFor("s", "one-more.ts")).toBe("capacity");
+		for (let index = 0; index < fits; index += 1) expect(getFileDraft("s", `big${index}.ts`)?.content).toBe(chunk);
 	});
 
 	it("clears every draft of one session, including its artifact variant, and no other", () => {

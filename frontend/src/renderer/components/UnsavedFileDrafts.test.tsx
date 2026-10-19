@@ -1,7 +1,7 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
-import { getFileDraft, MAX_FILE_DRAFT_CHARS, resetFileDraftsForTests } from "../lib/file-draft-store";
+import { draftedFilePaths, getFileDraft, MAX_FILE_DRAFT_CHARS, MAX_FILE_DRAFTS, resetFileDraftsForTests, setFileDraft } from "../lib/file-draft-store";
 import { describeUnsavedFileDrafts, DRAFT_TEXT, LEAVE_TOO_LARGE_MESSAGE, renderUnsavedFileDrafts } from "../test/unsaved-file-drafts.test.harness";
 import { FileContentPane } from "./FileContentPane";
 import type { FileAnnotationModel } from "./WorkspaceDiffView";
@@ -49,10 +49,13 @@ describeUnsavedFileDrafts("local", {
 	},
 	draft: () => editor().value,
 	typeMore: async (text) => { await userEvent.type(editor(), text); },
-	deferNextSave: () => {
+	deferNextSave: (response = "exact") => {
 		let answer: (value: unknown) => void = () => {};
 		putMock.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
-		return async () => { await act(async () => answer({ data: { ...loaded, content: `${loaded.content} // ${DRAFT_TEXT}`, fileFingerprint: "file-2" } })); };
+		return async () => {
+			const content = response === "exact" ? putMock.mock.calls.at(-1)?.[1]?.body?.content : "written by another tool\n";
+			await act(async () => answer({ data: { ...loaded, content, fileFingerprint: "file-2" } }));
+		};
 	},
 	startSave: async () => { await userEvent.click(screen.getByRole("button", { name: "Save" })); },
 	externalChange: () => { getMock.mockResolvedValue({ data: { ...loaded, content: "export const x = 99;\n", fileFingerprint: "file-3" } }); },
@@ -84,6 +87,30 @@ describe("a local draft too large to keep", () => {
 		await history.click("Go back");
 		expect(confirm).toHaveBeenCalledWith(LEAVE_TOO_LARGE_MESSAGE);
 		expect(history.index()).toBe(1);
+		confirm.mockRestore();
+		resetFileDraftsForTests();
+	});
+});
+
+describe("a local draft refused for lack of room", () => {
+	it("warns, keeps the stored drafts and says leaving discards it", async () => {
+		const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+		resetFileDraftsForTests();
+		for (let index = 0; index < MAX_FILE_DRAFTS; index += 1) setFileDraft("other", `f${index}.ts`, `kept ${index}`, "fp");
+		getMock.mockReset().mockResolvedValue({ data: loaded });
+		const history = await renderUnsavedFileDrafts("sess-1", (onDirtyChange) => (
+			<FileContentPane annotation={annotation} initialMode="file" initialRequestKey={1} onDirtyChange={onDirtyChange} path="src/App.tsx" sessionId="sess-1" split={false} />
+		));
+		await history.click("open file");
+		await userEvent.click(await screen.findByRole("button", { name: "Edit file" }));
+		await userEvent.type(editor(), " // typed");
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("Too many unsaved drafts");
+		expect(getFileDraft("sess-1", "src/App.tsx")).toBeUndefined();
+		expect(draftedFilePaths("other")).toHaveLength(MAX_FILE_DRAFTS);
+		expect(getFileDraft("other", "f0.ts")?.content).toBe("kept 0");
+		await history.click("Go back");
+		expect(confirm).toHaveBeenCalledWith(LEAVE_TOO_LARGE_MESSAGE);
 		confirm.mockRestore();
 		resetFileDraftsForTests();
 	});

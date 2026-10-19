@@ -11,14 +11,19 @@ export type FileDraft = {
 
 /** A draft larger than this is not kept past its pane. */
 export const MAX_FILE_DRAFT_CHARS = 1_000_000;
-/** The other sessions' drafts are evicted, oldest first, beyond these. */
+/** Beyond these, a new draft is refused; drafts already kept are never dropped to make room. */
 export const MAX_FILE_DRAFTS = 20;
 export const MAX_FILE_DRAFT_TOTAL_CHARS = 4_000_000;
+
+/** A base that matches no file: a save sent with it always takes the normal conflict path. */
+export const UNKNOWN_FILE_BASE = "\u0000unknown-base";
+
+export type UnstoredDraftReason = "size" | "capacity";
 
 // Insertion order is write order: a write re-inserts its entry, so the first key is the oldest.
 const drafts = new Map<string, FileDraft>();
 let revisionCounter = 0;
-let unstoredDrafts = new Set<string>();
+let unstoredDrafts = new Map<string, UnstoredDraftReason>();
 
 const SEPARATOR = "\u0000";
 
@@ -41,9 +46,10 @@ function totalChars(): number {
 }
 
 /**
- * Stores the draft being edited. The entry just written is never evicted; older ones are
- * dropped to fit the limits. Returns the new revision, or null when the draft is too large to
- * keep (it is then recorded as unstored so leaving can say so). `content: null` clears it.
+ * Stores the draft being edited. A draft is never dropped to make room for another: one that is
+ * too large, or that would pass the count or total limit, is refused and recorded as unstored
+ * with its reason so the pane and the leave prompt can say so (its older stored version goes,
+ * since it would come back stale). `content: null` clears it. Returns the new revision, or null.
  */
 export function setFileDraft(
 	sessionKey: string,
@@ -58,26 +64,39 @@ export function setFileDraft(
 		unstoredDrafts.delete(key);
 		return null;
 	}
-	if (content.length > MAX_FILE_DRAFT_CHARS) {
-		// A stale stored version must not come back as if it were the current text.
+	const existing = drafts.get(key);
+	const refuse = (reason: UnstoredDraftReason): null => {
 		drafts.delete(key);
-		unstoredDrafts.add(key);
+		unstoredDrafts.set(key, reason);
 		return null;
-	}
+	};
+	if (content.length > MAX_FILE_DRAFT_CHARS) return refuse("size");
+	const othersCount = drafts.size - (existing ? 1 : 0);
+	const othersChars = totalChars() - (existing?.content.length ?? 0);
+	if (othersCount + 1 > MAX_FILE_DRAFTS || othersChars + content.length > MAX_FILE_DRAFT_TOTAL_CHARS) return refuse("capacity");
 	unstoredDrafts.delete(key);
-	const base = drafts.get(key)?.baseFingerprint ?? baseFingerprint;
+	const base = existing?.baseFingerprint ?? baseFingerprint;
 	drafts.delete(key);
 	const revision = ++revisionCounter;
 	drafts.set(key, { content, baseFingerprint: base, revision });
-	for (const oldest of drafts.keys()) {
-		if (drafts.size <= MAX_FILE_DRAFTS && totalChars() <= MAX_FILE_DRAFT_TOTAL_CHARS) break;
-		if (oldest === key) break;
-		drafts.delete(oldest);
-	}
 	return revision;
 }
 
-/** True while an open draft was too large to keep: leaving would lose it. */
+/** Why an open draft could not be kept (so leaving would lose it), or null when all are kept. */
+export function unstoredFileDraftReason(): UnstoredDraftReason | null {
+	let reason: UnstoredDraftReason | null = null;
+	for (const value of unstoredDrafts.values()) {
+		if (value === "size") return "size";
+		reason = value;
+	}
+	return reason;
+}
+
+/** Why this file's draft could not be kept, or null when it is kept (or not being edited). */
+export function unstoredFileDraftReasonFor(sessionKey: string, path: string | null | undefined): UnstoredDraftReason | null {
+	return path ? unstoredDrafts.get(draftKey(sessionKey, path)) ?? null : null;
+}
+
 export function hasUnstoredFileDraft(): boolean {
 	return unstoredDrafts.size > 0;
 }
@@ -104,7 +123,7 @@ export function draftedFilePaths(sessionKey: string): string[] {
 
 /** Drops every draft of a session (and its artifact variant) once the session is gone. */
 export function clearSessionFileDrafts(sessionKey: string): void {
-	for (const key of [...drafts.keys(), ...unstoredDrafts]) {
+	for (const key of [...drafts.keys(), ...unstoredDrafts.keys()]) {
 		if (key.startsWith(`${sessionKey}${SEPARATOR}`) || key.startsWith(`${sessionKey}:`)) {
 			drafts.delete(key);
 			unstoredDrafts.delete(key);
@@ -114,6 +133,6 @@ export function clearSessionFileDrafts(sessionKey: string): void {
 
 export function resetFileDraftsForTests(): void {
 	drafts.clear();
-	unstoredDrafts = new Set();
+	unstoredDrafts = new Map();
 	revisionCounter = 0;
 }

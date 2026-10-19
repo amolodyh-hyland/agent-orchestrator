@@ -19,7 +19,7 @@ import {
 import { usePierreFileHighlightReady } from "../hooks/usePierreFileHighlight";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
-import { clearFileDraftIfRevision, getFileDraft, hasUnstoredFileDraft, rebaseFileDraft, setFileDraft } from "../lib/file-draft-store";
+import { clearFileDraftIfRevision, getFileDraft, rebaseFileDraft, setFileDraft, UNKNOWN_FILE_BASE, unstoredFileDraftReasonFor } from "../lib/file-draft-store";
 import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
@@ -231,9 +231,13 @@ export function FileContentPane({
 		const stored = getFileDraft(draftSessionKey, path);
 		const expectedFileFingerprint = stored?.baseFingerprint ?? detail.fileFingerprint;
 		const savedText = draft;
-		const finishSave = (savedFingerprint: string | undefined) => {
+		// `response` is what the server read back after writing. Newer edits may build on its
+		// fingerprint only when it holds exactly the text sent; if an external tool wrote in
+		// between, the base is unknown and the next save takes the normal conflict path.
+		const finishSave = (response: { content?: string; contentTruncated?: boolean; fileFingerprint?: string }) => {
 			clearFileDraftIfRevision(draftSessionKey, path, stored?.revision);
-			rebaseFileDraft(draftSessionKey, path, expectedFileFingerprint, savedFingerprint);
+			const confirmed = response.content === savedText && !response.contentTruncated && Boolean(response.fileFingerprint);
+			rebaseFileDraft(draftSessionKey, path, expectedFileFingerprint, confirmed ? response.fileFingerprint : UNKNOWN_FILE_BASE);
 			// Edits typed while the save ran stay; only the saved text's editor closes.
 			if (draftRef.current !== savedText) return false;
 			setRestoredDraft(null);
@@ -260,7 +264,7 @@ export function FileContentPane({
 				});
 				// The session's artifact list carries each file's modified time.
 				await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
-				if (finishSave(saved.fileFingerprint)) setMode(initialMode);
+				if (finishSave({ fileFingerprint: saved.fileFingerprint })) setMode(initialMode);
 				return;
 			}
 			const saved = await updateSessionWorkspaceFile({
@@ -284,7 +288,7 @@ export function FileContentPane({
 					"files-review-end-of-file",
 				].includes(String(queryKey[0])),
 			});
-			finishSave(saved.fileFingerprint);
+			finishSave(saved);
 		} catch (error) {
 			setSaveError(error instanceof Error ? error.message : t("files.saveError"));
 		} finally {
@@ -354,8 +358,9 @@ export function FileContentPane({
 	const detail = query.data;
 	// A draft that cannot be kept past this pane, or one started from a file that has since changed.
 	const storedDraft = editing ? getFileDraft(draftSessionKey, path) : undefined;
-	const draftNotice = !editing ? "" : hasUnstoredFileDraft()
-		? t("files.draftTooLarge")
+	const unstoredReason = editing ? unstoredFileDraftReasonFor(draftSessionKey, path) : null;
+	const draftNotice = !editing ? "" : unstoredReason
+		? t(unstoredReason === "size" ? "files.draftTooLarge" : "files.draftsFull")
 		: storedDraft?.baseFingerprint && storedDraft.baseFingerprint !== detail.fileFingerprint ? t("files.draftConflict") : "";
 	const renderedAvailable = canRenderMarkdown(path, detail);
 	const hasDisplayModeChoice = !singleView && (detail.status !== "unmodified" || renderedAvailable);

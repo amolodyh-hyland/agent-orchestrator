@@ -44,10 +44,14 @@ describeUnsavedFileDrafts("cloud", {
 		await userEvent.click(editorContent());
 		await userEvent.keyboard(text);
 	},
-	deferNextSave: () => {
+	deferNextSave: (response = "exact") => {
 		let answer: (value: unknown) => void = () => {};
 		updateWorkspaceReviewFile.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
-		return async () => { await act(async () => answer({ content: `# Hello ${DRAFT_TEXT}`, fileFingerprint: "fp-2" })); };
+		// The server answers with what it read back: the submitted text, or another tool's.
+		return async () => {
+			const content = response === "exact" ? updateWorkspaceReviewFile.mock.calls.at(-1)?.[2]?.content : "# written by another tool";
+			await act(async () => answer({ content, fileFingerprint: "fp-2" }));
+		};
 	},
 	startSave: async () => { await userEvent.click(screen.getByRole("button", { name: "Save" })); },
 	externalChange: () => { getWorkspaceReviewFile.mockResolvedValue({ ...detail, content: "# Changed elsewhere", fileFingerprint: "fp-3" }); },

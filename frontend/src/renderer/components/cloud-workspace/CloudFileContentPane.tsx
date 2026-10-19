@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cloudWorkspaceReviewFileQueryOptions, cloudWorkspaceReviewQueryKey, cloudWorkspaceReviewRevisionQueryOptions } from "../../hooks/useCloudWorkspaceReview";
 import type { WorkspaceFileDetail } from "../../hooks/useSessionWorkspaceFiles";
-import { clearFileDraftIfRevision, cloudDraftSessionKey, getFileDraft, hasUnstoredFileDraft, rebaseFileDraft, setFileDraft } from "../../lib/file-draft-store";
+import { clearFileDraftIfRevision, cloudDraftSessionKey, getFileDraft, rebaseFileDraft, setFileDraft, UNKNOWN_FILE_BASE, unstoredFileDraftReasonFor } from "../../lib/file-draft-store";
 import type { CloudCpClient, CloudCpWorkspaceReviewFileResponse, CloudCpWorkspaceReviewScope } from "../../lib/cloud-cp";
 import type { FileAnnotationModel } from "../WorkspaceDiffView";
 import { cancelFileAnnotations, FileAnnotationComposer, FileAnnotationSendBar, PanelMessage, RetryButton } from "../WorkspaceDiffView";
@@ -108,7 +108,9 @@ export function CloudFileContentPane({
 			queryClient.setQueryData(cloudWorkspaceReviewFileQueryOptions({ client, baseUrl, orgId, sessionId, path, scope, commitSha }).queryKey, { ...detail, ...result });
 			await queryClient.invalidateQueries({ queryKey: cloudWorkspaceReviewQueryKey(baseUrl, orgId, sessionId) });
 			clearFileDraftIfRevision(draftSessionKey, path, stored?.revision);
-			rebaseFileDraft(draftSessionKey, path, expectedFileFingerprint, result.fileFingerprint);
+			// Newer edits build on the response fingerprint only if it holds exactly the text sent.
+			const confirmed = result.content === savedText && Boolean(result.fileFingerprint);
+			rebaseFileDraft(draftSessionKey, path, expectedFileFingerprint, confirmed ? result.fileFingerprint : UNKNOWN_FILE_BASE);
 			// Edits typed while the save ran stay; only the saved text's editor closes.
 			if (draftRef.current === savedText) { setRestoredDraft(null); setEditing(false); setDraft(""); }
 		} catch (error) { setSaveError(error instanceof Error ? error.message : t("files.saveError")); }
@@ -124,8 +126,9 @@ export function CloudFileContentPane({
 	if (query.isPending) return <PanelMessage>{t("files.loading")}</PanelMessage>;
 	if (query.error || !detail) return <PanelMessage action={<RetryButton onClick={() => void query.refetch()} />}>{query.error?.message ?? t("files.error.loadFile")}</PanelMessage>;
 	const storedDraft = editing ? getFileDraft(draftSessionKey, path) : undefined;
-	const draftNotice = !editing ? "" : hasUnstoredFileDraft()
-		? t("files.draftTooLarge")
+	const unstoredReason = editing ? unstoredFileDraftReasonFor(draftSessionKey, path) : null;
+	const draftNotice = !editing ? "" : unstoredReason
+		? t(unstoredReason === "size" ? "files.draftTooLarge" : "files.draftsFull")
 		: storedDraft?.baseFingerprint && storedDraft.baseFingerprint !== detail.fileFingerprint ? t("files.draftConflict") : "";
 	const renderedAvailable = !detail.deleted && !detail.binary && !detail.contentTruncated && /\.(md|markdown)$/i.test(path);
 	const effectiveMode = detail.status === "unmodified" && mode === "diff" ? "file" : mode === "rendered" && !renderedAvailable ? "file" : mode;
