@@ -522,7 +522,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const [dirtyFilesBySession, setDirtyFilesBySession] = useState<Record<string, Record<string, true>>>({});
 	const dirtyFiles = dirtyFilesBySession[uiSessionId] ?? {};
 	const activeFileDirty = Boolean(fileTabs.activePath && dirtyFiles[fileTabs.activePath]);
-	useUnsavedLeaveGuard(activeFileDirty, t("files.unsavedLeaveConfirm"));
+	useUnsavedLeaveGuard(activeFileDirty, t("files.unsavedLeaveConfirm"), t("files.unsavedLeaveTooLargeConfirm"));
 	// Unsaved edits outlive this view (see file-draft-store): reopen their files so the editors
 	// remount with the drafts.
 	const draftSessionKey = session?.cloud ? cloudDraftSessionKey(session.cloud.orgId, sessionId) : uiSessionId;

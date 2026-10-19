@@ -11,6 +11,7 @@ import { draftedFilePaths, getFileDraft, resetFileDraftsForTests } from "../lib/
 import { resetNavigationHistoryForTests, traverseHistory } from "../lib/navigation-history";
 import { useUiStore } from "../stores/ui-store";
 
+export const LEAVE_TOO_LARGE_MESSAGE = "This file has unsaved changes that are too large to keep. Leaving will discard them. Leave anyway?";
 export const LEAVE_MESSAGE = "This file has unsaved changes. Your draft is kept and comes back when you return. Leave now?";
 
 // Mirrors SessionView: the file tab is open when the user opened it or when an unsaved draft
@@ -18,7 +19,7 @@ export const LEAVE_MESSAGE = "This file has unsaved changes. Your draft is kept 
 function SessionRoute({ draftSessionKey, renderPane }: { draftSessionKey: string; renderPane: (onDirtyChange: (dirty: boolean) => void) => ReactNode }) {
 	const [fileOpen, setFileOpen] = useState(() => draftedFilePaths(draftSessionKey).length > 0);
 	const [dirty, setDirty] = useState(false);
-	useUnsavedLeaveGuard(dirty, LEAVE_MESSAGE);
+	useUnsavedLeaveGuard(dirty, LEAVE_MESSAGE, LEAVE_TOO_LARGE_MESSAGE);
 	return (
 		<>
 			<button onClick={() => setFileOpen(true)} type="button">open file</button>
@@ -60,13 +61,16 @@ export async function renderUnsavedFileDrafts(draftSessionKey: string, renderPan
 	const click = async (name: string) => { act(() => screen.getByRole("button", { name }).click()); await settle(); };
 	const traverse = (direction: "back" | "forward") => { act(() => traverseHistory(router.history, direction)); return settle(); };
 	await click("go to session");
-	return { router, index, settle, click, traverse, waitForIndex: (expected: number) => waitFor(() => expect(index()).toBe(expected)) };
+	return { queryClient, router, index, settle, click, traverse, waitForIndex: (expected: number) => waitFor(() => expect(index()).toBe(expected)) };
 }
 
 export type DraftPaneDriver = {
 	/** The session key and path the pane stores its draft under. */
 	draftSessionKey: string;
 	path: string;
+	/** The fingerprint the file loads with, and the one a successful save returns. */
+	baseFingerprint: string;
+	savedFingerprint: string;
 	renderPane: (onDirtyChange: (dirty: boolean) => void) => ReactNode;
 	/** Opens the editor on the loaded file and types the draft into it. */
 	editDraft: () => Promise<void>;
@@ -76,6 +80,16 @@ export type DraftPaneDriver = {
 	save: () => Promise<void>;
 	discard: () => Promise<void>;
 	prepare: () => void;
+	/** Types more text into the open editor. */
+	typeMore: (text: string) => Promise<void>;
+	/** Makes the next save wait; the returned function lets the server answer it. */
+	deferNextSave: () => () => Promise<void>;
+	/** Clicks Save without waiting for the editor to close. */
+	startSave: () => Promise<void>;
+	/** The file changes on the server behind the draft's back. */
+	externalChange: () => void;
+	/** The fingerprint the last save sent as the expected one. */
+	lastSaveExpectedFingerprint: () => string | undefined;
 };
 
 export const DRAFT_TEXT = "DRAFT";
@@ -104,7 +118,7 @@ export function describeUnsavedFileDrafts(name: string, driver: DraftPaneDriver)
 			await history.click("go to board");
 			expect(screen.getByTestId("board")).toBeInTheDocument();
 			expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
-			expect(getFileDraft(driver.draftSessionKey, driver.path)).toContain(DRAFT_TEXT);
+			expect(getFileDraft(driver.draftSessionKey, driver.path)?.content).toContain(DRAFT_TEXT);
 
 			await history.click("Go back");
 			await history.waitForIndex(1);
@@ -146,6 +160,43 @@ export function describeUnsavedFileDrafts(name: string, driver: DraftPaneDriver)
 			await history.traverse("forward");
 			expect(confirm).not.toHaveBeenCalled();
 			expect(history.index()).toBe(1);
+		});
+
+		it("an older save finishing later does not delete edits typed after the pane came back", async () => {
+			const history = await openDirty();
+			const finishSave = driver.deferNextSave();
+			await driver.startSave();
+			await history.click("go to board");
+			await history.click("Go back");
+			await history.waitForIndex(1);
+			expect(await screen.findByRole("button", { name: "Save" })).toBeEnabled();
+			await driver.typeMore(" MORE");
+			await finishSave();
+			await history.settle();
+
+			expect(driver.draft()).toContain("MORE");
+			expect(getFileDraft(driver.draftSessionKey, driver.path)?.content).toContain("MORE");
+			// The newer edits now sit on top of what the finished save wrote.
+			expect(getFileDraft(driver.draftSessionKey, driver.path)?.baseFingerprint).toBe(driver.savedFingerprint);
+			await history.click("go to board");
+			await history.click("Go back");
+			await history.waitForIndex(1);
+			expect(await screen.findByRole("button", { name: "Save" })).toBeEnabled();
+			expect(driver.draft()).toContain("MORE");
+		});
+
+		it("saves a restored draft against the fingerprint it started from and shows the conflict", async () => {
+			const history = await openDirty();
+			await history.click("go to board");
+			driver.externalChange();
+			await history.click("Go back");
+			await history.waitForIndex(1);
+			// The workspace file watcher invalidates the file once the change is seen.
+			await act(() => history.queryClient.invalidateQueries());
+			expect(await screen.findByRole("alert")).toHaveTextContent("This file changed after your draft was started.");
+			expect(driver.draft()).toContain(DRAFT_TEXT);
+			await driver.startSave();
+			await waitFor(() => expect(driver.lastSaveExpectedFingerprint()).toBe(driver.baseFingerprint));
 		});
 
 		it("clears the draft on save", async () => {

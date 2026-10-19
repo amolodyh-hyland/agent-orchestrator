@@ -6,7 +6,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetFileDraftsForTests } from "../../lib/file-draft-store";
+import { cloudDraftSessionKey, resetFileDraftsForTests, setFileDraft } from "../../lib/file-draft-store";
 import type { CloudCpClient } from "../../lib/cloud-cp";
 import type { FileAnnotationModel } from "../WorkspaceDiffView";
 import { TooltipProvider } from "../ui/tooltip";
@@ -68,6 +68,20 @@ describe("CloudFileContentPane", () => {
 		// A new request for the same file re-seeds the editor from the stored draft, not the saved text.
 		view.rerender(pane({ initialRequestKey: 2 }));
 		expect(await screen.findByRole("button", { name: "Save" })).toBeEnabled();
+	});
+
+	it.each([
+		["a historical revision", { commitSha: "abc123" }, { editable: true }],
+		["a file that is not editable", {}, { editable: false }],
+	])("does not restore a stored draft into %s", async (_label, paneProps, detailPatch) => {
+		const client = { getWorkspaceReviewFile: vi.fn().mockResolvedValue({ ...detail, ...detailPatch }) } as unknown as CloudCpClient;
+		setFileDraft(cloudDraftSessionKey("org-1", "session-1"), "README.md", "# Draft", "fp-1");
+
+		renderPane(client, { initialMode: "file", ...paneProps });
+
+		expect(await screen.findByText("# Hello")).toBeInTheDocument();
+		expect(screen.queryByRole("textbox", { name: "Edit README.md" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
 	});
 
 	it("saves edits with the current fingerprint and reports dirty state", async () => {

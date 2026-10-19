@@ -14,9 +14,10 @@ import { useTranslation } from "react-i18next";
 import { settingsQueryKey, type Settings } from "./useSettings";
 import type { CloudCpSession } from "../lib/cloud-cp";
 import { clientForHost } from "../lib/host-clients";
-import { LOCAL_HOST, refKey } from "../lib/hosts";
+import { LOCAL_HOST, refKey, sessionUiKey } from "../lib/hosts";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 import { useUiStore } from "../stores/ui-store";
+import { clearSessionFileDrafts, cloudDraftSessionKey } from "../lib/file-draft-store";
 
 type TerminateSessionOptions = {
 	/** Fires synchronously as the kill starts — before the cache drops the row. */
@@ -159,6 +160,8 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 		},
 		onSuccess: async (artifactsDeleted, session) => {
 			void captureRendererEvent("ao.renderer.session_kill_succeeded", { project_id: session.workspaceId });
+			// The session's unsaved file drafts have nowhere to return to.
+			clearSessionFileDrafts(session.cloud ? cloudDraftSessionKey(session.cloud.orgId, session.id) : sessionUiKey(session.id, session.hostId));
 			// The archive stands either way. A failed delete, or a host whose daemon
 			// predates the option, leaves the files on disk, so say so.
 			if (session.deleteArtifacts && !artifactsDeleted) {

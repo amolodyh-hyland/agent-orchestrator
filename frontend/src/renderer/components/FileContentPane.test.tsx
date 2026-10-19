@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetFileDraftsForTests } from "../lib/file-draft-store";
+import { resetFileDraftsForTests, setFileDraft } from "../lib/file-draft-store";
 import { useUiStore } from "../stores/ui-store";
 import { EMPTY_TOPBAR_TABS, findSession } from "../lib/topbar-tabs";
 import { useTopbarTabsStore } from "../stores/topbar-tabs-store";
@@ -455,6 +455,26 @@ describe("FileContentPane", () => {
 		view.rerender(<QueryClientProvider client={new QueryClient()}><TooltipProvider>{pane(1)}</TooltipProvider></QueryClientProvider>);
 		expect(screen.getByRole("textbox", { name: "Edit src/App.tsx" })).toBeInTheDocument();
 		expect(screen.getByTestId("unsaved-file-indicator")).toBeInTheDocument();
+	});
+
+	it.each([
+		["a historical revision", { commitSha: "abc123" }, { editable: true }],
+		["a file that is not editable", {}, { editable: false }],
+	])("does not restore a stored draft into %s", async (_label, paneProps, detailPatch) => {
+		getMock.mockResolvedValue({
+			data: {
+				sessionId: "sess-1", path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 18, binary: false, deleted: false,
+				content: "export const x = 1;\n", contentTruncated: false, diff: "@@ -0,0 +1,1 @@\n+export const x = 1;\n", diffTruncated: false,
+				workspaceVersion: "workspace-1", fileFingerprint: "file-1", ...detailPatch,
+			},
+		});
+		setFileDraft("sess-1", "src/App.tsx", "export const x = 'draft';\n", "file-1");
+
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" path="src/App.tsx" sessionId="sess-1" split={false} {...paneProps} />);
+
+		expect(await screen.findByText("export const x = 1;", { exact: false })).toBeInTheDocument();
+		expect(screen.queryByRole("textbox", { name: "Edit src/App.tsx" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
 	});
 
 	it.each([

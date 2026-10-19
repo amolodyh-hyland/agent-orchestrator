@@ -1,7 +1,8 @@
-import { screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
-import { describeUnsavedFileDrafts, DRAFT_TEXT } from "../test/unsaved-file-drafts.test.harness";
+import { getFileDraft, MAX_FILE_DRAFT_CHARS, resetFileDraftsForTests } from "../lib/file-draft-store";
+import { describeUnsavedFileDrafts, DRAFT_TEXT, LEAVE_TOO_LARGE_MESSAGE, renderUnsavedFileDrafts } from "../test/unsaved-file-drafts.test.harness";
 import { FileContentPane } from "./FileContentPane";
 import type { FileAnnotationModel } from "./WorkspaceDiffView";
 
@@ -33,6 +34,8 @@ const editor = () => screen.getByRole("textbox", { name: EDITOR }) as HTMLTextAr
 describeUnsavedFileDrafts("local", {
 	draftSessionKey: "sess-1",
 	path: "src/App.tsx",
+	baseFingerprint: "file-1",
+	savedFingerprint: "file-2",
 	prepare: () => {
 		getMock.mockReset().mockResolvedValue({ data: loaded });
 		putMock.mockReset().mockResolvedValue({ data: { ...loaded, content: `${loaded.content} // ${DRAFT_TEXT}`, fileFingerprint: "file-2" } });
@@ -45,6 +48,15 @@ describeUnsavedFileDrafts("local", {
 		await userEvent.type(editor(), ` // ${DRAFT_TEXT}`);
 	},
 	draft: () => editor().value,
+	typeMore: async (text) => { await userEvent.type(editor(), text); },
+	deferNextSave: () => {
+		let answer: (value: unknown) => void = () => {};
+		putMock.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+		return async () => { await act(async () => answer({ data: { ...loaded, content: `${loaded.content} // ${DRAFT_TEXT}`, fileFingerprint: "file-2" } })); };
+	},
+	startSave: async () => { await userEvent.click(screen.getByRole("button", { name: "Save" })); },
+	externalChange: () => { getMock.mockResolvedValue({ data: { ...loaded, content: "export const x = 99;\n", fileFingerprint: "file-3" } }); },
+	lastSaveExpectedFingerprint: () => putMock.mock.calls.at(-1)?.[1]?.body?.expectedFileFingerprint,
 	save: async () => {
 		await userEvent.click(screen.getByRole("button", { name: "Save" }));
 		await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument());
@@ -53,4 +65,26 @@ describeUnsavedFileDrafts("local", {
 		await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
 		await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument());
 	},
+});
+
+describe("a local draft too large to keep", () => {
+	it("says so and warns that leaving discards it", async () => {
+		const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+		resetFileDraftsForTests();
+		getMock.mockReset().mockResolvedValue({ data: loaded });
+		const history = await renderUnsavedFileDrafts("sess-1", (onDirtyChange) => (
+			<FileContentPane annotation={annotation} initialMode="file" initialRequestKey={1} onDirtyChange={onDirtyChange} path="src/App.tsx" sessionId="sess-1" split={false} />
+		));
+		await history.click("open file");
+		await userEvent.click(await screen.findByRole("button", { name: "Edit file" }));
+		fireEvent.change(editor(), { target: { value: "x".repeat(MAX_FILE_DRAFT_CHARS + 1) } });
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("too large to keep");
+		expect(getFileDraft("sess-1", "src/App.tsx")).toBeUndefined();
+		await history.click("Go back");
+		expect(confirm).toHaveBeenCalledWith(LEAVE_TOO_LARGE_MESSAGE);
+		expect(history.index()).toBe(1);
+		confirm.mockRestore();
+		resetFileDraftsForTests();
+	});
 });

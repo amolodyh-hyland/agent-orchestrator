@@ -2358,7 +2358,7 @@ describe("SessionView", () => {
 
 	it("reopens a file that has an unsaved draft when the session view mounts again", async () => {
 		workerSession("sess-1").mode = "chat";
-		setFileDraft("sess-1", "src/App.tsx", "export const x = 2;");
+		setFileDraft("sess-1", "src/App.tsx", "export const x = 2;", "file-1");
 		render(<SessionView sessionId="sess-1" />);
 
 		expect(await screen.findByTestId("session-file-workspace")).toHaveTextContent("src/App.tsx");

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import type { CloudCpClient } from "../../lib/cloud-cp";
@@ -24,6 +24,8 @@ const editorContent = () => screen.getByRole("textbox", { name: EDITOR }).queryS
 describeUnsavedFileDrafts("cloud", {
 	draftSessionKey: cloudDraftSessionKey("org-1", "session-1"),
 	path: "README.md",
+	baseFingerprint: "fp-1",
+	savedFingerprint: "fp-2",
 	prepare: () => {
 		getWorkspaceReviewFile.mockReset().mockResolvedValue(detail);
 		updateWorkspaceReviewFile.mockReset().mockResolvedValue({ content: `# Hello ${DRAFT_TEXT}`, fileFingerprint: "fp-2" });
@@ -38,6 +40,18 @@ describeUnsavedFileDrafts("cloud", {
 		await waitFor(() => expect(editorContent().textContent).toContain(DRAFT_TEXT));
 	},
 	draft: () => editorContent().textContent ?? "",
+	typeMore: async (text) => {
+		await userEvent.click(editorContent());
+		await userEvent.keyboard(text);
+	},
+	deferNextSave: () => {
+		let answer: (value: unknown) => void = () => {};
+		updateWorkspaceReviewFile.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+		return async () => { await act(async () => answer({ content: `# Hello ${DRAFT_TEXT}`, fileFingerprint: "fp-2" })); };
+	},
+	startSave: async () => { await userEvent.click(screen.getByRole("button", { name: "Save" })); },
+	externalChange: () => { getWorkspaceReviewFile.mockResolvedValue({ ...detail, content: "# Changed elsewhere", fileFingerprint: "fp-3" }); },
+	lastSaveExpectedFingerprint: () => updateWorkspaceReviewFile.mock.calls.at(-1)?.[2]?.expectedFileFingerprint,
 	save: async () => {
 		await userEvent.click(screen.getByRole("button", { name: "Save" }));
 		await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument());
