@@ -178,7 +178,10 @@ export function FileContentPane({
 	}, [commitSha, hostId, initialMode, initialRequestKey, path, rememberDisplayMode, scope, sessionId, source, uiSessionId]);
 	// Editing resets with the file or request, not with a mode the pane reported
 	// to its parent: choosing Edit from Diff must not cancel the edit it starts.
+	// The draft is initialised once per opening request; a refetch only updates the base state.
+	const seededDraftRef = useRef(false);
 	useEffect(() => {
+		seededDraftRef.current = false;
 		setEditing(initialEditing);
 		setDraft("");
 		setRestoredDraft(null);
@@ -207,7 +210,9 @@ export function FileContentPane({
 		onModeChange?.(next);
 	};
 	useEffect(() => {
-		if (initialEditing && query.data && getFileDraft(draftSessionKey, path)?.content == null) setDraft(query.data.content);
+		if (!initialEditing || !query.data || seededDraftRef.current) return;
+		seededDraftRef.current = true;
+		if (getFileDraft(draftSessionKey, path)?.content == null) setDraft(query.data.content);
 	}, [draftSessionKey, initialEditing, initialRequestKey, path, query.data]);
 	const changeDraft = useCallback((content: string) => {
 		setDraft(content);

@@ -62,7 +62,10 @@ export function CloudFileContentPane({
 		onModeChange?.(next);
 	};
 	useEffect(() => { setMode(initialMode); }, [commitSha, initialMode, initialRequestKey, path, scope]);
+	// The draft is initialised once per opening request; a refetch only updates the base state.
+	const seededDraftRef = useRef(false);
 	useEffect(() => {
+		seededDraftRef.current = false;
 		setEditing(initialEditing);
 		setDraft("");
 		setRestoredDraft(null);
@@ -83,7 +86,11 @@ export function CloudFileContentPane({
 		setRestoredDraft(saved.content);
 		setMode("file");
 	}, [commitSha, detail, draftSessionKey, initialRequestKey, path]);
-	useEffect(() => { if (initialEditing && detail && getFileDraft(draftSessionKey, path)?.content == null) setDraft(detail.content); }, [detail, draftSessionKey, initialEditing, initialRequestKey, path]);
+	useEffect(() => {
+		if (!initialEditing || !detail || seededDraftRef.current) return;
+		seededDraftRef.current = true;
+		if (getFileDraft(draftSessionKey, path)?.content == null) setDraft(detail.content);
+	}, [detail, draftSessionKey, initialEditing, initialRequestKey, path]);
 	const changeDraft = useCallback((content: string) => {
 		setDraft(content);
 		draftRef.current = content;

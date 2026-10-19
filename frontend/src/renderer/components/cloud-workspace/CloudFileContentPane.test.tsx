@@ -2,11 +2,11 @@
 
 import "@testing-library/jest-dom/vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cloudDraftSessionKey, resetFileDraftsForTests, setFileDraft } from "../../lib/file-draft-store";
+import { cloudDraftSessionKey, MAX_FILE_DRAFTS, resetFileDraftsForTests, setFileDraft } from "../../lib/file-draft-store";
 import type { CloudCpClient } from "../../lib/cloud-cp";
 import type { FileAnnotationModel } from "../WorkspaceDiffView";
 import { TooltipProvider } from "../ui/tooltip";
@@ -68,6 +68,30 @@ describe("CloudFileContentPane", () => {
 		// A new request for the same file re-seeds the editor from the stored draft, not the saved text.
 		view.rerender(pane({ initialRequestKey: 2 }));
 		expect(await screen.findByRole("button", { name: "Save" })).toBeEnabled();
+	});
+
+	it.each([
+		["a draft whose text was refused for lack of room", true],
+		["a draft whose text is kept", false],
+	])("a refetch never replaces the edited draft of %s when the file opened for editing", async (_label, full) => {
+		if (full) for (let index = 0; index < MAX_FILE_DRAFTS; index += 1) setFileDraft("other", `f${index}.ts`, "kept", "fp");
+		const getWorkspaceReviewFile = vi.fn().mockResolvedValue(detail);
+		const client = { getWorkspaceReviewFile } as unknown as CloudCpClient;
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><TooltipProvider><CloudFileContentPane annotation={annotation} baseUrl="https://cloud.test" client={client} initialEditing initialMode="file" initialRequestKey={1} orgId="org-1" path="README.md" sessionId="session-1" split={false} /></TooltipProvider></QueryClientProvider>);
+		const editor = (await screen.findByRole("textbox", { name: "Edit README.md" })).querySelector<HTMLElement>(".cm-content");
+		await userEvent.click(editor!);
+		await userEvent.keyboard(" mine");
+		await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeEnabled());
+
+		getWorkspaceReviewFile.mockResolvedValue({ ...detail, content: "# Changed elsewhere", fileFingerprint: "fp-2" });
+		await act(() => queryClient.invalidateQueries());
+
+		await waitFor(() => expect(getWorkspaceReviewFile).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+		await act(async () => {});
+		expect(screen.getByRole("textbox", { name: "Edit README.md" }).querySelector<HTMLElement>(".cm-content")!.textContent).toContain("mine");
+		expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
 	});
 
 	it.each([

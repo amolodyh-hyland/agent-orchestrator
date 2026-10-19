@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetFileDraftsForTests, setFileDraft } from "../lib/file-draft-store";
+import { MAX_FILE_DRAFTS, resetFileDraftsForTests, setFileDraft } from "../lib/file-draft-store";
 import { useUiStore } from "../stores/ui-store";
 import { EMPTY_TOPBAR_TABS, findSession } from "../lib/topbar-tabs";
 import { useTopbarTabsStore } from "../stores/topbar-tabs-store";
@@ -455,6 +455,34 @@ describe("FileContentPane", () => {
 		view.rerender(<QueryClientProvider client={new QueryClient()}><TooltipProvider>{pane(1)}</TooltipProvider></QueryClientProvider>);
 		expect(screen.getByRole("textbox", { name: "Edit src/App.tsx" })).toBeInTheDocument();
 		expect(screen.getByTestId("unsaved-file-indicator")).toBeInTheDocument();
+	});
+
+	it.each([
+		["a draft whose text was refused for lack of room", true],
+		["a draft whose text is kept", false],
+	])("a refetch never replaces the edited draft of %s when the file opened for editing", async (_label, full) => {
+		if (full) for (let index = 0; index < MAX_FILE_DRAFTS; index += 1) setFileDraft("other", `f${index}.ts`, "kept", "fp");
+		const detail = (content: string, fileFingerprint: string) => ({
+			data: {
+				sessionId: "sess-1", path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 18, binary: false, deleted: false, editable: true,
+				content, contentTruncated: false, diff: "@@ -0,0 +1,1 @@\n+x\n", diffTruncated: false, workspaceVersion: "workspace-1", fileFingerprint,
+			},
+		});
+		getMock.mockResolvedValue(detail("export const x = 1;\n", "file-1"));
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialEditing initialMode="file" initialRequestKey={1} path="src/App.tsx" sessionId="sess-1" split={false} />);
+		const editor = await screen.findByRole("textbox", { name: "Edit src/App.tsx" });
+		await userEvent.type(editor, " // mine");
+		expect(await screen.findByRole("button", { name: "Save" })).toBeEnabled();
+
+		getMock.mockResolvedValue(detail("export const x = 99;\n", "file-2"));
+		const client = subscribeMock.mock.calls.at(-1)![1] as QueryClient;
+		await act(() => client.invalidateQueries());
+
+		await waitFor(() => expect(getMock.mock.calls.length).toBeGreaterThan(1));
+		await waitFor(() => expect(client.isFetching()).toBe(0));
+		await act(async () => {});
+		expect((screen.getByRole("textbox", { name: "Edit src/App.tsx" }) as HTMLTextAreaElement).value).toContain("// mine");
+		expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
 	});
 
 	it.each([
