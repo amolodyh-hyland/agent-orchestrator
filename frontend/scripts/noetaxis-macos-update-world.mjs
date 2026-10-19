@@ -146,7 +146,7 @@ export async function makeWorld(t, label, options = {}) {
 	const expand = (value) => value.replaceAll("<APP>", targetApp).replaceAll("<AO>", path.join(home, ".ao")).replaceAll("<TMP>", tmp).replaceAll("<HOME>", home);
 	const rows = procs.map((row, index) => ({ ...row, command: expand(row.command), cwd: expand(row.cwd ?? "/"), pid: row.pid ?? 4001 + index, ppid: row.ppid ?? 1 }));
 	for (const row of rows) {
-		row.executable = fixtureExecutable(row.command, targetApp, row.executable);
+		row.executable = fixtureExecutable(row.command, targetApp, row.executable ? expand(row.executable) : "");
 		if (row.executable.startsWith("/")) await mkdir(path.dirname(row.executable), { recursive: true });
 		if (row.cwd.startsWith(`${root}/`)) await mkdir(row.cwd, { recursive: true });
 	}
@@ -242,14 +242,15 @@ export async function makeWorld(t, label, options = {}) {
 			await mkdir(path.join(sim, "timers"), { recursive: true });
 			await writeFile(path.join(sim, "timers", `t${Math.random().toString(36).slice(2)}`), `${ticks}|${action}\n`);
 		},
-		async addProc(command, ppid = 1, explicitExecutable = "") {
+		async addProc(command, ppid = 1, explicitExecutable = "", cwd = "/") {
 			const procsFile = path.join(sim, "procs");
 			const existing = await readFile(procsFile, "utf8");
 			const pid = 9000 + existing.split("\n").filter(Boolean).length;
 			await writeFile(procsFile, `${existing}${pid}|${command}\n`);
 			const executable = fixtureExecutable(command, targetApp, explicitExecutable);
 			if (executable.startsWith("/")) await mkdir(path.dirname(executable), { recursive: true });
-			for (const [file, value] of [["ppids", ppid], ["executables", executable]]) await writeFile(path.join(sim, file), `${await readFile(path.join(sim, file), "utf8")}${pid}|${value}\n`);
+			if (cwd.startsWith(`${root}/`)) await mkdir(cwd, { recursive: true });
+			for (const [file, value] of [["ppids", ppid], ["executables", executable], ["cwds", cwd]]) await writeFile(path.join(sim, file), `${await readFile(path.join(sim, file), "utf8")}${pid}|${value}\n`);
 			return pid;
 		},
 		async sessionsNow() {

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { execute, makeWorld, mutatedScripts, oldVersion, realScriptsDir } from "./noetaxis-macos-update-world.mjs";
@@ -25,7 +25,7 @@ cap_survivors_file="$cap_dir/survivors-before.tsv"
 ${code}`, "survivor-test", scripts, world.targetApp, world.sim], { env: world.env, input, timeout: 40_000 });
 }
 
-const orphan = (pid = 8101, extra = {}) => ({ pid, ppid: 1, command: "/bin/sh <AO>/data/worktrees/project/session/run.sh", executable: "/bin/sh", ...extra });
+const orphan = (pid = 8101, extra = {}) => ({ pid, ppid: 1, command: "/bin/sh <AO>/data/worktrees/project/session/run.sh", executable: "/bin/sh", cwd: "<AO>/data/worktrees/project/session", ...extra });
 const branch = [
 	{ pid: 8101, ppid: 1, command: "<APP>/Contents/Resources/acp-runtime/node/bin/node index.js" },
 	{ pid: 8102, ppid: 8101, command: "/opt/agent --config <APP>/Contents/Resources/daemon/ao", executable: "/opt/agent" },
@@ -102,7 +102,7 @@ test("real session RPCs overlap within the configured pool and keep exact sessio
 });
 
 test("survivor inventory groups verified descendants, anchored orphans and leaked fixtures; decoys are excluded", darwin, async (t) => {
-	const world = await makeWorld(t, "teardown-inventory", { running: false, extraProcs: [...branch, orphan(8201), orphan(8202, { command: "/bin/sh unrelated.sh", cwd: "<AO>/data/worktrees/a" }), { pid: 8301, command: "/bin/sh <TMP>/noetaxis-watchdog-leaked/stubborn.sh", executable: "/bin/sh" }, orphan(8401, { command: "/bin/sh <HOME>/.ao-lookalike/tool.sh" }), orphan(8402, { command: "/bin/sh bare-ao-tool" }), orphan(8403, { command: "/bin/sh /outside/<AO>/tool.sh" }), orphan(8404, { command: "/bin/sh <AO>/../outside/tool.sh" })] });
+	const world = await makeWorld(t, "teardown-inventory", { running: false, extraProcs: [...branch, orphan(8201), orphan(8202, { command: "/bin/sh unrelated.sh", cwd: "<AO>/data/worktrees/a" }), { pid: 8301, command: "/bin/sh <TMP>/noetaxis-watchdog-leaked/stubborn.sh", executable: "/bin/sh" }, orphan(8401, { command: "/bin/sh <HOME>/.ao-lookalike/tool.sh", cwd: "/" }), orphan(8402, { command: "/bin/sh bare-ao-tool", cwd: "/" }), orphan(8403, { command: "/bin/sh /outside/<AO>/tool.sh", cwd: "/" }), orphan(8404, { command: "/bin/sh <AO>/../outside/tool.sh", cwd: "/" })] });
 	const result = survivorCall(world, 'noetaxis_survivor_scan "$target_app" "$cap_survivors_file"; /bin/cat "$cap_survivors_file"; noetaxis_survivor_report "$cap_survivors_file"');
 	assert.equal(result.status, 0, result.stdout + result.stderr);
 	const rows = result.stdout.trim().split("\n").map((line) => line.split(sep));
@@ -116,7 +116,7 @@ test("survivor inventory groups verified descendants, anchored orphans and leake
 	assert.match(result.stderr, /noetaxis_survivor_matches/);
 });
 
-test("orphan anchors normalize paths and reject parent traversal at every argument boundary, including signal rechecks", darwin, async (t) => {
+test("orphan eligibility uses only physical cwd or executable paths, never argv, including signal rechecks", darwin, async (t) => {
 	const excluded = [
 		"du -a <AO>/..", "du '<AO>/..'", 'du "<AO>/.."',
 		"du --path=<AO>/.. --all", "du <AO>/../outside", "du <AO>//..//outside",
@@ -124,16 +124,18 @@ test("orphan anchors normalize paths and reject parent traversal at every argume
 		"du <AO>/data/../../outside", "du <AO>/data /outside/..", "du <HOME>/.ao-lookalike/file",
 		"du <AO>;other", "du <AO>-x", "du <AO>x", "du <AO> other",
 		"du '<AO> other'", 'du "<AO>;other"',
+		"du /tmp/outside;<AO>/data", "du <AO>/data", "du <AO>",
 	];
 	const world = await makeWorld(t, "teardown-traversal", { running: false, extraProcs: [
-		...excluded.map((command, n) => orphan(8500 + n, { command })),
-		orphan(8600, { command: "du <HOME>//.ao/./data//worktrees/file" }),
-		orphan(8601, { command: "du <AO>" }),
+		...excluded.map((command, n) => orphan(8500 + n, { command, cwd: "/" })),
+		orphan(8600, { command: "unrelated", cwd: "<HOME>//.ao/./data//worktrees" }),
+		orphan(8601, { command: "unrelated", cwd: "/", executable: "<AO>/bin/tool" }),
 	] });
+	await writeFile(path.join(world.home, ".ao/bin/tool"), "fixture");
 	const scan = 'noetaxis_survivor_scan "$target_app" "$cap_survivors_file"; /bin/cat "$cap_survivors_file"';
 	const result = survivorCall(world, scan);
 	assert.equal(result.status, 0, result.stdout + result.stderr);
-	assert.deepEqual(result.stdout.trim().split("\n").map((line) => line.split(sep)[1]), ["8600", "8601"]);
+	assert.deepEqual(result.stdout.trim().split("\n").map((line) => line.split(sep)[1]).sort(), ["8600", "8601"]);
 	const recheck = survivorCall(world, `update_kill_survivors=1; update_survivors_confirmed=1
 for pid in {8500..${8500 + excluded.length - 1}}; do
  info="$(noetaxis_process_info "$pid")"
@@ -144,24 +146,61 @@ done`);
 	assert.equal(recheck.status, 0, recheck.stdout + recheck.stderr);
 	assert.deepEqual(signals(await world.calls()), []);
 	const spaces = survivorCall(world, `ao_home="$HOME/a home/.ao"
-noetaxis_ao_marker "du $HOME/a home//.ao/./data" /
-if noetaxis_ao_marker "du $HOME/a home/.ao/.." /; then exit 99; fi`);
+/bin/mkdir -p "$ao_home/data"
+noetaxis_ao_paths /bin/sh "$HOME/a home//.ao/./data"
+if noetaxis_ao_paths /bin/sh "$HOME/a home/.ao/.."; then exit 99; fi`);
 	assert.equal(spaces.status, 0, spaces.stdout + spaces.stderr);
-	for (const [search, replacement, expected] of [
-		[/^\t\texit 1 if \$command =~ .+;$/m, '# traversal guard removed', false],
-		['$command = normalize($command);', '# normalization removed', true],
-	]) {
-		const scripts = await mutatedScripts(t, "survivors.sh", search, replacement);
-		const broken = survivorCall(world, scan, { scripts });
-		assert.equal(broken.status, 0, broken.stdout + broken.stderr);
-		const ids = broken.stdout.trim().split("\n").map((line) => line.split(sep)[1]);
-		assert.equal(ids.includes("8500"), !expected, "the exclusion assertion catches a missing traversal guard");
-		assert.equal(ids.includes("8600"), !expected, "the inclusion assertion catches missing normalization");
-	}
-	const scripts = await mutatedScripts(t, "survivors.sh", '\\Q$anchor\\E(?=/|$)', '\\Q$anchor\\E(?=/|$|[\\s\\x22\\x27=;|&()<>])');
-	const siblings = survivorCall(world, scan, { scripts });
-	assert.equal(siblings.status, 0, siblings.stdout + siblings.stderr);
-	assert.match(siblings.stdout, /8512/, "the sibling exclusion catches accepting a delimiter after .ao");
+	const argvCheck = '[[ "$command_line" == *"$ao_home/"* ]] || noetaxis_ao_paths "$executable" "$cwd"';
+	const scripts = await mutatedScripts(t, "survivors.sh", 'noetaxis_ao_paths "$executable" "$cwd"', argvCheck);
+	const mutantWorld = await makeWorld(t, "teardown-embedded-argv-mutant", { running: false, extraProcs: [orphan(8518, { command: "du /tmp/outside;<AO>/data", cwd: "/" })] });
+	const broken = survivorCall(mutantWorld, scan, { scripts });
+	assert.equal(broken.status, 0, broken.stdout + broken.stderr);
+	assert.match(broken.stdout, /8518/, "the embedded-argv exclusion catches restoring command-text selection");
+	const recheckScripts = await mutatedScripts(t, "survivors.sh", 'noetaxis_ao_paths "$current_exe" "$(noetaxis_process_cwd "$pid" || true)"', '[[ "$current_command" == *"$ao_home/"* ]]');
+	const poisoned = survivorCall(world, `update_kill_survivors=1; update_survivors_confirmed=1
+info="$(noetaxis_process_info 8518)"
+IFS=$'\\t' read -r pid parent started command_line <<< "$info"
+executable="$(noetaxis_process_executable_path "$pid")"
+noetaxis_survivor_signal TERM b "$pid" "$parent" "$started" "$executable" "$command_line" "$pid -> 1" / 1`, { scripts: recheckScripts });
+	assert.equal(poisoned.status, 0, poisoned.stdout + poisoned.stderr);
+	assert.deepEqual(signals(await world.calls()), ["kill -TERM 8518"], "the signal-time exclusion catches restoring argv authorization");
+});
+
+test("orphan filesystem anchors resolve symlinks and exclude sibling directories and traversal", darwin, async (t) => {
+	const world = await makeWorld(t, "teardown-physical-anchors", { running: false, extraProcs: [
+		orphan(8700, { command: "unrelated", cwd: "<AO>" }),
+		orphan(8701, { command: "unrelated", cwd: "/", executable: "<AO>/bin/tool" }),
+		orphan(8702, { command: "unrelated", cwd: "/", executable: "<HOME>/alias/tool" }),
+		orphan(8703, { command: "unrelated", cwd: "/", executable: "<AO>/bin/outside-link" }),
+		...[".ao;x", ".ao-x", ".aox", ".ao other", ".ao/.."].map((name, n) => orphan(8710 + n, { command: "unrelated", cwd: `<HOME>/${name}` })),
+	] });
+	const anchor = path.join(world.home, ".ao");
+	await writeFile(path.join(anchor, "bin/tool"), "fixture");
+	await writeFile(path.join(world.home, "outside-tool"), "fixture");
+	await symlink(path.join(world.home, "outside-tool"), path.join(anchor, "bin/outside-link"));
+	await writeFile(path.join(world.home, "alias/tool"), "placeholder");
+	await rm(path.join(world.home, "alias/tool"));
+	await symlink(path.join(anchor, "bin/tool"), path.join(world.home, "alias/tool"));
+	await symlink(anchor, path.join(world.home, "cwd-alias"));
+	await symlink(world.home, path.join(anchor, "outside-cwd"));
+	const result = survivorCall(world, `noetaxis_survivor_scan "$target_app" "$cap_survivors_file"
+/bin/cat "$cap_survivors_file"
+noetaxis_ao_paths /bin/sh "$HOME/cwd-alias/data"
+if noetaxis_ao_paths /bin/sh "$ao_home/outside-cwd"; then exit 99; fi
+if noetaxis_ao_paths "$ao_home/bin/outside-link" /; then exit 99; fi`);
+	assert.equal(result.status, 0, result.stdout + result.stderr);
+	const rows = result.stdout.trim().split("\n").map((line) => line.split(sep));
+	assert.deepEqual(rows.map((row) => row[1]).sort(), ["8700", "8701", "8702"]);
+	assert.ok(rows.every((row) => row[8] === "1"));
+	const recheck = survivorCall(world, `update_kill_survivors=1; update_survivors_confirmed=1
+for pid in 8703 {8710..8714}; do
+ info="$(noetaxis_process_info "$pid")"
+ IFS=$'\\t' read -r pid parent started command_line <<< "$info"
+ executable="$(noetaxis_process_executable_path "$pid")"
+ if noetaxis_survivor_signal TERM b "$pid" "$parent" "$started" "$executable" "$command_line" "$pid -> 1" / 1; then exit 99; fi
+done`);
+	assert.equal(recheck.status, 0, recheck.stdout + recheck.stderr);
+	assert.deepEqual(signals(await world.calls()), []);
 });
 
 test("survivors require exact typed PID confirmation; --yes and wrong answers never signal", darwin, async (t) => {
@@ -322,7 +361,7 @@ test("an anchored orphan parent does not hide its independently verified bundle 
 
 test("respawn after KILL is reported and final rescan refuses", darwin, async (t) => {
 	const world = await makeWorld(t, "teardown-respawn", { running: false, extraProcs: [orphan()], cfg: { stubborn: "8101\n" } });
-	await world.setCfg("respawn_on_kill", `/bin/sh ${world.home}/.ao/data/worktrees/respawner.sh`);
+	await world.setCfg("respawn_on_kill", `${world.targetApp}/Contents/Resources/daemon/ao daemon`);
 	await writeFile(path.join(world.sim, "respawners"), "- 0 dev.agent-orchestrator.desktop\n");
 	const launchAgents = path.join(world.home, "Library/LaunchAgents");
 	await mkdir(launchAgents, { recursive: true });
@@ -360,7 +399,7 @@ test("the final scan immediately before swapping catches a late orphan; removing
 		let reached = false;
 		for (let n = 0; n < 1200; n++) { if (await stat(marker).catch(() => false)) { reached = true; break; } await pause(50); }
 		assert.ok(reached, stdout + stderr);
-		await world.addProc(`/bin/sh ${world.home}/.ao/data/worktrees/late.sh`, 1, "/bin/sh");
+		await world.addProc(`/bin/sh ${world.home}/.ao/data/worktrees/late.sh`, 1, "/bin/sh", path.join(world.home, ".ao/data/worktrees"));
 		assert.equal(await exited, expected, stdout + stderr);
 		assert.deepEqual(signals(await world.calls()), []);
 		assert.equal(world.installedVersion() === oldVersion, label === "real");
@@ -596,8 +635,8 @@ test("mutation: bypassing typed confirmation is caught", darwin, async (t) => {
 });
 
 test("mutation: an unanchored ao substring cannot silently become an approved orphan", darwin, async (t) => {
-	const scripts = await mutatedScripts(t, "survivors.sh", 'noetaxis_ao_marker() {', 'noetaxis_ao_marker() { return 0;');
-	const world = await makeWorld(t, "teardown-anchor-mutant", { running: false, extraProcs: [orphan(8101, { command: "/bin/sh totally-unrelated-ao-tool.sh" })] });
+	const scripts = await mutatedScripts(t, "survivors.sh", 'noetaxis_ao_paths() {', 'noetaxis_ao_paths() { return 0;');
+	const world = await makeWorld(t, "teardown-anchor-mutant", { running: false, extraProcs: [orphan(8101, { command: "/bin/sh totally-unrelated-ao-tool.sh", cwd: "/" })] });
 	const result = survivorCall(world, 'noetaxis_survivor_scan "$target_app" "$cap_survivors_file"; /bin/cat "$cap_survivors_file"', { scripts });
 	assert.equal(result.status, 0, result.stdout + result.stderr);
 	assert.match(result.stdout, /8101/);
@@ -606,7 +645,7 @@ test("mutation: an unanchored ao substring cannot silently become an approved or
 test("mutation: skipping the final survivor scan admits a respawner", darwin, async (t) => {
 	const scripts = await mutatedScripts(t, "survivors.sh", 'update_survivors_confirmed=0\n\tnoetaxis_survivor_scan "$app_path" "$file" || return 56', 'update_survivors_confirmed=0\n\t: > "$file"');
 	const world = await makeWorld(t, "teardown-rescan-mutant", { running: false, extraProcs: [orphan()], cfg: { stubborn: "8101\n" } });
-	await world.setCfg("respawn_on_kill", `/bin/sh ${world.home}/.ao/data/worktrees/respawner.sh`);
+	await world.setCfg("respawn_on_kill", `${world.targetApp}/Contents/Resources/daemon/ao daemon`);
 	const result = survivorCall(world, 'update_kill_survivors=1; noetaxis_update_survivors "$target_app"', { scripts, input: "kill survivors 8101\n" });
 	assert.equal(result.status, 0, result.stdout + result.stderr);
 	assert.equal((await world.procs()).length, 1, "the production final-empty assertion would reject the respawn");

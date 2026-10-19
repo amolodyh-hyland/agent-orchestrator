@@ -9,32 +9,25 @@ noetaxis_process_cwd() {
 	return 1
 }
 
-noetaxis_ao_marker() {
-	local command_line="$1" cwd="$2" marker_home="${ao_home:-$(noetaxis_ao_home)}" directory
-	if [[ "$cwd" == /* && -d "$cwd" ]]; then
-		directory="$(cd -P "$cwd" && pwd -P)" || return 1
+noetaxis_ao_paths() {
+	local executable="$1" cwd="$2" marker_home="${ao_home:-$(noetaxis_ao_home)}" directory candidate
+	for candidate in "$cwd" "$executable"; do
+		[[ "$candidate" == /* && "$candidate" != *$'\n'* && "$candidate" != *$'\r'* ]] || continue
+		if [[ "$candidate" == "$cwd" && -d "$candidate" ]]; then
+			directory="$(cd -P "$candidate" && pwd -P)" || continue
+		elif [[ "$candidate" == "$executable" && -f "$candidate" ]]; then
+			directory="$(/usr/bin/perl -MCwd=abs_path -e 'my $p = abs_path($ARGV[0]); defined($p) or exit 1; print $p' "$candidate")" || continue
+			[[ "$directory" == /* && "$directory" != *$'\n'* && "$directory" != *$'\r'* ]] || continue
+			directory="${directory%/*}"
+		else
+			continue
+		fi
 		while [[ -n "$directory" ]]; do
 			[[ "$directory" -ef "$marker_home" ]] && return 0
 			directory="${directory%/*}"
 		done
-	fi
-	/usr/bin/perl -e '
-		my ($anchor, $command) = @ARGV;
-		# ps joins argv without preserving its boundaries. Keep spaces inside the known home
-		# path, reject parent traversal at argument boundaries, then normalize before matching.
-		exit 1 if $command =~ m{(?:^|[/\s\x22\x27=;|&()<>])\.\.(?=/|$|[\s\x22\x27=;|&()<>])};
-		sub normalize {
-			my $path = shift;
-			$path =~ s{/+}{/}g;
-			1 while $path =~ s{/\.(?=/|$|[\s\x22\x27=;|&()<>])}{}g;
-			return $path;
-		}
-		$anchor = normalize($anchor);
-		$anchor =~ s{/$}{};
-		$command = normalize($command);
-		exit 0 if $command =~ m{(?:^|[\s\x22\x27=;|&()<>])\Q$anchor\E(?=/|$)};
-		exit 1;
-	' "$marker_home" "$command_line"
+	done
+	return 1
 }
 
 noetaxis_fixture_marker() {
@@ -64,7 +57,8 @@ noetaxis_survivor_scan() {
 		if [[ "$bundle_mentions" == *" $pid "* ]]; then printf '%s\ta\n' "$pid" >> "$seeds"; fi
 		if [[ "$parent" -eq 1 ]]; then
 			cwd="$(noetaxis_process_cwd "$pid" || true)"
-			if noetaxis_ao_marker "$command_line" "$cwd"; then printf '%s\tb\n' "$pid" >> "$seeds"; fi
+			executable="$(noetaxis_process_executable_path "$pid" || true)"
+			if noetaxis_ao_paths "$executable" "$cwd"; then printf '%s\tb\n' "$pid" >> "$seeds"; fi
 		fi
 		if noetaxis_fixture_marker "$command_line"; then printf '%s\tc\n' "$pid" >> "$seeds"; fi
 	done <<< "$raw"
@@ -102,7 +96,7 @@ noetaxis_survivor_scan() {
 						if [[ "$started" == "$old_start" && "$executable" == "$old_exe" && "$command_line" == "$old_command" && "$old_eligible" == 1 ]]; then eligible=1; fi
 					done
 					;;
-				b) if noetaxis_ao_marker "$command_line" "$cwd"; then eligible=1; fi ;;
+				b) if noetaxis_ao_paths "$executable" "$cwd"; then eligible=1; fi ;;
 				c) if noetaxis_fixture_marker "$command_line"; then eligible=1; fi ;;
 			esac
 		fi
@@ -154,7 +148,7 @@ noetaxis_survivor_matches() {
 	IFS=$'\t' read -r current_pid current_parent current_start current_command <<< "$info"
 	current_exe="$(noetaxis_process_executable_path "$pid")" || return 1
 	[[ "$current_start" == "$started" && "$current_command" == "$command_line" && "$current_exe" == "$executable" ]] || return 1
-	if [[ "$kind" == b ]]; then noetaxis_ao_marker "$current_command" "$(noetaxis_process_cwd "$pid" || true)" || return 1; fi
+	if [[ "$kind" == b ]]; then noetaxis_ao_paths "$current_exe" "$(noetaxis_process_cwd "$pid" || true)" || return 1; fi
 	if [[ "$kind" == c ]]; then noetaxis_fixture_marker "$current_command" || return 1; fi
 	[[ "$(noetaxis_process_info "$pid")" == "$info" ]]
 }
