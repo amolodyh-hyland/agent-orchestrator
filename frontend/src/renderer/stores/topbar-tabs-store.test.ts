@@ -19,6 +19,7 @@ import {
 	useTopbarTabsStore,
 } from "./topbar-tabs-store";
 import { assignProjectColorSlot, preferredProjectColorSlot } from "../lib/project-colors";
+import { isTopbarSessionClosed, resetNavigationHistoryForTests } from "../lib/navigation-history";
 
 function resetStore(): void {
 	resetTopbarTabsStoreForTests();
@@ -31,6 +32,7 @@ async function bootStore() {
 beforeEach(() => {
 	window.localStorage.clear();
 	resetStore();
+	resetNavigationHistoryForTests();
 });
 
 afterEach(() => {
@@ -113,6 +115,20 @@ describe("topbar tabs hydration", () => {
 		expect(readPersistedDensity(throwingStorage)).toBe("comfortable");
 		expect(readPersistedColorCoding(throwingStorage)).toBe(false);
 		expect(readPersistedProjectColors(throwingStorage)).toEqual({});
+	});
+});
+
+describe("topbar tab navigation history", () => {
+	it("marks removed session tabs closed until direct activation reopens them", () => {
+		const store = useTopbarTabsStore.getState();
+		store.activateSession({ sessionId: "nav-task", groupId: "project-1", kind: "task" });
+		expect(isTopbarSessionClosed("nav-task")).toBe(false);
+
+		store.closeTab("nav-task");
+		expect(isTopbarSessionClosed("nav-task")).toBe(true);
+
+		store.activateSession({ sessionId: "nav-task", groupId: "project-1", kind: "task" });
+		expect(isTopbarSessionClosed("nav-task")).toBe(false);
 	});
 });
 

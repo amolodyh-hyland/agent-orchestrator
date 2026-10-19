@@ -1,6 +1,5 @@
-import { useRouterState } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { MulticaViewState } from "../../shared/multica";
 import { aoBridge } from "../lib/bridge";
@@ -87,7 +86,6 @@ export function MulticaPane() {
 	const loadLinks = useMulticaLinksStore((state) => state.load);
 	const toggle = useMulticaStore((state) => state.toggle);
 	const navigateToSession = useNavigateToSession();
-	const pathname = useRouterState({ select: (state) => state.location.pathname });
 
 	useEffect(() => {
 		void load();
@@ -99,16 +97,6 @@ export function MulticaPane() {
 
 	useEffect(() => aoBridge.multica.onToggleShortcut(toggle), [toggle]);
 	useEffect(() => aoBridge.multicaLinks.onOpenSession((target) => navigateToSession(target.projectId, target.sessionId)), [navigateToSession]);
-
-	// Choosing something inside AO (a project or session in the sidebar) means the
-	// user wants AO back.
-	const previousPathname = useRef(pathname);
-	useEffect(() => {
-		if (previousPathname.current === pathname) return;
-		previousPathname.current = pathname;
-		const store = useMulticaStore.getState();
-		if (store.view.active) store.setActive(false);
-	}, [pathname]);
 
 	return (
 		<>

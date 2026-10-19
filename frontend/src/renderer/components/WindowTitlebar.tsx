@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { sidebarIsVisible, useUiStore } from "../stores/ui-store";
+import { traverseHistory } from "../lib/navigation-history";
 import { useCanGoForward } from "./TitlebarNav";
 import {
   DropdownMenu,
@@ -225,7 +226,7 @@ export function WindowTitlebar() {
               aria-label={t("titlebar.goBack")}
               className="window-titlebar__toggle"
               disabled={!canGoBack}
-              onClick={() => router.history.back()}
+              onClick={() => traverseHistory(router.history, "back")}
               type="button"
             >
               <ArrowLeft
@@ -244,7 +245,7 @@ export function WindowTitlebar() {
               aria-label={t("titlebar.goForward")}
               className="window-titlebar__toggle"
               disabled={!canGoForward}
-              onClick={() => router.history.forward()}
+              onClick={() => traverseHistory(router.history, "forward")}
               type="button"
             >
               <ArrowRight

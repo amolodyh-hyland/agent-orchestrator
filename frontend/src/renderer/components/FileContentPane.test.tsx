@@ -1,12 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { MAX_FILE_DRAFTS, resetFileDraftsForTests, setFileDraft } from "../lib/file-draft-store";
 import { useUiStore } from "../stores/ui-store";
 import { EMPTY_TOPBAR_TABS, findSession } from "../lib/topbar-tabs";
 import { useTopbarTabsStore } from "../stores/topbar-tabs-store";
 import { FileContentPane } from "./FileContentPane";
+import type { FileViewMode } from "./FileContentPane";
 import type { FileAnnotationModel } from "./WorkspaceDiffView";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -50,6 +52,7 @@ function noopAnnotation(): FileAnnotationModel {
 
 describe("FileContentPane", () => {
 	beforeEach(() => {
+		resetFileDraftsForTests();
 		localStorage.clear();
 		useTopbarTabsStore.setState({
 			tabs: EMPTY_TOPBAR_TABS,
@@ -337,8 +340,9 @@ describe("FileContentPane", () => {
 				diffTruncated: false,
 			},
 		});
+		const onModeChange = vi.fn();
 
-		renderWithQuery(<FileContentPane annotation={noopAnnotation()} path="src/App.tsx" sessionId="sess-1" split={false} toolbar="compact" />);
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} onModeChange={onModeChange} path="src/App.tsx" sessionId="sess-1" split={false} toolbar="compact" />);
 
 		const breadcrumb = await screen.findByRole("navigation", { name: "File path" });
 		expect(breadcrumb).toHaveTextContent("src/App.tsx");
@@ -347,6 +351,7 @@ describe("FileContentPane", () => {
 		expect(screen.getByRole("tab", { name: "Diff" })).toHaveAttribute("aria-selected", "true");
 		await userEvent.click(screen.getByRole("tab", { name: "File" }));
 		expect(await screen.findByText((_, element) => element?.tagName === "CODE" && element.textContent === "export const next = 2;\n")).toBeInTheDocument();
+		expect(onModeChange).toHaveBeenCalledWith("file");
 	});
 
 	it("opens a changed markdown file directly in rendered mode while retaining its status", async () => {
@@ -472,6 +477,92 @@ describe("FileContentPane", () => {
 		await waitFor(() => expect(findSession(useTopbarTabsStore.getState().tabs, "sess-1")?.mode).toBe("persistent"));
 		expect(screen.queryByRole("textbox", { name: "Edit src/App.tsx" })).not.toBeInTheDocument();
 		expect(screen.queryByTestId("unsaved-file-indicator")).not.toBeInTheDocument();
+	});
+
+	it("keeps editing after Edit from Diff when the parent follows the reported mode", async () => {
+		getMock.mockResolvedValue({
+			data: {
+				sessionId: "sess-1", path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 18, binary: false, deleted: false, editable: true,
+				content: "export const x = 1;\n", contentTruncated: false, diff: "@@ -0,0 +1,1 @@\n+export const x = 1;\n", diffTruncated: false,
+				workspaceVersion: "workspace-1", fileFingerprint: "file-1",
+			},
+		});
+		function ControlledParent() {
+			const [mode, setMode] = useState<FileViewMode>("diff");
+			return <FileContentPane annotation={noopAnnotation()} initialMode={mode} onModeChange={setMode} path="src/App.tsx" sessionId="sess-1" split={false} />;
+		}
+
+		renderWithQuery(<ControlledParent />);
+		await userEvent.click(await screen.findByRole("button", { name: "Edit file" }));
+
+		expect(await screen.findByRole("textbox", { name: "Edit src/App.tsx" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
+	});
+
+	it("keeps an unsaved draft when the request key is unchanged and resets it for a new key", async () => {
+		getMock.mockResolvedValue({
+			data: {
+				sessionId: "sess-1", path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 18, binary: false, deleted: false, editable: true,
+				content: "export const x = 1;\n", contentTruncated: false, diff: "@@ -0,0 +1,1 @@\n+export const x = 1;\n", diffTruncated: false,
+				workspaceVersion: "workspace-1", fileFingerprint: "file-1",
+			},
+		});
+		const pane = (requestKey: number) => <FileContentPane annotation={noopAnnotation()} initialMode="file" initialRequestKey={requestKey} path="src/App.tsx" sessionId="sess-1" split={false} />;
+		const view = renderWithQuery(pane(1));
+		await userEvent.click(await screen.findByRole("button", { name: "Edit file" }));
+		await userEvent.type(screen.getByRole("textbox", { name: "Edit src/App.tsx" }), "x");
+
+		view.rerender(<QueryClientProvider client={new QueryClient()}><TooltipProvider>{pane(1)}</TooltipProvider></QueryClientProvider>);
+		expect(screen.getByRole("textbox", { name: "Edit src/App.tsx" })).toBeInTheDocument();
+		expect(screen.getByTestId("unsaved-file-indicator")).toBeInTheDocument();
+	});
+
+	it.each([
+		["a draft whose text was refused for lack of room", true],
+		["a draft whose text is kept", false],
+	])("a refetch never replaces the edited draft of %s when the file opened for editing", async (_label, full) => {
+		if (full) for (let index = 0; index < MAX_FILE_DRAFTS; index += 1) setFileDraft("other", `f${index}.ts`, "kept", "fp");
+		const detail = (content: string, fileFingerprint: string) => ({
+			data: {
+				sessionId: "sess-1", path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 18, binary: false, deleted: false, editable: true,
+				content, contentTruncated: false, diff: "@@ -0,0 +1,1 @@\n+x\n", diffTruncated: false, workspaceVersion: "workspace-1", fileFingerprint,
+			},
+		});
+		getMock.mockResolvedValue(detail("export const x = 1;\n", "file-1"));
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialEditing initialMode="file" initialRequestKey={1} path="src/App.tsx" sessionId="sess-1" split={false} />);
+		const editor = await screen.findByRole("textbox", { name: "Edit src/App.tsx" });
+		await userEvent.type(editor, " // mine");
+		expect(await screen.findByRole("button", { name: "Save" })).toBeEnabled();
+
+		getMock.mockResolvedValue(detail("export const x = 99;\n", "file-2"));
+		const client = subscribeMock.mock.calls.at(-1)![1] as QueryClient;
+		await act(() => client.invalidateQueries());
+
+		await waitFor(() => expect(getMock.mock.calls.length).toBeGreaterThan(1));
+		await waitFor(() => expect(client.isFetching()).toBe(0));
+		await act(async () => {});
+		expect((screen.getByRole("textbox", { name: "Edit src/App.tsx" }) as HTMLTextAreaElement).value).toContain("// mine");
+		expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+	});
+
+	it.each([
+		["a historical revision", { commitSha: "abc123" }, { editable: true }],
+		["a file that is not editable", {}, { editable: false }],
+	])("does not restore a stored draft into %s", async (_label, paneProps, detailPatch) => {
+		getMock.mockResolvedValue({
+			data: {
+				sessionId: "sess-1", path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 18, binary: false, deleted: false,
+				content: "export const x = 1;\n", contentTruncated: false, diff: "@@ -0,0 +1,1 @@\n+export const x = 1;\n", diffTruncated: false,
+				workspaceVersion: "workspace-1", fileFingerprint: "file-1", ...detailPatch,
+			},
+		});
+		setFileDraft("sess-1", "src/App.tsx", "export const x = 'draft';\n", "file-1");
+
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" path="src/App.tsx" sessionId="sess-1" split={false} {...paneProps} />);
+
+		expect(await screen.findByText("export const x = 1;", { exact: false })).toBeInTheDocument();
+		expect(screen.queryByRole("textbox", { name: "Edit src/App.tsx" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
 	});
 
 	it.each([

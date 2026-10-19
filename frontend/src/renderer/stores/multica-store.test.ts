@@ -85,6 +85,31 @@ describe("multica store", () => {
 		expect(window.ao!.multica.setActive).toHaveBeenLastCalledWith(false);
 	});
 
+	it("keeps a newer pending request when an older request's reply arrives", async () => {
+		const replies: Array<() => void> = [];
+		window.ao!.multica.setActive = vi.fn((active: boolean) => new Promise<MulticaViewState>((resolve) => {
+			replies.push(() => resolve({ active, status: "ready", url: "" }));
+		}));
+		const store = await freshStore();
+		store.setState({ view: { active: true, status: "ready", url: "" } });
+
+		store.getState().setActive(false);
+		store.getState().setActive(true);
+		store.getState().setActive(false);
+		replies[0]();
+		replies[1]();
+		await Promise.resolve();
+		await Promise.resolve();
+
+		// Replies A and B arrived; hide C is still in flight, so Back must not trust
+		// the acknowledged view.
+		expect(store.getState().pendingActive).toBe(false);
+		replies[2]();
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(store.getState().pendingActive).toBeNull();
+	});
+
 	it("asks the main process to reload on retry", async () => {
 		const store = await freshStore();
 

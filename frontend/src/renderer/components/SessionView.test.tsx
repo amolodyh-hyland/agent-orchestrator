@@ -11,6 +11,8 @@ import { SessionTopbarProvider } from "./SessionTopbarPortal";
 import { TooltipProvider } from "./ui/tooltip";
 import type { SessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import type { BrowserTabsState, BrowserAgentActivityState } from "../../main/browser-view-host";
+import { resetFileDraftsForTests, setFileDraft } from "../lib/file-draft-store";
+import { confirmLeaveUnsavedWork, notifyNavigationRestore } from "../lib/navigation-history";
 import { inspectorIsOpen, rememberedFileDisplayMode, useUiStore, type InspectorView } from "../stores/ui-store";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
@@ -103,6 +105,7 @@ const routeBlockerState = vi.hoisted(() => ({
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
 	useParams: () => routeBlockerState.params,
+	useRouter: () => ({ history: { location: { href: "#/", state: {} }, push: vi.fn(), replace: vi.fn() } }),
 	useBlocker: (options: NonNullable<typeof routeBlockerState.options>) => {
 		routeBlockerState.options = options;
 	},
@@ -669,7 +672,7 @@ vi.mock("./SessionFileExplorer", () => ({
 	},
 }));
 vi.mock("./SessionFileWorkspace", () => ({
-	SessionFileWorkspace: ({ annotation, initialEditing, initialLine, initialMode, initialRequestKey, onInitialLineConsumed, path, scope, split }: {
+	SessionFileWorkspace: ({ annotation, initialEditing, initialLine, initialMode, initialRequestKey, onDirtyChange, onInitialLineConsumed, path, scope, split }: {
 		annotation: {
 			begin: (target: { path: string; scope: string; side: string; surface: string }) => void;
 			draftFor: (target: { path: string }) => string;
@@ -680,6 +683,7 @@ vi.mock("./SessionFileWorkspace", () => ({
 		initialLine?: number;
 		initialMode?: string;
 		initialRequestKey?: number;
+		onDirtyChange?: (path: string, dirty: boolean) => void;
 		onInitialLineConsumed?: (path: string, requestKey: number) => void;
 		path: string;
 		scope?: string;
@@ -688,6 +692,7 @@ vi.mock("./SessionFileWorkspace", () => ({
 		return (
 			<div data-editing={String(Boolean(initialEditing))} data-line={initialLine} data-mode={initialMode} data-request-key={initialRequestKey} data-split={String(split)} data-testid="session-file-workspace">
 				{path}
+				<button onClick={() => onDirtyChange?.(path, true)} type="button">mark file dirty</button>
 				{initialLine != null ? <button onClick={() => onInitialLineConsumed?.(path, initialRequestKey ?? 0)} type="button">consume initial line</button> : null}
 				<button onClick={() => annotation.begin({ path, scope: scope ?? "combined", side: "file", surface: "focused" })} type="button">header feedback</button>
 				{annotation.targets.map((target) => <input aria-label="feedback draft" key={target.path} onChange={(event) => annotation.setDraft(target, event.target.value)} value={annotation.draftFor(target)} />)}
@@ -696,7 +701,12 @@ vi.mock("./SessionFileWorkspace", () => ({
 	},
 }));
 vi.mock("./CloudWorkspaceDiff", () => ({
-	CloudFileContentPane: ({ path }: { path: string }) => <div data-testid="cloud-file-workspace">{path}</div>,
+	CloudFileContentPane: ({ onDirtyChange, path }: { onDirtyChange?: (path: string, dirty: boolean) => void; path: string }) => (
+		<div data-testid="cloud-file-workspace">
+			{path}
+			<button onClick={() => onDirtyChange?.(path, true)} type="button">mark cloud file dirty</button>
+		</div>
+	),
 	CloudWorkspaceDiff: ({ onOpenFile }: { onOpenFile?: (path: string) => void }) => (
 		<button onClick={() => onOpenFile?.("src/cloud.ts")} type="button">open cloud file</button>
 	),
@@ -2295,6 +2305,67 @@ describe("SessionView", () => {
 		view.rerender(<SessionView sessionId="sess-1" />);
 
 		expect(await screen.findByTestId("session-file-workspace")).toHaveAttribute("data-request-key", requestKey);
+	});
+
+	it("keeps the file request key when a history restore differs only in inspector state", async () => {
+		workerSession("sess-1").mode = "chat";
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
+		render(<SessionView sessionId="sess-1" />);
+		fireEvent.click(screen.getByRole("button", { name: "open files" }));
+		fireEvent.click(screen.getByRole("button", { name: "select src/App.tsx" }));
+		const pane = await screen.findByTestId("session-file-workspace");
+		const requestKey = pane.getAttribute("data-request-key");
+		const restore = (inspectorOpen: boolean, line?: number) => act(() => notifyNavigationRestore({
+			version: 1,
+			href: "#/sessions/sess-1",
+			settingsModal: null,
+			multicaActive: false,
+			sessionView: {
+				sessionKey: "sess-1",
+				sessionId: "sess-1",
+				target: { kind: "file", path: "src/App.tsx", request: { editing: false, line, mode: "file" } },
+				inspectorView: "files",
+				inspectorOpen,
+			},
+		}));
+
+		restore(false);
+		expect(await screen.findByTestId("session-file-workspace")).toHaveAttribute("data-request-key", requestKey);
+
+		// A different line is a real location change, unless a draft is open.
+		fireEvent.click(screen.getByRole("button", { name: "mark file dirty" }));
+		restore(true, 40);
+		expect(screen.getByTestId("session-file-workspace")).toHaveAttribute("data-request-key", requestKey);
+	});
+
+	it.each([
+		["local", "mark file dirty", "session-file-workspace"],
+		["cloud", "mark cloud file dirty", "cloud-file-workspace"],
+	])("guards leaving a %s file with unsaved edits", async (kind, dirtyButton, paneId) => {
+		if (kind === "cloud") workerSession("sess-1").cloud = { orgId: "cloud-org", sandboxProvider: "docker" };
+		workerSession("sess-1").mode = "chat";
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
+		const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+		render(<SessionView sessionId="sess-1" />);
+		expect(confirmLeaveUnsavedWork()).toBe(true);
+		expect(confirm).not.toHaveBeenCalled();
+
+		fireEvent.click(screen.getByRole("button", { name: "open files" }));
+		fireEvent.click(screen.getByRole("button", { name: kind === "cloud" ? "open cloud file" : "select src/App.tsx" }));
+		await screen.findByTestId(paneId);
+		fireEvent.click(screen.getByRole("button", { name: dirtyButton }));
+		expect(confirmLeaveUnsavedWork()).toBe(false);
+		expect(confirm).toHaveBeenCalledWith("This file has unsaved changes. Your draft is kept and comes back when you return. Leave now?");
+		confirm.mockRestore();
+	});
+
+	it("reopens a file that has an unsaved draft when the session view mounts again", async () => {
+		workerSession("sess-1").mode = "chat";
+		setFileDraft("sess-1", "src/App.tsx", "export const x = 2;", "file-1");
+		render(<SessionView sessionId="sess-1" />);
+
+		expect(await screen.findByTestId("session-file-workspace")).toHaveTextContent("src/App.tsx");
+		resetFileDraftsForTests();
 	});
 
 	it("does not replay a consumed chat line request after session navigation", async () => {

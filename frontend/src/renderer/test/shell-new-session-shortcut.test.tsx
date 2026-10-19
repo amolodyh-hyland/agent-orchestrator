@@ -91,7 +91,7 @@ const shellMocks = vi.hoisted(() => {
 			return () => state.appShortcutListeners.delete(listener);
 		}),
 		router: {
-			history: { canGoBack: vi.fn(() => true), back: vi.fn(), forward: vi.fn() },
+			history: { canGoBack: vi.fn(() => true), back: vi.fn(), forward: vi.fn(), location: { state: { __TSR_index: 1 } } },
 			subscribe: vi.fn(() => () => {}),
 		},
 		getPathForFile: vi.fn((file: File) => `/dropped/${file.name}`),
@@ -263,6 +263,7 @@ vi.mock("../components/OrchestratorReplacementDialog", () => ({ OrchestratorRepl
 vi.mock("../components/ShellTopbar", () => ({ ShellTopbar: () => null }));
 vi.mock("../components/topbar-tabs/TopbarTabsLifecycle", () => ({ TopbarTabsLifecycle: () => null }));
 vi.mock("../components/topbar-tabs/TopbarTabsRouteSync", () => ({ TopbarTabsRouteSync: () => null }));
+vi.mock("../components/NavigationHistorySync", () => ({ NavigationHistorySync: () => null }));
 vi.mock("../components/topbar-tabs/TopbarTabsRow", () => ({ TopbarTabsRow: () => null }));
 vi.mock("../components/TitlebarNav", async () => {
 	const { sidebarIsVisible, useUiStore: useStore } = await vi.importActual<

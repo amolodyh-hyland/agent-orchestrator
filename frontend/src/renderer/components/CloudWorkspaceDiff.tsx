@@ -20,7 +20,7 @@ export function CloudWorkspaceDiff({ annotation, session, isMaximized = false, o
 	return <CloudWorkspaceExplorer annotation={annotation} isMaximized={isMaximized} onOpenFile={onOpenFile} onSplitChange={onSplitChange} onToggleMaximized={onToggleMaximized} session={session} split={split} />;
 }
 
-export function CloudFileContentPane({ annotation, commitSha, initialEditing, initialLine, initialMode, initialRequestKey, onDirtyChange, path, scope, session, split = false }: {
+export function CloudFileContentPane({ annotation, commitSha, initialEditing, initialLine, initialMode, initialRequestKey, onDirtyChange, onModeChange, path, scope, session, split = false }: {
 	annotation: FileAnnotationModel;
 	commitSha?: string;
 	initialEditing?: boolean;
@@ -28,6 +28,7 @@ export function CloudFileContentPane({ annotation, commitSha, initialEditing, in
 	initialMode?: CloudFileViewMode;
 	initialRequestKey?: number;
 	onDirtyChange?: (path: string, dirty: boolean) => void;
+	onModeChange?: (mode: CloudFileViewMode) => void;
 	path: string;
 	scope?: CloudCpWorkspaceReviewScope;
 	session: WorkspaceSession;
@@ -42,7 +43,7 @@ export function CloudFileContentPane({ annotation, commitSha, initialEditing, in
 	const scopedAnnotation = useMemo(() => repositoryAnnotationModel(annotation, target.repository), [annotation, target.repository]);
 	return <section className="relative flex h-full min-h-0 flex-col bg-background">
 		<div className="board-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain">
-			<CloudFileContent annotation={scopedAnnotation} baseUrl={baseUrl} client={scopedClient} commitSha={commitSha} initialEditing={initialEditing} initialLine={initialLine} initialMode={initialMode} initialRequestKey={initialRequestKey} onDirtyChange={handleDirtyChange} orgId={session.cloud?.orgId ?? ""} path={target.path} scope={scope} sessionId={session.id} split={split} />
+			<CloudFileContent annotation={scopedAnnotation} baseUrl={baseUrl} client={scopedClient} commitSha={commitSha} initialEditing={initialEditing} initialLine={initialLine} initialMode={initialMode} initialRequestKey={initialRequestKey} onDirtyChange={handleDirtyChange} orgId={session.cloud?.orgId ?? ""} path={target.path} scope={scope} sessionId={session.id} split={split} onModeChange={onModeChange} />
 		</div>
 	</section>;
 }
