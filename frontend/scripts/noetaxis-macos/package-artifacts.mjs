@@ -40,6 +40,29 @@ export async function writeManifest(appPath, manifestPath) {
 	return files.length;
 }
 
+export async function writeInstallerArtifacts(outputDir) {
+	const installerDir = path.join(outputDir, "installer");
+	await mkdir(installerDir, { recursive: true });
+	for (const name of ["install.sh", "update.sh", "update-lib.sh", "survivors.sh", "common.sh", "rollback.sh", "README.md", "pkg-scripts"]) {
+		await cp(path.join(scriptDir, name), path.join(installerDir, name), { recursive: true, preserveTimestamps: true });
+		if (name.endsWith(".sh")) await chmod(path.join(installerDir, name), 0o755);
+	}
+	await cp(path.join(scriptDir, "common.sh"), path.join(installerDir, "pkg-scripts/common.sh"));
+	return installerDir;
+}
+
+export async function writeArtifactChecksums(outputDir) {
+	const lines = [];
+	for (const relative of await regularFiles(outputDir)) {
+		if (relative === "SHA256SUMS" || relative.split("/").some((part) => part.endsWith(".app"))) continue;
+		const bytes = await readFile(path.join(outputDir, relative));
+		lines.push(`${createHash("sha256").update(bytes).digest("hex")}  ${relative}`);
+	}
+	const checksumsPath = path.join(outputDir, "SHA256SUMS");
+	await writeFile(checksumsPath, `${lines.join("\n")}\n`);
+	return checksumsPath;
+}
+
 async function makeTemporaryWritable(directory) {
 	try {
 		await chmod(directory, 0o755);
@@ -133,6 +156,8 @@ export async function buildPackages({ appPath, outputDir, version, revision, cre
 		]);
 		const result = { appPath, manifestPath, pkgPath, dmgPath: "", fileCount };
 		if (createDiskImage) result.dmgPath = await buildDiskImage({ appPath, outputDir, version });
+		result.installerDir = await writeInstallerArtifacts(outputDir);
+		result.checksumsPath = await writeArtifactChecksums(outputDir);
 		return result;
 	} finally {
 		await makeTemporaryWritable(workDir);

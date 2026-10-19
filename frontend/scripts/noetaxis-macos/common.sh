@@ -10,10 +10,11 @@ NOETAXIS_LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Framework
 # the bundled ao is one), so the helper runs as a child of a small perl supervisor, in a process
 # group of its own. At the deadline the supervisor sends that group SIGTERM, waits one second,
 # then SIGKILL (also to descendants that outlive a leader that exited on TERM; the group id stays reserved because the leader is reaped only after the last signal), copies the helper's output (it wrote to private files) and prints "timed out" on stderr and exits 142 (143 when the script itself is
-# interrupted). This is the ONLY place in the installer that can send SIGKILL, and it can only
+# interrupted). This watchdog signal site can only
 # reach the process group of the helper command it started itself. It never touches AO's own
-# processes (the app, daemon, chat hosts, agents), which are only ever sent SIGTERM, only by
-# noetaxis_signal_own_pid in update-lib.sh, and only with --force.
+# processes (the app, daemon, chat hosts, agents). Default --force handling sends SIGTERM through
+# noetaxis_signal_own_pid in update-lib.sh. Separately typed survivor teardown
+# in survivors.sh can send TERM/KILL after executable and start-time identity checks.
 noetaxis_bounded() {
 	local seconds="$1"
 	shift
