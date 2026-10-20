@@ -248,6 +248,7 @@ type Discoverer struct {
 	ACPOptions        map[string]ACPOptionListFunc
 	ClaudeModels      ClaudeModelListFunc
 	ClaudeFingerprint ClaudeFingerprintFunc
+	ClaudePolicy      ClaudeModelPolicyFunc
 }
 
 // CodexModelListFunc obtains Codex's account-scoped app-server catalog without
@@ -265,6 +266,19 @@ type ACPOptionListFunc func(context.Context, ports.AgentModelDiscoveryRequest) (
 // whenever the provider could not be asked; the service then retains its
 // matching cached catalog instead of replacing it with guessed models.
 type ClaudeModelListFunc func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error)
+
+type ClaudeModelPolicyFunc func(context.Context, ports.AgentModelDiscoveryRequest) agentcreds.ClaudeModelPolicy
+
+var defaultClaudeModelPolicy ClaudeModelPolicyFunc = func(ctx context.Context, request ports.AgentModelDiscoveryRequest) agentcreds.ClaudeModelPolicy {
+	return agentcreds.ResolveClaudeModelPolicy(ctx, request.WorkingDir, request.Env, agentcreds.ResolveOptions{})
+}
+
+func claudePolicyFor(ctx context.Context, request ports.AgentModelDiscoveryRequest, resolve ClaudeModelPolicyFunc) agentcreds.ClaudeModelPolicy {
+	if resolve == nil {
+		resolve = defaultClaudeModelPolicy
+	}
+	return resolve(ctx, request)
+}
 
 // ClaudeFingerprintFunc supplies account/provider identity that is not present
 // in settings files, such as subscription credentials and apiProvider.
@@ -286,7 +300,7 @@ func (d Discoverer) discover(ctx context.Context, request ports.AgentModelDiscov
 		})
 	}
 	if request.AgentID == "claude-code" {
-		return discoverClaudeCatalog(ctx, request, d.ClaudeModels)
+		return discoverClaudeCatalog(ctx, request, d.ClaudeModels, d.ClaudePolicy)
 	}
 	if request.AgentID == "muse" || request.AgentID == "memcode" {
 		return Base(request.AgentID), nil
@@ -405,30 +419,61 @@ func ClaudeFallbackModelIDs() []string {
 	return append([]string(nil), claudeFallbackAliases...)
 }
 
-// discoverClaudeCatalog reports only provider-discovered models. Errors leave
-// the shared service to retain the matching cached catalog or allow manual
-// entry when no successful catalog has been saved yet.
+// Discovery errors retain matching cached provider models in the service.
+// A cold failure supplies explicitly unverified CLI aliases and manual entry.
 func discoverClaudeCatalog(
 	ctx context.Context,
 	request ports.AgentModelDiscoveryRequest,
 	list ClaudeModelListFunc,
+	policies ...ClaudeModelPolicyFunc,
 ) (ports.AgentModelCatalog, error) {
 	base := Manual(request.AgentID)
+	var resolve ClaudeModelPolicyFunc
+	if len(policies) > 0 {
+		resolve = policies[0]
+	}
+	policy := claudePolicyFor(ctx, request, resolve)
+	if policy.Unresolved {
+		base.SelectionMode = ports.ModelSelectionCatalog
+		base.Source = "built-in"
+		return base, fmt.Errorf("claude-code model policy is unavailable or dynamic; named model choices withheld")
+	}
+	filter := func(models []ports.AgentModelInfo) []ports.AgentModelInfo {
+		allowed := make([]ports.AgentModelInfo, 0, len(models))
+		for _, model := range models {
+			if policy.Allows(model.ID) {
+				allowed = append(allowed, model)
+			}
+		}
+		return allowed
+	}
+	fallback := func(cause error) (ports.AgentModelCatalog, error) {
+		for _, alias := range ClaudeFallbackModelIDs() {
+			efforts, _ := ClaudeFallbackEfforts(alias)
+			base.Models = append(base.Models, ports.AgentModelInfo{
+				ID: alias, Label: alias + " (built-in alias; availability unverified)", Efforts: efforts,
+			})
+		}
+		base.Models = filter(base.Models)
+		base.SelectionMode = ports.ModelSelectionCatalog
+		base.Source = "built-in"
+		return base, fmt.Errorf("claude-code model discovery: %w; showing built-in CLI aliases, account availability unverified", cause)
+	}
 	if list == nil {
-		return base, errors.New("claude-code model discovery is unavailable")
+		return fallback(errors.New("model listing is unavailable"))
 	}
 	models, err := list(ctx, request)
 	if err != nil {
-		return base, fmt.Errorf("claude-code model discovery: %w", err)
+		return fallback(err)
 	}
 	normalized := normalize(models)
 	if len(normalized) == 0 {
-		return base, errors.New("claude-code model discovery returned no models")
+		return fallback(errors.New("provider returned no models"))
 	}
 	settings := agentcreds.ResolveClaudeSettings(ctx, request.WorkingDir, request.Env, agentcreds.ResolveOptions{})
 	// An explicitly configured alias may accompany the provider's concrete
 	// models; use the discovered catalog to resolve its display version.
-	base.Models = LabelClaudeAliasVersions(applyClaudeConfiguredDefault(normalized, settings.Model), normalized)
+	base.Models = filter(LabelClaudeAliasVersions(applyClaudeConfiguredDefault(normalized, settings.Model), normalized))
 	base.SelectionMode = ports.ModelSelectionCatalog
 	base.Source = "provider"
 	return base, nil
@@ -457,6 +502,9 @@ func applyClaudeConfiguredDefault(models []ports.AgentModelInfo, configured stri
 // cached catalog, since the binary alone does not change when settings do.
 func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentModelDiscoveryRequest) string {
 	fingerprint := CatalogFingerprint(ctx, request.AgentID, request.Binary, request.WorkingDir, request.Env)
+	if request.AgentID == "claude-code" {
+		fingerprint += "\x00policy-v1=" + claudePolicyFor(ctx, request, d.ClaudePolicy).Fingerprint()
+	}
 	if request.AgentID == "fx" && request.CredentialType == "" {
 		return fingerprint + ":shared-providers-v1:" + fingerprintConfigPaths([]string{fxSettingsPath(request.Env)})
 	}

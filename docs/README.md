@@ -10,6 +10,8 @@ Start with [architecture.md](architecture.md) for the current backend model and
 
 ## Reference docs
 
+[Claude Code authentication](claude-authentication.md) covers native login status, enterprise credentials, provider model listing and the labelled alias fallback.
+
 Gemini CLI setup, permission mapping, and current capability limits are documented
 in [gemini-cli.md](gemini-cli.md).
 
