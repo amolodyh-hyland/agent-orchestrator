@@ -1291,6 +1291,7 @@
 	"notify.all": "すべて",
 	"notify.bell": "通知",
 	"notify.clearAll": "すべてクリア",
+	"notify.clearAllAfter": "これ以降をすべてクリア",
 	"notify.clearOne": "通知をクリア: {{title}}",
 	"notify.clearOneShort": "通知をクリア",
 	"notify.cloud": "クラウド",

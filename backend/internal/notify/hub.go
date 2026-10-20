@@ -57,7 +57,7 @@ func (h *Hub) Publish(_ context.Context, event domain.NotificationEvent) error {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	for _, sub := range h.subs {
-		if event.Kind != domain.NotificationCleared && sub.projectID != "" && sub.projectID != event.Record.ProjectID {
+		if event.Kind != domain.NotificationCleared && event.Kind != domain.NotificationReadChanged && sub.projectID != "" && sub.projectID != event.Record.ProjectID {
 			continue
 		}
 		if event.Kind == domain.NotificationCleared {

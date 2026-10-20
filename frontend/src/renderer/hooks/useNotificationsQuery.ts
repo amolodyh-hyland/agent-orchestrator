@@ -27,10 +27,6 @@ export function useNotificationsQuery(status: NotificationListStatus, enabled = 
 	});
 }
 
-/**
- * Opening the notification panel is the acknowledgement — there is no manual
- * "mark all read" control any more, so this mutation is fired on open.
- */
 export function useMarkAllNotificationsReadMutation() {
 	const queryClient = useQueryClient();
 	return useMutation({

@@ -132,6 +132,8 @@ func (m *Manager) MarkRead(ctx context.Context, id string) (Notification, bool, 
 	if id == "" {
 		return Notification{}, false, apierr.Invalid("INVALID_NOTIFICATION_ID", "Notification id is required", nil)
 	}
+	m.barrier.Lock()
+	defer m.barrier.Unlock()
 	row, ok, err := m.store.MarkNotificationRead(ctx, id)
 	if err != nil {
 		return Notification{}, false, err
@@ -139,22 +141,36 @@ func (m *Manager) MarkRead(ctx context.Context, id string) (Notification, bool, 
 	if !ok {
 		return Notification{}, false, apierr.NotFound("NOTIFICATION_NOT_FOUND", "Unknown unread notification")
 	}
+	m.publishRead(ctx)
 	return notificationFromRecord(row), true, nil
 }
 
-// MarkAllRead acknowledges notifications as seen. With ids it acknowledges
-// exactly those rows — the ones a client actually rendered — which keeps
-// anything past the client's last loaded page unread and therefore still
-// reachable. With no ids it falls back to acknowledging every unread row, for
-// clients that do not paginate.
+// MarkAllRead marks the selected rows read, or all unread rows when ids is empty.
 func (m *Manager) MarkAllRead(ctx context.Context, ids []string) (int64, error) {
 	if m == nil || m.store == nil {
 		return 0, errors.New("notification: store is required")
 	}
+	m.barrier.Lock()
+	defer m.barrier.Unlock()
+	var count int64
+	var err error
 	if len(ids) == 0 {
-		return m.store.MarkAllNotificationsRead(ctx)
+		count, err = m.store.MarkAllNotificationsRead(ctx)
+	} else {
+		count, err = m.store.MarkNotificationsRead(ctx, ids)
 	}
-	return m.store.MarkNotificationsRead(ctx, ids)
+	if err == nil && count > 0 {
+		m.publishRead(ctx)
+	}
+	return count, err
+}
+
+func (m *Manager) publishRead(ctx context.Context) {
+	if m.publisher != nil {
+		if err := m.publisher.Publish(ctx, domain.NotificationEvent{Kind: domain.NotificationReadChanged}); err != nil {
+			m.logger.Warn("publish notification read", "error", err)
+		}
+	}
 }
 
 // Delete removes one notification without changing its session or PR state.

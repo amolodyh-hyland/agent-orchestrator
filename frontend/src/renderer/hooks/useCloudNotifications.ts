@@ -143,7 +143,7 @@ export function useCloudNotifications(
 			throw error;
 		}
 	}, [markRead, orgId, ready, storageKey]);
-	return { ...query, items, markAllRead, markRead, clearAll, clearOne };
+	return { ...query, items, badgeKey: `cloud:${base}:${orgId}:${userId}`, markAllRead, markRead, clearAll, clearOne };
 }
 
 /**

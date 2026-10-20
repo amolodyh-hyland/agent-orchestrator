@@ -42,7 +42,7 @@ export function connectRemoteNotificationStreams(queryClient: QueryClient): () =
 			if (!base || connections.has(hostId)) continue;
 			const close = probeRemoteSse(
 				`${base.replace(/\/+$/, "")}/api/v1/notifications/stream`,
-				["notification_created", "notification_resolved", "notification_deleted", "notification_cleared"],
+				["notification_read", "notification_created", "notification_resolved", "notification_deleted", "notification_cleared"],
 				() => invalidate(hostId),
 				() => { setStreaming(hostId, true); invalidate(hostId); },
 				() => { setStreaming(hostId, false); invalidate(hostId); },
@@ -107,6 +107,7 @@ export function useRemoteNotificationHosts(status: NotificationListStatus, enabl
 		hosts: connected.map((hostId, index) => ({
 			hostId,
 			label: labelForHost(hostId) ?? hostId,
+			updatedAt: queries[index]?.dataUpdatedAt,
 			data: queries[index]?.isError ? undefined : queries[index]?.data,
 			isError: queries[index]?.isError ?? false,
 			isLoading: queries[index]?.isLoading ?? false,

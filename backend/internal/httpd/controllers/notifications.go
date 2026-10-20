@@ -202,6 +202,9 @@ func writeNotificationSSE(w http.ResponseWriter, flusher http.Flusher, event dom
 	name := "notification_created"
 	var payload any = notificationResponseFromRecord(event.Record)
 	switch event.Kind {
+	case domain.NotificationReadChanged:
+		name = "notification_read"
+		payload = struct{}{}
 	case domain.NotificationCleared:
 		name = "notification_cleared"
 		payload = struct {

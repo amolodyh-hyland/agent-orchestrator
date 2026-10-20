@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { aoBridge } from "../lib/bridge";
@@ -102,6 +102,7 @@ vi.mock("../hooks/useRestoreSession", () => ({ useRestoreSession: () => vi.fn() 
 vi.mock("../lib/host-clients", () => ({ clientForHost: (hostId: string) => mocks.clientForHost(hostId) }));
 
 beforeEach(() => {
+	window.localStorage.clear();
 	for (const mock of Object.values(mocks)) mock.mockReset();
 	remoteA = [hostA];
 	remoteB = [hostB];
@@ -145,7 +146,7 @@ it("combines unread counts while keeping equal notification and session IDs tied
 		params: { hostId: "host-b", projectId: "same-project", sessionId: "same-session" },
 	});
 
-	await user.click(screen.getByRole("button", { name: "3 unread notifications" }));
+	await user.click(screen.getByRole("button", { name: "Notifications" }));
 	await user.click(screen.getByRole("button", { name: "Clear notification: Host B: B ping" }));
 	await waitFor(() => expect(mocks.clearRemote).toHaveBeenCalledTimes(1));
 	expect(mocks.clearRemote).toHaveBeenCalledWith("host-b", "/api/v1/notifications/{id}", {
@@ -155,26 +156,17 @@ it("combines unread counts while keeping equal notification and session IDs tied
 	expect(mocks.navigate).toHaveBeenCalledTimes(1);
 });
 
-it("acknowledges each remote inbox on its own host when opened", async () => {
-	render(
-		<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-			<TooltipProvider><NotificationCenter /></TooltipProvider>
-		</QueryClientProvider>,
-	);
+it("keeps every remote inbox unread on open", async () => {
+	render(<QueryClientProvider client={new QueryClient()}><TooltipProvider><NotificationCenter /></TooltipProvider></QueryClientProvider>);
 	await userEvent.click(screen.getByRole("button", { name: "3 unread notifications" }));
-
-	await waitFor(() => expect(mocks.markRemote).toHaveBeenCalledTimes(2));
-	expect(mocks.markRemote).toHaveBeenCalledWith("host-a", "/api/v1/notifications/read-all", {
-		body: { ids: ["same-notification"] },
-	});
-	expect(mocks.markRemote).toHaveBeenCalledWith("host-b", "/api/v1/notifications/read-all", {
-		body: { ids: ["same-notification"] },
-	});
-	expect(mocks.markLocal).toHaveBeenCalledTimes(1);
-	expect(mocks.markLocal).toHaveBeenCalledWith(["same-notification"]);
+	expect(mocks.markRemote).not.toHaveBeenCalled();
+	expect(mocks.markLocal).not.toHaveBeenCalled();
+	expect(screen.getByRole("button", { name: "Notifications" })).toBeInTheDocument();
+	await userEvent.click(screen.getByText("B ping body"));
+	expect(mocks.markRemote).toHaveBeenCalledExactlyOnceWith("host-b", "/api/v1/notifications/read-all", { body: { ids: ["same-notification"] } });
 });
 
-it("shows and acknowledges unread remote rows beyond the first history page", async () => {
+it("shows unread remote rows beyond the first history page", async () => {
 	remoteA = [];
 	remoteB = [];
 	unreadOnlyA = [{ ...notification("Older unread A"), id: "older-unread" }];
@@ -185,9 +177,7 @@ it("shows and acknowledges unread remote rows beyond the first history page", as
 	);
 	await userEvent.click(screen.getByRole("button", { name: "2 unread notifications" }));
 	expect(await screen.findByText("Older unread A")).toBeInTheDocument();
-	await waitFor(() => expect(mocks.markRemote).toHaveBeenCalledWith("host-a", "/api/v1/notifications/read-all", {
-		body: { ids: ["older-unread"] },
-	}));
+	expect(mocks.markRemote).not.toHaveBeenCalled();
 });
 
 it("clears each connected host when Clear all is clicked", async () => {
@@ -204,21 +194,14 @@ it("clears each connected host when Clear all is clicked", async () => {
 	expect(mocks.clearRemote).toHaveBeenCalledWith("host-b", "/api/v1/notifications");
 });
 
-it("waits for Retry after a remote read failure instead of repeatedly sending it", async () => {
-	mocks.markRemote.mockImplementation(async (hostId: string) => {
-		if (hostId === "host-b") throw new Error("offline");
-		return { data: { updatedCount: 1 } };
-	});
-	render(
-		<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-			<TooltipProvider><NotificationCenter /></TooltipProvider>
-		</QueryClientProvider>,
-	);
+it("surfaces a remote read failure after a click", async () => {
+	mocks.markRemote.mockRejectedValue(new Error("offline"));
+	render(<QueryClientProvider client={new QueryClient()}><TooltipProvider><NotificationCenter /></TooltipProvider></QueryClientProvider>);
 	await userEvent.click(screen.getByRole("button", { name: "3 unread notifications" }));
-	await screen.findByText("Host B: offline");
-	expect(mocks.markRemote).toHaveBeenCalledTimes(2);
-	await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-	await waitFor(() => expect(mocks.markRemote).toHaveBeenCalledTimes(3));
+	await userEvent.click(screen.getByText("B ping body"));
+	await userEvent.click(screen.getByRole("button", { name: "Notifications" }));
+	expect(await screen.findByText("offline")).toBeInTheDocument();
+	expect(mocks.markRemote).toHaveBeenCalledTimes(1);
 });
 
 it("warns when one remote inbox fails without hiding healthy rows", async () => {
@@ -226,14 +209,14 @@ it("warns when one remote inbox fails without hiding healthy rows", async () => 
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const invalidate = vi.spyOn(client, "invalidateQueries");
 	render(<QueryClientProvider client={client}><TooltipProvider><NotificationCenter /></TooltipProvider></QueryClientProvider>);
-	await userEvent.click(screen.getByRole("button", { name: "3 unread notifications" }));
+	await userEvent.click(screen.getByRole("button", { name: "2 unread notifications" }));
 	expect(screen.getByText("A ping")).toBeInTheDocument();
 	expect(screen.getByText("Could not load notifications.")).toBeInTheDocument();
 	await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 	expect(invalidate).toHaveBeenCalledWith({ queryKey: ["remote-notifications", "host-b", "all"] });
 });
 
-it("loads and acknowledges older notifications from the correct host", async () => {
+it("loads older notifications from the correct host", async () => {
 	nextCursorA = "older-a";
 	const older = { ...notification("Older A ping"), id: "older-notification", createdAt: "2026-09-29T10:00:00Z" };
 	mocks.fetchOlder.mockResolvedValue(remotePage([older]));
@@ -246,12 +229,7 @@ it("loads and acknowledges older notifications from the correct host", async () 
 	await userEvent.click(screen.getByRole("button", { name: "Load earlier from Host A" }));
 	await screen.findByText("Older A ping");
 	expect(mocks.fetchOlder).toHaveBeenCalledWith("host-a", "all", "older-a");
-	await waitFor(() => expect(mocks.markRemote).toHaveBeenCalledWith("host-a", "/api/v1/notifications/read-all", {
-		body: { ids: ["older-notification"] },
-	}));
-	expect(screen.queryByRole("button", { name: "Load earlier from Host A" })).not.toBeInTheDocument();
-	await userEvent.click(screen.getByRole("button", { name: "Clear notification: Host A: Older A ping" }));
-	await waitFor(() => expect(screen.queryByText("Older A ping")).not.toBeInTheDocument());
+	expect(mocks.markRemote).not.toHaveBeenCalled();
 });
 
 it("drops older pages when polling moves the first-page cursor", async () => {
@@ -338,4 +316,15 @@ it("shows only new remote OS notifications and opens their host-qualified sessio
 		to: "/host/$hostId/project/$projectId/session/$sessionId",
 		params: { hostId: "host-b", projectId: "same-project", sessionId: "new-session" },
 	});
+});
+
+it("clears only the displayed suffix, qualifying identical ids by host", async () => {
+ render(<QueryClientProvider client={new QueryClient()}><TooltipProvider><NotificationCenter /></TooltipProvider></QueryClientProvider>);
+ await userEvent.click(screen.getByRole("button", { name: "3 unread notifications" }));
+ fireEvent.contextMenu(screen.getByRole("listitem", { name: "Notifications: A ping" }));
+ await userEvent.click(await screen.findByRole("menuitem", { name: "Clear all after this" }));
+ await waitFor(() => expect(mocks.clearRemote).toHaveBeenCalledTimes(2));
+ expect(mocks.clearRemote).toHaveBeenCalledWith("host-a", "/api/v1/notifications/{id}", { params: { path: { id: "same-notification" } } });
+ expect(mocks.clearRemote).toHaveBeenCalledWith("host-b", "/api/v1/notifications/{id}", { params: { path: { id: "same-notification" } } });
+ expect(mocks.clearLocal).not.toHaveBeenCalled();
 });

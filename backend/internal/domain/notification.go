@@ -123,6 +123,8 @@ const (
 	NotificationDeleted NotificationEventKind = "deleted"
 	// NotificationCleared announces that notification history was deleted.
 	NotificationCleared NotificationEventKind = "cleared"
+	// NotificationReadChanged asks clients to refresh persisted read state.
+	NotificationReadChanged NotificationEventKind = "read"
 )
 
 // NotificationEvent is one live notification-stream message.

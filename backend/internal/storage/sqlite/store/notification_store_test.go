@@ -8,6 +8,8 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 func TestNotificationStore_InsertListAndDedupe(t *testing.T) {
@@ -679,5 +681,53 @@ func TestNotificationStore_MarkNotificationsReadOnlyTouchesGivenIDs(t *testing.T
 	count, err := s.CountUnreadNotifications(ctx)
 	if err != nil || count != 1 {
 		t.Fatalf("unread count = %d err=%v, want 1 (ntf_3 must stay reachable)", count, err)
+	}
+}
+
+func TestNotificationReadAndDismissalSurviveRestart(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s, err := sqlitetest.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedProject(t, s, "persist")
+	sess, err := s.CreateSession(ctx, sampleRecord("persist"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, id := range []string{"new", "clicked", "cleared"} {
+		rec := domain.NotificationRecord{ID: id, Title: id, SessionID: sess.ID, ProjectID: sess.ProjectID, Type: domain.NotificationReviewCompleted, Status: domain.NotificationUnread, CreatedAt: time.Date(2026, 10, 20, 12, i, 0, 0, time.UTC), SourceKey: id}
+		if _, _, err := s.CreateNotification(ctx, rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := s.MarkNotificationRead(ctx, "clicked"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.DeleteNotification(ctx, "cleared"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = sqlite.OpenPreMigrated(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	rows, err := s.ListNotifications(ctx, domain.NotificationListAll, time.Time{}, "", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %+v", rows)
+	}
+	states := map[string]domain.NotificationStatus{}
+	for _, row := range rows {
+		states[row.ID] = row.Status
+	}
+	if states["new"] != domain.NotificationUnread || states["clicked"] != domain.NotificationRead {
+		t.Fatalf("states = %+v", states)
 	}
 }

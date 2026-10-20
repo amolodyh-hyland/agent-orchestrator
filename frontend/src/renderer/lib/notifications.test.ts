@@ -622,6 +622,16 @@ describe("createNotificationsTransport", () => {
 		await vi.waitFor(() => expect(invalidateSpy).toHaveBeenCalledTimes(2));
 	});
 
+	it("refreshes persisted read state when another window selects a row", async () => {
+		const qc = queryClient();
+		const invalidate = vi.spyOn(qc, "invalidateQueries");
+		const stop = createNotificationsTransport(qc).connect();
+		EventSourceStub.instances[0].dispatch("notification_read", {});
+		await vi.waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: unreadNotificationsQueryKey }));
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: recentNotificationsQueryKey });
+		stop();
+	});
+
 	it("removes a deleted notification from every live cache", async () => {
 		const qc = queryClient();
 		const cancelSpy = vi.spyOn(qc, "cancelQueries");

@@ -1290,6 +1290,7 @@
 	"standalone.workspaceName": "草稿区",
 	"notify.bell": "通知",
 	"notify.clearAll": "清除全部",
+	"notify.clearAllAfter": "清除此条及之后的所有通知",
 	"notify.clearOne": "清除通知：{{title}}",
 	"notify.clearOneShort": "清除通知",
 	"notify.cloud": "云端",

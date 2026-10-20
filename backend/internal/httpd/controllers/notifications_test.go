@@ -371,6 +371,29 @@ func TestNotificationsAPI_StreamCreatedNotifications(t *testing.T) {
 	}
 }
 
+func TestNotificationReadStreamFrame(t *testing.T) {
+	stream := &fakeNotificationStream{ch: make(chan domain.NotificationEvent, 1)}
+	srv := newNotificationStreamTestServer(t, &fakeNotificationService{}, stream)
+	resp, err := srv.Client().Get(srv.URL + "/api/v1/notifications/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	stream.ch <- domain.NotificationEvent{Kind: domain.NotificationReadChanged}
+	reader := bufio.NewReader(resp.Body)
+	var frame strings.Builder
+	for range 6 {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		frame.WriteString(line)
+	}
+	if !strings.Contains(frame.String(), "event: notification_read\ndata: {}\n\n") {
+		t.Fatalf("frame = %q", frame.String())
+	}
+}
+
 func TestNotificationsAPI_StreamWithoutPublisherIs501(t *testing.T) {
 	srv := newNotificationStreamTestServer(t, &fakeNotificationService{}, nil)
 	body, status, _ := doRequest(t, srv, "GET", "/api/v1/notifications/stream", "")

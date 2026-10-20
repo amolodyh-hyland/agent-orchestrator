@@ -93,7 +93,7 @@ export async function fetchNotificationsPage(
 }
 
 /**
- * Fired when the panel opens — seeing the notifications is the acknowledgement.
+ * Marks explicit selections read; opening the panel only resets the badge.
  *
  * Empty `ids` marks every unread row (the all-history panel still shows them).
  * Non-empty `ids` marks exactly those rows so incremental clients can keep later
@@ -664,6 +664,7 @@ export function createNotificationsTransport(
 							watched: isWatchingNeedsInputSession(notification, getVisibleAgentSessionId()),
 						});
 					});
+					source.addEventListener("notification_read", () => { invalidateNotifications(); });
 					// AO closed the underlying issue (the session got its input, the
 					// PR stopped waiting on a merge). Patch the row live so an open
 					// panel reflects that without waiting for a refetch.
