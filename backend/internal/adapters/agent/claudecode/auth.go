@@ -233,7 +233,7 @@ func (p *Plugin) resolveProviderContext(
 	provider, providerOK := agentcreds.ResolveProvider(reported, opts)
 	cliManaged := cliOK && report.managesCredential(opts)
 	reportedProvider, reportedOK := agentcreds.ParseProvider(reported)
-	cliSignedOut := cliOK && report.LoggedIn != nil && !*report.LoggedIn && report.AuthMethod == "none" && reportedOK && provider == reportedProvider
+	cliSignedOut := cliOK && report.LoggedIn != nil && !*report.LoggedIn && reportedOK && provider == reportedProvider
 	if cliOK && report.LoggedIn != nil && !*report.LoggedIn {
 		opts.DisableStoredCredentials = true
 	}

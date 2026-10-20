@@ -33,6 +33,9 @@ type ResolveOptions struct {
 	Env Env
 	// ConfigDir overrides Claude Code's config directory.
 	ConfigDir string
+	// ManagedSettingsDir overrides the system policy directory and OS policy
+	// lookup, allowing isolated policy fixtures without reading device policy.
+	ManagedSettingsDir string
 	// AllowKeychain permits reading the macOS keychain.
 	//
 	// This is the switch behind open question Q1. The Cloud provisioning

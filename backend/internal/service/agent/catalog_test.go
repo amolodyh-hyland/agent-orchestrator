@@ -701,7 +701,7 @@ func (f *fakeModelDiscoverer) Manual(agentID string) ports.AgentModelCatalog {
 	}
 }
 
-var testModelDiscoverer ports.AgentModelDiscoverer = modelcatalog.Discoverer{}
+var testModelDiscoverer ports.AgentModelDiscoverer = modelcatalog.Discoverer{ClaudePolicy: testNoClaudeModelPolicy}
 
 func successfulModelDiscoverer() *fakeModelDiscoverer {
 	return &fakeModelDiscoverer{version: "v1", catalog: ports.AgentModelCatalog{

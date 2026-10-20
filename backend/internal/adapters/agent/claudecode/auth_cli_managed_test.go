@@ -122,20 +122,38 @@ func TestCLIManagedModelListingKeepsAccountSignInWhenLegacyStoreFails(t *testing
 }
 
 func TestNativeSignedOutDoesNotAcceptAStaleEnvironmentCredential(t *testing.T) {
-	clearClaudeCredentialEnv(t)
-	t.Setenv("ANTHROPIC_API_KEY", "stale-fixture")
-	previousCommand, previousResolver := claudeAuthCommand, claudeResolveLocal
-	t.Cleanup(func() { claudeAuthCommand, claudeResolveLocal = previousCommand, previousResolver })
-	claudeAuthCommand = func(context.Context, string, string, map[string]string) (claudeCommandOutput, error) {
-		return claudeCommandOutput{Stdout: []byte(`{"loggedIn":false,"authMethod":"none","apiProvider":"firstParty"}`)}, errors.New("signed out")
-	}
-	claudeResolveLocal = func(context.Context, agentcreds.Provider, agentcreds.ResolveOptions) (agentcreds.Credential, bool) {
-		t.Fatal("native sign-out must not validate unrelated credential sources")
-		return agentcreds.Credential{}, false
-	}
-	status, _, steps, err := (&Plugin{resolvedBinary: "/fixture/claude"}).authStatusAndDiagnostics(context.Background(), "", nil, false)
-	if err != nil || status != ports.AgentAuthStatusUnauthorized || len(steps) != 1 || steps[0].Code != "cli_signed_out" {
-		t.Fatalf("status=%s, steps=%+v, err=%v", status, steps, err)
+	for _, method := range []string{"", "none", "api_key"} {
+		t.Run("method="+method, func(t *testing.T) {
+			clearClaudeCredentialEnv(t)
+			t.Setenv("ANTHROPIC_API_KEY", "stale-fixture")
+			previousCommand, previousResolver := claudeAuthCommand, claudeResolveLocal
+			t.Cleanup(func() { claudeAuthCommand, claudeResolveLocal = previousCommand, previousResolver })
+			claudeAuthCommand = func(context.Context, string, string, map[string]string) (claudeCommandOutput, error) {
+				payload := map[string]any{"loggedIn": false, "apiProvider": "firstParty"}
+				if method != "" {
+					payload["authMethod"] = method
+				}
+				raw, _ := json.Marshal(payload)
+				return claudeCommandOutput{Stdout: raw}, errors.New("signed out")
+			}
+			claudeResolveLocal = func(context.Context, agentcreds.Provider, agentcreds.ResolveOptions) (agentcreds.Credential, bool) {
+				t.Fatal("native sign-out must not validate unrelated credential sources")
+				return agentcreds.Credential{}, false
+			}
+			status, _, steps, err := (&Plugin{resolvedBinary: "/fixture/claude"}).authStatusAndDiagnostics(context.Background(), "", nil, false)
+			if err != nil || status != ports.AgentAuthStatusUnauthorized || len(steps) != 1 || steps[0].Code != "cli_signed_out" {
+				t.Fatalf("status=%s, steps=%+v, err=%v", status, steps, err)
+			}
+			previousReport := claudeModelAuthReport
+			t.Cleanup(func() { claudeModelAuthReport = previousReport })
+			claudeModelAuthReport = func(ctx context.Context, binary, dir string, env map[string]string) (claudeAuthReport, bool) {
+				return (&Plugin{}).claudeCLIAuthReport(ctx, binary, dir, env)
+			}
+			models, err := ProviderModels(context.Background(), "/fixture/claude", "", nil)
+			if len(models) != 0 || !errors.Is(err, ports.ErrAgentModelDiscoveryCredentialRejected) {
+				t.Fatalf("signed-out account models=%+v, err=%v", models, err)
+			}
+		})
 	}
 }
 

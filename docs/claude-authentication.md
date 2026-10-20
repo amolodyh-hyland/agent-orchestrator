@@ -19,7 +19,8 @@ Native status covers claude.ai enterprise accounts, saved Console keys, Console
 OAuth profiles, federation, `apiKeyHelper`, environment keys/tokens, corporate
 gateway sessions and cloud providers, without requiring AO to extract secrets.
 Future auth methods with `loggedIn: true` also remain recognizable. Explicit
-sign-out disables stored-credential fallback. Unrecognized or unavailable CLI
+sign-out for the selected provider disables stored-credential fallback, including
+ambient environment keys, whether or not `authMethod` is supplied. Unrecognized or unavailable CLI
 status retains the legacy fallback and is not proof of sign-out.
 
 ## Optional account model listing
@@ -69,6 +70,24 @@ so an account switch invalidates the old provider list.
 The pre-existing static alias fallback for spawn effort validation did not
 populate an empty model picker.
 
+## Model restrictions
+
+Both provider choices and built-in aliases are filtered after adding a configured
+default. `agentcreds/claude_model_policy.go` reads user/project/local lists and
+cached remote, OS-managed and file-managed settings. Managed allowlists replace
+lower scopes; unmanaged lists union. Explicit empty lists block named choices.
+Managed source priority and opt-in merging, family/version/snapshot entries,
+managed deny/exact rules, alias pins, provider IDs, model overrides and disabling
+1M context are included in the effective policy and catalog cache fingerprint.
+Policy changes therefore prevent reuse of an old provider catalog. The Default
+option remains the CLI's responsibility; the picker does not assert its model.
+
+Discovery never executes `policyHelper` or fetches remote policy. Dynamic,
+unreadable or ambiguous policy withholds named choices with a warning. Cached
+remote policy and organization entitlements may lag server changes; built-in
+aliases continue to carry the availability-unverified label. Claude Code remains
+the authority that enforces policy when a session starts.
+
 ## Evidence and tests
 
 Claude Code 2.1.304 was identified with `--version`; its help documents the status
@@ -81,4 +100,6 @@ secret omission, account switches, provider results and cached/fallback models.
 Official references: [authentication](https://code.claude.com/docs/en/authentication),
 [CLI status contract](https://code.claude.com/docs/en/cli-reference),
 [settings precedence](https://code.claude.com/docs/en/settings), and
-[corporate gateway](https://code.claude.com/docs/en/claude-apps-gateway).
+[corporate gateway](https://code.claude.com/docs/en/claude-apps-gateway),
+[model restrictions](https://code.claude.com/docs/en/model-config), and
+[managed sources](https://code.claude.com/docs/en/managed-settings).

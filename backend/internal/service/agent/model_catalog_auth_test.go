@@ -156,7 +156,7 @@ func TestClaudeDiscoveryFailureUsesCachedModelsWithoutStaticFallback(t *testing.
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
 	t.Setenv("ANTHROPIC_MODEL", "")
 	var fail atomic.Bool
-	discoverer := modelcatalog.Discoverer{ClaudeModels: func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
+	discoverer := modelcatalog.Discoverer{ClaudePolicy: testNoClaudeModelPolicy, ClaudeModels: func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
 		if fail.Load() {
 			return nil, wrapAuthError(ports.ErrAgentModelDiscoveryCredentialExpired, "login token expired")
 		}

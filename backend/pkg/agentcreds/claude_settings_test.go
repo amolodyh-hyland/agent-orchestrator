@@ -132,7 +132,8 @@ func TestClaudeSettingsOnlyApprovedFileEnvironmentKeys(t *testing.T) {
 		"ANTHROPIC_BASE_URL": "https://gateway.example", "ANTHROPIC_API_KEY": "fixture-key",
 		"ANTHROPIC_AUTH_TOKEN": "fixture-token", "ANTHROPIC_MODEL": "kimi-k2",
 		"ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-opus", "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-sonnet",
-		"ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-haiku", "ANTHROPIC_SMALL_FAST_MODEL": "small-model",
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-haiku", "ANTHROPIC_DEFAULT_FABLE_MODEL": "glm-fable", "ANTHROPIC_SMALL_FAST_MODEL": "small-model",
+		"CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",
 	}
 	fileEnv := make(map[string]any, len(want)+4)
 	for key, value := range want {
