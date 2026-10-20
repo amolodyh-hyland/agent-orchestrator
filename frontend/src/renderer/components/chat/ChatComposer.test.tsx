@@ -385,6 +385,80 @@ describe("send keys", () => {
 		expect(onSend).toHaveBeenCalledWith("`sample`");
 	});
 
+	it("styles completed inline Markdown live and sends the original source", async () => {
+		const sessionId = "composer-live-inline-code";
+		const { onSend, field } = renderComposer({ draftSessionId: sessionId });
+		const markdown = "Run `npm test` now.";
+
+		await typeInComposer(field, markdown);
+		await waitFor(() => expect(field.querySelector(".chat-composer-markdown-code")).not.toBeNull());
+		expect(composerWireText(field)).toBe(markdown);
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.text).toBe(markdown));
+
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(onSend.mock.calls[0]?.[0]).toBe(markdown));
+	});
+
+	it("undo removes the live inline-code conversion", async () => {
+		const { field } = renderComposer();
+		await typeInComposer(field, "`sample`");
+		await waitFor(() => expect(field.querySelector(".chat-composer-markdown-code")).not.toBeNull());
+		await userEvent.keyboard("{Control>}z{/Control}");
+
+		await waitFor(() => expect(field.querySelector(".chat-composer-markdown-code")).toBeNull());
+		expect(composerWireText(field)).toBe("`sample`");
+	});
+
+	it("keeps Enter inside a fenced code block until its closing fence and sends the source Markdown", async () => {
+		const { onSend, field } = renderComposer();
+		await typeInComposer(field, "```ts");
+		await userEvent.keyboard("{Enter}");
+
+		expect(onSend).not.toHaveBeenCalled();
+		expect(composerWireText(field)).toBe("```ts\n");
+		await waitFor(() => expect(field.querySelector(".chat-composer-markdown-code")).not.toBeNull());
+
+		await typeInComposer(field, "const value = `inside`");
+		await userEvent.keyboard("{Enter}");
+		expect(onSend).not.toHaveBeenCalled();
+		await typeInComposer(field, "```");
+		await userEvent.keyboard("{Enter}");
+
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith("```ts\nconst value = `inside`\n```"));
+	});
+
+	it("formats pasted Markdown without changing its send payload", async () => {
+		const { onSend, field } = renderComposer();
+		const markdown = "Run `npm test`.\n```ts\nconst value = `inside`;\n```";
+		fireEvent.paste(field, {
+			clipboardData: {
+				files: [],
+				items: [],
+				getData: (type: string) => type === "text/plain" ? markdown : "",
+				setData: () => undefined,
+			},
+		});
+
+		await waitFor(() => expect(composerWireText(field)).toBe(markdown));
+		await waitFor(() => expect(field.querySelectorAll(".chat-composer-markdown-code").length).toBeGreaterThan(1));
+		expect(field.querySelector('code[data-lexical-text][style*="var(--card)"]')).not.toBeNull();
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith(markdown));
+	});
+
+	it("waits for IME composition to finish before applying inline-code styling", async () => {
+		const { field } = renderComposer();
+		await typeInComposer(field, "`sample");
+		fireEvent.compositionStart(field);
+		await typeInComposer(field, "`");
+		expect(field.querySelector(".chat-composer-markdown-code")).toBeNull();
+
+		fireEvent.compositionEnd(field);
+
+		await waitFor(() => expect(field.querySelector(".chat-composer-markdown-code")).not.toBeNull());
+		expect(composerWireText(field)).toBe("`sample`");
+	});
+
 	it("wraps code in a fenced block, previews it, and keeps Shift+Enter inside the fence", async () => {
 		const { onSend, field } = renderComposer();
 		await typeInComposer(field, "const x = 1;");
