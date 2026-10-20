@@ -19,6 +19,7 @@ import {
 	COMMAND_PRIORITY_HIGH,
 	DecoratorNode,
 	getDOMSelectionFromTarget,
+	HISTORIC_TAG,
 	HISTORY_PUSH_TAG,
 	KEY_ENTER_COMMAND,
 	KEY_ESCAPE_COMMAND,
@@ -50,6 +51,7 @@ import { Box, Image as ImageIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { composerFileIcon } from "./composerFileIcon";
+import { isComposerOpenCodeFenceAt, parseComposerMarkdown } from "./composerMarkdown";
 import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
 import { splitInlineImagePaths } from "./messageAttachments";
 
@@ -148,6 +150,9 @@ type TokenKind = "skill" | "file" | "image";
 
 const completionHandledEvents = new WeakSet<Event>();
 const PROGRAMMATIC_TEXT_UPDATE_TAG = "ao:composer-programmatic-text";
+const COMPOSER_MARKDOWN_FORMAT_TAG = "ao:composer-markdown-format";
+const COMPOSER_CODE_BLOCK_STYLE =
+	"background-color: var(--card); border-radius: var(--radius-sm); padding-inline: 0.25rem";
 
 type SerializedComposerTokenNode = Spread<
 	{
@@ -275,6 +280,59 @@ function $serializeComposer(): string {
 		.join("\n");
 }
 
+function $formatComposerMarkdown(): void {
+	const ranges = parseComposerMarkdown($serializeComposer()).codeRanges;
+	const formatNode = (node: LexicalNode, start: number): number => {
+		if ($isTextNode(node)) {
+			const end = start + node.getTextContent().length;
+			const splitOffsets = new Set<number>();
+			for (const range of ranges) {
+				if (range.start > start && range.start < end) splitOffsets.add(range.start - start);
+				if (range.end > start && range.end < end) splitOffsets.add(range.end - start);
+			}
+			const parts = node.splitText(...splitOffsets);
+			let partStart = start;
+			for (const part of parts) {
+				const partEnd = partStart + part.getTextContent().length;
+				const range = ranges.find((candidate) =>
+					candidate.start <= partStart && candidate.end >= partEnd,
+				);
+				const shouldBeCode = Boolean(range);
+				if (part.hasFormat("code") !== shouldBeCode) part.toggleFormat("code");
+				const style = range?.kind === "fenced" ? COMPOSER_CODE_BLOCK_STYLE : "";
+				if (style && part.getStyle() !== style) part.setStyle(style);
+				else if (!style && part.getStyle() === COMPOSER_CODE_BLOCK_STYLE) part.setStyle("");
+				partStart = partEnd;
+			}
+			return end;
+		}
+
+		if ($isElementNode(node)) {
+			let offset = start;
+			for (const child of node.getChildren()) offset = formatNode(child, offset);
+			return offset;
+		}
+		return start + node.getTextContent().length;
+	};
+
+	const paragraphs = $getRoot().getChildren();
+	let offset = 0;
+	for (const [index, paragraph] of paragraphs.entries()) {
+		offset = formatNode(paragraph, offset);
+		if (index < paragraphs.length - 1) offset += 1;
+	}
+}
+
+function $selectionIsInsideOpenComposerCodeFence(): boolean {
+	const selection = $getSelection();
+	if (!$isRangeSelection(selection)) return false;
+	const anchorOffset = $documentOffsetForPoint(selection.anchor.getNode(), selection.anchor.offset);
+	const focusOffset = $documentOffsetForPoint(selection.focus.getNode(), selection.focus.offset);
+	if (anchorOffset === undefined || focusOffset === undefined) return false;
+	const text = $serializeComposer();
+	return isComposerOpenCodeFenceAt(text, anchorOffset) && isComposerOpenCodeFenceAt(text, focusOffset);
+}
+
 function $insertComposerToken(trigger: ComposerTrigger, value: string): boolean {
 	const node = $getNodeByKey<LexicalNode>(trigger.nodeKey);
 	if (!$isTextNode(node)) return false;
@@ -316,6 +374,7 @@ function $replaceEditorText(text: string, attached: string[] = [], caret: "start
 	}
 	if (caret === "start") root.selectStart();
 	else root.selectEnd();
+	$formatComposerMarkdown();
 }
 
 /** True when nothing precedes (or follows) the point in the whole document. */
@@ -538,11 +597,13 @@ const EditorBridge = forwardRef<
 		onDismissSuggestion: () => void;
 		/** Staged paths of the images attached right now. */
 		attachedImages: () => string[];
+		compositionState: { current: boolean };
+		compositionEndScheduler: { current: () => void };
 		onChange: (snapshot: ComposerEditorSnapshot) => void;
 		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
 	}
->(function EditorBridge({ disabled, promptSuggestion, onDismissSuggestion, attachedImages, onChange, onComplete, onEnter }, ref) {
+>(function EditorBridge({ disabled, promptSuggestion, onDismissSuggestion, attachedImages, compositionState, compositionEndScheduler, onChange, onComplete, onEnter }, ref) {
 	const [editor] = useLexicalComposerContext();
 
 	useEffect(() => editor.setEditable(!disabled), [disabled, editor]);
@@ -618,16 +679,56 @@ const EditorBridge = forwardRef<
 	);
 
 	useLayoutEffect(() => {
+		let disposed = false;
+		let formatScheduled = false;
+		const formatAfterTextUpdate = (compositionEnded = false) => {
+			if (
+				formatScheduled || compositionState.current ||
+				(!compositionEnded && editor.isComposing())
+			) return;
+			formatScheduled = true;
+			queueMicrotask(() => {
+				formatScheduled = false;
+				if (
+					disposed || compositionState.current ||
+					(!compositionEnded && editor.isComposing())
+				) return;
+				editor.update(() => $formatComposerMarkdown(), {
+					discrete: true,
+					tag: COMPOSER_MARKDOWN_FORMAT_TAG,
+				});
+			});
+		};
+		const formatAfterComposition = () => formatAfterTextUpdate(true);
+		compositionEndScheduler.current = formatAfterComposition;
 		const dismissIfNotEmpty = () => {
 			if (promptSuggestion && $serializeComposer().length > 0) onDismissSuggestion();
 		};
 		editor.getEditorState().read(dismissIfNotEmpty);
-		return editor.registerUpdateListener(({ editorState, tags }) => {
+		const unregister = editor.registerUpdateListener(({ editorState, prevEditorState, tags }) => {
 			editorState.read(dismissIfNotEmpty);
-			if (tags.has(PROGRAMMATIC_TEXT_UPDATE_TAG)) return;
-			editorState.read(() => onChange(editorSnapshot()));
+			if (tags.has(COMPOSER_MARKDOWN_FORMAT_TAG)) return;
+			const text = editorState.read($serializeComposer);
+			const previousText = prevEditorState.read($serializeComposer);
+			if (!tags.has(PROGRAMMATIC_TEXT_UPDATE_TAG)) {
+				editorState.read(() => onChange(editorSnapshot()));
+			}
+			if (
+				!tags.has(PROGRAMMATIC_TEXT_UPDATE_TAG) &&
+				!tags.has(HISTORIC_TAG) &&
+				text !== previousText
+			) {
+				formatAfterTextUpdate();
+			}
 		});
-	}, [editor, onChange, onDismissSuggestion, promptSuggestion]);
+		return () => {
+			disposed = true;
+			unregister();
+			if (compositionEndScheduler.current === formatAfterComposition) {
+				compositionEndScheduler.current = () => undefined;
+			}
+		};
+	}, [compositionEndScheduler, compositionState, editor, onChange, onDismissSuggestion, promptSuggestion]);
 
 	useEffect(() => {
 		const complete = (event: globalThis.KeyboardEvent | null, key: "Enter" | "Tab") => {
@@ -636,6 +737,7 @@ const EditorBridge = forwardRef<
 			// also insert a newline or a second completion token.
 			if (event?.defaultPrevented) return true;
 			if (event?.isComposing || event?.shiftKey || editor.isComposing()) return false;
+			if (key === "Enter" && $selectionIsInsideOpenComposerCodeFence()) return false;
 			const snapshot = editorSnapshot();
 			if (
 				key === "Tab" && promptSuggestion && !snapshot.text &&
@@ -783,11 +885,18 @@ export const ComposerEditor = forwardRef<
 		namespace: "AOChatComposer",
 		nodes: [ComposerTokenNode],
 		editable: !disabled,
-		theme: { paragraph: "m-0" },
+		theme: {
+			paragraph: "m-0",
+			text: {
+				code: "chat-composer-markdown-code rounded bg-surface px-[5px] py-[2px] font-mono text-[0.9em] text-markdown-code",
+			},
+		},
 		onError(error: Error) {
 			throw error;
 		},
 	};
+	const compositionState = useRef(false);
+	const compositionEndScheduler = useRef<() => void>(() => undefined);
 
 	// Read at setText time, not render time, so a draft restore sees the
 	// attachments it was restored with.
@@ -828,8 +937,15 @@ export const ComposerEditor = forwardRef<
 								menuOpen ? `${menuId}-option-${activeIndex}` : undefined
 							}
 							aria-autocomplete={suggestion ? "both" : "list"}
-							onCompositionStart={() => onCompositionChange(true)}
-							onCompositionEnd={() => onCompositionChange(false)}
+							onCompositionStart={() => {
+								compositionState.current = true;
+								onCompositionChange(true);
+							}}
+							onCompositionEnd={() => {
+								compositionState.current = false;
+								onCompositionChange(false);
+								window.setTimeout(() => compositionEndScheduler.current(), 0);
+							}}
 							onKeyDown={(event) => {
 								if (!completionHandledEvents.has(event.nativeEvent)) onKeyDown(event);
 							}}
@@ -859,6 +975,8 @@ export const ComposerEditor = forwardRef<
 					promptSuggestion={suggestion}
 					onDismissSuggestion={dismissSuggestion}
 					attachedImages={attachedImages}
+					compositionState={compositionState}
+					compositionEndScheduler={compositionEndScheduler}
 					onChange={onChange}
 					onComplete={onComplete}
 					onEnter={onEnter}
