@@ -1,16 +1,18 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { sessionProjectContextQueryKey } from "../lib/session-project-context";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 
-export function SessionProjectContext({ sessionId, hostId }: { sessionId: string; hostId?: string }) {
+export function SessionProjectContext({ sessionId, hostId, startupPending = false }: { sessionId: string; hostId?: string; startupPending?: boolean }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const query = useQuery({
-		queryKey: ["session-project-context", hostId ?? "local", sessionId],
+		queryKey: sessionProjectContextQueryKey(sessionId, hostId),
 		enabled: open,
-		staleTime: Infinity,
+		staleTime: (query) => query.state.data ? Infinity : 0,
+		refetchInterval: (query) => startupPending && !query.state.data ? 1000 : false,
 		retry: false,
 		queryFn: async () => {
 			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/project-context", { params: { path: { sessionId } } });
@@ -18,6 +20,11 @@ export function SessionProjectContext({ sessionId, hostId }: { sessionId: string
 			return data?.manifest ?? null;
 		},
 	});
+	const wasStarting = useRef(startupPending);
+	useEffect(() => {
+		if (wasStarting.current && !startupPending && open && !query.data) void query.refetch();
+		wasStarting.current = startupPending;
+	}, [startupPending, open, query.data, query.refetch]);
 	const manifest = query.data;
 	return <details className="mt-3 text-sm" onToggle={(event) => setOpen(event.currentTarget.open)}>
 		<summary className="cursor-pointer py-2 font-medium">{t("projectContext.sessionTitle")}</summary>

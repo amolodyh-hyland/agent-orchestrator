@@ -81,7 +81,7 @@ const roleFields: Record<ProjectSettingsRole, RoleFields> = {
 
 // Both persistence adapters render this page. Drafts, validation, autosave and
 // common controls live here so a UI change applies to local and Cloud projects.
-export function ProjectSettingsEditor({ initialValues, section, capabilities, details, workspaceRepos, repository, renderAgent, defaultReviewer = () => "", modelScope, modelHostId, reviewerWarning, autoReviewDescription, save, onSaveState, saveUnchanged = false, disabled = false, generalExtra }: {
+export function ProjectSettingsEditor({ initialValues, section, capabilities, details, workspaceRepos, repository, renderAgent, defaultReviewer = () => "", modelScope, modelHostId, reviewerWarning, autoReviewDescription, save, onSaveState, saveUnchanged = false, disabled = false, generalExtra, additionalSave }: {
 	initialValues: ProjectSettingsDraft;
 	section: SettingsSection;
 	capabilities: Capabilities;
@@ -97,6 +97,8 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	autoReviewDescription?: string;
 	save: (values: ProjectSettingsDraft) => Promise<{ values?: ProjectSettingsDraft; replacementError?: string | null }>;
 	onSaveState?: (state: ProjectSettingsSaveState) => void;
+	/** General-page context shares the navigation guard but persists through CAS. */
+	additionalSave?: { state: ProjectSettingsSaveState; submit: () => Promise<boolean> };
 	saveUnchanged?: boolean;
 	/** Read-only sections appended to the General page (e.g. a Cloud project's Coder template). */
 	generalExtra?: ReactNode;
@@ -140,7 +142,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 		if (visibleRoles.some((role) => !validity[role])) return t("settings.project.tuningInvalid");
 		return undefined;
 	};
-	const submit = () => {
+	const submitSettings = () => {
 		if (disabled || mutation.isPending || intakeIncomplete || (!dirty && !saveUnchanged)) return;
 		const problem = validate();
 		setError(problem);
@@ -149,19 +151,32 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 		setDidSave(false);
 		mutation.mutate(draft);
 	};
+	const extraState = additionalSave?.state;
+	const submit = async () => {
+		if (disabled || mutation.isPending || extraState?.requestPending) return;
+		if (extraState?.dirty) {
+			if (!(await additionalSave?.submit())) return;
+			if (!dirty) return;
+		}
+		submitSettings();
+	};
 	useEffect(() => {
-		if (disabled || !dirty || mutation.isPending || JSON.stringify(draft) === failedKey.current) return;
-		const timeout = window.setTimeout(submit, 650);
+		// Avoid advancing the project revision underneath an unsaved context draft.
+		if (disabled || extraState?.dirty || extraState?.requestPending || !dirty || mutation.isPending || JSON.stringify(draft) === failedKey.current) return;
+		const timeout = window.setTimeout(submitSettings, 650);
 		return () => window.clearTimeout(timeout);
-	}, [disabled, draft, dirty, mutation.isPending, validity]);
+	}, [disabled, draft, dirty, mutation.isPending, validity, extraState?.dirty, extraState?.requestPending]);
 	useEffect(() => {
 		if (!mutation.isPending) { setShowSaving(false); return; }
 		const timeout = window.setTimeout(() => setShowSaving(true), 200);
 		return () => window.clearTimeout(timeout);
 	}, [mutation.isPending]);
 	useEffect(() => {
-		onSaveState?.({ phase: error ? "failed" : mutation.isPending ? showSaving ? "saving" : "pending" : dirty && !intakeIncomplete ? "pending" : didSave ? "saved" : "idle", dirty: dirty && !intakeIncomplete, requestPending: mutation.isPending, error, replacementError });
-	}, [dirty, didSave, error, intakeIncomplete, mutation.isPending, onSaveState, replacementError, showSaving]);
+		const combinedDirty = Boolean((dirty && !intakeIncomplete) || extraState?.dirty || extraState?.requestPending);
+		const requestPending = Boolean(mutation.isPending || extraState?.requestPending);
+		const combinedError = extraState?.error ?? error;
+		onSaveState?.({ phase: combinedError ? "failed" : requestPending ? showSaving || extraState?.requestPending ? "saving" : "pending" : combinedDirty ? "pending" : didSave || extraState?.phase === "saved" ? "saved" : "idle", dirty: combinedDirty, requestPending, error: combinedError, replacementError });
+	}, [dirty, didSave, error, intakeIncomplete, mutation.isPending, onSaveState, replacementError, showSaving, extraState]);
 	useEffect(() => {
 		if (!didSave) return;
 		const timeout = window.setTimeout(() => setDidSave(false), 1800);

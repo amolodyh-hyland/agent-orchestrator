@@ -126,7 +126,11 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const [projectSaveState, setProjectSaveState] = useState<ProjectSettingsSaveState>(initialProjectSaveState);
 	const [cueBusy, setCueBusy] = useState(false);
 	useEffect(() => {
-		if (pendingProjectSection && projectSaveState.phase === "saved" && !projectSaveState.dirty) {
+		if (pendingProjectSection && projectSaveState.phase === "failed") {
+			setPendingProjectSection(null);
+		} else if (pendingProjectSection && projectSaveState.dirty && !projectSaveState.requestPending && projectSaveState.phase === "pending") {
+			(document.getElementById("project-settings-form") as HTMLFormElement | null)?.requestSubmit();
+		} else if (pendingProjectSection && !projectSaveState.dirty && !projectSaveState.requestPending && (projectSaveState.phase === "saved" || projectSaveState.phase === "idle")) {
 			setActiveProjectSection(pendingProjectSection);
 			setPendingProjectSection(null);
 		}
@@ -174,6 +178,8 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		} else if (projectSaveState.unsaveable && !projectSaveState.requestPending) {
 			closeWhenSavedRef.current = false;
 			closeSettings();
+		} else if (projectSaveState.dirty && !projectSaveState.requestPending && projectSaveState.phase === "pending") {
+			(document.getElementById("project-settings-form") as HTMLFormElement | null)?.requestSubmit();
 		} else if (!projectSaveState.dirty && !projectSaveState.requestPending &&
 			(projectSaveState.phase === "saved" || projectSaveState.phase === "idle")) {
 			closeWhenSavedRef.current = false;
