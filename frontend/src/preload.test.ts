@@ -516,3 +516,11 @@ describe("preload multica awareness bridge", () => {
 		expect(electronMocks.off).toHaveBeenCalledWith("multicaAwareness:state", wrapped);
 	});
 });
+
+describe("project context link bridge", () => {
+	it("forwards only the picker request to the project-context IPC", async () => {
+		electronMocks.invoke.mockResolvedValue(null);
+		await exposedBridge().app.chooseProjectContextLink({ kind: "file", title: "Link a file" });
+		expect(electronMocks.invoke).toHaveBeenCalledWith("projectContext:chooseLink", { kind: "file", title: "Link a file" });
+	});
+});

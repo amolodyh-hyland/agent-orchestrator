@@ -2989,3 +2989,12 @@ describe("CreateProjectFlow project import validation", () => {
 	});
 
 });
+
+it("offers repository-free Project creation without opening a folder picker", async () => {
+	const create = vi.fn();
+	render(<QueryClientProvider client={new QueryClient()}><CreateProjectFlow initialOpen mode="choose" onCreateProject={create} onInitializeProject={vi.fn()} /></QueryClientProvider>);
+	fireEvent.click(await screen.findByRole("button", { name: /Create a project without a repository/ }));
+	await screen.findByRole("textbox", { name: "Project name" });
+	expect(bridgeMocks.chooseDirectory).not.toHaveBeenCalled();
+	expect(create).not.toHaveBeenCalled();
+});

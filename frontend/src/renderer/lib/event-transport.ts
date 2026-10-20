@@ -1,3 +1,5 @@
+import { sessionProjectContextQueryRoot } from "./session-project-context";
+import { LOCAL_HOST } from "./hosts";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { aoBridge } from "./bridge";
 import { getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
@@ -118,7 +120,8 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			// key receives at most one in-flight refresh and one queued catch-up.
 			const refreshes = new Map<string, { dirty: boolean }>();
 			const invalidate = (queryKey: QueryKey) => {
-				if (disposed) return;
+				// A queued startup catch-up must not refresh a manifest already pinned.
+				if (disposed || (queryKey[0] === sessionProjectContextQueryRoot[0] && queryClient.getQueryData(queryKey))) return;
 				const key = JSON.stringify(queryKey);
 				const running = refreshes.get(key);
 				if (running) {
@@ -140,7 +143,13 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				};
 				void queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false }).then(settled, settled);
 			};
+			const invalidateMissingProjectContexts = (hostId = LOCAL_HOST) => {
+				for (const query of queryClient.getQueryCache().findAll({ queryKey: [...sessionProjectContextQueryRoot, hostId] })) {
+					if (!query.state.data) invalidate(query.queryKey);
+				}
+			};
 			const refreshRemote = (hostId: string, reconnect = false) => {
+				invalidateMissingProjectContexts(hostId);
 				invalidate(["remote-workspaces", hostId]);
 				invalidate(["project", hostId]);
 				invalidate(["project-config", hostId]);
@@ -231,6 +240,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					allConversationsInvalidationPending = false;
 				}
 				if (workspaceInvalidationPending) {
+					invalidateMissingProjectContexts();
 					invalidate(workspaceQueryKey);
 					invalidate(agentSwitchesQueryRoot);
 					invalidate(sessionScmSummaryQueryKey());

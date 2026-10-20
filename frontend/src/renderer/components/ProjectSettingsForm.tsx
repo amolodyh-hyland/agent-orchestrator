@@ -1,6 +1,7 @@
+import { ProjectContextSettings } from "./ProjectContextSettings";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { components } from "../../api/schema";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
 import { useRemoteProjectQuery, workspaceQueryKeyForHost, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
@@ -133,6 +134,8 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
+	const [contextSaveState, setContextSaveState] = useState<ProjectSettingsSaveState>({ phase: "idle" });
+	const contextSubmitRef = useRef<(() => Promise<boolean>) | null>(null);
 	const setOrchestratorReplacementError = useUiStore((state) => state.setOrchestratorReplacementError);
 	const workspaceQuery = useQuery({ ...workspaceQueryOptions, enabled: !hostId });
 	const remoteProjectQuery = useRemoteProjectQuery(hostId ?? "", projectId);
@@ -329,11 +332,13 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 	};
 	return <ProjectSettingsEditor initialValues={initialValues} section={section} disabled={!hostConnected}
 		capabilities={{ workflow: !isScratchProject, sessionPrefix: !isScratchProject, intake: intakeVisible, reviewer: !isScratchProject, requiredAgents: true, workersRequestReview: !isScratchProject }}
-		details={[{ label: t("settings.project.path"), value: project.path, href: hostId ? undefined : `file://${encodeURI(project.path)}` }, { label: t("settings.project.repo"), value: project.repo || "—", href: project.repo ? repositoryHref(project.repo) : undefined }]}
+		details={[{ label: t("settings.project.path"), value: project.path || "—", href: hostId || !project.path ? undefined : `file://${encodeURI(project.path)}` }, { label: t("settings.project.repo"), value: project.repo || "—", href: project.repo ? repositoryHref(project.repo) : undefined }]}
 		workspaceRepos={project.kind === "workspace" ? project.workspaceRepos ?? [] : undefined} repository={project.repo}
 		modelScope={() => projectId} defaultReviewer={(draft) => WORKER_DEFAULT_REVIEWERS[draft.workerAgent] ?? "claude-code"}
 		reviewerWarning={reviewerTrustWarning} save={save} saveUnchanged onSaveState={onSaveState}
 		modelHostId={hostId}
+		additionalSave={section === "general" ? { state: contextSaveState, submit: () => contextSubmitRef.current?.() ?? Promise.resolve(false) } : undefined}
+		generalExtra={<ProjectContextSettings key={project.id} project={project} hostId={hostId} disabled={!hostConnected} onSaveState={setContextSaveState} submitRef={contextSubmitRef} onSaved={() => { void queryClient.invalidateQueries({ queryKey: projectQueryKey(projectId, hostId) }); void onSaved(); }} />}
 		renderAgent={(props) => <LocalAgentPicker {...props} projectId={projectId} hostId={hostId} agentsQuery={agentsQuery} />} />;
 }
 

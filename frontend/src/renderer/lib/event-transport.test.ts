@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InfiniteQueryObserver, QueryClient, QueryObserver } from "@tanstack/react-query";
 import { computeSseRetryDelayMs } from "./sse-backoff";
+import { sessionProjectContextQueryKey } from "./session-project-context";
 
 const {
 	onStatusMock,
@@ -81,6 +82,7 @@ class EventSourceStub {
 
 function fakeQueryClient() {
 	return {
+		getQueryCache: vi.fn(() => ({ findAll: () => [] })),
 		invalidateQueries: vi.fn().mockResolvedValue(undefined),
 		isFetching: vi.fn().mockReturnValue(0),
 		refetchQueries: vi.fn().mockResolvedValue(undefined),
@@ -601,6 +603,58 @@ describe("createEventTransport", () => {
 			disconnect?.();
 			queryClient.clear();
 			vi.useRealTimers();
+		}
+	});
+
+	it.each(["local", "box-a"])("refreshes only missing pinned contexts on %s lifecycle events", async (host) => {
+		vi.useFakeTimers();
+		const client = new QueryClient();
+		let disconnect: (() => void) | undefined;
+		try {
+			connectedHostsMock.mockReturnValue(["box-a"]);
+			baseUrlForHostMock.mockImplementation((hostId) => `http://127.0.0.1:4000/${hostId}`);
+			const missing = sessionProjectContextQueryKey("starting", host);
+			const populated = sessionProjectContextQueryKey("pinned", host);
+			const otherHost = sessionProjectContextQueryKey("starting", host === "local" ? "box-a" : "local");
+			disconnect = createEventTransport(client).connect();
+			client.setQueryData(missing, null);
+			client.setQueryData(populated, { digest: "immutable" });
+			client.setQueryData(otherHost, null);
+			const source = host === "local" ? cdcSources()[0] : EventSourceStub.instances.find((source) => source.url.includes("/box-a/"))!;
+			source.emit("session_updated", JSON.stringify({ sessionId: "starting", payload: { id: "starting" } }));
+			await vi.advanceTimersByTimeAsync(200);
+			expect(client.getQueryState(missing)?.isInvalidated).toBe(true);
+			expect(client.getQueryState(populated)?.isInvalidated).toBe(false);
+			expect(client.getQueryState(otherHost)?.isInvalidated).toBe(false);
+		} finally {
+			disconnect?.(); client.clear(); vi.useRealTimers();
+		}
+	});
+
+	it("catches up a startup manifest read that was in flight before the lifecycle event", async () => {
+		vi.useFakeTimers();
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		let disconnect: (() => void) | undefined;
+		let unsubscribe: (() => void) | undefined;
+		try {
+			const queryKey = sessionProjectContextQueryKey("starting");
+			let finish!: (manifest: null) => void;
+			const pinned = { digest: "pinned" };
+			const queryFn = vi.fn().mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; })).mockResolvedValue(pinned);
+			const observer = new QueryObserver(client, { queryKey, queryFn, staleTime: Infinity });
+			unsubscribe = observer.subscribe(() => {});
+			disconnect = createEventTransport(client).connect();
+			cdcSources()[0].emit("session_updated", JSON.stringify({ sessionId: "starting", payload: { id: "starting" } }));
+			await vi.advanceTimersByTimeAsync(200);
+			finish(null);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(queryFn).toHaveBeenCalledTimes(2);
+			expect(client.getQueryData(queryKey)).toEqual(pinned);
+			cdcSources()[0].emit("session_updated", JSON.stringify({ sessionId: "starting", payload: { id: "starting" } }));
+			await vi.advanceTimersByTimeAsync(200);
+			expect(queryFn).toHaveBeenCalledTimes(2);
+		} finally {
+			unsubscribe?.(); disconnect?.(); client.clear(); vi.useRealTimers();
 		}
 	});
 

@@ -213,6 +213,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/sessions", c.spawn)
 	r.Post("/sessions/cleanup", c.cleanup)
 	r.Get("/sessions/{sessionId}", c.get)
+	r.Get("/sessions/{sessionId}/project-context", c.projectContext)
 	r.Get("/sessions/{sessionId}/preview", c.preview)
 	r.Post("/sessions/{sessionId}/preview", c.setPreview)
 	r.Delete("/sessions/{sessionId}/preview", c.clearPreview)
@@ -482,6 +483,22 @@ func decodeAttachments(in []AttachmentInput, maxFileBytes, maxTotalBytes int) ([
 		out = append(out, attachment)
 	}
 	return out, nil
+}
+
+func (c *SessionsController) projectContext(w http.ResponseWriter, r *http.Request) {
+	reader, ok := c.Svc.(interface {
+		ProjectContext(context.Context, domain.SessionID) (*domain.ProjectContextManifest, error)
+	})
+	if !ok {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/project-context")
+		return
+	}
+	manifest, err := reader.ProjectContext(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, ProjectContextResponse{Manifest: manifest})
 }
 
 func (c *SessionsController) get(w http.ResponseWriter, r *http.Request) {

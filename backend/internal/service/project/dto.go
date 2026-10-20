@@ -65,9 +65,10 @@ type InitializeRepositoryResult struct {
 // atomically replaces the user-facing display name, per-project config, and
 // optional durable instructions.
 type UpdateSettingsInput struct {
-	DisplayName  string                      `json:"displayName" minLength:"1" maxLength:"100"`
-	Config       domain.ProjectConfig        `json:"config"`
-	Instructions *domain.ProjectInstructions `json:"instructions,omitempty"`
+	ExpectedRevision *int64                      `json:"expectedRevision,omitempty" minimum:"1"`
+	DisplayName      string                      `json:"displayName" minLength:"1" maxLength:"100"`
+	Config           domain.ProjectConfig        `json:"config"`
+	Instructions     *domain.ProjectInstructions `json:"instructions,omitempty"`
 }
 
 // SetConfigInput is the body shape for PUT /api/v1/projects/{id}/config. Config

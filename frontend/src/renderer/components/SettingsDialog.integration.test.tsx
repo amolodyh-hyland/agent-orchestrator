@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
@@ -22,7 +22,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 }));
 
 const project = {
-	id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one", repo: "",
+	id: "proj-1", name: "Project One", revision: 1, instructions: { shared: "Original", attachments: [{ id: "notes", sourceKind: "machine_local_file", sourceRef: "notes-ref", machineId: "this-machine", mediaType: "text/plain", position: 0, roles: ["shared"], enabled: true, required: false }] }, kind: "single_repo", path: "/repo/project-one", repo: "",
 	config: { worker: { agent: "codex" }, orchestrator: { agent: "claude-code" } },
 };
 let catalog = { agents: [agentReadiness("claude-code", "Claude Code"), agentReadiness("codex", "Codex")] };
@@ -62,6 +62,7 @@ beforeEach(() => {
 	useUiStore.setState({ settingsModal: null });
 	catalog = { agents: [agentReadiness("claude-code", "Claude Code"), agentReadiness("codex", "Codex")] };
 	vi.spyOn(apiClient, "GET").mockImplementation(async (path) => {
+		if (path === "/api/v1/identity") return { data: { hostId: "this-machine" } } as never;
 		if (path === "/api/v1/projects/{id}") return { data: { status: "ok", project } } as never;
 		if (path === "/api/v1/agents/readiness") return { data: catalog } as never;
 		if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
@@ -235,5 +236,157 @@ describe("Settings recovery modal integration", () => {
 			expect.objectContaining({ body: expect.objectContaining({ displayName: "Unsaved project name" }) }),
 		));
 		await waitFor(() => expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument());
+	});
+});
+
+
+describe("Project context settings navigation guards", () => {
+	it.each(["Close settings", "Escape", "Agents"])("flushes context before %s and waits for the write", async (leave) => {
+		let finish!: (value: unknown) => void;
+		const put = vi.spyOn(apiClient, "PUT").mockImplementation(() => new Promise((resolve) => { finish = resolve as typeof finish; }) as never);
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderDialogs();
+		fireEvent.change(await screen.findByLabelText("Shared instructions"), { target: { value: "Draft instructions" } });
+		if (leave === "Escape") await userEvent.keyboard("{Escape}");
+		else await userEvent.click(screen.getByRole("button", { name: leave }));
+		await waitFor(() => expect(put).toHaveBeenCalledTimes(1));
+		expect(put).toHaveBeenNthCalledWith(1, "/api/v1/projects/{id}", expect.objectContaining({ body: expect.objectContaining({ expectedRevision: 1, instructions: expect.objectContaining({ shared: "Draft instructions" }) }) }));
+		expect(useUiStore.getState().settingsModal).not.toBeNull();
+		expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("data-active", "true");
+		await act(async () => finish({ data: { project: { ...project, revision: 2, instructions: { ...project.instructions, shared: "Draft instructions" } } } }));
+		if (leave === "Agents") await waitFor(() => expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("data-active", "true"));
+		else await waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
+		expect(put).toHaveBeenCalledTimes(1);
+	});
+
+	it.each(["Close settings", "Agents"])("persists detached links before %s", async (leave) => {
+		const put = vi.spyOn(apiClient, "PUT").mockResolvedValue({ data: { project: { ...project, revision: 2, instructions: { shared: "Original", attachments: [] } } } } as never);
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderDialogs();
+		await userEvent.click(await screen.findByRole("button", { name: "Remove link notes" }));
+		expect(put).not.toHaveBeenCalled();
+		await userEvent.click(screen.getByRole("button", { name: leave }));
+		await waitFor(() => expect(put).toHaveBeenCalledTimes(1));
+		expect(put).toHaveBeenNthCalledWith(1, "/api/v1/projects/{id}", expect.objectContaining({ body: expect.objectContaining({ instructions: expect.objectContaining({ attachments: [] }) }) }));
+		if (leave === "Agents") await waitFor(() => expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("data-active", "true"));
+		else await waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
+	});
+
+	it.each(["Close settings", "Agents"])("waits for a pending native link selection before %s", async (leave) => {
+		let choose!: (value: { localPath: string; name: string; mediaType: string }) => void;
+		vi.spyOn(window.ao!.app, "chooseProjectContextLink").mockImplementation(() => new Promise((resolve) => { choose = resolve; }));
+		const put = vi.spyOn(apiClient, "PUT").mockImplementation(async (_path, input) => ({ data: { project: { ...project, revision: 2, instructions: (input as { body?: { instructions?: typeof project.instructions } })?.body?.instructions } } }) as never);
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderDialogs();
+		await userEvent.click(await screen.findByRole("button", { name: "Link a file" }));
+		await userEvent.click(screen.getByRole("button", { name: leave }));
+		expect(useUiStore.getState().settingsModal).not.toBeNull();
+		expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("data-active", "true");
+		await act(async () => choose({ localPath: "/private/reference.md", name: "Reference", mediaType: "text/markdown" }));
+		await waitFor(() => expect(put).toHaveBeenCalledTimes(1));
+		expect(put).toHaveBeenNthCalledWith(1, "/api/v1/projects/{id}", expect.objectContaining({ body: expect.objectContaining({ instructions: expect.objectContaining({ attachments: expect.arrayContaining([expect.objectContaining({ localPath: "/private/reference.md" })]) }) }) }));
+		if (leave === "Agents") await waitFor(() => expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("data-active", "true"));
+		else await waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
+	});
+
+	it.each(["Close settings", "Agents"])("continues %s when a pending link picker is canceled", async (leave) => {
+		let choose!: (value: null) => void;
+		vi.spyOn(window.ao!.app, "chooseProjectContextLink").mockImplementation(() => new Promise((resolve) => { choose = resolve; }));
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderDialogs();
+		await userEvent.click(await screen.findByRole("button", { name: "Link a file" }));
+		await userEvent.click(screen.getByRole("button", { name: leave }));
+		await act(async () => choose(null));
+		if (leave === "Agents") await waitFor(() => expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("data-active", "true"));
+		else await waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
+		expect(apiClient.PUT).not.toHaveBeenCalled();
+	});
+
+	it("flushes both context and other General settings before closing", async () => {
+		const put = vi.spyOn(apiClient, "PUT").mockImplementation(async (_path, input) => ({ data: { project: { ...project, revision: 2, instructions: (input as { body?: { instructions?: typeof project.instructions } })?.body?.instructions ?? project.instructions } } }) as never);
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderDialogs();
+		fireEvent.change(await screen.findByLabelText("Shared instructions"), { target: { value: "Draft instructions" } });
+		await userEvent.click(screen.getByRole("button", { name: "Edit Project name" }));
+		fireEvent.change(screen.getByRole("textbox", { name: "Project name" }), { target: { value: "Renamed project" } });
+		await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
+		await waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
+		expect(put).toHaveBeenCalledTimes(2);
+		expect(put).toHaveBeenNthCalledWith(1, "/api/v1/projects/{id}", expect.objectContaining({ body: expect.objectContaining({ instructions: expect.objectContaining({ shared: "Draft instructions" }) }) }));
+		expect(put).toHaveBeenNthCalledWith(2, "/api/v1/projects/{id}", expect.objectContaining({ body: expect.objectContaining({ displayName: "Renamed project" }) }));
+	});
+
+	it.each(["Close settings", "Agents"])("retains conflicted drafts when attempting %s and does not submit a merge automatically", async (leave) => {
+		const put = vi.spyOn(apiClient, "PUT").mockResolvedValue({ error: { code: "PROJECT_REVISION_CONFLICT", message: "Project changed" } } as never);
+		useUiStore.getState().openProjectSettings("proj-1");
+		const client = renderDialogs();
+		fireEvent.change(await screen.findByLabelText("Shared instructions"), { target: { value: "Local draft" } });
+		act(() => client.setQueryData(["project", "proj-1"], { ...project, revision: 2, instructions: { shared: "Remote" } }));
+		const get = vi.mocked(apiClient.GET).getMockImplementation()! as (path: unknown, input: unknown) => Promise<unknown>;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, input) => path === "/api/v1/projects/{id}" ? { data: { status: "ok", project: { ...project, revision: 2, instructions: { shared: "Remote" } } } } as never : await get(path, input) as never);
+		await userEvent.click(screen.getByRole("button", { name: leave }));
+		await screen.findByRole("button", { name: "Merge and review draft" });
+		expect(screen.getByLabelText("Shared instructions")).toHaveValue("Local draft");
+		expect(useUiStore.getState().settingsModal).not.toBeNull();
+		expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("data-active", "true");
+		// Repeating the leave request while the conflict is already displayed
+		// must not leave a close/navigation intent armed for the merged draft.
+		await userEvent.click(screen.getByRole("button", { name: leave }));
+		await userEvent.click(screen.getByRole("button", { name: "Merge and review draft" }));
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
+		expect(put).toHaveBeenCalledTimes(1);
+		expect(screen.getByLabelText("Shared instructions")).toHaveValue("Remote\n\nLocal draft");
+	});
+
+	it.each(["immediate", "deferred"])("navigates after a failed context write is retried successfully (%s response)", async (response) => {
+		let finish!: (value: unknown) => void;
+		const saved = { data: { project: { ...project, revision: 2, instructions: { ...project.instructions, shared: "Draft" } } } };
+		const put = vi.spyOn(apiClient, "PUT")
+			.mockResolvedValueOnce({ error: { message: "Context write failed" } } as never)
+			.mockImplementationOnce(() => (response === "immediate" ? Promise.resolve(saved) : new Promise((resolve) => { finish = resolve as typeof finish; })) as never);
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderDialogs();
+		fireEvent.change(await screen.findByLabelText("Shared instructions"), { target: { value: "Draft" } });
+		await userEvent.click(screen.getByRole("button", { name: "Agents" }));
+		await screen.findAllByText("Context write failed");
+		expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("data-active", "true");
+		expect(screen.getByLabelText("Shared instructions")).toHaveValue("Draft");
+
+		await userEvent.click(screen.getByRole("button", { name: "Agents" }));
+		await waitFor(() => expect(put).toHaveBeenCalledTimes(2));
+		if (response === "deferred") {
+			expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("data-active", "true");
+			await act(async () => finish(saved));
+		}
+		await waitFor(() => expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("data-active", "true"));
+		expect(put).toHaveBeenCalledTimes(2);
+	});
+
+	it("cancels navigation when the retry also fails, before a later explicit save", async () => {
+		const put = vi.spyOn(apiClient, "PUT").mockResolvedValue({ error: { message: "Context write failed" } } as never);
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderDialogs();
+		fireEvent.change(await screen.findByLabelText("Shared instructions"), { target: { value: "Draft" } });
+		await userEvent.click(screen.getByRole("button", { name: "Agents" }));
+		await screen.findAllByText("Context write failed");
+		await userEvent.click(screen.getByRole("button", { name: "Agents" }));
+		await waitFor(() => expect(put).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Save context" })).toBeEnabled());
+		put.mockResolvedValue({ data: { project: { ...project, revision: 2, instructions: { ...project.instructions, shared: "Draft" } } } } as never);
+		await userEvent.click(screen.getByRole("button", { name: "Save context" }));
+		await screen.findByText("Context saved");
+		expect(put).toHaveBeenCalledTimes(3);
+		expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("data-active", "true");
+	});
+
+	it("reports failed context writes to the close guard without losing the draft", async () => {
+		vi.spyOn(apiClient, "PUT").mockResolvedValue({ error: { message: "Context write failed" } } as never);
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderDialogs();
+		fireEvent.change(await screen.findByLabelText("Shared instructions"), { target: { value: "Draft" } });
+		await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
+		await screen.findAllByText("Context write failed");
+		expect(screen.getByLabelText("Shared instructions")).toHaveValue("Draft");
+		expect(useUiStore.getState().settingsModal).not.toBeNull();
 	});
 });

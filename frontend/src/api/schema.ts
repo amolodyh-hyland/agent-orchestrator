@@ -3357,6 +3357,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/project-context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the immutable context pinned when the session started */
+        get: operations["getSessionProjectContext"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/renders": {
         parameters: {
             query?: never;
@@ -6271,6 +6288,36 @@ export interface components {
             sourceRef?: string;
             text?: string;
         };
+        ProjectContextManifest: {
+            attachments?: components["schemas"]["ProjectContextManifestEntry"][];
+            channel: string;
+            /** Format: date-time */
+            createdAt: string;
+            digest: string;
+            issueTask: boolean;
+            projectId?: string;
+            /** Format: int64 */
+            projectRevision: number;
+            role: components["schemas"]["ProjectContextRole"];
+            roleInstructions?: string;
+            roleRules?: string;
+            sessionId: string;
+            sharedInstructions?: string;
+        };
+        ProjectContextManifestEntry: {
+            /** @enum {string} */
+            availability: "available" | "reference_only" | "unavailable";
+            binding: components["schemas"]["ProjectContextAttachment"];
+            /** Format: int64 */
+            byteCount: number;
+            content?: string;
+            reason?: string;
+            snapshotRef: string;
+            sourceDigest?: string;
+        };
+        ProjectContextResponse: {
+            manifest: null | components["schemas"]["ProjectContextManifest"];
+        };
         /** @enum {string} */
         ProjectContextRole: "shared" | "worker" | "coordinator" | "issue_task" | "chat";
         ProjectGetResponse: {
@@ -7448,6 +7495,7 @@ export interface components {
         UpdateProjectSettingsInput: {
             config: components["schemas"]["ProjectConfig"];
             displayName: string;
+            expectedRevision?: null | number;
             instructions?: components["schemas"]["ProjectInstructions"];
         };
         UpdateSessionInterfaceRequest: {
@@ -19979,6 +20027,56 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionProjectContext: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectContextResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
