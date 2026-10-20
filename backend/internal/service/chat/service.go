@@ -2440,13 +2440,7 @@ func (s *Service) SetConfigOption(
 		s.persistPickedModel(id, previous, settings)
 	}
 	if runtimeApproval != "" {
-		controller.mu.Lock()
-		permissionChanged := controller.effectivePermission != runtimeApproval
-		controller.effectivePermission = runtimeApproval
-		controller.mu.Unlock()
-		if controller.onPermissionsChanged != nil && permissionChanged {
-			controller.onPermissionsChanged(controller.sessionID, runtimeApproval)
-		}
+		controller.recordRuntimePermission(runtimeApproval)
 	}
 	return options, nil
 }

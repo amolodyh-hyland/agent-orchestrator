@@ -1852,13 +1852,8 @@ func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (p
 	}
 	if outcome.steppedDown(requested) {
 		c.adoptEffectivePermission(ctx, requested, outcome)
-	}
-	c.mu.Lock()
-	changed := c.effectivePermission != outcome.Effective
-	c.effectivePermission = outcome.Effective
-	c.mu.Unlock()
-	if changed && !outcome.steppedDown(requested) && c.reviewID == "" && c.onPermissionsChanged != nil {
-		c.onPermissionsChanged(c.sessionID, outcome.Effective)
+	} else {
+		c.recordRuntimePermission(outcome.Effective)
 	}
 	return ref, nil
 }
@@ -1869,6 +1864,7 @@ func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (p
 // made while the turn was being sent is left alone.
 func (c *Controller) adoptEffectivePermission(ctx context.Context, requested ports.PermissionMode, outcome permissionFallbackOutcome) {
 	c.adoptEffectiveMode(ctx, requested, outcome.Effective)
+	c.recordRuntimePermission(outcome.Effective)
 	// The notice goes last, and whatever the user chose meanwhile: the turn did run
 	// with the lower mode. Writing it publishes an event that makes clients refetch
 	// the conversation, so the settings (the picker's mode) and the session record
@@ -1881,7 +1877,7 @@ func (c *Controller) adoptEffectivePermission(ctx context.Context, requested por
 }
 
 // adoptEffectiveMode stores the mode a turn really ran with as the conversation's
-// approval mode and reports it for the session record, unless the user changed the
+// approval mode, unless the user changed the
 // mode while the turn was being sent.
 func (c *Controller) adoptEffectiveMode(ctx context.Context, requested, effective ports.PermissionMode) {
 	c.configMu.Lock()
@@ -1897,7 +1893,14 @@ func (c *Controller) adoptEffectiveMode(ctx context.Context, requested, effectiv
 		c.log.Warn("could not record the permission fallback on the conversation",
 			"sessionID", c.sessionID, "effective", effective, "error", err)
 	}
-	if c.onPermissionsChanged != nil {
+}
+
+func (c *Controller) recordRuntimePermission(effective ports.PermissionMode) {
+	c.mu.Lock()
+	changed := c.effectivePermission != effective
+	c.effectivePermission = effective
+	c.mu.Unlock()
+	if changed && c.reviewID == "" && c.onPermissionsChanged != nil {
 		c.onPermissionsChanged(c.sessionID, effective)
 	}
 }

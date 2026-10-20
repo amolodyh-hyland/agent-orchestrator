@@ -2370,6 +2370,7 @@ func TestRememberProjectPermissionsPinsExistingSessions(t *testing.T) {
 		row.Metadata.ConversationCheckpointState = domain.ConversationCheckpointEmpty
 		row.OutputType = domain.SessionOutputNone
 		row.Metadata.Permissions = tc.want
+		row.Metadata.PermissionCeiling = tc.want
 		if tc.saved == "" {
 			row.Revision++ // Pinning permissions writes even without changing updated_at.
 		}

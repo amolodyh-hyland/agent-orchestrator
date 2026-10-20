@@ -159,7 +159,9 @@ Rules:
   approvals required — no work started**. AO starts no work under `default`;
   the user must choose an available manual mode explicitly. A failed launch
   clears the session's runtime permission field rather than reporting the refused
-  request as accepted.
+  request as accepted. The separately persisted `permission_ceiling` retains the
+  session's requested bound: retries use that ceiling or an accepted lower rung,
+  independently of later project defaults. Runtime cleanup never clears it.
 - Claude Code Chat uses the same ladder. ACP `session/set_mode` policy and
   unsupported-mode refusals are typed permission rejections, including details
   nested inside a generic JSON-RPC error. A model-dependent catalog without Auto
@@ -170,7 +172,9 @@ Rules:
   an explicitly chosen bypass mode is honoured when the provider accepts it.
 - Session details show the session API's recorded runtime permission mode. A
   successful fallback or provider permission-picker change updates that field;
-  process command-line flags describe only the initial launch.
+  process command-line flags describe only the initial launch. Runtime reports
+  also remain independent of a newer preference chosen during dispatch: a
+  bypass-to-Auto fallback still reports Auto while preserving that preference.
 - A refusal is reported with `409 CHAT_PERMISSION_REJECTED` carrying that message,
   never an anonymous `500`, wherever an error is returned to the caller: the
   conversation routes (send, steer, queue, retry, edit, branch and the rest, through

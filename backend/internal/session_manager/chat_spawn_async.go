@@ -503,9 +503,6 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 	if rec.Metadata.Model != "" {
 		config.Model = rec.Metadata.Model
 	}
-	if rec.Metadata.Permissions != "" {
-		config.Permissions = rec.Metadata.Permissions
-	}
 	cfg := ports.SpawnConfig{
 		ProjectID: rec.ProjectID, IssueID: rec.IssueID, Kind: rec.Kind,
 		Harness: rec.Harness, RequestedMode: domain.SessionModeChat,

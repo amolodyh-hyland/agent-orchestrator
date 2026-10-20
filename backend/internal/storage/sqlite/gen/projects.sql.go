@@ -184,9 +184,10 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 }
 
 const pinProjectSessionPermissions = `-- name: PinProjectSessionPermissions :exec
-UPDATE sessions SET session_permissions = ?1
+UPDATE sessions SET session_permissions = ?1,
+    permission_ceiling = CASE WHEN permission_ceiling = '' THEN ?1 ELSE permission_ceiling END
 WHERE project_id = ?2 AND kind = ?3
-  AND LENGTH(session_permissions) = 0
+  AND LENGTH(session_permissions) = 0 AND LENGTH(permission_ceiling) = 0
 `
 
 type PinProjectSessionPermissionsParams struct {

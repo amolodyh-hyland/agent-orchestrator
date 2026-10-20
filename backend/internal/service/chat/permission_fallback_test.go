@@ -502,6 +502,16 @@ func TestStepDownDoesNotOverwriteAConcurrentChoice(t *testing.T) {
 	if got := f.ctrl.Settings().ApprovalMode; got != acceptEdit {
 		t.Fatalf("approval mode = %q, want the user's concurrent choice %q", got, acceptEdit)
 	}
+	if got := f.changedModes(); !reflect.DeepEqual(got, []ports.PermissionMode{autoMode}) {
+		t.Fatalf("reported runtime mode = %v, want accepted auto independently of the newer preference", got)
+	}
+	if got := f.persistedMode(t); got != acceptEdit {
+		t.Fatalf("persisted preference = %q, want accept-edits", got)
+	}
+	notices := f.fallbackNotices(t)
+	if len(notices) != 1 || notices[0].Effective != string(autoMode) {
+		t.Fatalf("runtime notice = %+v", notices)
+	}
 }
 
 /* ---- launch-level step-down ------------------------------------------- */

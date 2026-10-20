@@ -125,6 +125,7 @@ func (s *Store) createSessionLocked(ctx context.Context, rec domain.SessionRecor
 		}
 		num++
 	}
+	rec.Metadata.PermissionCeiling = sessionPermissionCeiling(rec)
 	if err := s.qw.InsertSession(ctx, recordToInsert(rec, num)); err != nil {
 		if rec.ClientRequestID != "" {
 			existing, found, reloadErr := s.getSessionByClientRequestID(ctx, s.qw, rec.ClientRequestID)
@@ -280,6 +281,7 @@ func (s *Store) PromoteTaskPreparation(ctx context.Context, id domain.SessionID,
 		Model:              rec.Metadata.Model,
 		Effort:             rec.Metadata.Effort,
 		SessionPermissions: string(rec.Metadata.Permissions),
+		PermissionCeiling:  string(sessionPermissionCeiling(rec)),
 		RequestedOutput:    string(rec.RequestedOutput),
 		CreatedAt:          rec.CreatedAt,
 		UpdatedAt:          rec.UpdatedAt,
@@ -459,8 +461,8 @@ func (s *Store) UpdateSessionArtifactOutput(ctx context.Context, id domain.Sessi
 	return rows > 0, nil
 }
 
-// UpdateSessionPermissions changes only the pinned permission mode, leaving
-// concurrent lifecycle and controller ownership updates intact.
+// UpdateSessionPermissions changes only the runtime permission mode, leaving
+// the requested ceiling, lifecycle state, and controller ownership intact.
 func (s *Store) UpdateSessionPermissions(ctx context.Context, id domain.SessionID, permissions domain.PermissionMode) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -983,6 +985,7 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 			Model:                            row.Model,
 			Effort:                           row.Effort,
 			Permissions:                      domain.PermissionMode(row.SessionPermissions),
+			PermissionCeiling:                domain.PermissionMode(row.PermissionCeiling),
 		},
 		RequestedOutput:   domain.RequestedOutput(row.RequestedOutput),
 		CleanupGeneration: row.CleanupGeneration,
@@ -1111,6 +1114,7 @@ func recordToInsert(rec domain.SessionRecord, num int64) gen.InsertSessionParams
 		Model:                            rec.Metadata.Model,
 		Effort:                           rec.Metadata.Effort,
 		SessionPermissions:               string(rec.Metadata.Permissions),
+		PermissionCeiling:                string(sessionPermissionCeiling(rec)),
 		RequestedOutput:                  string(rec.RequestedOutput),
 		CreatedAt:                        rec.CreatedAt,
 		UpdatedAt:                        rec.UpdatedAt,
@@ -1124,8 +1128,8 @@ func recordToInsert(rec domain.SessionRecord, num int64) gen.InsertSessionParams
 	}
 }
 
-// Permissions are immutable after insertion (or the focused legacy pin), so
-// generic session updates cannot overwrite them with a stale record.
+// Generic session updates cannot overwrite runtime permissions or their
+// separately pinned ceiling with a stale lifecycle snapshot.
 func recordToUpdate(rec domain.SessionRecord) gen.UpdateSessionParams {
 	activity := normalActivity(rec.Activity, rec.UpdatedAt)
 	return gen.UpdateSessionParams{
@@ -1277,4 +1281,11 @@ func normalActivity(a domain.Activity, fallback time.Time) domain.Activity {
 	// rather than trusting each caller's clock.
 	a.LastActivityAt = a.LastActivityAt.UTC()
 	return a
+}
+
+func sessionPermissionCeiling(rec domain.SessionRecord) domain.PermissionMode {
+	if rec.Metadata.PermissionCeiling != "" {
+		return rec.Metadata.PermissionCeiling
+	}
+	return rec.Metadata.Permissions
 }
