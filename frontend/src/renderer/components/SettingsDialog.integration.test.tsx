@@ -338,6 +338,47 @@ describe("Project context settings navigation guards", () => {
 		expect(screen.getByLabelText("Shared instructions")).toHaveValue("Remote\n\nLocal draft");
 	});
 
+	it.each(["immediate", "deferred"])("navigates after a failed context write is retried successfully (%s response)", async (response) => {
+		let finish!: (value: unknown) => void;
+		const saved = { data: { project: { ...project, revision: 2, instructions: { ...project.instructions, shared: "Draft" } } } };
+		const put = vi.spyOn(apiClient, "PUT")
+			.mockResolvedValueOnce({ error: { message: "Context write failed" } } as never)
+			.mockImplementationOnce(() => (response === "immediate" ? Promise.resolve(saved) : new Promise((resolve) => { finish = resolve as typeof finish; })) as never);
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderDialogs();
+		fireEvent.change(await screen.findByLabelText("Shared instructions"), { target: { value: "Draft" } });
+		await userEvent.click(screen.getByRole("button", { name: "Agents" }));
+		await screen.findAllByText("Context write failed");
+		expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("data-active", "true");
+		expect(screen.getByLabelText("Shared instructions")).toHaveValue("Draft");
+
+		await userEvent.click(screen.getByRole("button", { name: "Agents" }));
+		await waitFor(() => expect(put).toHaveBeenCalledTimes(2));
+		if (response === "deferred") {
+			expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("data-active", "true");
+			await act(async () => finish(saved));
+		}
+		await waitFor(() => expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("data-active", "true"));
+		expect(put).toHaveBeenCalledTimes(2);
+	});
+
+	it("cancels navigation when the retry also fails, before a later explicit save", async () => {
+		const put = vi.spyOn(apiClient, "PUT").mockResolvedValue({ error: { message: "Context write failed" } } as never);
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderDialogs();
+		fireEvent.change(await screen.findByLabelText("Shared instructions"), { target: { value: "Draft" } });
+		await userEvent.click(screen.getByRole("button", { name: "Agents" }));
+		await screen.findAllByText("Context write failed");
+		await userEvent.click(screen.getByRole("button", { name: "Agents" }));
+		await waitFor(() => expect(put).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Save context" })).toBeEnabled());
+		put.mockResolvedValue({ data: { project: { ...project, revision: 2, instructions: { ...project.instructions, shared: "Draft" } } } } as never);
+		await userEvent.click(screen.getByRole("button", { name: "Save context" }));
+		await screen.findByText("Context saved");
+		expect(put).toHaveBeenCalledTimes(3);
+		expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("data-active", "true");
+	});
+
 	it("reports failed context writes to the close guard without losing the draft", async () => {
 		vi.spyOn(apiClient, "PUT").mockResolvedValue({ error: { message: "Context write failed" } } as never);
 		useUiStore.getState().openProjectSettings("proj-1");
