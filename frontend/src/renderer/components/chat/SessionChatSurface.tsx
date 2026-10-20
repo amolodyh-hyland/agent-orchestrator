@@ -38,6 +38,7 @@ import { useConversationPromptSuggestion } from "../../hooks/useConversationProm
 import { useRememberProjectPermissions } from "../../hooks/useRememberProjectPermissions";
 import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
 import { isWebLink, isWorkspaceHtmlLink } from "../../lib/external-link-policy";
+import { aoBridge } from "../../lib/bridge";
 import { sessionUiKey } from "../../lib/hosts";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import {
@@ -721,6 +722,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				filePathsTruncated={truncated}
 				localEchos={localEchos}
 				onStageAttachments={stageAttachments}
+				onChooseFolder={aoBridge.chatAttachment.chooseFolder}
 				nativeImages={can(renderSnapshot, "images")}
 				// Gated on what the daemon advertises, so the control is never drawn for a
 				// harness that cannot steer. The refusal check stays as a backstop: it

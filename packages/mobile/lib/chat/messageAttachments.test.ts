@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attachmentTileSize, isImageAttachment, isSameAttachmentLoad, stagedAttachmentParts, withAttachmentReferences } from "./messageAttachments";
+import { attachmentName, attachmentTileSize, isFolderAttachmentPath, isImageAttachment, isSameAttachmentLoad, stagedAttachmentParts, withAttachmentReferences } from "./messageAttachments";
 
 describe("mobile Chat staged attachments", () => {
 	it("strips the desktop composer suffix so the image can render instead of the raw path list", () => {
@@ -33,6 +33,15 @@ describe("mobile Chat staged attachments", () => {
 			body: "",
 			attachments: [".ao/attachments/image-xyz.jpeg"],
 		});
+	});
+
+	it("renders absolute folder references as folders, not image paths", () => {
+		const path = "/Users/me/Project Files/folder.png";
+		const text = `Inspect this\n\nAttached files (read these files in the workspace):\n- ${path}`;
+		expect(stagedAttachmentParts(text)).toEqual({ body: "Inspect this", attachments: [path] });
+		expect(isFolderAttachmentPath(path)).toBe(true);
+		expect(isImageAttachment(path)).toBe(false);
+		expect(attachmentName(path)).toBe("folder.png");
 	});
 
 	it("leaves prose that merely quotes the wording about non-staged files untouched", () => {

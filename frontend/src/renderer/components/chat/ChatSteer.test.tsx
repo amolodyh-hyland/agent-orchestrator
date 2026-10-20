@@ -253,7 +253,7 @@ describe("ChatComposer steering", () => {
 		expect(field).toHaveTextContent("inspect this");
 		expect(field).toHaveAttribute("aria-disabled", "true");
 		expect(screen.getByRole("button", { name: "Steer message" })).toBeDisabled();
-		expect(screen.getByRole("button", { name: "Attach a file" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Add attachment" })).toBeDisabled();
 
 		await act(async () => finishRead());
 		await waitFor(() => expect(stage).toHaveBeenCalledOnce());

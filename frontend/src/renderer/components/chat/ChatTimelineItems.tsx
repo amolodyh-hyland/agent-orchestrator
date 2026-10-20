@@ -9,7 +9,7 @@ import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
  * re-sorting. Those belong to the daemon.
  */
 
-import { stagedAttachmentParts, attachmentName, attachmentURL, IMAGE_ATTACHMENT_PATH, splitInlineImagePaths } from "./messageAttachments";
+import { stagedAttachmentParts, attachmentName, attachmentURL, isFolderAttachmentPath, isImageAttachmentPath, splitInlineImagePaths } from "./messageAttachments";
 import { ChatImage } from "./ChatImage";
 import {
 	ACCENT_ACTION_SEGMENT,
@@ -28,6 +28,7 @@ import {
 	CornerDownLeft,
 	CornerDownRight,
 	File as FileIcon,
+	Folder as FolderIcon,
 	FileDiff,
 	Gauge,
 	KeyRound,
@@ -427,7 +428,7 @@ function ProseWithInlineImages({
 	renderText: (text: string) => ReactNode;
 }) {
 	const { t } = useTranslation();
-	const images = attachments.filter((path) => IMAGE_ATTACHMENT_PATH.test(path));
+	const images = attachments.filter(isImageAttachmentPath);
 	if (apiBaseUrl === null || images.length === 0) return renderText(text);
 	return splitInlineImagePaths(text, (path) => images.includes(path)).map((segment, index) =>
 		segment.path === undefined ? (
@@ -458,12 +459,12 @@ function StagedAttachmentItems({
 }) {
 	const { t } = useTranslation();
 	if (paths.length === 0) return null;
-	const images = paths.filter((path) => IMAGE_ATTACHMENT_PATH.test(path));
+	const images = paths.filter(isImageAttachmentPath);
 	return (
 		<ul aria-label={ariaLabel} className={cn("flex max-w-full flex-wrap gap-2", className)}>
 			{paths.map((path) => {
 				const name = attachmentName(path);
-				return IMAGE_ATTACHMENT_PATH.test(path) && apiBaseUrl !== null ? (
+				return isImageAttachmentPath(path) && apiBaseUrl !== null ? (
 					<li key={path} className="max-w-full">
 						<ChatImage
 							src={attachmentURL(apiBaseUrl, sessionId, path)}
@@ -476,7 +477,9 @@ function StagedAttachmentItems({
 						title={path}
 						className="flex max-w-full items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1.5 text-xs text-muted-foreground"
 					>
-						<FileIcon aria-hidden="true" className="size-3.5 shrink-0" />
+						{isFolderAttachmentPath(path)
+							? <FolderIcon aria-hidden="true" className="size-3.5 shrink-0" />
+							: <FileIcon aria-hidden="true" className="size-3.5 shrink-0" />}
 						<span className="truncate">{name}</span>
 					</li>
 				);
@@ -2487,7 +2490,7 @@ export function SteerMessage({
 	const preview = longReport
 		? `${body.slice(0, ORIGIN_REPORT_PREVIEW_LENGTH).trimEnd()}…`
 		: body;
-	let stagedImagesToMatch = attachments.filter((path) => IMAGE_ATTACHMENT_PATH.test(path)).length;
+	let stagedImagesToMatch = attachments.filter(isImageAttachmentPath).length;
 	// Composer images are recorded twice: once as durable staged paths and once as
 	// native prompt blocks. Suppress only the corresponding leading native images;
 	// later image blocks may be distinct provider content and must remain visible.

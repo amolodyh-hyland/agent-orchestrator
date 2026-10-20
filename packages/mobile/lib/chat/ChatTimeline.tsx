@@ -47,7 +47,7 @@ import {
 	validateInput,
 } from "./elicitationModel";
 import { previewFilePath } from "../api";
-import { attachmentName, attachmentTileSize, isImageAttachment, isSameAttachmentLoad, stagedAttachmentParts, type AttachmentImageSource } from "./messageAttachments";
+import { attachmentName, attachmentTileSize, isFolderAttachmentPath, isImageAttachment, isSameAttachmentLoad, stagedAttachmentParts, type AttachmentImageSource } from "./messageAttachments";
 import type {
 	ConversationActivity,
 	ConversationItem,
@@ -388,12 +388,12 @@ function StagedAttachments({ sessionId, paths, spaced }: { sessionId: string; pa
 			const source = config && isImageAttachment(path)
 				? { uri: `${httpBase(config)}${previewFilePath(sessionId, path)}`, headers: authHeaders(config) }
 				: undefined;
-			return <StagedAttachment key={path} name={attachmentName(path)} source={source} tileSize={tileSize} />;
+			return <StagedAttachment key={path} name={attachmentName(path)} folder={isFolderAttachmentPath(path)} source={source} tileSize={tileSize} />;
 		})}
 	</View>;
 }
 
-function StagedAttachment({ name, source, tileSize }: { name: string; source?: AttachmentImageSource; tileSize: number }) {
+function StagedAttachment({ name, folder, source, tileSize }: { name: string; folder: boolean; source?: AttachmentImageSource; tileSize: number }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	// The failure belongs to the load that failed, so a reconnect to another address
@@ -401,7 +401,7 @@ function StagedAttachment({ name, source, tileSize }: { name: string; source?: A
 	const [failedLoad, setFailedLoad] = useState<AttachmentImageSource>();
 	const [viewerOpen, setViewerOpen] = useState(false);
 	if (!source) {
-		return <View style={styles.attachmentChip}><Feather name="file-text" size={12} color={t.textTertiary} /><Text numberOfLines={1} style={styles.attachmentName}>{name}</Text></View>;
+		return <View style={styles.attachmentChip}><Feather name={folder ? "folder" : "file-text"} size={12} color={t.textTertiary} /><Text numberOfLines={1} style={styles.attachmentName}>{name}</Text></View>;
 	}
 	if (!isSameAttachmentLoad(failedLoad, source)) {
 		// Cover-cropping a square reads as a deliberate thumbnail; the viewer shows the whole image.

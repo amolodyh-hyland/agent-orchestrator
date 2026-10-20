@@ -107,6 +107,7 @@ import { AgentAvatar } from "../AgentAvatar";
 import { SessionPaneTab } from "../CenterPane";
 import { RemoteSessionTabAction } from "../topbar-tabs/RemoteSessionTabAction";
 import { Button } from "../ui/button";
+import type { ChatFolderAttachmentPickerResult } from "../../../shared/chat-folder-attachment";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { SessionTopbarPortal } from "../SessionTopbarPortal";
 import { ShellTerminalTab } from "../ShellTerminalTab";
@@ -135,7 +136,7 @@ import type { ComposerPromptSuggestion } from "./ComposerEditor";
 import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
 import { ContextMeter } from "./ContextMeter";
 import type { SessionTabActions } from "../topbar-tabs/TopbarTab";
-import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
+import { stagedAttachmentParts, attachmentName, isFolderAttachmentPath } from "./messageAttachments";
 import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { SessionStartup } from "./SessionStartup";
@@ -515,6 +516,8 @@ export interface ChatWorkspaceProps {
 	 * no worktree to write into.
 	 */
 	onStageAttachments?: (attachments: { mimeType: string; data: string }[]) => Promise<string[]>;
+	/** Opens the narrow Electron folder picker and returns a validated path reference. */
+	onChooseFolder?: () => Promise<ChatFolderAttachmentPickerResult>;
 	/** The provider negotiated native image prompt blocks. */
 	nativeImages?: boolean;
 	/**
@@ -717,6 +720,7 @@ function ChatWorkspaceContent({
 	filePathsTruncated,
 	localEchos,
 	onStageAttachments,
+	onChooseFolder,
 	nativeImages,
 	onSteer,
 	showSteerButton,
@@ -1101,6 +1105,7 @@ function ChatWorkspaceContent({
 			// Paths and native blocks have no shared persisted identity.
 			const attachments: StoredComposerAttachment[] = parts.attachments.map((path) => ({
 				id: path, name: attachmentName(path), path,
+				...(isFolderAttachmentPath(path) ? { kind: "folder" as const } : {}),
 			}));
 			(message.content ?? []).forEach((item, index) => {
 				attachments.push({ id: `content-${index}`, contentIndex: index, contentType: item.type,
@@ -1851,6 +1856,7 @@ function ChatWorkspaceContent({
 										filePaths={filePaths}
 										filePathsTruncated={filePathsTruncated}
 										onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
+										onChooseFolder={newWorkDisabled ? undefined : onChooseFolder}
 										nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
 										autoFocus={!reviewerActive}
 										autoFocusKey={draftScope.sessionId}
