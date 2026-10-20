@@ -7,6 +7,15 @@ import { chatFixture } from "../../lib/chat-fixture";
 import type { ConversationSnapshot } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
 
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@tanstack/react-router")>();
+	return {
+		...actual,
+		useNavigate: () => vi.fn(),
+		useParams: () => ({ projectId: undefined, sessionId: undefined }),
+	};
+});
+
 /** turn-2 was stopped by an account switch to acct-b. */
 function switchedSnapshot(): ConversationSnapshot {
 	const turns = chatFixture.turns.map((turn) =>

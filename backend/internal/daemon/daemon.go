@@ -556,6 +556,7 @@ func Run() error {
 			return roots
 		},
 	})
+	chatBindings.Sessions(sessMgr)
 	agentAccountSvc := newAgentAccounts(cfg, store, codexHome, agentDeps.CodexAccounts, log)
 	if wired, ok := sessMgr.(interface {
 		SetAgentAccounts(ports.AgentAccountLaunchEnv)
@@ -580,7 +581,6 @@ func Run() error {
 			}
 		})
 	}
-	chatBindings.Sessions(sessMgr)
 	if runner, ok := sessMgr.(interface {
 		RunPromptSuggestionTask(context.Context, domain.SessionID, string, string, string) (string, error)
 	}); ok {

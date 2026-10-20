@@ -265,7 +265,7 @@ func TestGetLaunchCommandAppendsModelAndReasoningEffortFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"copilot", "--model", "gpt-5-mini", "--reasoning-effort", "high"}
+	want := []string{"copilot", "--no-auto-update", "--model", "gpt-5-mini", "--reasoning-effort", "high"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -280,7 +280,7 @@ func TestGetLaunchCommandAppendsTrimmedReasoningEffort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"copilot", "--reasoning-effort", "xhigh"}
+	want := []string{"copilot", "--no-auto-update", "--reasoning-effort", "xhigh"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -303,7 +303,7 @@ func TestGetLaunchCommandAppendsEveryReasoningEffortLevel(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := []string{"copilot", "--reasoning-effort", effort}
+			want := []string{"copilot", "--no-auto-update", "--reasoning-effort", effort}
 			if !reflect.DeepEqual(cmd, want) {
 				t.Fatalf("cmd = %#v, want %#v", cmd, want)
 			}
@@ -321,7 +321,7 @@ func TestGetLaunchCommandOmitsUnsupportedReasoningEffort(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := []string{"copilot"}
+			want := []string{"copilot", "--no-auto-update"}
 			if !reflect.DeepEqual(cmd, want) {
 				t.Fatalf("cmd = %#v, want %#v", cmd, want)
 			}
@@ -338,7 +338,7 @@ func TestGetLaunchCommandOmitsBlankReasoningEffort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"copilot"}
+	want := []string{"copilot", "--no-auto-update"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -354,7 +354,7 @@ func TestGetLaunchCommandAppendsReasoningEffortBeforePrompt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"copilot", "--model", "m", "--reasoning-effort", "low", "--interactive", "do it"}
+	want := []string{"copilot", "--no-auto-update", "--model", "m", "--reasoning-effort", "low", "--interactive", "do it"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}

@@ -50,13 +50,12 @@ describe("TitlebarNav", () => {
 		expect(nav).toHaveClass("top-0", "h-traffic-light-clearance", "left-titlebar-cluster-left");
 		rerender(<TooltipProvider><TitlebarNav isFullScreen /></TooltipProvider>);
 		expect(nav).toHaveClass("top-0", "h-traffic-light-clearance", "left-titlebar-cluster-left-fullscreen");
-		// The brand and the history arrows trade places; the hidden one is inert and
-		// aria-hidden (it collapses to width 0 rather than unmounting).
+		// The history arrows stay in the row in both sidebar states; only the brand is
+		// inert and aria-hidden when the sidebar is closed (it collapses to width 0
+		// rather than unmounting).
 		const brand = container.querySelector('[data-slot="titlebar-brand"]');
-		const history = container.querySelector('[data-slot="titlebar-history"]');
 		expect(brand?.hasAttribute("aria-hidden")).toBe(!open);
-		expect(history?.hasAttribute("aria-hidden")).toBe(open);
-		if (!open) expect(screen.getByRole("button", { name: "Go back" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Go back" })).toBeDisabled();
 	});
 
 	it("keeps history controls mounted after the brand appears and across sidebar toggles", async () => {
@@ -69,7 +68,7 @@ describe("TitlebarNav", () => {
 		expect(back).toBeVisible();
 		expect(forward).toBeVisible();
 		fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
-		expect(screen.queryByText("Orchestrator.inc")).not.toBeInTheDocument();
+		expect(document.querySelector('[data-slot="titlebar-brand"]')).toHaveAttribute("aria-hidden", "true");
 		expect(screen.getByRole("button", { name: "Go back" })).toBe(back);
 		fireEvent.click(screen.getByRole("button", { name: "Expand sidebar" }));
 		await screen.findByText("Orchestrator.inc");

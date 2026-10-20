@@ -66,7 +66,6 @@ vi.mock("../../lib/bridge", () => ({
 			// The starting orchestrator's chat mounts ChatWorkspace in place of the board.
 			onCloseShellTerminalShortcut: () => () => undefined,
 			setCloseShellTerminalShortcutEnabled: vi.fn(),
-			onShortcut: () => () => undefined,
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
 			// ShellTopbar subscribes to the open-orchestrator shortcut on mount.
