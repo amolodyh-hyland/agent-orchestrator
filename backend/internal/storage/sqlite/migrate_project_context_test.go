@@ -48,3 +48,20 @@ func TestMigrateProjectContextSnapshotsFreshDatabase(t *testing.T) {
 		}
 	}
 }
+
+func TestMigrateProjectContextSnapshotsDownAndUpAgain(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 201)
+	upTo(t, db, 216)
+	downTo(t, db, 215)
+	for _, name := range []string{"project_context_snapshots", "project_context_local_sources", "project_context_snapshots_immutable_update", "idx_project_context_local_sources_machine"} {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name = ?`, name).Scan(&n); err != nil || n != 0 {
+			t.Fatalf("%s survived down: count=%d err=%v", name, n, err)
+		}
+	}
+	upTo(t, db, 216)
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name = 'project_context_snapshots'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("snapshots table after re-up: count=%d err=%v", n, err)
+	}
+}

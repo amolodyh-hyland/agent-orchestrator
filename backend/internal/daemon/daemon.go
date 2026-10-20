@@ -932,6 +932,7 @@ func Run() error {
 	}
 
 	bs.HostID = hostIdentity.HostID
+	projectSvc.SetProjectContextMachineID(hostIdentity.HostID)
 	if machineSetter, ok := sessMgr.(interface{ SetProjectContextMachineID(string) }); ok {
 		machineSetter.SetProjectContextMachineID(hostIdentity.HostID)
 	}

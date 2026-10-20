@@ -6254,6 +6254,8 @@ export interface components {
         ProjectContextAttachment: {
             enabled: boolean;
             id: string;
+            /** @description Write-only locator registered by the daemon on MachineID and never stored or returned. */
+            localPath?: string;
             /** @description Required for repo_relative_file and machine_local_file sources. */
             machineId?: string;
             mediaType: string;

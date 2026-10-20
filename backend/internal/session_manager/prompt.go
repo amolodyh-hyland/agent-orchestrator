@@ -1,6 +1,7 @@
 package sessionmanager
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -182,7 +183,7 @@ func buildProjectRules(cfg projectRulesConfig) (string, error) {
 		parts = append(parts, rules)
 	}
 	if rel := strings.TrimSpace(cfg.AgentRulesFile); rel != "" {
-		data, err := readProjectContextFile(cfg.ProjectPath, rel, domain.MaxProjectContextInstructionBytes)
+		data, err := readProjectContextFile(context.Background(), cfg.ProjectPath, rel, domain.MaxProjectContextInstructionBytes)
 		if err != nil {
 			return "", fmt.Errorf("read agentRulesFile %s: %w", rel, err)
 		}

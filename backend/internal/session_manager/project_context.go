@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -245,7 +246,7 @@ func (m *Manager) resolveExistingProjectRoleRules(ctx context.Context, project d
 			if !validProjectContextRelativePath(relative) {
 				return "", &ProjectContextResolutionError{BindingID: "agentRulesFile", Reason: "path_escape"}
 			}
-			data, err := readProjectContextFile(project.Path, relative, domain.MaxProjectContextInstructionBytes)
+			data, err := readProjectContextFile(ctx, project.Path, relative, domain.MaxProjectContextInstructionBytes)
 			if err != nil {
 				return "", &ProjectContextResolutionError{BindingID: "agentRulesFile", Reason: contextReason(err)}
 			}
@@ -277,6 +278,7 @@ func (m *Manager) resolveExistingProjectRoleRules(ctx context.Context, project d
 func (m *Manager) resolveProjectContextAttachment(ctx context.Context, project domain.ProjectRecord, role domain.ProjectContextRole, sessionID domain.SessionID, binding domain.ProjectContextAttachment) (domain.ProjectContextManifestEntry, int64, error) {
 	metadata := binding
 	metadata.Text = ""
+	metadata.LocalPath = ""
 	if metadata.OwnerKind == "" {
 		metadata.OwnerKind = domain.ProjectContextOwnerProject
 	}
@@ -345,7 +347,7 @@ func (m *Manager) resolveProjectContextAttachment(ctx context.Context, project d
 		if supportedMediaType {
 			limit = domain.MaxProjectContextAttachmentBytes
 		}
-		file, sourceSize, errOpen = openProjectContextFile(local.RootPath, local.RelativePath, limit)
+		file, sourceSize, errOpen = openProjectContextFile(ctx, local.RootPath, local.RelativePath, limit)
 		if errOpen != nil {
 			if errors.Is(errOpen, errProjectContextTooLarge) {
 				return entry, 0, &ProjectContextResolutionError{BindingID: binding.ID, Reason: "attachment_size_limit"}
@@ -399,13 +401,13 @@ var (
 	errProjectContextNotRegular = errors.New("project context source is not a regular file")
 )
 
-func readProjectContextFile(rootPath, relativePath string, max int64) ([]byte, error) {
-	data, _, err := readProjectContextFileWithSize(rootPath, relativePath, max)
+func readProjectContextFile(ctx context.Context, rootPath, relativePath string, max int64) ([]byte, error) {
+	data, _, err := readProjectContextFileWithSize(ctx, rootPath, relativePath, max)
 	return data, err
 }
 
-func readProjectContextFileWithSize(rootPath, relativePath string, max int64) ([]byte, int64, error) {
-	file, size, err := openProjectContextFile(rootPath, relativePath, max)
+func readProjectContextFileWithSize(ctx context.Context, rootPath, relativePath string, max int64) ([]byte, int64, error) {
+	file, size, err := openProjectContextFile(ctx, rootPath, relativePath, max)
 	if err != nil {
 		return nil, size, err
 	}
@@ -414,41 +416,54 @@ func readProjectContextFileWithSize(rootPath, relativePath string, max int64) ([
 	return data, size, err
 }
 
-func openProjectContextFile(rootPath, relativePath string, max int64) (*os.File, int64, error) {
+// openProjectContextFile opens a regular file under rootPath. The path is
+// checked with Stat before it is opened, and the open uses O_NONBLOCK so a FIFO
+// or device node cannot park the spawn on a writer that never arrives. The
+// opened handle is then compared with the earlier Stat so a swap between the
+// two cannot substitute a different file.
+func openProjectContextFile(ctx context.Context, rootPath, relativePath string, max int64) (*os.File, int64, error) {
 	if !filepath.IsAbs(rootPath) || !validProjectContextRelativePath(relativePath) {
 		return nil, 0, fs.ErrPermission
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
 	}
 	root, err := os.OpenRoot(rootPath)
 	if err != nil {
 		return nil, 0, err
 	}
-	file, err := root.Open(filepath.FromSlash(relativePath))
+	defer root.Close()
+	name := filepath.FromSlash(relativePath)
+	pre, err := root.Stat(name)
 	if err != nil {
-		_ = root.Close()
+		return nil, 0, err
+	}
+	if !pre.Mode().IsRegular() {
+		return nil, 0, errProjectContextNotRegular
+	}
+	file, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
 		return nil, 0, err
 	}
 	info, err := file.Stat()
 	if err != nil {
 		_ = file.Close()
-		_ = root.Close()
 		return nil, 0, err
 	}
-	if !info.Mode().IsRegular() {
+	if !info.Mode().IsRegular() || !os.SameFile(pre, info) {
 		_ = file.Close()
-		_ = root.Close()
 		return nil, 0, errProjectContextNotRegular
 	}
 	if info.Size() > max {
 		_ = file.Close()
-		_ = root.Close()
 		return nil, info.Size(), errProjectContextTooLarge
 	}
-	// Root.Close prevents additional opens. The returned file descriptor remains
-	// bound to the validated file even if the path is renamed after this point.
-	if err := root.Close(); err != nil {
+	if err := ctx.Err(); err != nil {
 		_ = file.Close()
 		return nil, info.Size(), err
 	}
+	// The returned file descriptor remains bound to the validated file even if
+	// the path is renamed after this point.
 	return file, info.Size(), nil
 }
 

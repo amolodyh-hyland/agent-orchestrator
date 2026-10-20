@@ -1165,7 +1165,18 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 	}
 	id := rec.ID
-	if err := m.ensureProjectContextSnapshot(ctx, rec, project); err != nil {
+	// A claimed preparation was created as a TUI session with no issue; the
+	// requested mode, kind and issue only land when it is promoted below. Resolve
+	// context against those effective values so chat and issue attachments are
+	// selected, and required ones can still block creation.
+	contextRec := rec
+	if prep != nil {
+		effective := seedRecord(cfg, project.Config, m.clock())
+		contextRec.Kind = effective.Kind
+		contextRec.Mode = effective.Mode
+		contextRec.IssueID = effective.IssueID
+	}
+	if err := m.ensureProjectContextSnapshot(ctx, contextRec, project); err != nil {
 		if prep != nil {
 			cleanupCtx, cancel := spawnRollbackContext(ctx)
 			m.discardClaimedTaskPreparation(cleanupCtx, prep)

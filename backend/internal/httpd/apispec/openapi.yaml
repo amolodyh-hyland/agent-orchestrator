@@ -17746,6 +17746,11 @@ components:
           maxLength: 128
           minLength: 1
           type: string
+        localPath:
+          description: Write-only locator registered by the daemon on MachineID and
+            never stored or returned.
+          maxLength: 4096
+          type: string
         machineId:
           description: Required for repo_relative_file and machine_local_file sources.
           maxLength: 128

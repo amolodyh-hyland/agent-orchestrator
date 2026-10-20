@@ -72,6 +72,11 @@ type ProjectContextAttachment struct {
 	Position   int                      `json:"position" minimum:"0"`
 	Enabled    bool                     `json:"enabled"`
 	Text       string                   `json:"text,omitempty" maxLength:"1048576"`
+	// LocalPath is write-only. The owning daemon registers it as the machine-local
+	// locator for SourceRef and drops it before the binding is stored or returned.
+	// Repo-relative sources take a path relative to the Project; machine-local
+	// sources take an absolute path.
+	LocalPath string `json:"localPath,omitempty" maxLength:"4096" description:"Write-only locator registered by the daemon on MachineID and never stored or returned."`
 }
 
 // Validate rejects malformed references before they can be persisted as a
@@ -122,6 +127,9 @@ func (a ProjectContextAttachment) Validate() error {
 		seenRoles[role] = struct{}{}
 	}
 
+	if a.LocalPath != "" && ((a.SourceKind != ProjectContextRepoRelativeFile && a.SourceKind != ProjectContextMachineLocalFile) || len(a.LocalPath) > 4096 || strings.ContainsRune(a.LocalPath, 0)) {
+		return fmt.Errorf("project context attachment %q local path is only valid for repo-relative or machine-local sources", a.ID)
+	}
 	switch a.SourceKind {
 	case ProjectContextInlineText:
 		if a.SourceRef != "" || a.MachineID != "" {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 type projectContextTestStore struct {
@@ -473,4 +474,69 @@ func TestProjectContextAttachmentPromptIncludesUnavailableMarkerAndTrustBoundary
 			t.Fatalf("project context composition order = %v", positions)
 		}
 	}
+}
+
+func TestProjectContextPreparedSpawnUsesEffectiveModeAndIssue(t *testing.T) {
+	project := func(required bool) domain.ProjectInstructions {
+		return domain.ProjectInstructions{Attachments: []domain.ProjectContextAttachment{
+			inlineContextBinding("chat-note", domain.ProjectContextRoleChat, "chat attachment"),
+			inlineContextBinding("issue-note", domain.ProjectContextRoleIssueTask, "issue attachment"),
+			{
+				ID: "chat-required", SourceKind: domain.ProjectContextRepoRelativeFile, SourceRef: "no-such-source", MachineID: "machine-a",
+				MediaType: "text/plain", Roles: []domain.ProjectContextRole{domain.ProjectContextRoleChat}, Enabled: required, Required: true,
+			},
+		}}
+	}
+	spawn := func(t *testing.T, required bool, cfg ports.SpawnConfig) (*fakeStore, domain.SessionRecord, error) {
+		t.Helper()
+		m, st, _, _ := newManager()
+		m.runBackground = func(work func()) { work() }
+		m.dataDir = t.TempDir()
+		m.chat = &recordingLauncher{}
+		p := st.projects["mer"]
+		p.Instructions = project(required)
+		st.projects["mer"] = p
+		token, err := m.PrepareTaskWorkspace(ctx, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.ProjectID, cfg.Kind, cfg.Harness, cfg.Prompt, cfg.TaskPreparation = "mer", domain.KindWorker, domain.HarnessClaudeCode, "go", token
+		rec, _, _, err := m.Spawn(ctx, cfg)
+		return st, rec, err
+	}
+	entries := func(st *fakeStore, id domain.SessionID) map[string]bool {
+		got := map[string]bool{}
+		for _, e := range st.projectContextSnapshots[id].Attachments {
+			got[e.Binding.ID] = true
+		}
+		return got
+	}
+
+	t.Run("chat session selects chat attachments", func(t *testing.T) {
+		st, rec, err := spawn(t, false, ports.SpawnConfig{RequestedMode: domain.SessionModeChat})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := entries(st, rec.ID)
+		if !got["chat-note"] || got["issue-note"] {
+			t.Fatalf("chat snapshot attachments = %v, want chat-note only", got)
+		}
+	})
+	t.Run("issue session selects issue attachments", func(t *testing.T) {
+		st, rec, err := spawn(t, false, ports.SpawnConfig{RequestedMode: domain.SessionModeTUI, IssueID: "ISSUE-1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := entries(st, rec.ID)
+		if !got["issue-note"] || got["chat-note"] {
+			t.Fatalf("issue snapshot attachments = %v, want issue-note only", got)
+		}
+	})
+	t.Run("required chat binding blocks a prepared chat spawn", func(t *testing.T) {
+		_, _, err := spawn(t, true, ports.SpawnConfig{RequestedMode: domain.SessionModeChat})
+		var resolutionErr *ProjectContextResolutionError
+		if !errors.As(err, &resolutionErr) || resolutionErr.BindingID != "chat-required" {
+			t.Fatalf("spawn error = %v, want required chat-required resolution error", err)
+		}
+	})
 }
