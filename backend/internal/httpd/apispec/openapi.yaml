@@ -17738,6 +17738,73 @@ components:
         workersRequestReview:
           type: boolean
       type: object
+    ProjectContextAttachment:
+      properties:
+        enabled:
+          type: boolean
+        id:
+          maxLength: 128
+          minLength: 1
+          type: string
+        machineId:
+          description: Required for repo_relative_file and machine_local_file sources.
+          maxLength: 128
+          type: string
+        mediaType:
+          maxLength: 128
+          minLength: 1
+          type: string
+        ownerId:
+          maxLength: 128
+          type: string
+        ownerKind:
+          enum:
+          - project
+          - user
+          type: string
+        position:
+          minimum: 0
+          type: integer
+        required:
+          type: boolean
+        roles:
+          items:
+            $ref: '#/components/schemas/ProjectContextRole'
+          minItems: 1
+          type: array
+          uniqueItems: true
+        sourceKind:
+          enum:
+          - inline_text
+          - repo_relative_file
+          - machine_local_file
+          - explicitly_imported_bundle
+          type: string
+        sourceRef:
+          description: Opaque source reference; absolute local paths are resolved
+            by the owning daemon.
+          maxLength: 128
+          type: string
+        text:
+          maxLength: 1.048576e+06
+          type: string
+      required:
+      - id
+      - sourceKind
+      - mediaType
+      - required
+      - roles
+      - position
+      - enabled
+      type: object
+    ProjectContextRole:
+      enum:
+      - shared
+      - worker
+      - coordinator
+      - issue_task
+      - chat
+      type: string
     ProjectGetResponse:
       properties:
         project:
@@ -17753,6 +17820,10 @@ components:
       type: object
     ProjectInstructions:
       properties:
+        attachments:
+          items:
+            $ref: '#/components/schemas/ProjectContextAttachment'
+          type: array
         coordinator:
           type: string
         shared:

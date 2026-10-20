@@ -17,6 +17,7 @@ import (
 	"os"
 
 	"os/exec"
+	"reflect"
 
 	"path/filepath"
 
@@ -207,7 +208,7 @@ func TestProjectsAPI_CreateContainerWithoutGit(t *testing.T) {
 	}
 
 	body, status, headers := doRequest(t, srv, "POST", "/api/v1/projects/containers",
-		`{"displayName":"Planning","path":`+quote(emptyDir)+`,"instructions":{"shared":"Shared context","worker":"Worker context","coordinator":"Coordinator context"}}`)
+		`{"displayName":"Planning","path":`+quote(emptyDir)+`,"instructions":{"shared":"Shared context","worker":"Worker context","coordinator":"Coordinator context","attachments":[{"id":"runbook","sourceKind":"inline_text","mediaType":"text/plain","required":false,"roles":["shared"],"position":1,"enabled":true,"text":"Reference only."}]}}`)
 	if status != http.StatusCreated {
 		t.Fatalf("POST Project container = %d, want 201; body=%s", status, body)
 	}
@@ -219,8 +220,12 @@ func TestProjectsAPI_CreateContainerWithoutGit(t *testing.T) {
 	if created.Project.ID == "" || created.Project.Kind != string(domain.ProjectKindScratch) || created.Project.Path != emptyDir || created.Project.Repo != "" || created.Project.DefaultBranch != "" {
 		t.Fatalf("created Project = %#v", created.Project)
 	}
-	if created.Project.Revision != 1 || created.Project.Instructions == nil || *created.Project.Instructions != (domain.ProjectInstructions{
+	if created.Project.Revision != 1 || created.Project.Instructions == nil || !reflect.DeepEqual(*created.Project.Instructions, domain.ProjectInstructions{
 		Shared: "Shared context", Worker: "Worker context", Coordinator: "Coordinator context",
+		Attachments: []domain.ProjectContextAttachment{{
+			ID: "runbook", SourceKind: domain.ProjectContextInlineText, MediaType: "text/plain", Required: false,
+			Roles: []domain.ProjectContextRole{domain.ProjectContextRoleShared}, Position: 1, Enabled: true, Text: "Reference only.",
+		}},
 	}) {
 		t.Fatalf("created Project metadata = revision %d, instructions %#v", created.Project.Revision, created.Project.Instructions)
 	}

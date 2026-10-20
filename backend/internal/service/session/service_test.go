@@ -3822,6 +3822,18 @@ func TestToSpawnAPIErrorMapsSpawnStageSentinels(t *testing.T) {
 	}
 }
 
+func TestProjectContextResolutionErrorMapsBindingAndReason(t *testing.T) {
+	resolutionErr := &sessionmanager.ProjectContextResolutionError{BindingID: "runbook", Reason: "missing"}
+	mapped := toSpawnAPIError(fmt.Errorf("spawn worker: %w", resolutionErr))
+	var apiError *apierr.Error
+	if !errors.As(mapped, &apiError) || apiError.Kind != apierr.KindInvalid || apiError.Code != "PROJECT_CONTEXT_UNAVAILABLE" {
+		t.Fatalf("mapped = %v, want PROJECT_CONTEXT_UNAVAILABLE", mapped)
+	}
+	if apiError.Details["bindingId"] != "runbook" || apiError.Details["reason"] != "missing" {
+		t.Fatalf("mapped details = %#v, want bindingId and stable reason", apiError.Details)
+	}
+}
+
 func TestSpawnEmitsTypedErrorCodeForRuntimeFailure(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}

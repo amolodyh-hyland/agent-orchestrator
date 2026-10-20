@@ -51,6 +51,7 @@ type fakeStore struct {
 	sessions                           map[domain.SessionID]domain.SessionRecord
 	pr                                 map[domain.SessionID]domain.PRFacts
 	projects                           map[string]domain.ProjectRecord
+	projectContextSnapshots            map[domain.SessionID]domain.ProjectContextManifest
 	conversations                      map[domain.SessionID]domain.ConversationRecord
 	workspaceRepo                      map[string][]domain.WorkspaceRepoRecord
 	num                                int
@@ -78,13 +79,25 @@ type fakeStore struct {
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
-		sessions:      map[domain.SessionID]domain.SessionRecord{},
-		pr:            map[domain.SessionID]domain.PRFacts{},
-		projects:      map[string]domain.ProjectRecord{},
-		conversations: map[domain.SessionID]domain.ConversationRecord{},
-		workspaceRepo: map[string][]domain.WorkspaceRepoRecord{},
-		worktrees:     map[domain.SessionID][]domain.SessionWorktreeRecord{},
+		sessions:                map[domain.SessionID]domain.SessionRecord{},
+		pr:                      map[domain.SessionID]domain.PRFacts{},
+		projects:                map[string]domain.ProjectRecord{},
+		projectContextSnapshots: map[domain.SessionID]domain.ProjectContextManifest{},
+		conversations:           map[domain.SessionID]domain.ConversationRecord{},
+		workspaceRepo:           map[string][]domain.WorkspaceRepoRecord{},
+		worktrees:               map[domain.SessionID][]domain.SessionWorktreeRecord{},
 	}
+}
+func (f *fakeStore) CreateProjectContextSnapshot(_ context.Context, manifest domain.ProjectContextManifest) (bool, error) {
+	if _, exists := f.projectContextSnapshots[manifest.SessionID]; exists {
+		return false, nil
+	}
+	f.projectContextSnapshots[manifest.SessionID] = manifest
+	return true, nil
+}
+func (f *fakeStore) GetProjectContextSnapshot(_ context.Context, id domain.SessionID) (domain.ProjectContextManifest, bool, error) {
+	manifest, ok := f.projectContextSnapshots[id]
+	return manifest, ok, nil
 }
 func (f *fakeStore) GetProject(_ context.Context, id string) (domain.ProjectRecord, bool, error) {
 	if f.getProjectErr != nil {

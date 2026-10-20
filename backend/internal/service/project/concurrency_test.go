@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -130,7 +131,7 @@ func TestAddReactivatedArchivedProjectKeepsInstructionsAndAdvancesRevision(t *te
 	if err != nil {
 		t.Fatalf("re-Add: %v", err)
 	}
-	if readded.Instructions == nil || *readded.Instructions != instructions {
+	if readded.Instructions == nil || !reflect.DeepEqual(*readded.Instructions, instructions) {
 		t.Fatalf("re-added instructions = %#v, want %#v", readded.Instructions, instructions)
 	}
 	// Add (1), settings (2), archive (3), reactivation (4).

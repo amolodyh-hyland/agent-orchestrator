@@ -173,6 +173,7 @@ var (
 	ErrSpawnPrompt             = errors.New("prompt")
 	ErrSpawnCreate             = errors.New("create")
 	ErrSpawnSystemPrompt       = errors.New("system prompt file")
+	ErrSpawnProjectContext     = errors.New("project context")
 	ErrSpawnArtifactDir        = errors.New("artifact dir")
 	ErrSpawnAgentAccount       = errors.New("agent account")
 	ErrWorkspaceCreate         = errors.New("workspace")
@@ -413,10 +414,13 @@ type conversationSettingsStore interface {
 // Manager coordinates internal session spawn, restore, kill, and cleanup over
 // the outbound ports. User-facing read-model assembly lives in the service package.
 type Manager struct {
-	runtime   runtimeController
-	agents    ports.AgentResolver
-	workspace ports.Workspace
-	store     Store
+	runtime                   runtimeController
+	agents                    ports.AgentResolver
+	workspace                 ports.Workspace
+	store                     Store
+	projectContextPolicy      ProjectContextPolicy
+	projectContextMachineID   string
+	projectContextMachineIDMu sync.RWMutex
 	// agentSwitchReporting supplies the exact authorization snapshot immediately
 	// before each failure-aware store transaction. Nil is fail-closed.
 	agentSwitchReporting ports.AgentSwitchReportingPolicy
@@ -813,13 +817,16 @@ const (
 
 // Deps are the collaborators a Session Manager needs; New wires them together.
 type Deps struct {
-	Runtime         runtimeController
-	Agents          ports.AgentResolver
-	Workspace       ports.Workspace
-	Store           Store
-	ReportingPolicy ports.AgentSwitchReportingPolicy
-	DaemonRunID     string
-	Messenger       ports.AgentMessenger
+	Runtime   runtimeController
+	Agents    ports.AgentResolver
+	Workspace ports.Workspace
+	Store     Store
+	// ProjectContextPolicy is optional. Nil permits user-configured context; a
+	// configured policy can only deny resolution.
+	ProjectContextPolicy ProjectContextPolicy
+	ReportingPolicy      ports.AgentSwitchReportingPolicy
+	DaemonRunID          string
+	Messenger            ports.AgentMessenger
 	// Defaults supplies the daemon-owned default session interface for spawns that
 	// name no mode. Nil means always use the compatibility default.
 	Defaults SessionModeDefaults
@@ -871,6 +878,7 @@ func New(d Deps) *Manager {
 		agents:                         d.Agents,
 		workspace:                      d.Workspace,
 		store:                          d.Store,
+		projectContextPolicy:           d.ProjectContextPolicy,
 		agentSwitchReporting:           d.ReportingPolicy,
 		daemonRunID:                    strings.TrimSpace(d.DaemonRunID),
 		defaults:                       d.Defaults,
@@ -1157,6 +1165,16 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 	}
 	id := rec.ID
+	if err := m.ensureProjectContextSnapshot(ctx, rec, project); err != nil {
+		if prep != nil {
+			cleanupCtx, cancel := spawnRollbackContext(ctx)
+			m.discardClaimedTaskPreparation(cleanupCtx, prep)
+			cancel()
+		} else {
+			m.rollbackSpawnSeedRow(ctx, id)
+		}
+		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnProjectContext, err)
+	}
 	if m.agentAccounts != nil {
 		if err := m.agentAccounts.BindSession(ctx, id, cfg.Harness, cfg.AgentAccountID); err != nil {
 			if prep != nil {
@@ -5904,10 +5922,29 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 		Standalone: projectID == "",
 		Project:    promptProjectContext(projectID, project),
 	}
+	snapshot, hasSnapshot, err := m.projectContextSnapshot(ctx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	if hasSnapshot {
+		if snapshot.ProjectID != "" && snapshot.ProjectID != projectID {
+			return "", fmt.Errorf("project context snapshot for session %s belongs to project %s", sessionID, snapshot.ProjectID)
+		}
+		if snapshot.Role != contextRole(kind) {
+			return "", fmt.Errorf("project context snapshot for session %s has role %s, want %s", sessionID, snapshot.Role, contextRole(kind))
+		}
+		cfg.SharedProjectInstructions = snapshot.SharedInstructions
+		cfg.RoleProjectInstructions = snapshot.RoleInstructions
+		cfg.ProjectAttachments = projectContextAttachmentPrompt(snapshot)
+	}
 
 	switch kind {
 	case domain.KindOrchestrator:
-		cfg.OrchestratorRules = project.Config.OrchestratorRules
+		if hasSnapshot {
+			cfg.OrchestratorRules = snapshot.RoleRules
+		} else {
+			cfg.OrchestratorRules = project.Config.OrchestratorRules
+		}
 	case domain.KindWorker:
 		if projectID != "" {
 			orchestratorID, ok, err := m.activeOrchestratorSessionID(ctx, projectID)
@@ -5918,15 +5955,19 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 				cfg.OrchestratorSessionID = string(orchestratorID)
 			}
 		}
-		rules, err := buildProjectRules(projectRulesConfig{
-			ProjectPath:    project.Path,
-			AgentRules:     project.Config.AgentRules,
-			AgentRulesFile: project.Config.AgentRulesFile,
-		})
-		if err != nil {
-			return "", err
+		if hasSnapshot {
+			cfg.ProjectRules = snapshot.RoleRules
+		} else {
+			rules, err := buildProjectRules(projectRulesConfig{
+				ProjectPath:    project.Path,
+				AgentRules:     project.Config.AgentRules,
+				AgentRulesFile: project.Config.AgentRulesFile,
+			})
+			if err != nil {
+				return "", err
+			}
+			cfg.ProjectRules = rules
 		}
-		cfg.ProjectRules = rules
 	default:
 		return "", nil
 	}

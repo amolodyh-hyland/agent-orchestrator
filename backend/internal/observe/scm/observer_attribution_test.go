@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"reflect"
 	"testing"
 	"time"
 
@@ -219,7 +220,7 @@ func TestDiscoverSubjects_OriginBackfillKeepsConcurrentInstructions(t *testing.T
 	if err != nil || !ok {
 		t.Fatalf("get project: ok=%v err=%v", ok, err)
 	}
-	if got.RepoOriginURL != "https://github.com/o/r.git" || got.Instructions != newer || got.Revision != 3 {
+	if got.RepoOriginURL != "https://github.com/o/r.git" || !reflect.DeepEqual(got.Instructions, newer) || got.Revision != 3 {
 		t.Fatalf("project after backfill = origin %q instructions %#v revision %d, want origin set, newer instructions, revision 3", got.RepoOriginURL, got.Instructions, got.Revision)
 	}
 }

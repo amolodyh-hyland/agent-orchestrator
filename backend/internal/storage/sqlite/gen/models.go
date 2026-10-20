@@ -578,6 +578,27 @@ type Project struct {
 	InstructionsJson string
 }
 
+type ProjectContextLocalSource struct {
+	SourceRef    string
+	MachineID    string
+	RootPath     string
+	RelativePath string
+	MediaType    string
+	OwnerKind    string
+	OwnerID      string
+	RegisteredAt time.Time
+	UpdatedAt    time.Time
+}
+
+type ProjectContextSnapshot struct {
+	SessionID       string
+	ProjectID       sql.NullString
+	ProjectRevision int64
+	ManifestJson    string
+	Digest          string
+	CreatedAt       time.Time
+}
+
 type Report struct {
 	ID                 string
 	SessionID          string

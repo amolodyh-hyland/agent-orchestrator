@@ -287,6 +287,9 @@ sequenceDiagram
     DB->>CDC: trigger change_log
     CDC->>UI: SSE session.created
 
+    Note over Mgr: Resolve selected Project context and persist its immutable session manifest
+    Mgr->>DB: Insert session context snapshot
+
     Note over Mgr: 2. Create workspace
     alt project session
         Mgr->>WS: Create(project, branch)
@@ -338,7 +341,9 @@ flowchart TD
     Preflight --> CreateRow[Create session row in SQLite]
     RuntimePreflight --> CreateRow
     CreateRow --> Trigger1[CDC: session.created]
-    CreateRow --> CreateWS[Create git worktree or standalone directory]
+    CreateRow --> PinContext[Resolve Project links and persist immutable session context]
+    PinContext -->|resolved| CreateWS[Create git worktree or standalone directory]
+    PinContext -->|required context missing or size limit exceeded| AbortSpawn[Delete seed row and return typed error]
     CreateWS --> LaunchMode{Persisted mode}
     LaunchMode -->|tui| CreateRT[Launch native PTY / ConPTY / tmux]
     CreateRT --> GetCmd[Get agent launch command]
@@ -352,6 +357,17 @@ flowchart TD
     Trigger2 --> Done([Session running])
 
 ```
+
+After the seed row is created, Session Manager resolves the Project's shared
+instructions, the current role's instructions and rules, and selected context
+links before creating a workspace or starting a TUI or Chat controller. It
+stores one immutable, digested manifest per session. Repo-relative and
+machine-local links resolve through the current daemon's local source registry;
+absolute locators stay out of the Project API. Missing optional links remain
+marked unavailable in the manifest, while a missing required link or a size
+limit aborts session creation with its binding ID and reason. Prompt composition
+uses the pinned manifest so later Project or source edits affect new sessions
+only.
 
 New Git worker sessions from the desktop, CLI, or orchestrator with an initial
 prompt generate a title and task slug together
@@ -624,6 +640,7 @@ erDiagram
     projects o|--o{ sessions : optionally_owns
     projects o|--o| conversations : optionally_owns_orchestrator_narrative
     sessions ||--o| conversations : owns_worker_narrative
+    sessions ||--|| project_context_snapshots : pins
     sessions ||--o{ session_interface_transitions : records_controller_handoffs
     session_interface_transitions ||--o{ session_interface_transition_messages : holds_messages_during_gap
     conversations ||--o{ conversation_turns : contains
@@ -656,6 +673,15 @@ erDiagram
         string activity_state
         boolean is_terminated
         jsonb metadata
+    }
+
+    project_context_snapshots {
+        string session_id PK,FK
+        string project_id FK
+        integer project_revision
+        jsonb manifest_json
+        string digest
+        timestamp created_at
     }
 
     conversations {

@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -24,7 +25,7 @@ func TestInsertProjectIfAbsentDoesNotOverwriteExistingProject(t *testing.T) {
 		t.Fatalf("InsertProjectIfAbsent inserted=%v err=%v, want false", inserted, err)
 	}
 	got, _, err := s.GetProject(ctx, "p")
-	if err != nil || got.Path != "/tmp/p" || got.Instructions != instructions || got.Revision != 2 {
+	if err != nil || got.Path != "/tmp/p" || !reflect.DeepEqual(got.Instructions, instructions) || got.Revision != 2 {
 		t.Fatalf("project after skipped insert = %#v, %v", got, err)
 	}
 	if inserted, err := s.InsertProjectIfAbsent(ctx, domain.ProjectRecord{ID: "q", Path: "/tmp/q", RegisteredAt: now}); err != nil || !inserted {
@@ -44,7 +45,7 @@ func TestImportWorkspaceProjectAdvancesTargetRevision(t *testing.T) {
 		t.Fatalf("ImportWorkspaceProject: %v", err)
 	}
 	got, _, err := s.GetProject(ctx, "w")
-	if err != nil || got.Instructions != source.Instructions || got.Revision != 6 {
+	if err != nil || !reflect.DeepEqual(got.Instructions, source.Instructions) || got.Revision != 6 {
 		t.Fatalf("project after import = %#v, %v; want source instructions at revision 6", got, err)
 	}
 }

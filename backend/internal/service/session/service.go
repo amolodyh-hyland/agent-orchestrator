@@ -1615,6 +1615,13 @@ func toSpawnAPIError(err error) error {
 	if errors.As(err, &already) {
 		return already
 	}
+	var contextErr *sessionmanager.ProjectContextResolutionError
+	if errors.As(err, &contextErr) {
+		return apierr.Invalid("PROJECT_CONTEXT_UNAVAILABLE", contextErr.Error(), map[string]any{
+			"bindingId": contextErr.BindingID,
+			"reason":    contextErr.Reason,
+		})
+	}
 	if mapped := toAPIError(err); !errors.Is(mapped, err) {
 		return mapped
 	}
@@ -1633,6 +1640,8 @@ func toSpawnAPIError(err error) error {
 		return apierr.Internal("SPAWN_CREATE_FAILED", err.Error())
 	case errors.Is(err, sessionmanager.ErrSpawnSystemPrompt):
 		return apierr.Internal("SPAWN_SYSTEM_PROMPT_FAILED", err.Error())
+	case errors.Is(err, sessionmanager.ErrSpawnProjectContext):
+		return apierr.Internal("PROJECT_CONTEXT_SNAPSHOT_FAILED", err.Error())
 	case errors.Is(err, sessionmanager.ErrWorkspaceCreate):
 		return apierr.Conflict("WORKSPACE_CREATE_FAILED", err.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrWorkspaceProvision):
