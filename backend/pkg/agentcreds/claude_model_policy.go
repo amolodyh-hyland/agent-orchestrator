@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -154,7 +155,7 @@ func ResolveClaudeModelPolicy(ctx context.Context, workingDir string, env map[st
 	}
 	osPolicy := claudePolicyDocument{}
 	if opts.ManagedSettingsDir == "" {
-		osPolicy = readClaudeOSPolicy(ctx, opts)
+		osPolicy = readClaudeOSPolicy(ctx, opts, readClaudeRegistryValue)
 	}
 	sources := []claudePolicyDocument{remote, osPolicy, file}
 	if osPolicy.userFallback {
@@ -283,7 +284,14 @@ func mergePolicyEnv(p *ClaudeModelPolicy, doc claudePolicyDocument) {
 	}
 }
 
-func readClaudeOSPolicy(ctx context.Context, opts ResolveOptions) claudePolicyDocument {
+type claudeRegistryValue struct {
+	data       []byte
+	expandable bool
+}
+
+type claudeRegistryReader func(context.Context, string) (claudeRegistryValue, error)
+
+func readClaudeOSPolicy(ctx context.Context, opts ResolveOptions, readRegistry claudeRegistryReader) claudePolicyDocument {
 	runner := opts.Runner
 	if runner == nil {
 		runner = execCommand
@@ -296,31 +304,24 @@ func readClaudeOSPolicy(ctx context.Context, opts ResolveOptions) claudePolicyDo
 		return readClaudeMacPolicy(ctx, runner, paths)
 	case "windows":
 		for _, hive := range []string{"HKLM", "HKCU"} {
-			data, err := runner(ctx, "reg", "query", hive+`\SOFTWARE\Policies\ClaudeCode`, "/v", "Settings")
+			value, err := readRegistry(ctx, hive)
 			if err != nil {
-				if os.IsNotExist(err) || strings.Contains(strings.ToLower(string(data)), "unable to find") {
+				if errors.Is(err, os.ErrNotExist) {
 					continue
 				}
 				return claudePolicyDocument{broken: true}
 			}
-			for _, kind := range []string{"REG_EXPAND_SZ", "REG_SZ"} {
-				if _, raw, ok := strings.Cut(string(data), kind); ok {
-					if kind == "REG_EXPAND_SZ" && strings.Contains(raw, "%") {
-						// Expansion can alter restrictions, not just paths. Without a
-						// native effective-settings report do not guess its result.
-						return claudePolicyDocument{broken: true}
-					}
-					doc := parseClaudePolicyDocument([]byte(strings.TrimSpace(raw)))
-					if !doc.present() && hive == "HKLM" {
-						break
-					}
-					doc.userFallback = hive == "HKCU"
-					return doc
-				}
-			}
-			if !strings.Contains(string(data), "REG_SZ") && !strings.Contains(string(data), "REG_EXPAND_SZ") {
+			if value.expandable && strings.Contains(string(value.data), "%") {
+				// Expansion can alter restrictions, not just paths. Without a
+				// native effective-settings report do not guess its result.
 				return claudePolicyDocument{broken: true}
 			}
+			doc := parseClaudePolicyDocument(value.data)
+			if !doc.present() && hive == "HKLM" {
+				continue
+			}
+			doc.userFallback = hive == "HKCU"
+			return doc
 		}
 	}
 	return claudePolicyDocument{}

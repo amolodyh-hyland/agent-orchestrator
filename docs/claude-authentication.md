@@ -82,6 +82,11 @@ managed deny/exact rules, alias pins, provider IDs, model overrides and disablin
 Policy changes therefore prevent reuse of an old provider catalog. The Default
 option remains the CLI's responsibility; the picker does not assert its model.
 
+Windows policy reads in `claude_model_policy_registry_windows.go` use the registry
+API with read-only access. Missing keys or values are recognized by error code,
+independent of Windows display language; access failures remain unresolved policy.
+Discovery does not invoke `reg query`.
+
 Discovery never executes `policyHelper` or fetches remote policy. Dynamic,
 unreadable or ambiguous policy withholds named choices with a warning. Cached
 remote policy and organization entitlements may lag server changes; built-in

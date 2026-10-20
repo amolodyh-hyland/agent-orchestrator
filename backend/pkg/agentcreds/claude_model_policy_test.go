@@ -2,7 +2,10 @@ package agentcreds
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -142,51 +145,86 @@ func TestClaudeOSModelPolicyReaders(t *testing.T) {
 	})
 	t.Run("Windows machine policy", func(t *testing.T) {
 		calls := 0
-		doc := readClaudeOSPolicy(context.Background(), ResolveOptions{GOOS: "windows", Runner: func(_ context.Context, name string, args ...string) ([]byte, error) {
+		doc := readClaudeOSPolicy(context.Background(), ResolveOptions{GOOS: "windows"}, func(_ context.Context, hive string) (claudeRegistryValue, error) {
 			calls++
-			if name != "reg" || args[1] != `HKLM\SOFTWARE\Policies\ClaudeCode` {
-				t.Fatal("unexpected registry command")
+			if hive != "HKLM" {
+				t.Fatal("unexpected registry hive")
 			}
-			return []byte(`Settings    REG_SZ    {"availableModels":["sonnet"]}`), nil
-		}})
+			return claudeRegistryValue{data: []byte(`{"availableModels":["sonnet"]}`)}, nil
+		})
 		if doc.broken || doc.userFallback || !doc.present() || calls != 1 {
 			t.Fatal("machine registry policy not recognized")
 		}
 	})
 	t.Run("Windows user policy fallback", func(t *testing.T) {
 		calls := 0
-		doc := readClaudeOSPolicy(context.Background(), ResolveOptions{GOOS: "windows", Runner: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		doc := readClaudeOSPolicy(context.Background(), ResolveOptions{GOOS: "windows"}, func(_ context.Context, hive string) (claudeRegistryValue, error) {
 			calls++
-			if args[1] == `HKLM\SOFTWARE\Policies\ClaudeCode` {
-				return nil, os.ErrNotExist
+			if hive == "HKLM" {
+				return claudeRegistryValue{}, os.ErrNotExist
 			}
-			return []byte(`Settings    REG_EXPAND_SZ    {"availableModels":[]}`), nil
-		}})
+			return claudeRegistryValue{data: []byte(`{"availableModels":[]}`), expandable: true}, nil
+		})
 		if doc.broken || !doc.userFallback || !doc.present() || calls != 2 {
 			t.Fatal("user registry policy fallback not recognized")
 		}
 	})
 	t.Run("Windows empty machine document permits user fallback", func(t *testing.T) {
 		calls := 0
-		doc := readClaudeOSPolicy(context.Background(), ResolveOptions{GOOS: "windows", Runner: func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		doc := readClaudeOSPolicy(context.Background(), ResolveOptions{GOOS: "windows"}, func(_ context.Context, _ string) (claudeRegistryValue, error) {
 			calls++
 			if calls == 1 {
-				return []byte(`Settings REG_SZ {}`), nil
+				return claudeRegistryValue{data: []byte(`{}`)}, nil
 			}
-			return []byte(`Settings REG_SZ {"availableModels":["sonnet"]}`), nil
-		}})
+			return claudeRegistryValue{data: []byte(`{"availableModels":["sonnet"]}`)}, nil
+		})
 		if doc.broken || !doc.userFallback || calls != 2 {
 			t.Fatal("empty machine settings incorrectly masked the user policy")
 		}
 	})
 	t.Run("Windows dynamic expansion withholds models", func(t *testing.T) {
-		doc := readClaudeOSPolicy(context.Background(), ResolveOptions{GOOS: "windows", Runner: func(_ context.Context, _ string, _ ...string) ([]byte, error) {
-			return []byte(`Settings REG_EXPAND_SZ {"deniedModels":["%MODEL%"]}`), nil
-		}})
+		doc := readClaudeOSPolicy(context.Background(), ResolveOptions{GOOS: "windows"}, func(_ context.Context, _ string) (claudeRegistryValue, error) {
+			return claudeRegistryValue{data: []byte(`{"deniedModels":["%MODEL%"]}`), expandable: true}, nil
+		})
 		if !doc.broken {
 			t.Fatal("unresolved expanded restriction could offer a blocked model")
 		}
 	})
+}
+
+func TestClaudeRegistryLocalizedCommandFailure(t *testing.T) {
+	const helperEnv = "AO_TEST_REGISTRY_LOCALIZED_FAILURE"
+	if os.Getenv(helperEnv) == "1" {
+		_, _ = fmt.Fprintln(os.Stderr, "FEHLER: Der angegebene Registrierungsschlüssel bzw. Wert wurde nicht gefunden.")
+		os.Exit(1)
+	}
+	// Produce a real ExitError with a process state, as reg.exe returns for both
+	// missing keys and access failures. No registry command is executed.
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestClaudeRegistryLocalizedCommandFailure$")
+	cmd.Env = append(os.Environ(), helperEnv+"=1")
+	output, err := cmd.CombinedOutput()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 || len(output) == 0 {
+		t.Fatal("localized command failure fixture did not exit 1")
+	}
+	commandCalls, registryCalls := 0, 0
+	opts := ResolveOptions{GOOS: "windows", Runner: func(context.Context, string, ...string) ([]byte, error) {
+		commandCalls++
+		return output, exitErr
+	}}
+	doc := readClaudeOSPolicy(t.Context(), opts, func(context.Context, string) (claudeRegistryValue, error) {
+		registryCalls++
+		return claudeRegistryValue{}, os.ErrNotExist // native API normalizes ERROR_FILE_NOT_FOUND
+	})
+	if doc.broken || doc.present() || registryCalls != 2 || commandCalls != 0 {
+		t.Fatal("unmanaged Windows policy depended on localized reg.exe output")
+	}
+	doc = readClaudeOSPolicy(t.Context(), opts, func(context.Context, string) (claudeRegistryValue, error) {
+		return claudeRegistryValue{}, os.ErrPermission
+	})
+	if !doc.broken {
+		t.Fatal("registry access failure was mistaken for missing policy")
+	}
 }
 
 func TestClaudeModelPolicyExplicitAliasEnvironmentWins(t *testing.T) {
