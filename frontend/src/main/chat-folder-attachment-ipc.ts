@@ -63,6 +63,9 @@ export async function validateChatFolderAttachment(
 		return { error: fileSystemError(cause) };
 	}
 
+	// Message text is re-parsed line by line, so a trailing blank would not survive a re-send.
+	if (/\s$/.test(canonicalPath)) return { error: "trailing_whitespace" };
+
 	return {
 		path: canonicalPath,
 		name: path.basename(canonicalPath) || canonicalPath,

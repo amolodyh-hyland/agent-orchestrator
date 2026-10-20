@@ -21,7 +21,7 @@ export function stagedAttachmentParts(text: string): { body: string; attachments
 	if (!match?.[1]) return { body: text, attachments: [] };
 
 	const attachments = match[1]
-		.trimEnd()
+		.replace(/\n$/, "")
 		.split("\n")
 		.map((line) => line.slice(2));
 	// Reinterpret only AO-staged files and validated absolute folder references. A

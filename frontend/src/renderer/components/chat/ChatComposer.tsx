@@ -170,6 +170,7 @@ const FOLDER_ATTACHMENT_ERROR_KEYS: Record<ChatFolderAttachmentError, string> = 
 	not_directory: "chat.composer.folderNotDirectory",
 	not_readable: "chat.composer.folderNotReadable",
 	symbolic_link: "chat.composer.folderSymbolicLink",
+	trailing_whitespace: "chat.composer.folderTrailingWhitespace",
 };
 
 /**
@@ -1747,7 +1748,7 @@ export const ChatComposer = memo(function ChatComposer({
 	}
 
 	async function attachFolder() {
-		if (!onChooseFolder || disabled || submitInFlight.current || draftMutationPending || fileAttachments.preparing) return;
+		if (!onChooseFolder || remoteHost || disabled || submitInFlight.current || draftMutationPending || fileAttachments.preparing) return;
 		setFolderAttachmentError(null);
 		try {
 			const selection = await onChooseFolder();
@@ -2146,6 +2147,7 @@ export const ChatComposer = memo(function ChatComposer({
 									disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
 									onAttachFile={() => filePicker.current?.click()}
 									onAttachFolder={() => void attachFolder()}
+									folderDisabled={remoteHost}
 								/>
 							</>
 						) : null}

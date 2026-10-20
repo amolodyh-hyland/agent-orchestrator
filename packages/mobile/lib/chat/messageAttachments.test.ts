@@ -35,6 +35,11 @@ describe("mobile Chat staged attachments", () => {
 		});
 	});
 
+	it("keeps trailing whitespace in folder paths", () => {
+		const path = "/Users/me/Project ";
+		expect(stagedAttachmentParts(`Look\n\nAttached files (read these files in the workspace):\n- ${path}`).attachments).toEqual([path]);
+	});
+
 	it("renders absolute folder references as folders, not image paths", () => {
 		const path = "/Users/me/Project Files/folder.png";
 		const text = `Inspect this\n\nAttached files (read these files in the workspace):\n- ${path}`;

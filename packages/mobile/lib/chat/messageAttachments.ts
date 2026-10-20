@@ -15,7 +15,7 @@ export function isFolderAttachmentPath(path: string): boolean {
 export function stagedAttachmentParts(text: string): { body: string; attachments: string[] } {
 	const match = ATTACHMENT_REFERENCE_BLOCK.exec(text);
 	if (!match?.[1]) return { body: text, attachments: [] };
-	const attachments = match[1].trimEnd().split("\n").map((line) => line.slice(2));
+	const attachments = match[1].replace(/\n$/, "").split("\n").map((line) => line.slice(2));
 	// Only reinterpret AO-staged files and absolute folder references: prose quoting
 	// the same wording about ordinary project paths must stay readable text.
 	if (attachments.some((path) => !STAGED_ATTACHMENT_PATH.test(path) && !isFolderAttachmentPath(path))) return { body: text, attachments: [] };

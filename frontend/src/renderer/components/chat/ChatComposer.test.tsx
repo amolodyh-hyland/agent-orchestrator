@@ -2200,13 +2200,11 @@ describe("attachments", () => {
 			draftSessionId: sessionId,
 			onStageAttachments: vi.fn(),
 			onChooseFolder: chooseFolder,
-			remoteHost: true,
 		});
 		await userEvent.click(screen.getByRole("button", { name: "Add attachment" }));
 		await userEvent.click(screen.getByRole("menuitem", { name: "Attach folder" }));
 		const remove = await screen.findByRole("button", { name: "Remove Project Files" });
 		expect(remove.closest("li")?.querySelector(".lucide-folder")).not.toBeNull();
-		expect(screen.getByText("On dev-mac")).toBeInTheDocument();
 		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.attachments).toMatchObject([
 			{ path, name: "Project Files", kind: "folder", machineName: "dev-mac", bytes: 0 },
 		]));
@@ -2215,6 +2213,18 @@ describe("attachments", () => {
 		await waitFor(() => expect(onSend.mock.calls.at(-1)?.[0]).toBe(
 			`Please inspect this folder\n\nAttached files (read these files in the workspace):\n- ${path}`,
 		));
+	});
+
+	it("disables Attach folder for remote sessions with an explanation", async () => {
+		const chooseFolder = vi.fn().mockResolvedValue({ path: "/Users/me/Project", name: "Project", machineName: "dev-mac" });
+		renderComposer({ onStageAttachments: vi.fn(), onChooseFolder: chooseFolder, remoteHost: true });
+		await userEvent.click(screen.getByRole("button", { name: "Add attachment" }));
+		const item = await screen.findByRole("menuitem", { name: "Attach folder" });
+		expect(item).toHaveAttribute("aria-disabled", "true");
+		expect(item.parentElement).toHaveAttribute("title", "Attaching folders isn't available for remote sessions yet.");
+		await userEvent.click(item);
+		expect(chooseFolder).not.toHaveBeenCalled();
+		expect(screen.getByRole("menuitem", { name: "Attach file" })).not.toHaveAttribute("aria-disabled", "true");
 	});
 
 	it("shows a translated validation error returned by the folder picker", async () => {

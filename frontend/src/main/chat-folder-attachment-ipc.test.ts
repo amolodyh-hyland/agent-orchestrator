@@ -58,6 +58,36 @@ describe("validateChatFolderAttachment", () => {
 	});
 });
 
+describe("validateChatFolderAttachment canonical target", () => {
+	const linkedFileSystem = (overrides: Partial<ChatFolderAttachmentFileSystem>) => fileSystem({
+		realpath: vi.fn(async () => "/Users/me/real"),
+		lstat: vi.fn(async (folderPath: string) => folderPath === "/Users/me/picked" ? directoryStats() : directoryStats(false)),
+		...overrides,
+	});
+
+	it("revalidates the canonical target instead of trusting the picked path", async () => {
+		await expect(validateChatFolderAttachment("/Users/me/picked", linkedFileSystem({}))).resolves.toEqual({ error: "not_directory" });
+		await expect(validateChatFolderAttachment("/Users/me/picked", linkedFileSystem({
+			lstat: vi.fn(async (folderPath: string) => folderPath === "/Users/me/picked" ? directoryStats() : directoryStats(false, true)),
+		}))).resolves.toEqual({ error: "symbolic_link" });
+	});
+
+	it("checks readability on the canonical target", async () => {
+		const access = vi.fn(async (folderPath: string) => {
+			if (folderPath === "/Users/me/real") throw Object.assign(new Error("denied"), { code: "EACCES" });
+		});
+		await expect(validateChatFolderAttachment("/Users/me/picked", fileSystem({
+			realpath: vi.fn(async () => "/Users/me/real"),
+			access,
+		}))).resolves.toEqual({ error: "not_readable" });
+		expect(access).toHaveBeenCalledWith("/Users/me/real", expect.any(Number));
+	});
+
+	it("rejects folders whose path ends in whitespace", async () => {
+		await expect(validateChatFolderAttachment("/Users/me/Project ", fileSystem())).resolves.toEqual({ error: "trailing_whitespace" });
+	});
+});
+
 describe("registerChatFolderAttachmentIpc", () => {
 	it("opens one folder and returns a validated selection", async () => {
 		const { registered, ipcMain } = handlers();

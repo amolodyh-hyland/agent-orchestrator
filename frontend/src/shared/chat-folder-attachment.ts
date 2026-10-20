@@ -5,7 +5,8 @@ export type ChatFolderAttachmentError =
 	| "not_found"
 	| "not_directory"
 	| "not_readable"
-	| "symbolic_link";
+	| "symbolic_link"
+	| "trailing_whitespace";
 
 export type ChatFolderAttachmentSelection = {
 	path: string;

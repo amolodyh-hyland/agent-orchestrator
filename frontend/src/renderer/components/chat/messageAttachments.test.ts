@@ -5,6 +5,11 @@ const a = ".ao/attachments/attachment-a.png";
 const b = ".ao/attachments/attachment-b.png";
 
 describe("folder attachment references", () => {
+	it("keeps trailing whitespace in folder paths", () => {
+		const path = "/Users/me/Project ";
+		expect(stagedAttachmentParts(`Look\n\nAttached files (read these files in the workspace):\n- ${path}`).attachments).toEqual([path]);
+	});
+
 	it("parses absolute folder references from the existing attachment suffix", () => {
 		const path = "/Users/me/Project Files";
 		const text = `Inspect this\n\nAttached files (read these files in the workspace):\n- ${path}`;
