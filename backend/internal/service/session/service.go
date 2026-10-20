@@ -1286,6 +1286,23 @@ func (s *Service) GetRecord(ctx context.Context, id domain.SessionID) (domain.Se
 	return rec, nil
 }
 
+func (s *Service) ProjectContext(ctx context.Context, id domain.SessionID) (*domain.ProjectContextManifest, error) {
+	if _, err := s.GetRecord(ctx, id); err != nil {
+		return nil, err
+	}
+	reader, ok := s.store.(interface {
+		GetProjectContextSnapshot(context.Context, domain.SessionID) (domain.ProjectContextManifest, bool, error)
+	})
+	if !ok {
+		return nil, nil
+	}
+	manifest, found, err := reader.GetProjectContextSnapshot(ctx, id)
+	if err != nil || !found {
+		return nil, err
+	}
+	return &manifest, nil
+}
+
 // Get returns one session as an enriched display model, or an apierr.NotFound
 // (SESSION_NOT_FOUND) if it is absent.
 func (s *Service) Get(ctx context.Context, id domain.SessionID) (domain.Session, error) {

@@ -12,6 +12,7 @@ export const aoBridge: AoBridge =
 	({
 		app: {
 			getVersion: async () => "0.0.0-preview",
+			chooseProjectContextLink: async () => null,
 			chooseDirectory: async () => null,
 			checkGitRepository: async () => true,
 			openExternal: async (url: string) => {

@@ -9853,6 +9853,45 @@ paths:
         preview
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/project-context:
+    get:
+      operationId: getSessionProjectContext
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectContextResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read the immutable context pinned when the session started
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/renders:
     post:
       operationId: publishSessionRender
@@ -17802,6 +17841,82 @@ components:
       - position
       - enabled
       type: object
+    ProjectContextManifest:
+      properties:
+        attachments:
+          items:
+            $ref: '#/components/schemas/ProjectContextManifestEntry'
+          type: array
+        channel:
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        digest:
+          type: string
+        issueTask:
+          type: boolean
+        projectId:
+          type: string
+        projectRevision:
+          format: int64
+          type: integer
+        role:
+          $ref: '#/components/schemas/ProjectContextRole'
+        roleInstructions:
+          type: string
+        roleRules:
+          type: string
+        sessionId:
+          type: string
+        sharedInstructions:
+          type: string
+      required:
+      - sessionId
+      - projectRevision
+      - role
+      - channel
+      - issueTask
+      - createdAt
+      - digest
+      type: object
+    ProjectContextManifestEntry:
+      properties:
+        availability:
+          enum:
+          - available
+          - reference_only
+          - unavailable
+          type: string
+        binding:
+          $ref: '#/components/schemas/ProjectContextAttachment'
+        byteCount:
+          format: int64
+          type: integer
+        content:
+          type: string
+        reason:
+          type: string
+        snapshotRef:
+          type: string
+        sourceDigest:
+          type: string
+      required:
+      - binding
+      - byteCount
+      - availability
+      - snapshotRef
+      type: object
+    ProjectContextResponse:
+      properties:
+        manifest:
+          anyOf:
+          - type: "null"
+          - $ref: '#/components/schemas/ProjectContextManifest'
+            type: object
+      required:
+      - manifest
+      type: object
     ProjectContextRole:
       enum:
       - shared
@@ -20765,6 +20880,11 @@ components:
           maxLength: 100
           minLength: 1
           type: string
+        expectedRevision:
+          minimum: 1
+          type:
+          - "null"
+          - integer
         instructions:
           $ref: '#/components/schemas/ProjectInstructions'
       required:

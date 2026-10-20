@@ -1,3 +1,4 @@
+import { SessionProjectContext } from "./SessionProjectContext";
 import { File, FileText, FolderClosed, MessageSquare } from "lucide-react";
 import { AppLink } from "./AppLink";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -433,6 +434,7 @@ const SummaryView = memo(function SummaryView({
 			activity={
 				<>
 					<ActivityTimeline hostId={hostId} prs={prSummaries} session={session} />
+					{!session.cloud && session.workspaceId !== STANDALONE_WORKSPACE_ID && <SessionProjectContext key={`${hostId}:${session.id}`} hostId={hostId} sessionId={session.id} />}
 					{hostId || !accountsPreview ? null : <SessionAccountSummary session={session} />}
 					<ResumeAgentControl
 						className="w-full"

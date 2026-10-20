@@ -344,6 +344,26 @@ func (m *Manager) resolveProjectContextAttachment(ctx context.Context, project d
 		if local.MediaType != "" && !sameMediaType(binding.MediaType, local.MediaType) {
 			return unavailableOrError(entry, binding, "media_type_mismatch")
 		}
+		if sameMediaType(binding.MediaType, "inode/directory") {
+			if !filepath.IsAbs(local.RootPath) || !validProjectContextRelativePath(local.RelativePath) {
+				return unavailableOrError(entry, binding, "denied")
+			}
+			root, err := os.OpenRoot(local.RootPath)
+			if err != nil {
+				return unavailableOrError(entry, binding, contextReason(err))
+			}
+			info, statErr := root.Stat(filepath.FromSlash(local.RelativePath))
+			_ = root.Close()
+			if statErr != nil {
+				return unavailableOrError(entry, binding, contextReason(statErr))
+			}
+			if !info.IsDir() {
+				return unavailableOrError(entry, binding, "not_directory")
+			}
+			entry.Availability = domain.ProjectContextReferenceOnly
+			entry.Reason = "directory_reference"
+			return entry, 0, nil
+		}
 		var file *os.File
 		var errOpen error
 		limit := int64(1<<63 - 1)

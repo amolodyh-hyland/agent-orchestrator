@@ -3637,3 +3637,7 @@ type SwitchSessionAgentAccountRequest struct {
 	// account's limit. Otherwise the move waits for the turn to finish.
 	StopTurn bool `json:"stopTurn,omitempty"`
 }
+
+type ProjectContextResponse struct {
+	Manifest *domain.ProjectContextManifest `json:"manifest"`
+}

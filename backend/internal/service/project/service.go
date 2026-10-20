@@ -844,6 +844,9 @@ func (m *Service) UpdateSettings(ctx context.Context, id domain.ProjectID, in Up
 	if !ok || !row.ArchivedAt.IsZero() {
 		return Project{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
 	}
+	if in.ExpectedRevision != nil && *in.ExpectedRevision != normalizedProjectRevision(row.Revision) {
+		return Project{}, apierr.Conflict("PROJECT_REVISION_CONFLICT", "The project changed since it was read; reload and merge your changes", nil)
+	}
 	if in.Instructions != nil {
 		if err := in.Instructions.Validate(); err != nil {
 			return Project{}, apierr.Invalid("INVALID_PROJECT_INSTRUCTIONS", err.Error(), nil)

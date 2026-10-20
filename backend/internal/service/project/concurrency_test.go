@@ -139,3 +139,19 @@ func TestAddReactivatedArchivedProjectKeepsInstructionsAndAdvancesRevision(t *te
 		t.Fatalf("re-added revision = %d, want 4", readded.Revision)
 	}
 }
+
+func TestUpdateSettingsRejectsClientRevisionBeforeRegisteringSources(t *testing.T) {
+	manager, racing, created := newRacingContainer(t)
+	commitInstructions(t, racing.Store, created.ID, "current")
+	staleRevision := int64(1)
+	stale := domain.ProjectInstructions{Shared: "stale"}
+	_, err := manager.UpdateSettings(context.Background(), created.ID, project.UpdateSettingsInput{DisplayName: "Planning", Instructions: &stale, ExpectedRevision: &staleRevision})
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "PROJECT_REVISION_CONFLICT" {
+		t.Fatalf("stale client revision = %v, want conflict", err)
+	}
+	current, err := manager.Get(context.Background(), created.ID)
+	if err != nil || current.Project.Instructions.Shared != "current" || current.Project.Revision != 2 {
+		t.Fatalf("current Project = %#v, %v", current, err)
+	}
+}

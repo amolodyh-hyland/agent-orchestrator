@@ -564,3 +564,46 @@ func TestProjectContextProjectOwnedSourceCannotClaimAnotherProjectsOwner(t *test
 		t.Fatalf("spoofed owner entry = %#v, want unavailable/owner_mismatch", entry)
 	}
 }
+
+func TestProjectContextDirectoryLinksAreReferencesOnlyAndMachineBound(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "notes"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "notes", "secret.txt"), []byte("do not read directory contents"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	binding := domain.ProjectContextAttachment{ID: "notes", SourceKind: domain.ProjectContextMachineLocalFile, SourceRef: "folder-ref", MachineID: "machine-a", MediaType: "inode/directory", Required: true, Enabled: true, Roles: []domain.ProjectContextRole{domain.ProjectContextRoleShared}}
+	manager := newProjectContextManager()
+	manager.SetProjectContextMachineID("machine-a")
+	store := &projectContextTestStore{sources: map[string]domain.ProjectContextLocalSourceRecord{"folder-ref": {SourceRef: "folder-ref", MachineID: "machine-a", RootPath: root, RelativePath: "notes", MediaType: "inode/directory", OwnerKind: domain.ProjectContextOwnerProject, OwnerID: "p"}}}
+	manager.store = store
+	project := domain.ProjectRecord{ID: "p"}
+	entry, size, err := manager.resolveProjectContextAttachment(context.Background(), project, domain.ProjectContextRoleWorker, "p-1", binding)
+	if err != nil || entry.Availability != domain.ProjectContextReferenceOnly || entry.Content != "" || size != 0 || entry.SourceDigest != "" {
+		t.Fatalf("directory entry = %#v, %d, %v", entry, size, err)
+	}
+	manager.SetProjectContextMachineID("machine-b")
+	if _, _, err := manager.resolveProjectContextAttachment(context.Background(), project, domain.ProjectContextRoleWorker, "p-1", binding); err == nil {
+		t.Fatal("another machine resolved the directory")
+	}
+	manager.SetProjectContextMachineID("machine-a")
+	if err := os.RemoveAll(filepath.Join(root, "notes")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := manager.resolveProjectContextAttachment(context.Background(), project, domain.ProjectContextRoleWorker, "p-1", binding); err == nil {
+		t.Fatal("missing required directory did not block")
+	}
+	binding.Required = false
+	entry, _, err = manager.resolveProjectContextAttachment(context.Background(), project, domain.ProjectContextRoleWorker, "p-1", binding)
+	if err != nil || entry.Availability != domain.ProjectContextUnavailable || entry.Reason != "missing" {
+		t.Fatalf("missing optional directory = %#v, %v", entry, err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(root, "notes")); err != nil {
+		t.Skip(err)
+	}
+	entry, _, err = manager.resolveProjectContextAttachment(context.Background(), project, domain.ProjectContextRoleWorker, "p-1", binding)
+	if err != nil || entry.Availability != domain.ProjectContextUnavailable {
+		t.Fatalf("escaping symlink = %#v, %v", entry, err)
+	}
+}

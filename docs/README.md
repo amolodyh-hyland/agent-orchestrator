@@ -8,6 +8,9 @@ state, terminal streaming, and CDC/event infrastructure.
 Start with [architecture.md](architecture.md) for the current backend model and
 [cli/README.md](cli/README.md) for the CLI surface.
 
+See [project-context.md](project-context.md) for repository-free Projects, local
+context links, revision conflicts, and pinned session context.
+
 ## Reference docs
 
 [Claude Code authentication](claude-authentication.md) covers native login status, enterprise credentials, provider model listing and the labelled alias fallback.

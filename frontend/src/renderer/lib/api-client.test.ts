@@ -512,3 +512,32 @@ describe("apiErrorDetails", () => {
 		},
 	);
 });
+
+describe("Project context API contracts", () => {
+	afterEach(() => { vi.restoreAllMocks(); setApiBaseUrl(null); });
+	it("creates a project without execution resources and preserves CAS on context updates", async () => {
+		setApiBaseUrl("http://127.0.0.1:43001");
+		const requests: Request[] = [];
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+			const request = new Request(input, init);
+			requests.push(request);
+			return new Response(JSON.stringify(request.method === "PUT" ? { error: "conflict", code: "PROJECT_REVISION_CONFLICT", message: "Reload and merge", requestId: "req-cas" } : { project: { id: "research", kind: "scratch", revision: 1 } }), { status: request.method === "PUT" ? 409 : 201, headers: { "Content-Type": "application/json" } });
+		});
+		await apiClient.POST("/api/v1/projects/containers", { body: { displayName: "Research" } });
+		const result = await apiClient.PUT("/api/v1/projects/{id}", { params: { path: { id: "research" } }, body: { displayName: "Research", config: {}, expectedRevision: 1, instructions: { shared: "New instructions" } } });
+		expect(await requests[0].json()).toEqual({ displayName: "Research" });
+		expect(await requests[1].json()).toMatchObject({ expectedRevision: 1, instructions: { shared: "New instructions" } });
+		expect(result.response.status).toBe(409);
+		expect(apiErrorDetails(result.error)).toBeUndefined();
+		expect(apiErrorMessage(result.error)).toContain("Reload and merge");
+	});
+	it("reads only the pinned session manifest on the selected daemon", async () => {
+		setApiBaseUrl("http://127.0.0.1:43001");
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ manifest: { projectRevision: 3, digest: "pinned" } }), { headers: { "Content-Type": "application/json" } }));
+		const { data } = await apiClient.GET("/api/v1/sessions/{sessionId}/project-context", { params: { path: { sessionId: "research-1" } } });
+		expect(data?.manifest?.digest).toBe("pinned");
+		expect(String(fetchMock.mock.calls[0][0] instanceof Request ? fetchMock.mock.calls[0][0].url : fetchMock.mock.calls[0][0])).toBe("http://127.0.0.1:43001/api/v1/sessions/research-1/project-context");
+		expect(normalizeApiOperation("POST", "/api/v1/projects/containers")).toBe("POST /api/v1/projects/containers");
+		expect(normalizeApiOperation("GET", "/api/v1/sessions/research-1/project-context")).toBe("GET /api/v1/sessions/:id/project-context");
+	});
+});

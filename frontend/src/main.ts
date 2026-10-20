@@ -1,3 +1,4 @@
+import { registerProjectContextIpc } from "./main/project-context-ipc";
 import { syncMacWindowButtons } from "./main/window-chrome";
 import { MAC_TITLEBAR_HEIGHT, MAC_WINDOW_BUTTON_X, MAC_WINDOW_BUTTON_RADIUS } from "./shared/window-chrome";
 import { finishUpdateQuit } from "./main/update-quit";
@@ -3027,6 +3028,11 @@ registerRemotesIpc(ipcMain, {
 		? { port: daemonStatus.port, pid: daemonStatus.pid, generation: daemonAttachmentGeneration }
 		: null),
 });
+
+registerProjectContextIpc({ ipcMain, dialog, isTrustedSender: (id) => {
+	const sender = trustedShellWebContents.get(id);
+	return !!sender && !sender.isDestroyed();
+} });
 
 ipcMain.handle("app:chooseDirectory", async (_event, input?: string | { title?: string; defaultPath?: string }) => {
 	const title = typeof input === "string"

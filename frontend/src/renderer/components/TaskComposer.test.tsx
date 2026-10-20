@@ -153,6 +153,26 @@ afterEach(() => {
 });
 
 describe("TaskComposer", () => {
+	it("starts a chat task for a repository-free Project and visibly reports missing required context", async () => {
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/settings") return { data: { defaultSessionMode: "chat", chatHarnesses: ["codex"] } };
+			if (path.includes("/models")) return { data: { agent: "codex", selectionMode: "text", models: [], allowCustom: true } };
+			return { data: { status: "ok", project: { id: "research", kind: "scratch", path: "", repo: "", agent: "codex", config: {} } } };
+		});
+		h.post.mockImplementation(async (path: string) => path === "/api/v1/projects/{id}/tasks/prepare" ? { data: { taskPreparation: "" } } : { error: { code: "PROJECT_CONTEXT_UNAVAILABLE", message: 'Required Project context "notes" is unavailable: missing', details: { bindingId: "notes", reason: "missing" } } });
+		const created = vi.fn();
+		render(<Wrap><TaskComposer projectId="research" onCreated={created} /></Wrap>);
+		fireEvent.change(task(), { target: { value: "Compare the selected research notes" } });
+		await waitForTaskReady();
+		fireEvent.click(startTask());
+		await screen.findByText('Required Project context "notes" is unavailable: missing');
+		expect(created).not.toHaveBeenCalled();
+		expect(h.post.mock.calls.find(([path]) => path === "/api/v1/orchestrators/delegate")![1].body).toMatchObject({ projectId: "research", brief: "Compare the selected research notes" });
+		h.post.mockImplementation(async (path: string) => path === "/api/v1/projects/{id}/tasks/prepare" ? { data: { taskPreparation: "" } } : { data: { workerId: "research-1" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(created).toHaveBeenCalled());
+	});
 	it("does not launch a remote project task without a ready agent", async () => {
 		h.agentCatalog = { agents: [] };
 		h.remoteGet.mockImplementation(async (path: string) => path === "/api/v1/settings"

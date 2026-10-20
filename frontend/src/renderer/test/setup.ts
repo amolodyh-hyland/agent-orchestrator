@@ -123,6 +123,7 @@ if (typeof window !== "undefined") {
 	window.ao = {
 		app: {
 			getVersion: async () => "0.0.0-test",
+			chooseProjectContextLink: async () => null,
 			chooseDirectory: async () => null,
 			checkGitRepository: async () => true,
 			openExternal: async () => undefined,

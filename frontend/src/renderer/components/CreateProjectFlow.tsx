@@ -1,3 +1,4 @@
+import { CreateContextProjectDialog } from "./CreateContextProjectDialog";
 import { AppLink } from "./AppLink";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
@@ -119,7 +120,7 @@ function GitHubIcon({ className }: { className?: string }) {
 }
 
 type CreateProjectFlowMode = ProjectKind | "choose";
-type ProjectSource = "clone" | "local" | "workspace";
+type ProjectSource = "clone" | "local" | "workspace" | "context";
 
 /** Where the new project should live: on this machine or in AO Cloud. */
 type ProjectOffering = "local" | "cloud";
@@ -195,6 +196,7 @@ export function CreateProjectFlow({
 	sourceSignal?: { source: ProjectSource | "cloud"; nonce: number } | null;
 }) {
 	const { t } = useTranslation();
+	const [contextProjectOpen, setContextProjectOpen] = useState(false);
 	const resolvedIdleLabel = idleLabel ?? t("createProject.newProject");
 	const [error, setError] = useState<string | null>(null);
 	const [activeView, dispatchView] = useReducer(createProjectViewReducer, initialOpen ? "source" : null);
@@ -295,6 +297,11 @@ export function CreateProjectFlow({
 		setError(null);
 		setValidationScan(null);
 		resetProjectImportState();
+		if (source === "context") {
+			setModePickerOpen(false);
+			setContextProjectOpen(true);
+			return;
+		}
 		if (source === "clone") {
 			setCloneDetails(initialCloneDetails(hostId));
 			setCloneSelection(null);
@@ -743,6 +750,7 @@ export function CreateProjectFlow({
 
 	return (
 		<>
+			{contextProjectOpen && <CreateContextProjectDialog onClose={() => setContextProjectOpen(false)} onCreated={(id) => { setContextProjectOpen(false); shell?.openProject?.(id); }} />}
 			{!embedded &&
 				children?.({
 					// Zero-arg wrapper: callers wire this directly to onClick, whose
@@ -2029,6 +2037,7 @@ function ImportSourcePicker({
 		onCreateStandaloneAgent?.();
 	};
 	const localSources: Array<{ source: ProjectSource; icon: ReactNode; label: string; description: string }> = [
+		...(!hostId ? [{ source: "context" as const, icon: <MessageSquarePlus className="size-5" aria-hidden="true" strokeWidth={1.8} />, label: t("projectContext.create"), description: t("projectContext.createDescription") }] : []),
 		{
 			source: "clone",
 			icon: <GitFork className="size-5" aria-hidden="true" strokeWidth={1.8} />,
