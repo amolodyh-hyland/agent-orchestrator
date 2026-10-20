@@ -240,3 +240,25 @@ func TestRejectedModesKeepsTheOrderTheyWereRefusedIn(t *testing.T) {
 		t.Fatalf("rejectedModes = %v, want %v", got, want)
 	}
 }
+
+func TestControllerReportsFirstAcceptedModeIndependentlyOfPreference(t *testing.T) {
+	mode := ports.PermissionModeAcceptEdits
+	controller := newController("s", domain.SessionConversationOwner("s"), domain.ConversationRecord{
+		Settings: domain.ConversationSettings{ApprovalMode: mode},
+	}, "gen", domain.HarnessClaudeCode, &fakeSender{}, nil, nil,
+		slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil)
+	var reported []ports.PermissionMode
+	controller.onPermissionsChanged = func(_ domain.SessionID, effective domain.PermissionMode) {
+		reported = append(reported, effective)
+	}
+	for range 2 {
+		if _, err := controller.sendTurn(context.Background(), ports.ChatUserMessage{
+			Text: "go", Settings: ports.ChatTurnSettings{Approval: mode},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if want := []ports.PermissionMode{mode}; !reflect.DeepEqual(reported, want) {
+		t.Fatalf("runtime reports=%v, want first accepted mode %v", reported, want)
+	}
+}

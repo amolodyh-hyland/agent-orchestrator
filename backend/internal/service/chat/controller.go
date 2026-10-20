@@ -214,10 +214,11 @@ type Controller struct {
 	// controller. The zero value leaves it on, so callers that never mention it
 	// get the default behavior.
 	permissionFallbackOff bool
-	// onPermissionsChanged reports the mode a turn actually ran with after the
-	// fallback lowered it, so the session record can show it.
-	onPermissionsChanged func(domain.SessionID, domain.PermissionMode)
-	effectivePermission  ports.PermissionMode
+	// onPermissionsChanged reports the mode the provider actually accepted, so
+	// the session record can show it independently of the requested preference.
+	onPermissionsChanged   func(domain.SessionID, domain.PermissionMode)
+	effectivePermission    ports.PermissionMode
+	hasEffectivePermission bool
 
 	// sendMu serializes command dispatch so only one operation mutates the
 	// provider conversation at a time.
@@ -399,7 +400,6 @@ func newController(
 		onCodexCapacityChanged: onCodexCapacityChanged,
 		state:                  ports.ChatControllerReady,
 		settings:               conversation.Settings,
-		effectivePermission:    conversation.Settings.ApprovalMode,
 		mcpServers:             map[string]domain.ConversationMCPServer{},
 		mcpServerSeenRevision:  map[string]uint64{},
 		stopped:                make(chan struct{}),
@@ -1897,8 +1897,9 @@ func (c *Controller) adoptEffectiveMode(ctx context.Context, requested, effectiv
 
 func (c *Controller) recordRuntimePermission(effective ports.PermissionMode) {
 	c.mu.Lock()
-	changed := c.effectivePermission != effective
+	changed := !c.hasEffectivePermission || c.effectivePermission != effective
 	c.effectivePermission = effective
+	c.hasEffectivePermission = true
 	c.mu.Unlock()
 	if changed && c.reviewID == "" && c.onPermissionsChanged != nil {
 		c.onPermissionsChanged(c.sessionID, effective)
