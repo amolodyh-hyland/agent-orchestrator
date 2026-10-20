@@ -19,6 +19,72 @@ export type ComposerMarkdownAnalysis = {
 	fences: ComposerCodeFence[];
 };
 
+export type ComposerMarkdownRangeCursor = {
+	splitOffsets(start: number, end: number): number[];
+	coveringRange(start: number, end: number): ComposerMarkdownCodeRange | undefined;
+	advanceTo(offset: number): void;
+};
+
+/**
+ * Maps sorted, disjoint code ranges onto text nodes in document order.
+ * Each query resumes at the first range that can still overlap its interval.
+ */
+export function createComposerMarkdownRangeCursor(
+	ranges: readonly ComposerMarkdownCodeRange[],
+): ComposerMarkdownRangeCursor {
+	let nextRange = 0;
+	const advanceTo = (offset: number) => {
+		while (nextRange < ranges.length) {
+			if (ranges[nextRange].end > offset) break;
+			nextRange += 1;
+		}
+	};
+
+	return {
+		splitOffsets: (start, end) => {
+			advanceTo(start);
+			const offsets = new Set<number>();
+			for (let index = nextRange; index < ranges.length; index += 1) {
+				const range = ranges[index];
+				if (range.start >= end) break;
+				if (range.start > start) offsets.add(range.start - start);
+				if (range.end > start && range.end < end) offsets.add(range.end - start);
+			}
+			return [...offsets];
+		},
+		coveringRange: (start, end) => {
+			advanceTo(start);
+			const range = ranges[nextRange];
+			return range && range.start <= start && range.end >= end ? range : undefined;
+		},
+		advanceTo,
+	};
+}
+
+function mergeRanges(
+	first: readonly ComposerMarkdownCodeRange[],
+	second: readonly ComposerMarkdownCodeRange[],
+): ComposerMarkdownCodeRange[] {
+	const merged: ComposerMarkdownCodeRange[] = [];
+	let firstIndex = 0;
+	let secondIndex = 0;
+	while (firstIndex < first.length || secondIndex < second.length) {
+		const left = first[firstIndex];
+		const right = second[secondIndex];
+		if (
+			left &&
+			(!right || left.start < right.start || (left.start === right.start && left.end <= right.end))
+		) {
+			merged.push(left);
+			firstIndex += 1;
+		} else if (right) {
+			merged.push(right);
+			secondIndex += 1;
+		}
+	}
+	return merged;
+}
+
 type MarkdownLine = {
 	start: number;
 	end: number;
@@ -116,7 +182,7 @@ export function parseComposerMarkdown(text: string): ComposerMarkdownAnalysis {
 			continue;
 		}
 
-		const opening = line.text.match(/^ {0,3}(`{3,})(.*)$/);
+		const opening = line.text.match(/^ {0,3}(`{3,})([^`]*)$/);
 		if (!opening) continue;
 		fencedLines.add(index);
 		activeFence = {
@@ -136,9 +202,7 @@ export function parseComposerMarkdown(text: string): ComposerMarkdownAnalysis {
 	const inlineCode = lines.flatMap((line, index) =>
 		fencedLines.has(index) ? [] : inlineCodeOnLine(line.text, line.start),
 	);
-	const codeRanges = [...fencedCode, ...inlineCode].sort(
-		(left, right) => left.start - right.start || left.end - right.end,
-	);
+	const codeRanges = mergeRanges(fencedCode, inlineCode);
 
 	return { codeRanges, inlineCode, fencedCode, fences };
 }

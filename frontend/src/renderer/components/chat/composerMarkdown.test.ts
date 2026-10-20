@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	createComposerMarkdownRangeCursor,
 	isComposerCodeFenceAt,
 	isComposerOpenCodeFenceAt,
 	parseComposerMarkdown,
@@ -11,6 +12,17 @@ describe("parseComposerMarkdown", () => {
 			{ start: 4, end: 11, kind: "inline" },
 		]);
 		expect(parseComposerMarkdown("run `value").codeRanges).toEqual([]);
+	});
+
+	it("keeps a same-line triple-backtick span inline instead of opening a fence", () => {
+		const text = "```inline```";
+		const analysis = parseComposerMarkdown(text);
+
+		expect(analysis.fencedCode).toEqual([]);
+		expect(analysis.inlineCode).toEqual([
+			{ start: 0, end: text.length, kind: "inline" },
+		]);
+		expect(isComposerOpenCodeFenceAt(text, text.length)).toBe(false);
 	});
 
 	it("matches equal backtick runs and ignores escaped delimiters", () => {
@@ -88,5 +100,36 @@ describe("parseComposerMarkdown", () => {
 		expect(isComposerOpenCodeFenceAt(text, text.indexOf("const"))).toBe(false);
 		expect(isComposerCodeFenceAt(text, closingFence)).toBe(false);
 		expect(isComposerCodeFenceAt(text, text.length)).toBe(false);
+	});
+
+	it("maps 10,000 inline spans with work bounded by the number of spans and text parts", () => {
+		const spanCount = 10_000;
+		const draft = "x`a`".repeat(spanCount);
+		let rangePropertyReads = 0;
+		const ranges = parseComposerMarkdown(draft).codeRanges.map((range) => new Proxy(range, {
+			get(target, property, receiver) {
+				if (property === "start" || property === "end") rangePropertyReads += 1;
+				return Reflect.get(target, property, receiver);
+			},
+		}));
+		const cursor = createComposerMarkdownRangeCursor(ranges);
+		const boundaries = [0, ...cursor.splitOffsets(0, draft.length), draft.length];
+		let mappedSpanCount = 0;
+		let textPartCount = 0;
+
+		for (let index = 0; index < boundaries.length - 1; index += 1) {
+			const start = boundaries[index];
+			const end = boundaries[index + 1];
+			if (cursor.coveringRange(start, end)) mappedSpanCount += 1;
+			textPartCount += 1;
+			cursor.advanceTo(end);
+		}
+
+		expect(draft.length).toBe(40_000);
+		expect(ranges).toHaveLength(spanCount);
+		expect(mappedSpanCount).toBe(spanCount);
+		expect(rangePropertyReads).toBeLessThanOrEqual(
+			8 * (ranges.length + textPartCount),
+		);
 	});
 });

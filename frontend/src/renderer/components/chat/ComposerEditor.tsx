@@ -51,7 +51,11 @@ import { Box, Image as ImageIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { composerFileIcon } from "./composerFileIcon";
-import { isComposerOpenCodeFenceAt, parseComposerMarkdown } from "./composerMarkdown";
+import {
+	createComposerMarkdownRangeCursor,
+	isComposerOpenCodeFenceAt,
+	parseComposerMarkdown,
+} from "./composerMarkdown";
 import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
 import { splitInlineImagePaths } from "./messageAttachments";
 
@@ -282,21 +286,15 @@ function $serializeComposer(): string {
 
 function $formatComposerMarkdown(): void {
 	const ranges = parseComposerMarkdown($serializeComposer()).codeRanges;
+	const rangeCursor = createComposerMarkdownRangeCursor(ranges);
 	const formatNode = (node: LexicalNode, start: number): number => {
 		if ($isTextNode(node)) {
 			const end = start + node.getTextContent().length;
-			const splitOffsets = new Set<number>();
-			for (const range of ranges) {
-				if (range.start > start && range.start < end) splitOffsets.add(range.start - start);
-				if (range.end > start && range.end < end) splitOffsets.add(range.end - start);
-			}
-			const parts = node.splitText(...splitOffsets);
+			const parts = node.splitText(...rangeCursor.splitOffsets(start, end));
 			let partStart = start;
 			for (const part of parts) {
 				const partEnd = partStart + part.getTextContent().length;
-				const range = ranges.find((candidate) =>
-					candidate.start <= partStart && candidate.end >= partEnd,
-				);
+				const range = rangeCursor.coveringRange(partStart, partEnd);
 				const shouldBeCode = Boolean(range);
 				if (part.hasFormat("code") !== shouldBeCode) part.toggleFormat("code");
 				const style = range?.kind === "fenced" ? COMPOSER_CODE_BLOCK_STYLE : "";
@@ -304,6 +302,7 @@ function $formatComposerMarkdown(): void {
 				else if (!style && part.getStyle() === COMPOSER_CODE_BLOCK_STYLE) part.setStyle("");
 				partStart = partEnd;
 			}
+			rangeCursor.advanceTo(end);
 			return end;
 		}
 

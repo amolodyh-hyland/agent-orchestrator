@@ -441,6 +441,7 @@ describe("send keys", () => {
 
 		await waitFor(() => expect(composerWireText(field)).toBe(markdown));
 		await waitFor(() => expect(field.querySelectorAll(".chat-composer-markdown-code").length).toBeGreaterThan(1));
+		expect(field.querySelector('code[data-lexical-text][style*="var(--card)"]')).not.toBeNull();
 		await userEvent.keyboard("{Enter}");
 		await waitFor(() => expect(onSend).toHaveBeenCalledWith(markdown));
 	});
