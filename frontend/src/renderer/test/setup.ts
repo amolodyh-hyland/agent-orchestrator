@@ -482,6 +482,9 @@ if (typeof window !== "undefined") {
 			},
 			onSessionChanged: () => () => undefined,
 		},
+		chatAttachment: {
+			chooseFolder: async () => null,
+		},
 		cloudCp: {
 			request: async () => ({ status: 401, headers: {}, body: "" }),
 			openStream: async () => ({ streamId: "stream_test" }),

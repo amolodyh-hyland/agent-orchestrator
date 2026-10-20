@@ -1811,7 +1811,7 @@ export const ChatComposer = memo(function ChatComposer({
 			? "chat.draft.filesUnavailable" : null) ??
 		commandError;
 	const visibleAttachmentError = folderAttachmentError
-		? t(folderAttachmentError)
+		? t(folderAttachmentError, { defaultValue: folderAttachmentError })
 		: translateDraft(attachmentError);
 	const withQueueStack = (form: ReactElement) =>
 		(
@@ -1931,7 +1931,7 @@ export const ChatComposer = memo(function ChatComposer({
 										)}
 										<span
 											className="max-w-[120px] truncate text-xs text-muted-foreground"
-											title={file.kind === "folder" ? file.stagedPath : file.name}
+											title={file.kind === "folder" ? path : file.name}
 										>
 											{file.name}
 										</span>
