@@ -80,33 +80,19 @@ func (s *Store) GetProjectContextSnapshot(ctx context.Context, id domain.Session
 // machine-only locator. RootPath and RelativePath are never returned in project
 // read models or manifests.
 func (s *Store) UpsertProjectContextLocalSource(ctx context.Context, source domain.ProjectContextLocalSourceRecord) error {
-	if !validLocalContextToken(source.SourceRef, domain.MaxProjectContextSourceReferenceBytes) || strings.TrimSpace(source.MachineID) == "" || len(source.MachineID) > domain.MaxProjectContextMachineIDBytes || !filepath.IsAbs(source.RootPath) || !validLocalContextRelativePath(source.RelativePath) {
-		return fmt.Errorf("project context local source has an invalid reference, machine id, or path")
-	}
-	if source.OwnerKind == "" {
-		source.OwnerKind = domain.ProjectContextOwnerUser
-	}
-	if source.OwnerKind != domain.ProjectContextOwnerUser && source.OwnerKind != domain.ProjectContextOwnerProject {
-		return fmt.Errorf("project context local source has an unsupported owner kind")
-	}
-	if len(source.OwnerID) > 128 || (source.OwnerKind == domain.ProjectContextOwnerUser && strings.TrimSpace(source.OwnerID) == "") {
-		return fmt.Errorf("project context local source has an invalid owner id")
-	}
-	if source.MediaType == "" || len(source.MediaType) > 128 {
-		return fmt.Errorf("project context local source requires a valid media type")
-	}
-	if _, _, err := mime.ParseMediaType(source.MediaType); err != nil {
-		return fmt.Errorf("project context local source has an invalid media type")
-	}
-	if source.RegisteredAt.IsZero() {
-		source.RegisteredAt = time.Now().UTC()
-	}
-	if source.UpdatedAt.IsZero() {
-		source.UpdatedAt = source.RegisteredAt
+	if err := validateProjectContextLocalSource(&source); err != nil {
+		return err
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	err := s.qw.UpsertProjectContextLocalSource(ctx, gen.UpsertProjectContextLocalSourceParams{
+	return upsertProjectContextLocalSource(ctx, s.qw, source)
+}
+
+// upsertProjectContextLocalSource writes one locator. The statement itself
+// refuses to replace a source_ref owned by someone else, so ownership is
+// enforced atomically with the write.
+func upsertProjectContextLocalSource(ctx context.Context, q *gen.Queries, source domain.ProjectContextLocalSourceRecord) error {
+	rows, err := q.UpsertProjectContextLocalSource(ctx, gen.UpsertProjectContextLocalSourceParams{
 		SourceRef:    source.SourceRef,
 		MachineID:    source.MachineID,
 		RootPath:     source.RootPath,
@@ -120,7 +106,107 @@ func (s *Store) UpsertProjectContextLocalSource(ctx context.Context, source doma
 	if err != nil {
 		return fmt.Errorf("upsert project context local source %s: %w", source.SourceRef, err)
 	}
+	if rows == 0 {
+		return fmt.Errorf("project context local source %s: %w", source.SourceRef, domain.ErrProjectContextSourceOwned)
+	}
 	return nil
+}
+
+// UpsertProjectWithContextSources creates a Project and registers its local
+// attachment sources in one transaction.
+func (s *Store) UpsertProjectWithContextSources(ctx context.Context, r domain.ProjectRecord, sources []domain.ProjectContextLocalSourceRecord) error {
+	config, err := marshalProjectConfig(r.Config)
+	if err != nil {
+		return err
+	}
+	instructions, err := marshalProjectInstructions(r.Instructions)
+	if err != nil {
+		return err
+	}
+	sources, err = normalizeProjectContextLocalSources(sources)
+	if err != nil {
+		return err
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "create project with context sources", func(q *gen.Queries) error {
+		if err := upsertProjectContextLocalSources(ctx, q, sources); err != nil {
+			return err
+		}
+		return upsertProject(ctx, q, r, config, instructions)
+	})
+}
+
+// UpdateProjectSettingsWithContextSources applies the settings update and
+// registers local attachment sources in one transaction. When the update does
+// not apply (missing project or stale revision) nothing is registered and it
+// reports false.
+func (s *Store) UpdateProjectSettingsWithContextSources(ctx context.Context, id, displayName string, config domain.ProjectConfig, instructions *domain.ProjectInstructions, expectedRevision int64, sources []domain.ProjectContextLocalSourceRecord) (bool, error) {
+	encodedConfig, err := marshalProjectConfig(config)
+	if err != nil {
+		return false, err
+	}
+	encodedInstructions := "{}"
+	var setInstructions int64
+	if instructions != nil {
+		setInstructions = 1
+		if encodedInstructions, err = marshalProjectInstructions(*instructions); err != nil {
+			return false, err
+		}
+	}
+	sources, err = normalizeProjectContextLocalSources(sources)
+	if err != nil {
+		return false, err
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	var applied bool
+	err = s.inTx(ctx, "update project settings with context sources", func(q *gen.Queries) error {
+		if err := upsertProjectContextLocalSources(ctx, q, sources); err != nil {
+			return err
+		}
+		rows, err := q.UpdateProjectSettings(ctx, gen.UpdateProjectSettingsParams{
+			DisplayName: displayName, Config: encodedConfig, SetInstructions: setInstructions,
+			InstructionsJson: encodedInstructions, ID: domain.ProjectID(id), ExpectedRevision: expectedRevision,
+		})
+		if err != nil {
+			return err
+		}
+		if rows == 0 {
+			return errProjectSettingsNotApplied
+		}
+		applied = true
+		return nil
+	})
+	if errors.Is(err, errProjectSettingsNotApplied) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return applied, nil
+}
+
+var errProjectSettingsNotApplied = errors.New("project settings update did not apply")
+
+func upsertProjectContextLocalSources(ctx context.Context, q *gen.Queries, sources []domain.ProjectContextLocalSourceRecord) error {
+	for _, source := range sources {
+		if err := upsertProjectContextLocalSource(ctx, q, source); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func normalizeProjectContextLocalSources(sources []domain.ProjectContextLocalSourceRecord) ([]domain.ProjectContextLocalSourceRecord, error) {
+	out := make([]domain.ProjectContextLocalSourceRecord, 0, len(sources))
+	for _, source := range sources {
+		if err := validateProjectContextLocalSource(&source); err != nil {
+			return nil, err
+		}
+		out = append(out, source)
+	}
+	return out, nil
 }
 
 // GetProjectContextLocalSource returns a locator only to the local resolver.
@@ -164,4 +250,32 @@ func validLocalContextToken(value string, max int) bool {
 		return false
 	}
 	return true
+}
+
+func validateProjectContextLocalSource(source *domain.ProjectContextLocalSourceRecord) error {
+	if !validLocalContextToken(source.SourceRef, domain.MaxProjectContextSourceReferenceBytes) || strings.TrimSpace(source.MachineID) == "" || len(source.MachineID) > domain.MaxProjectContextMachineIDBytes || !filepath.IsAbs(source.RootPath) || !validLocalContextRelativePath(source.RelativePath) {
+		return fmt.Errorf("project context local source has an invalid reference, machine id, or path")
+	}
+	if source.OwnerKind == "" {
+		source.OwnerKind = domain.ProjectContextOwnerUser
+	}
+	if source.OwnerKind != domain.ProjectContextOwnerUser && source.OwnerKind != domain.ProjectContextOwnerProject {
+		return fmt.Errorf("project context local source has an unsupported owner kind")
+	}
+	if len(source.OwnerID) > 128 || (source.OwnerKind == domain.ProjectContextOwnerUser && strings.TrimSpace(source.OwnerID) == "") {
+		return fmt.Errorf("project context local source has an invalid owner id")
+	}
+	if source.MediaType == "" || len(source.MediaType) > 128 {
+		return fmt.Errorf("project context local source requires a valid media type")
+	}
+	if _, _, err := mime.ParseMediaType(source.MediaType); err != nil {
+		return fmt.Errorf("project context local source has an invalid media type")
+	}
+	if source.RegisteredAt.IsZero() {
+		source.RegisteredAt = time.Now().UTC()
+	}
+	if source.UpdatedAt.IsZero() {
+		source.UpdatedAt = source.RegisteredAt
+	}
+	return nil
 }

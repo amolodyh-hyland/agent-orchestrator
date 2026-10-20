@@ -540,3 +540,27 @@ func TestProjectContextPreparedSpawnUsesEffectiveModeAndIssue(t *testing.T) {
 		}
 	})
 }
+
+func TestProjectContextProjectOwnedSourceCannotClaimAnotherProjectsOwner(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "b.md"), []byte("project b secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := newProjectContextManager()
+	manager.store = &projectContextTestStore{sources: map[string]domain.ProjectContextLocalSourceRecord{
+		"b-ref": {SourceRef: "b-ref", MachineID: "machine-a", RootPath: root, RelativePath: "b.md", MediaType: "text/markdown", OwnerKind: domain.ProjectContextOwnerProject, OwnerID: "project-b"},
+	}}
+	manager.SetProjectContextMachineID("machine-a")
+	binding := domain.ProjectContextAttachment{
+		ID: "spoof", SourceKind: domain.ProjectContextMachineLocalFile, SourceRef: "b-ref", MachineID: "machine-a",
+		OwnerKind: domain.ProjectContextOwnerProject, OwnerID: "project-b",
+		MediaType: "text/markdown", Roles: []domain.ProjectContextRole{domain.ProjectContextRoleShared}, Enabled: true,
+	}
+	entry, _, err := manager.resolveProjectContextAttachment(context.Background(), domain.ProjectRecord{ID: "project-a", Revision: 1}, domain.ProjectContextRoleWorker, "a-1", binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.Content != "" || entry.Availability != domain.ProjectContextUnavailable || entry.Reason != "owner_mismatch" {
+		t.Fatalf("spoofed owner entry = %#v, want unavailable/owner_mismatch", entry)
+	}
+}

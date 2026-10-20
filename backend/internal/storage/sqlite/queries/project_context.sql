@@ -8,7 +8,9 @@ SELECT session_id, project_id, project_revision, manifest_json, digest, created_
 FROM project_context_snapshots
 WHERE session_id = ?;
 
--- name: UpsertProjectContextLocalSource :exec
+-- name: UpsertProjectContextLocalSource :execrows
+-- A conflicting source_ref is updated only by its current owner; otherwise no
+-- row is affected.
 INSERT INTO project_context_local_sources (
     source_ref, machine_id, root_path, relative_path, media_type,
     owner_kind, owner_id, registered_at, updated_at
@@ -20,7 +22,9 @@ ON CONFLICT (source_ref) DO UPDATE SET
     media_type = excluded.media_type,
     owner_kind = excluded.owner_kind,
     owner_id = excluded.owner_id,
-    updated_at = excluded.updated_at;
+    updated_at = excluded.updated_at
+WHERE project_context_local_sources.owner_kind = excluded.owner_kind
+  AND project_context_local_sources.owner_id = excluded.owner_id;
 
 -- name: GetProjectContextLocalSource :one
 SELECT source_ref, machine_id, root_path, relative_path, media_type,

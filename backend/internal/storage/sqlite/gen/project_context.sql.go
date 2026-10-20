@@ -85,7 +85,7 @@ func (q *Queries) InsertProjectContextSnapshot(ctx context.Context, arg InsertPr
 	return result.RowsAffected()
 }
 
-const upsertProjectContextLocalSource = `-- name: UpsertProjectContextLocalSource :exec
+const upsertProjectContextLocalSource = `-- name: UpsertProjectContextLocalSource :execrows
 INSERT INTO project_context_local_sources (
     source_ref, machine_id, root_path, relative_path, media_type,
     owner_kind, owner_id, registered_at, updated_at
@@ -98,6 +98,8 @@ ON CONFLICT (source_ref) DO UPDATE SET
     owner_kind = excluded.owner_kind,
     owner_id = excluded.owner_id,
     updated_at = excluded.updated_at
+WHERE project_context_local_sources.owner_kind = excluded.owner_kind
+  AND project_context_local_sources.owner_id = excluded.owner_id
 `
 
 type UpsertProjectContextLocalSourceParams struct {
@@ -112,8 +114,10 @@ type UpsertProjectContextLocalSourceParams struct {
 	UpdatedAt    time.Time
 }
 
-func (q *Queries) UpsertProjectContextLocalSource(ctx context.Context, arg UpsertProjectContextLocalSourceParams) error {
-	_, err := q.db.ExecContext(ctx, upsertProjectContextLocalSource,
+// A conflicting source_ref is updated only by its current owner; otherwise no
+// row is affected.
+func (q *Queries) UpsertProjectContextLocalSource(ctx context.Context, arg UpsertProjectContextLocalSourceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, upsertProjectContextLocalSource,
 		arg.SourceRef,
 		arg.MachineID,
 		arg.RootPath,
@@ -124,5 +128,8 @@ func (q *Queries) UpsertProjectContextLocalSource(ctx context.Context, arg Upser
 		arg.RegisteredAt,
 		arg.UpdatedAt,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

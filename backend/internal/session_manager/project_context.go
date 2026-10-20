@@ -327,6 +327,9 @@ func (m *Manager) resolveProjectContextAttachment(ctx context.Context, project d
 		if !found {
 			return unavailableOrError(entry, binding, "missing")
 		}
+		if metadata.OwnerKind == domain.ProjectContextOwnerProject && metadata.OwnerID != string(project.ID) {
+			return unavailableOrError(entry, binding, "owner_mismatch")
+		}
 		machineID := m.projectContextMachineIDValue()
 		if binding.SourceKind == domain.ProjectContextRepoRelativeFile || binding.SourceKind == domain.ProjectContextMachineLocalFile {
 			if machineID == "" || binding.MachineID != machineID || local.MachineID != machineID {

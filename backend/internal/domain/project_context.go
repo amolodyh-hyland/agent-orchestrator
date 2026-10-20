@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime"
 	"strings"
@@ -19,6 +20,10 @@ const (
 	MaxProjectContextSessionBytes         = 8 << 20
 	MaxProjectContextInstructionBytes     = 64 << 10
 )
+
+// ErrProjectContextSourceOwned reports an attempt to overwrite a local source
+// registered by a different owner.
+var ErrProjectContextSourceOwned = errors.New("project context source reference is owned by another owner")
 
 type ProjectContextSourceKind string
 
