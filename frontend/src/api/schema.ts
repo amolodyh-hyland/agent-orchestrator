@@ -6251,12 +6251,33 @@ export interface components {
             worker?: components["schemas"]["RoleOverride"];
             workersRequestReview?: boolean;
         };
+        ProjectContextAttachment: {
+            enabled: boolean;
+            id: string;
+            /** @description Required for repo_relative_file and machine_local_file sources. */
+            machineId?: string;
+            mediaType: string;
+            ownerId?: string;
+            /** @enum {string} */
+            ownerKind?: "project" | "user";
+            position: number;
+            required: boolean;
+            roles: components["schemas"]["ProjectContextRole"][];
+            /** @enum {string} */
+            sourceKind: "inline_text" | "repo_relative_file" | "machine_local_file" | "explicitly_imported_bundle";
+            /** @description Opaque source reference; absolute local paths are resolved by the owning daemon. */
+            sourceRef?: string;
+            text?: string;
+        };
+        /** @enum {string} */
+        ProjectContextRole: "shared" | "worker" | "coordinator" | "issue_task" | "chat";
         ProjectGetResponse: {
             project: components["schemas"]["ProjectOrDegraded"];
             /** @enum {string} */
             status: "ok" | "degraded";
         };
         ProjectInstructions: {
+            attachments?: components["schemas"]["ProjectContextAttachment"][];
             coordinator?: string;
             shared?: string;
             worker?: string;
