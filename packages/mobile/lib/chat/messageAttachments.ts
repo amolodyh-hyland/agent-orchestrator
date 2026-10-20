@@ -6,14 +6,19 @@ const ATTACHMENT_REFERENCE_BLOCK =
 	/(?:^|\n\n)(?:Attached files \(read these files in the workspace(?: for context)?\)|Attached images \(read these files in the workspace for visual context\)|Attached files are available in the worktree):\n((?:- [^\n]+(?:\n|$))+)$/;
 const STAGED_ATTACHMENT_PATH = /^\.ao\/attachments\/(?:attachment|image)-[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const IMAGE_ATTACHMENT_PATH = /\.(?:png|jpe?g|gif|webp|bmp)$/i;
+const ABSOLUTE_FOLDER_PATH = /^(?:\/|[A-Za-z]:[\\/]|\\\\)[^\0\r\n]*$/;
+
+export function isFolderAttachmentPath(path: string): boolean {
+	return ABSOLUTE_FOLDER_PATH.test(path);
+}
 
 export function stagedAttachmentParts(text: string): { body: string; attachments: string[] } {
 	const match = ATTACHMENT_REFERENCE_BLOCK.exec(text);
 	if (!match?.[1]) return { body: text, attachments: [] };
-	const attachments = match[1].trimEnd().split("\n").map((line) => line.slice(2));
-	// Only reinterpret paths AO itself stages: prose quoting the same wording about
-	// docs/screenshot.png must stay readable text.
-	if (attachments.some((path) => !STAGED_ATTACHMENT_PATH.test(path))) return { body: text, attachments: [] };
+	const attachments = match[1].replace(/\n$/, "").split("\n").map((line) => line.slice(2));
+	// Only reinterpret AO-staged files and absolute folder references: prose quoting
+	// the same wording about ordinary project paths must stay readable text.
+	if (attachments.some((path) => !STAGED_ATTACHMENT_PATH.test(path) && !isFolderAttachmentPath(path))) return { body: text, attachments: [] };
 	return { body: labelInlineImages(text.slice(0, match.index), attachments), attachments };
 }
 
@@ -52,9 +57,9 @@ export function attachmentTileSize(imageCount: number): number {
 }
 
 export function isImageAttachment(path: string): boolean {
-	return IMAGE_ATTACHMENT_PATH.test(path);
+	return !isFolderAttachmentPath(path) && IMAGE_ATTACHMENT_PATH.test(path);
 }
 
 export function attachmentName(path: string): string {
-	return path.slice(path.lastIndexOf("/") + 1);
+	return path.split(/[\\/]/).at(-1) ?? path;
 }

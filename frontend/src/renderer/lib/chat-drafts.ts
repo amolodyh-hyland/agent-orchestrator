@@ -43,6 +43,10 @@ export interface ChatDraftAttachment {
 	name: string;
 	mimeType: string;
 	bytes: number;
+	/** Folder attachments are absolute path references; older file descriptors omit this. */
+	kind?: "folder";
+	/** Machine that owns a folder reference, shown while viewing remote sessions. */
+	machineName?: string;
 }
 
 export interface ChatDraftInlineEdit {
@@ -701,16 +705,22 @@ function isContentSummary(value: unknown): value is ConversationContentSummary {
 function isAttachment(value: unknown): value is ChatDraftAttachment {
 	if (!value || typeof value !== "object") return false;
 	const attachment = value as Partial<ChatDraftAttachment>;
+	const validFolderPath = typeof attachment.path === "string" &&
+		(attachment.path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(attachment.path) || attachment.path.startsWith("\\\\")) &&
+		!/[\0\r\n]/.test(attachment.path);
 	return (
 		typeof attachment.id === "string" &&
 		attachment.id.length > 0 &&
 		typeof attachment.path === "string" &&
-		(attachment.path === "" || attachment.path.startsWith(".ao/attachments/")) &&
+		(attachment.kind === "folder"
+			? validFolderPath
+			: attachment.kind === undefined && (attachment.path === "" || attachment.path.startsWith(".ao/attachments/"))) &&
 		typeof attachment.name === "string" &&
 		typeof attachment.mimeType === "string" &&
 		typeof attachment.bytes === "number" &&
 		Number.isFinite(attachment.bytes) &&
-		attachment.bytes >= 0
+		attachment.bytes >= 0 &&
+		(attachment.machineName === undefined || typeof attachment.machineName === "string")
 	);
 }
 
@@ -978,7 +988,9 @@ function attachmentsEqual(
 				attachment.path === candidate.path &&
 				attachment.name === candidate.name &&
 				attachment.mimeType === candidate.mimeType &&
-				attachment.bytes === candidate.bytes
+				attachment.bytes === candidate.bytes &&
+				attachment.kind === candidate.kind &&
+				attachment.machineName === candidate.machineName
 			);
 		})
 	);

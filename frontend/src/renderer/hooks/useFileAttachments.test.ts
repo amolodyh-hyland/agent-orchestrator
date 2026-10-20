@@ -21,6 +21,26 @@ const file = (name: string, bytes = 8, type = "text/plain") =>
 
 const mb = 1024 * 1024;
 
+describe("useFileAttachments folders", () => {
+	it("stops adding folders at the attachment limit", async () => {
+		const { result } = renderHook(() => useFileAttachments());
+		const folders = Array.from({ length: MAX_ATTACHMENTS + 2 }, (_, index) => ({
+			path: `/Users/me/folder-${index}`,
+			name: `folder-${index}`,
+			machineName: "dev-mac",
+		}));
+		await act(async () => {
+			await result.current.addFolders(folders);
+		});
+		expect(result.current.attachments).toHaveLength(MAX_ATTACHMENTS);
+		expect(result.current.error).toBeTruthy();
+		await act(async () => {
+			await result.current.addFolders([{ path: "/Users/me/extra", name: "extra", machineName: "dev-mac" }]);
+		});
+		expect(result.current.attachments).toHaveLength(MAX_ATTACHMENTS);
+	});
+});
+
 describe("useFileAttachments", () => {
 	it("stages a supported file", async () => {
 		const { result } = renderHook(() => useFileAttachments());

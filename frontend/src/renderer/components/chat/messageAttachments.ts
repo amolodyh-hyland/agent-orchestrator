@@ -6,18 +6,28 @@ const ATTACHMENT_REFERENCE_BLOCK =
 	/(?:^|\n\n)(?:Attached files \(read these files in the workspace(?: for context)?\)|Attached images \(read these files in the workspace for visual context\)):\n((?:- [^\n]+(?:\n|$))+)$/;
 const STAGED_ATTACHMENT_PATH = /^\.ao\/attachments\/(?:attachment|image)-[A-Za-z0-9][A-Za-z0-9._-]*$/;
 export const IMAGE_ATTACHMENT_PATH = /\.(?:png|jpe?g|gif|webp|bmp)$/i;
+const ABSOLUTE_FOLDER_PATH = /^(?:\/|[A-Za-z]:[\\/]|\\\\)[^\0\r\n]*$/;
+
+export function isFolderAttachmentPath(path: string): boolean {
+	return ABSOLUTE_FOLDER_PATH.test(path);
+}
+
+export function isImageAttachmentPath(path: string): boolean {
+	return !isFolderAttachmentPath(path) && IMAGE_ATTACHMENT_PATH.test(path);
+}
 
 export function stagedAttachmentParts(text: string): { body: string; attachments: string[] } {
 	const match = ATTACHMENT_REFERENCE_BLOCK.exec(text);
 	if (!match?.[1]) return { body: text, attachments: [] };
 
 	const attachments = match[1]
-		.trimEnd()
+		.replace(/\n$/, "")
 		.split("\n")
 		.map((line) => line.slice(2));
-	// Only reinterpret paths AO itself stages. A user can write an identically
-	// worded example about docs/screenshot.png; that prose must remain untouched.
-	if (attachments.length === 0 || attachments.some((path) => !STAGED_ATTACHMENT_PATH.test(path))) {
+	// Reinterpret only AO-staged files and validated absolute folder references. A
+	// user can write the same label about ordinary project paths; keep that prose.
+	if (attachments.length === 0 || attachments.some((path) =>
+		!STAGED_ATTACHMENT_PATH.test(path) && !isFolderAttachmentPath(path))) {
 		return { body: text, attachments: [] };
 	}
 	// The match begins at the generated separator, so slicing at its index
@@ -26,7 +36,7 @@ export function stagedAttachmentParts(text: string): { body: string; attachments
 }
 
 export function attachmentName(path: string): string {
-	return path.slice(path.lastIndexOf("/") + 1);
+	return path.split(/[\\/]/).at(-1) ?? path;
 }
 
 export function attachmentURL(apiBaseUrl: string, sessionId: string, path: string): string {
@@ -102,7 +112,7 @@ export function proseBesideImages(text: string, attached: string[]): string {
 /** Plain-text form for one-line surfaces: attached inline images read as `[Image N]`. */
 export function labelInlineImages(text: string, label: (index: number) => string = (index) => `Image ${index}`): string {
 	const { body, attachments } = stagedAttachmentParts(text);
-	const images = attachments.filter((path) => IMAGE_ATTACHMENT_PATH.test(path));
+	const images = attachments.filter(isImageAttachmentPath);
 	if (images.length === 0) return text;
 	const labelled = splitInlineImagePaths(body, (path) => images.includes(path))
 		.map((segment) => segment.path === undefined ? segment.text : `[${label(images.indexOf(segment.path) + 1)}]`)

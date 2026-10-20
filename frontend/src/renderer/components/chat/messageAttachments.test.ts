@@ -1,8 +1,32 @@
 import { describe, expect, it } from "vitest";
-import { labelInlineImages, proseBesideImages, removeInlineImagePath, splitInlineImagePaths } from "./messageAttachments";
+import { attachmentName, isFolderAttachmentPath, isImageAttachmentPath, labelInlineImages, proseBesideImages, removeInlineImagePath, splitInlineImagePaths, stagedAttachmentParts } from "./messageAttachments";
 
 const a = ".ao/attachments/attachment-a.png";
 const b = ".ao/attachments/attachment-b.png";
+
+describe("folder attachment references", () => {
+	it("keeps trailing whitespace in folder paths", () => {
+		const path = "/Users/me/Project ";
+		expect(stagedAttachmentParts(`Look\n\nAttached files (read these files in the workspace):\n- ${path}`).attachments).toEqual([path]);
+	});
+
+	it("parses absolute folder references from the existing attachment suffix", () => {
+		const path = "/Users/me/Project Files";
+		const text = `Inspect this\n\nAttached files (read these files in the workspace):\n- ${path}`;
+		expect(stagedAttachmentParts(text)).toEqual({ body: "Inspect this", attachments: [path] });
+		expect(attachmentName(path)).toBe("Project Files");
+		expect(isFolderAttachmentPath(path)).toBe(true);
+		expect(isFolderAttachmentPath("C:\\Users\\me\\Project Files")).toBe(true);
+		expect(isImageAttachmentPath("/Users/me/folder.png")).toBe(false);
+	});
+
+	it("keeps relative non-AO paths and newline-bearing references as ordinary text", () => {
+		const text = "Example\n\nAttached files (read these files in the workspace):\n- docs/screenshot.png";
+		expect(stagedAttachmentParts(text)).toEqual({ body: text, attachments: [] });
+		const invalid = "Example\n\nAttached files (read these files in the workspace):\n- /Users/me/folder\nname";
+		expect(stagedAttachmentParts(invalid)).toEqual({ body: invalid, attachments: [] });
+	});
+});
 
 describe("inline image paths", () => {
 	it("leaves a staged path inside a longer path as text", () => {

@@ -224,7 +224,7 @@ describe("send keys", () => {
 		);
 
 		const tools = screen.getByRole("group", { name: "Message tools" });
-		expect(within(tools).getByRole("button", { name: "Attach a file" })).toBeInTheDocument();
+		expect(within(tools).getByRole("button", { name: "Add attachment" })).toBeInTheDocument();
 		expect(within(tools).getByRole("button", { name: "Model" })).toBeInTheDocument();
 
 		const actions = screen.getByRole("group", { name: "Send message controls" });
@@ -2168,12 +2168,71 @@ describe("attachments", () => {
 	// worktree to write into.
 	it("offers no attach control when there is nowhere to put the bytes", () => {
 		renderComposer();
-		expect(screen.queryByLabelText("Attach a file")).toBeNull();
+		expect(screen.queryByLabelText("Add attachment")).toBeNull();
 	});
 
 	it("offers the attach control when staging is wired", () => {
 		renderComposer({ onStageAttachments: vi.fn() });
-		expect(screen.getByLabelText("Attach a file")).toBeTruthy();
+		expect(screen.getByLabelText("Add attachment")).toBeTruthy();
+	});
+
+	it("opens the attach menu and runs both actions from the keyboard", async () => {
+		const chooseFolder = vi.fn().mockResolvedValue(null);
+		const openFilePicker = vi.spyOn(HTMLInputElement.prototype, "click");
+		renderComposer({ onStageAttachments: vi.fn(), onChooseFolder: chooseFolder });
+		const trigger = screen.getByRole("button", { name: "Add attachment" });
+		trigger.focus();
+		await userEvent.keyboard("{Enter}");
+		await screen.findByRole("menuitem", { name: "Attach file" });
+		await userEvent.keyboard("{ArrowDown}{Enter}");
+		await waitFor(() => expect(chooseFolder).toHaveBeenCalledTimes(1));
+		await userEvent.click(trigger);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Attach file" }));
+		expect(openFilePicker).toHaveBeenCalledTimes(1);
+		openFilePicker.mockRestore();
+	});
+
+	it("shows a folder chip, keeps it in the draft, and sends its absolute path reference", async () => {
+		const sessionId = "composer-folder-reference";
+		const path = "/Users/me/Project Files";
+		const chooseFolder = vi.fn().mockResolvedValue({ path, name: "Project Files", machineName: "dev-mac" });
+		const { onSend, field } = renderComposer({
+			draftSessionId: sessionId,
+			onStageAttachments: vi.fn(),
+			onChooseFolder: chooseFolder,
+		});
+		await userEvent.click(screen.getByRole("button", { name: "Add attachment" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Attach folder" }));
+		const remove = await screen.findByRole("button", { name: "Remove Project Files" });
+		expect(remove.closest("li")?.querySelector(".lucide-folder")).not.toBeNull();
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.attachments).toMatchObject([
+			{ path, name: "Project Files", kind: "folder", machineName: "dev-mac", bytes: 0 },
+		]));
+		await typeInComposer(field, "Please inspect this folder");
+		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await waitFor(() => expect(onSend.mock.calls.at(-1)?.[0]).toBe(
+			`Please inspect this folder\n\nAttached files (read these files in the workspace):\n- ${path}`,
+		));
+	});
+
+	it("disables Attach folder for remote sessions with an explanation", async () => {
+		const chooseFolder = vi.fn().mockResolvedValue({ path: "/Users/me/Project", name: "Project", machineName: "dev-mac" });
+		renderComposer({ onStageAttachments: vi.fn(), onChooseFolder: chooseFolder, remoteHost: true });
+		await userEvent.click(screen.getByRole("button", { name: "Add attachment" }));
+		const item = await screen.findByRole("menuitem", { name: "Attach folder" });
+		expect(item).toHaveAttribute("aria-disabled", "true");
+		expect(item.parentElement).toHaveAttribute("title", "Attaching folders isn't available for remote sessions yet.");
+		await userEvent.click(item);
+		expect(chooseFolder).not.toHaveBeenCalled();
+		expect(screen.getByRole("menuitem", { name: "Attach file" })).not.toHaveAttribute("aria-disabled", "true");
+	});
+
+	it("shows a translated validation error returned by the folder picker", async () => {
+		const chooseFolder = vi.fn().mockResolvedValue({ error: "symbolic_link" });
+		renderComposer({ onStageAttachments: vi.fn(), onChooseFolder: chooseFolder });
+		await userEvent.click(screen.getByRole("button", { name: "Add attachment" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Attach folder" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("Choose the folder directly instead of a symbolic link.");
 	});
 
 	it("shows a removable chip per pasted image", async () => {

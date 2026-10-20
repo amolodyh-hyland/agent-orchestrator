@@ -90,6 +90,9 @@ export const aoBridge: AoBridge =
 				return true;
 			},
 		},
+		chatAttachment: {
+			chooseFolder: async () => null,
+		},
 		daemon: {
 			getStatus: async () => ({
 				state: "stopped",

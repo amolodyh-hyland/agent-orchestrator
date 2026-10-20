@@ -57,7 +57,6 @@ import {
 	Loader2,
 	Pencil,
 	Play,
-	Plus,
 	Square,
 	X,
 } from "lucide-react";
@@ -68,6 +67,7 @@ import { ChatMarkdown } from "./ChatMarkdown";
 import { cn } from "../../lib/utils";
 import { apiErrorCode, apiErrorMessage, getApiBaseUrl } from "../../lib/api-client";
 import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
+import { ChatAttachmentMenu } from "./ChatAttachmentMenu";
 import {
 	ComposerEditor,
 	type ComposerEditorHandle,
@@ -85,7 +85,8 @@ import {
 	type FileAttachmentPayload,
 } from "../../hooks/useFileAttachments";
 import { useTranslation } from "react-i18next";
-import { File } from "lucide-react";
+import { File, Folder } from "lucide-react";
+import type { ChatFolderAttachmentError, ChatFolderAttachmentPickerResult } from "../../../shared/chat-folder-attachment";
 import { effectiveShortcutBindings, shortcutBindingLabel, type AppShortcutId } from "../../../shared/shortcuts";
 import { useAppShortcut } from "../../hooks/useAppShortcut";
 import { isMacPlatform } from "../../lib/platform";
@@ -163,6 +164,14 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 const SEND_CONCEAL_MS = 3000;
 const MAX_NATIVE_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_NATIVE_IMAGES_BYTES = 25 * 1024 * 1024;
+const FOLDER_ATTACHMENT_ERROR_KEYS: Record<ChatFolderAttachmentError, string> = {
+	invalid_path: "chat.composer.folderInvalidPath",
+	not_found: "chat.composer.folderNotFound",
+	not_directory: "chat.composer.folderNotDirectory",
+	not_readable: "chat.composer.folderNotReadable",
+	symbolic_link: "chat.composer.folderSymbolicLink",
+	trailing_whitespace: "chat.composer.folderTrailingWhitespace",
+};
 
 /**
  * Tell the agent to open the attached files. Mirrors the wording spawn uses for a task
@@ -185,7 +194,11 @@ function restoredDeliveryNotice(delivery: ChatComposerDelivery | undefined): str
 		: "chat.draft.sendRestart";
 }
 /** A retained server-owned attachment; image bytes stay in durable storage. */
-export type StoredComposerAttachment = ChatDraftRetainedAttachment & { dataUrl?: string };
+export type StoredComposerAttachment = ChatDraftRetainedAttachment & {
+	dataUrl?: string;
+	kind?: "folder";
+	machineName?: string;
+};
 export type ChatComposerHandle = {
 	focus(): void;
 	isEmpty(): boolean;
@@ -209,6 +222,7 @@ export const ChatComposer = memo(function ChatComposer({
 	filePaths = [],
 	filePathsTruncated,
 	onStageAttachments,
+	onChooseFolder,
 	nativeImages,
 	onSteer,
 	showSteerButton,
@@ -293,6 +307,8 @@ export const ChatComposer = memo(function ChatComposer({
 	 * offered at all.
 	 */
 	onStageAttachments?: (attachments: FileAttachmentPayload[]) => Promise<string[]>;
+	/** Opens the Electron folder picker; the renderer receives only its validated selection. */
+	onChooseFolder?: () => Promise<ChatFolderAttachmentPickerResult>;
 	/** Send the same staged bytes as native ACP image blocks when negotiated. */
 	nativeImages?: boolean;
 	/**
@@ -401,6 +417,7 @@ export const ChatComposer = memo(function ChatComposer({
 	const [isComposing, setIsComposing] = useState(false);
 	const [dragging, setDragging] = useState(false);
 	const [sendError, setSendError] = useState<string | null>(null);
+	const [folderAttachmentError, setFolderAttachmentError] = useState<string | null>(null);
 	const [steerOutcomeNotice, setSteerOutcomeNotice] = useState<string | null>(null);
 	const [deliveryRecoveryNotice, setDeliveryRecoveryNotice] = useState<string | null>(null);
 	const [deliveryUncertain, setDeliveryUncertain] = useState(
@@ -499,13 +516,17 @@ export const ChatComposer = memo(function ChatComposer({
 				mimeType: attachment.mimeType,
 				bytes: attachment.bytes,
 				stagedPath: attachment.path,
+				...(attachment.kind ? { kind: attachment.kind } : {}),
+				...(attachment.machineName ? { machineName: attachment.machineName } : {}),
 			})) ?? [],
 		[persistedDraft, draftSeed?.stagedAttachments],
 	);
 	const persistAttachments = useCallback(
 		(attachments: FileAttachment[]) => {
 			const descriptors = attachments.flatMap((attachment) => attachment.stagedPath
-				? [{ id: attachment.id, path: attachment.stagedPath, name: attachment.name, mimeType: attachment.mimeType, bytes: attachment.bytes }]
+				? [{ id: attachment.id, path: attachment.stagedPath, name: attachment.name, mimeType: attachment.mimeType, bytes: attachment.bytes,
+					...(attachment.kind ? { kind: attachment.kind } : {}),
+					...(attachment.machineName ? { machineName: attachment.machineName } : {}) }]
 				: []);
 			if (!draftScope) {
 				onQueuedAttachmentsChange?.(descriptors);
@@ -562,6 +583,9 @@ export const ChatComposer = memo(function ChatComposer({
 	const fileAttachments = useFileAttachments({
 		initialAttachments: restoredAttachments,
 		initialKey: attachmentScopeKey,
+		maxAttachmentsMessage: t("chat.composer.attachmentLimit", { count: MAX_ATTACHMENTS }),
+		invalidFolderMessage: t("chat.composer.folderInvalidPath"),
+		folderAttachFailedMessage: t("chat.composer.folderAttachFailed"),
 		prepareAttachments: onStageAttachments ? prepareAttachments : undefined,
 		onAttachmentsChange: persistAttachments,
 	});
@@ -605,12 +629,12 @@ export const ChatComposer = memo(function ChatComposer({
 	const stripAttachments = (optimisticSend || nextDraftHasChanged ? [] : [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
 		const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
 		const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
-		const preview = file.dataUrl ?? (path && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
+		const preview = file.kind === "folder" ? undefined : file.dataUrl ?? (path && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
 			? attachmentURL(assetOrigin, assetSessionId ?? boundarySessionId ?? "", path) : undefined);
 		return { file, path, preview };
 	});
 	const composerImages: ComposerImage[] = stripAttachments.flatMap(({ file, path, preview }) =>
-		path && IMAGE_ATTACHMENT_PATH.test(path) ? [{ path, name: file.name, src: preview }] : []);
+		path && file.kind !== "folder" && IMAGE_ATTACHMENT_PATH.test(path) ? [{ path, name: file.name, src: preview }] : []);
 	const controlsDisabled = Boolean(disabled || submitting);
 	const hasDraft = hasText || staged || contextReferences.length > 0;
 	useEffect(() => {
@@ -978,6 +1002,8 @@ export const ChatComposer = memo(function ChatComposer({
 					mimeType: attachment.mimeType,
 					bytes: attachment.bytes,
 					stagedPath: attachment.path,
+					...(attachment.kind ? { kind: attachment.kind } : {}),
+					...(attachment.machineName ? { machineName: attachment.machineName } : {}),
 				})),
 			);
 		}
@@ -1454,6 +1480,8 @@ export const ChatComposer = memo(function ChatComposer({
 							name: attachment.name,
 							mimeType: attachment.mimeType,
 							bytes: attachment.bytes,
+							...(attachment.kind ? { kind: attachment.kind } : {}),
+							...(attachment.machineName ? { machineName: attachment.machineName } : {}),
 						}]
 					: [],
 			),
@@ -1719,6 +1747,22 @@ export const ChatComposer = memo(function ChatComposer({
 		});
 	}
 
+	async function attachFolder() {
+		if (!onChooseFolder || remoteHost || disabled || submitInFlight.current || draftMutationPending || fileAttachments.preparing) return;
+		setFolderAttachmentError(null);
+		try {
+			const selection = await onChooseFolder();
+			if (!selection) return;
+			if ("error" in selection) {
+				setFolderAttachmentError(FOLDER_ATTACHMENT_ERROR_KEYS[selection.error]);
+				return;
+			}
+			await fileAttachments.addFolders([selection]);
+		} catch {
+			setFolderAttachmentError("chat.composer.folderAttachFailed");
+		}
+	}
+
 	function onPaste(event: ClipboardEvent<HTMLDivElement>) {
 		if (!canAttach || fileAttachments.preparing || draftMutationPending || submitInFlight.current) return;
 		const clipboard = event.clipboardData;
@@ -1767,6 +1811,9 @@ export const ChatComposer = memo(function ChatComposer({
 		(fileAttachments.attachments.some((file) => !file.data && !file.stagedPath)
 			? "chat.draft.filesUnavailable" : null) ??
 		commandError;
+	const visibleAttachmentError = folderAttachmentError
+		? t(folderAttachmentError, { defaultValue: folderAttachmentError })
+		: translateDraft(attachmentError);
 	const withQueueStack = (form: ReactElement) =>
 		(
 			<div className="relative mx-auto flex w-full max-w-3xl flex-col">
@@ -1878,15 +1925,22 @@ export const ChatComposer = memo(function ChatComposer({
 											<img src={preview} alt="" className="size-6 rounded-sm object-cover" />
 										) : (
 											<div className="flex size-6 items-center justify-center rounded-sm bg-surface">
-												<File aria-hidden="true" className="size-3.5 text-muted-foreground" />
+												{file.kind === "folder"
+													? <Folder aria-hidden="true" className="size-3.5 text-muted-foreground" />
+													: <File aria-hidden="true" className="size-3.5 text-muted-foreground" />}
 											</div>
 										)}
 										<span
 											className="max-w-[120px] truncate text-xs text-muted-foreground"
-											title={file.name}
+											title={file.kind === "folder" ? path : file.name}
 										>
 											{file.name}
 										</span>
+										{file.kind === "folder" && remoteHost && file.machineName ? (
+											<span className="max-w-[120px] truncate text-[10px] text-passive" title={file.machineName}>
+												{t("chat.composer.folderOnMachine", { machine: file.machineName })}
+											</span>
+										) : null}
 										<button
 											type="button"
 											onClick={() => {
@@ -1974,9 +2028,9 @@ export const ChatComposer = memo(function ChatComposer({
 					</div>
 				) : null}
 
-				{attachmentError ? (
+				{visibleAttachmentError ? (
 					<p role="alert" className="px-1.5 text-xs leading-snug text-destructive">
-						{translateDraft(attachmentError)}
+						{visibleAttachmentError}
 					</p>
 				) : null}
 				{canAbandonUncertainSteer ? (
@@ -2089,24 +2143,12 @@ export const ChatComposer = memo(function ChatComposer({
 										event.target.value = "";
 									}}
 								/>
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<span className="inline-flex">
-											<Button
-												type="button"
-												variant="ghost"
-												size="icon-sm"
-												disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
-												onClick={() => filePicker.current?.click()}
-												aria-label="Attach a file"
-												className="size-7 shrink-0 rounded-full p-0 text-muted-foreground hover:bg-interactive-active! hover:text-foreground"
-											>
-												<Plus aria-hidden="true" className="size-3.5 text-muted-foreground" />
-											</Button>
-										</span>
-									</TooltipTrigger>
-									<TooltipContent side="bottom">Attach a file</TooltipContent>
-								</Tooltip>
+								<ChatAttachmentMenu
+									disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
+									onAttachFile={() => filePicker.current?.click()}
+									onAttachFolder={() => void attachFolder()}
+									folderDisabled={remoteHost}
+								/>
 							</>
 						) : null}
 						{settings}

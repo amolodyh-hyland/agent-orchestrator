@@ -21,11 +21,15 @@ export type FileAttachment = {
 	bytes: number;
 	/** File name for display. */
 	name: string;
+	/** Folder references are path-only and never contain bytes. */
+	kind?: "folder";
+	/** Machine where the referenced folder lives, shown for remote sessions. */
+	machineName?: string;
 	/** data: URL used to render the thumbnail preview (for images only). */
 	dataUrl?: string;
 	/** Base64 payload without the "data:...;base64," prefix, for upload. */
 	data?: string;
-	/** Durable worktree-relative path, present only after daemon staging succeeds. */
+	/** Daemon-staged file path or absolute folder reference. */
 	stagedPath?: string;
 };
 
@@ -41,6 +45,10 @@ export type FileAttachmentOptions = {
 	initialAttachments?: FileAttachment[];
 	/** Changes when the hook must replace its state with initialAttachments. */
 	initialKey?: string;
+	/** Localized count-cap message for surfaces that can attach files and folders. */
+	maxAttachmentsMessage?: string;
+	invalidFolderMessage?: string;
+	folderAttachFailedMessage?: string;
 	/**
 	 * Make newly accepted bytes durable before their chips become visible. A
 	 * rejection leaves the existing attachment list untouched.
@@ -80,12 +88,14 @@ export type PendingFileAttachmentCapture = {
 };
 
 function sharedAttachmentDescriptors(attachments: FileAttachment[]): FileAttachment[] {
-	return attachments.map(({ id, mimeType, bytes, name, stagedPath }) => ({
+	return attachments.map(({ id, mimeType, bytes, name, stagedPath, kind, machineName }) => ({
 		id,
 		mimeType,
 		bytes,
 		name,
 		...(stagedPath ? { stagedPath } : {}),
+		...(kind ? { kind } : {}),
+		...(machineName ? { machineName } : {}),
 	}));
 }
 
@@ -290,6 +300,9 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 	const {
 		initialAttachments = [],
 		initialKey,
+		maxAttachmentsMessage,
+		invalidFolderMessage,
+		folderAttachFailedMessage,
 		prepareAttachments,
 		onAttachmentsChange,
 	} = options;
@@ -327,6 +340,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		});
 	}, [initialKey, onAttachmentsChange]);
 
+	const attachmentLimitMessage = maxAttachmentsMessage ?? `You can attach up to ${MAX_ATTACHMENTS} files.`;
 	const processFiles = useCallback(async (files: File[], generation: number, sharedWork?: SharedAttachmentWork): Promise<FileAttachment[]> => {
 		if (generationRef.current !== generation) return [];
 		if (initialKey && sharedWork && !sharedAttachmentWorkIsCurrent(initialKey, sharedWork)) return [];
@@ -368,7 +382,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 					continue;
 				}
 				if (attachmentsRef.current.length + results.length >= MAX_ATTACHMENTS) {
-					errors.add(`You can attach up to ${MAX_ATTACHMENTS} files.`);
+					errors.add(attachmentLimitMessage);
 					break;
 				}
 				const total = attachmentsRef.current.reduce((sum, attachment) => sum + attachment.bytes, freshBytes);
@@ -413,7 +427,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		let total = accepted.reduce((sum, a) => sum + a.bytes, 0);
 		for (const a of fresh) {
 			if (accepted.length >= MAX_ATTACHMENTS) {
-				errors.add(`You can attach up to ${MAX_ATTACHMENTS} files.`);
+				errors.add(attachmentLimitMessage);
 				break;
 			}
 			if (total + a.bytes > MAX_ATTACHMENTS_BYTES) {
@@ -467,7 +481,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		setError(nextError);
 		if (initialKey) notifySharedAttachmentEntry(initialKey, { error: nextError });
 		return added;
-	}, [initialKey, onAttachmentsChange, prepareAttachments]);
+	}, [attachmentLimitMessage, initialKey, onAttachmentsChange, prepareAttachments]);
 
 	/** Resolves with the attachments this batch actually added, staged when staging is on. */
 	const addFiles = useCallback((files: Iterable<File>): Promise<FileAttachment[]> => {
@@ -501,6 +515,72 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		addQueueRef.current = settled;
 		return settled;
 	}, [initialKey, processFiles]);
+
+	/** Add validated absolute folder references without reading or staging their contents. */
+	const addFolders = useCallback((folders: Array<{ path: string; name: string; machineName: string }>): Promise<FileAttachment[]> => {
+		const batch = [...folders];
+		if (batch.length === 0) return Promise.resolve([]);
+		const sharedKey = initialKey;
+		const generation = generationRef.current;
+		const sharedWork = sharedKey ? beginSharedAttachmentWork(sharedKey) : undefined;
+		queuedAddsRef.current += 1;
+		setPreparing(true);
+		const process = async (): Promise<FileAttachment[]> => {
+			if (generationRef.current !== generation ||
+				(sharedKey && sharedWork && !sharedAttachmentWorkIsCurrent(sharedKey, sharedWork))) return [];
+			const next = [...attachmentsRef.current];
+			const added: FileAttachment[] = [];
+			let nextError: string | null = null;
+			for (const folder of batch) {
+				if (next.length >= MAX_ATTACHMENTS) {
+					nextError = attachmentLimitMessage;
+					break;
+				}
+				if (!folder.path || !folder.name || /[\0\r\n]/.test(folder.path) ||
+					!(folder.path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(folder.path) || folder.path.startsWith("\\\\"))) {
+					nextError = invalidFolderMessage ?? "Choose a valid folder.";
+					continue;
+				}
+				const attachment: FileAttachment = {
+					id: typeof crypto !== "undefined" && "randomUUID" in crypto
+						? crypto.randomUUID()
+						: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+					mimeType: "inode/directory",
+					bytes: 0,
+					name: folder.name,
+					stagedPath: folder.path,
+					kind: "folder",
+					machineName: folder.machineName,
+				};
+				next.push(attachment);
+				added.push(attachment);
+			}
+			if (generationRef.current !== generation ||
+				(sharedKey && sharedWork && !sharedAttachmentWorkIsCurrent(sharedKey, sharedWork))) return [];
+			if (added.length > 0) {
+				attachmentsRef.current = next;
+				setAttachments(next);
+				onAttachmentsChange?.(next);
+				if (sharedKey) notifySharedAttachmentEntry(sharedKey, { attachments: sharedAttachmentDescriptors(next) }, listenerTokenRef.current);
+			}
+			setError(nextError);
+			if (sharedKey) notifySharedAttachmentEntry(sharedKey, { error: nextError });
+			return added;
+		};
+		const run = queuedAddsRef.current === 1 ? process() : addQueueRef.current.then(process);
+		const settled = run
+			.catch((): FileAttachment[] => {
+				setError(folderAttachFailedMessage ?? "Could not attach that folder.");
+				return [];
+			})
+			.finally(() => {
+				queuedAddsRef.current = Math.max(0, queuedAddsRef.current - 1);
+				if (sharedKey && sharedWork) endSharedAttachmentWork(sharedKey, sharedWork.token);
+				else if (queuedAddsRef.current === 0) setPreparing(false);
+			});
+		addQueueRef.current = settled;
+		return settled;
+	}, [attachmentLimitMessage, folderAttachFailedMessage, initialKey, invalidFolderMessage, onAttachmentsChange]);
 
 	const remove = useCallback((id: string) => {
 		const next = attachmentsRef.current.filter((a) => a.id !== id);
@@ -584,6 +664,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		error,
 		preparing,
 		addFiles,
+		addFolders,
 		remove,
 		clear,
 		reconcilePersistedAttachments,
