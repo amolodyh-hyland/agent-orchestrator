@@ -835,6 +835,15 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		return openErr
 	})
 	if err != nil {
+		if fallbackOutcome.Effective == "" && len(fallbackOutcome.Rejected) > 0 {
+			if owner.Kind == domain.ConversationOwnerSession && s.onPermissionsChanged != nil {
+				s.onPermissionsChanged(cfg.SessionID, "")
+			}
+			if noticeErr := s.store.UpsertActivity(ctx, conversation.ID, "",
+				permissionFallbackActivity(s.newID(), requestedPermissions, fallbackOutcome), s.now()); noticeErr != nil {
+				return nil, errors.Join(err, fmt.Errorf("persist manual approval requirement: %w", noticeErr))
+			}
+		}
 		return nil, err
 	}
 	effectivePermissions := fallbackOutcome.Effective
@@ -2394,7 +2403,18 @@ func (s *Service) SetConfigOption(
 	}
 	options = permissionConfigOptions(record.Harness, options)
 	settings, _ := settingsFromConfigOptions(previous, options)
+	var runtimeApproval domain.PermissionMode
+	for _, option := range options {
+		for _, choice := range option.Choices {
+			if choice.Value == option.Current.Select && choice.PermissionMode != "" {
+				runtimeApproval = choice.PermissionMode
+			}
+		}
+	}
 	if record.Harness == domain.HarnessClaudeCode {
+		if configID != "mode" {
+			settings.ApprovalMode = previous.ApprovalMode
+		}
 		// Provider-owned defaults stay implicit so future Claude defaults still apply.
 		if settings.Model == "default" {
 			settings.Model = ""
@@ -2418,6 +2438,15 @@ func (s *Service) SetConfigOption(
 		// Code's model menu) change the model; it must persist the pick the same
 		// way the turn-settings route does.
 		s.persistPickedModel(id, previous, settings)
+	}
+	if runtimeApproval != "" {
+		controller.mu.Lock()
+		permissionChanged := controller.effectivePermission != runtimeApproval
+		controller.effectivePermission = runtimeApproval
+		controller.mu.Unlock()
+		if controller.onPermissionsChanged != nil && permissionChanged {
+			controller.onPermissionsChanged(controller.sessionID, runtimeApproval)
+		}
 	}
 	return options, nil
 }

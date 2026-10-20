@@ -106,6 +106,7 @@ export function toWorkspaceSession(
 		title: session.displayName ?? session.issueId ?? session.id,
 		issueId: session.issueId,
 		provider: toAgentProvider(session.harness),
+		permissions: session.permissions,
 		reviewerHarness: toReviewerHarnessId(session.reviewerHarness),
 		reviewerConfig: session.reviewerConfig
 			? {
@@ -210,6 +211,7 @@ function toLocalWorkspaceSession(
 		title: session.displayName ?? session.issueId ?? session.id,
 		issueId: session.issueId,
 		provider: toAgentProvider(session.harness),
+		permissions: session.permissions,
 		reviewerHarness: toReviewerHarnessId(session.reviewerHarness),
 		reviewerConfig: session.reviewerConfig
 			? {

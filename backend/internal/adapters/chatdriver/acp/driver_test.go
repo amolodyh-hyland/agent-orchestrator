@@ -815,6 +815,7 @@ type fakeAgent struct {
 	customPrompt        func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error)
 	mode                string
 	modeNotFound        bool // SetSessionMode returns -32601
+	modeErrors          map[string]error
 	modeRequiresOption  SessionOption
 	configNotFound      bool // SetSessionConfigOption returns -32601
 	configErr           error
@@ -1153,6 +1154,10 @@ func (a *fakeAgent) SetSessionConfigOption(_ context.Context, params acpsdk.SetS
 }
 func (a *fakeAgent) SetSessionMode(_ context.Context, params acpsdk.SetSessionModeRequest) (acpsdk.SetSessionModeResponse, error) {
 	a.mu.Lock()
+	if err := a.modeErrors[string(params.ModeId)]; err != nil {
+		a.mu.Unlock()
+		return acpsdk.SetSessionModeResponse{}, err
+	}
 	if required := a.modeRequiresOption; required.ID != "" && a.options[required.ID] != required.Value {
 		a.mu.Unlock()
 		return acpsdk.SetSessionModeResponse{}, acpsdk.NewInternalError(map[string]any{
@@ -2555,7 +2560,7 @@ func TestACPDriverAppliesModelBeforeModelDependentMode(t *testing.T) {
 	}
 }
 
-func TestACPDriverFallsBackFromModelUnsupportedAutoMode(t *testing.T) {
+func TestACPDriverRejectsModelUnsupportedAutoMode(t *testing.T) {
 	agent := &fakeAgent{
 		newConfig: []acpsdk.SessionConfigOption{
 			selectConfigOption("model", "Model", "model", "sonnet", "sonnet", "haiku"),
@@ -2582,28 +2587,21 @@ func TestACPDriverFallsBackFromModelUnsupportedAutoMode(t *testing.T) {
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	driver.useTestProcess(fakeSpawn(agent))
 
-	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{
+	_, err := driver.Start(context.Background(), ports.ChatStartConfig{
 		WorkspacePath: t.TempDir(),
 		Model:         "haiku",
 		Permissions:   ports.PermissionModeAuto,
 	})
-	if err != nil {
-		t.Fatalf("Start with model-unsupported Auto mode: %v", err)
+	var rejection *ports.PermissionRejectedError
+	if !errors.As(err, &rejection) || rejection.Mode != ports.PermissionModeAuto {
+		t.Fatalf("Start = %v, want typed Auto rejection for the service ladder", err)
 	}
-	defer opened.Close()
 
 	agent.mu.Lock()
 	mode := agent.mode
 	agent.mu.Unlock()
-	if mode != "default" {
-		t.Fatalf("provider mode = %q, want default fallback", mode)
-	}
-	conv := opened.(*conversation)
-	conv.mu.Lock()
-	permissionMode := conv.permissionMode
-	conv.mu.Unlock()
-	if permissionMode != ports.PermissionModeDefault {
-		t.Fatalf("conversation permission mode = %q, want default fallback", permissionMode)
+	if mode != "" {
+		t.Fatalf("provider mode = %q, want no silent mode substitution", mode)
 	}
 }
 

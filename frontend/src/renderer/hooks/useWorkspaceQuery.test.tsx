@@ -76,6 +76,16 @@ beforeEach(() => {
 });
 
 describe("useWorkspaceQuery", () => {
+    it("carries the recorded runtime permission mode into session details", async () => {
+        respondWith({
+            projects: { data: { projects: [{ id: "p1", name: "Project", path: "/tmp/project" }] } },
+            sessions: { data: { sessions: [{ id: "s1", projectId: "p1", harness: "claude-code", mode: "chat", permissions: "accept-edits", status: "working", statusReadiness: "ready", activity: {state: "active"}, prs: [] }] } },
+        });
+        const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
+        await waitFor(() => expect(result.current.isSuccess).toBe(true));
+        expect(result.current.data?.[0].sessions[0].permissions).toBe("accept-edits");
+    });
+
 	it.each(["pending", "failed", "removed"])("keeps local workspace cleanup state %s", async (workspaceCleanup) => {
 		respondWith({
 			projects: { data: { projects: [{ id: "p1", name: "Project", path: "/tmp/project" }] } },

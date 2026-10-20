@@ -1480,6 +1480,11 @@ describe("SessionInspector completion controls", () => {
 });
 
 describe("SessionInspector Activity section", () => {
+  it("shows the effective runtime permission mode from the session API", () => {
+    renderWithQuery(<SessionInspector session={session([], {mode: "chat", permissions: "accept-edits"})} />);
+    expect(screen.getByText("Runtime permission mode:")).toHaveTextContent("accept-edits");
+  });
+
   const activitySectionElement = () =>
     screen
       .getByText("Activity")

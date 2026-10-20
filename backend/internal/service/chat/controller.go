@@ -217,6 +217,7 @@ type Controller struct {
 	// onPermissionsChanged reports the mode a turn actually ran with after the
 	// fallback lowered it, so the session record can show it.
 	onPermissionsChanged func(domain.SessionID, domain.PermissionMode)
+	effectivePermission  ports.PermissionMode
 
 	// sendMu serializes command dispatch so only one operation mutates the
 	// provider conversation at a time.
@@ -398,6 +399,7 @@ func newController(
 		onCodexCapacityChanged: onCodexCapacityChanged,
 		state:                  ports.ChatControllerReady,
 		settings:               conversation.Settings,
+		effectivePermission:    conversation.Settings.ApprovalMode,
 		mcpServers:             map[string]domain.ConversationMCPServer{},
 		mcpServerSeenRevision:  map[string]uint64{},
 		stopped:                make(chan struct{}),
@@ -1840,10 +1842,23 @@ func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (p
 		return sendErr
 	})
 	if err != nil {
+		if outcome.Effective == "" && len(outcome.Rejected) > 0 {
+			if noticeErr := c.store.UpsertActivity(ctx, c.conversation.ID, "",
+				permissionFallbackActivity(c.newID(), requested, outcome), c.now()); noticeErr != nil {
+				return ports.ChatTurnRef{}, errors.Join(err, fmt.Errorf("persist manual approval requirement: %w", noticeErr))
+			}
+		}
 		return ports.ChatTurnRef{}, err
 	}
 	if outcome.steppedDown(requested) {
 		c.adoptEffectivePermission(ctx, requested, outcome)
+	}
+	c.mu.Lock()
+	changed := c.effectivePermission != outcome.Effective
+	c.effectivePermission = outcome.Effective
+	c.mu.Unlock()
+	if changed && !outcome.steppedDown(requested) && c.reviewID == "" && c.onPermissionsChanged != nil {
+		c.onPermissionsChanged(c.sessionID, outcome.Effective)
 	}
 	return ref, nil
 }

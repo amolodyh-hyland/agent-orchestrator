@@ -460,6 +460,7 @@ export interface SystemEventDetail {
 	 */
 	requested?: string;
 	effective?: string;
+	manualApprovalsRequired?: boolean;
 	rejected?: Array<{ mode: string; reason: string }>;
 	/** provider.failure */
 	category?: string;

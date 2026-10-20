@@ -154,6 +154,23 @@ Rules:
   `PermissionFallbackExhaustedError` that lists each mode and its reason. A refusal
   with nothing below the requested mode (`accept-edits`, `default`) is reported as
   the provider's refusal itself, not as an exhausted ladder.
+- Exhaustion also persists a `permission.fallback` timeline activity with
+  `manualApprovalsRequired: true` and no effective mode. The UI says **Manual
+  approvals required — no work started**. AO starts no work under `default`;
+  the user must choose an available manual mode explicitly. A failed launch
+  clears the session's runtime permission field rather than reporting the refused
+  request as accepted.
+- Claude Code Chat uses the same ladder. ACP `session/set_mode` policy and
+  unsupported-mode refusals are typed permission rejections, including details
+  nested inside a generic JSON-RPC error. A model-dependent catalog without Auto
+  rejects Auto so the service tries `accept-edits`; it never substitutes Default.
+  A model-picker catalog rebuild preserves the requested permission preference
+  for the next turn, even if the provider clamps its idle mode to Default.
+  Managed settings stay authoritative and unchanged. On personal subscriptions,
+  an explicitly chosen bypass mode is honoured when the provider accepts it.
+- Session details show the session API's recorded runtime permission mode. A
+  successful fallback or provider permission-picker change updates that field;
+  process command-line flags describe only the initial launch.
 - A refusal is reported with `409 CHAT_PERMISSION_REJECTED` carrying that message,
   never an anonymous `500`, wherever an error is returned to the caller: the
   conversation routes (send, steer, queue, retry, edit, branch and the rest, through

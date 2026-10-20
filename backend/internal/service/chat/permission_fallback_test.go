@@ -196,10 +196,11 @@ func (f *fallbackFixture) persistedMode(t *testing.T) ports.PermissionMode {
 
 // fallbackNotice is the decoded detail of a permission.fallback timeline row.
 type fallbackNotice struct {
-	Event     string `json:"event"`
-	Requested string `json:"requested"`
-	Effective string `json:"effective"`
-	Rejected  []struct {
+	ManualApprovalsRequired bool   `json:"manualApprovalsRequired"`
+	Event                   string `json:"event"`
+	Requested               string `json:"requested"`
+	Effective               string `json:"effective"`
+	Rejected                []struct {
 		Mode   string `json:"mode"`
 		Reason string `json:"reason"`
 	} `json:"rejected"`
@@ -432,13 +433,16 @@ func TestEveryModeRejectedFailsClearlyListingThem(t *testing.T) {
 	if turn.State != domain.TurnStateFailed {
 		t.Fatalf("turn state = %q, want failed", turn.State)
 	}
+	notices := f.fallbackNotices(t)
+	if len(notices) != 1 || !notices[0].ManualApprovalsRequired || notices[0].Effective != "" || len(notices[0].Rejected) != 3 {
+		t.Fatalf("manual approval requirement was not persisted: %+v", notices)
+	}
 	if f.ctrl.Settings().ApprovalMode != bypass || len(f.changedModes()) != 0 {
 		t.Fatalf("a total failure changed the mode: %q, reported %v", f.ctrl.Settings().ApprovalMode, f.changedModes())
 	}
 }
 
-// A turn that ran with the requested mode, or that failed outright, leaves no
-// notice: the timeline only says a mode was lowered when one really was.
+// An accepted request or an unrelated failure leaves no permission notice.
 func TestNoTimelineNoticeWithoutAStepDown(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -447,7 +451,6 @@ func TestNoTimelineNoticeWithoutAStepDown(t *testing.T) {
 	}{
 		{"requested mode accepted", nil, false},
 		{"unrelated failure", map[ports.PermissionMode]error{bypass: errProviderBusy}, true},
-		{"every mode rejected", reject(bypass, autoMode, acceptEdit), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFallbackFixture(t, fallbackOptions{permissions: bypass, reject: tc.reject})
@@ -805,5 +808,29 @@ func assertNoticeWrittenLast(t *testing.T, observed []noticeState) {
 	}
 	if !reflect.DeepEqual(observed[0].reported, []ports.PermissionMode{autoMode}) {
 		t.Errorf("when the notice was written the session record had been told %v, want [%s]", observed[0].reported, autoMode)
+	}
+}
+
+func TestAcceptedPermissionChangeUpdatesSessionRuntimeMode(t *testing.T) {
+	f := newFallbackFixture(t, fallbackOptions{permissions: bypass})
+	if f.startErr != nil {
+		t.Fatal(f.startErr)
+	}
+	settings := f.ctrl.Settings()
+	settings.ApprovalMode = acceptEdit
+	if _, err := f.svc.SetTurnSettings(context.Background(), testSession, settings); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.changedModes()) != 0 {
+		t.Fatal("reported a pending choice as the runtime mode before acceptance")
+	}
+	if _, err := f.send("with new permissions"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.changedModes(); !reflect.DeepEqual(got, []ports.PermissionMode{acceptEdit}) {
+		t.Fatalf("runtime mode reported=%v", got)
+	}
+	if notices := f.fallbackNotices(t); len(notices) != 0 {
+		t.Fatalf("a user choice was reported as a fallback: %+v", notices)
 	}
 }
