@@ -79,6 +79,8 @@ type Service struct {
 	defaultHarness      domain.AgentHarness
 	logger              *slog.Logger
 	onModelScopeChanged func(projectID string)
+	contextMachineMu    sync.RWMutex
+	contextMachineID    string
 	// addMu serialises the whole body of Add. Workspace registration performs
 	// filesystem mutations (git init, .gitignore writes, commits) that are not
 	// covered by the store's own writeMu, so path/id conflict checks plus the
@@ -459,6 +461,10 @@ func (m *Service) CreateContainer(ctx context.Context, in CreateContainerInput) 
 		}
 		id = uuid.NewString()
 	}
+	instructions, contextSources, err := m.prepareProjectContextLocalSources(domain.ProjectID(id), path, in.Instructions)
+	if err != nil {
+		return Project{}, err
+	}
 	row := domain.ProjectRecord{
 		ID:           id,
 		Path:         path,
@@ -466,9 +472,17 @@ func (m *Service) CreateContainer(ctx context.Context, in CreateContainerInput) 
 		RegisteredAt: m.clock().UTC(),
 		Kind:         domain.ProjectKindScratch,
 		Revision:     1,
-		Instructions: in.Instructions,
+		Instructions: instructions,
 	}
-	if err := m.store.UpsertProject(ctx, row); err != nil {
+	if len(contextSources) > 0 {
+		writer, ok := m.store.(projectContextSourceWriter)
+		if !ok {
+			return Project{}, apierr.Invalid("PROJECT_CONTEXT_LOCAL_SOURCE_UNAVAILABLE", "Local attachments are not supported by this daemon", nil)
+		}
+		if err := writer.UpsertProjectWithContextSources(ctx, row, contextSources); err != nil {
+			return Project{}, contextSourceStoreError(err, "PROJECT_CREATE_FAILED", "Failed to create Project")
+		}
+	} else if err := m.store.UpsertProject(ctx, row); err != nil {
 		return Project{}, apierr.Internal("PROJECT_CREATE_FAILED", "Failed to create Project")
 	}
 	m.modelScopeChanged(row.ID)
@@ -846,9 +860,30 @@ func (m *Service) UpdateSettings(ctx context.Context, id domain.ProjectID, in Up
 	if err := in.Config.ValidateCanonicalRepository(row.RepoOriginURL); err != nil {
 		return Project{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
 	}
-	updated, err := m.store.UpdateProjectSettings(ctx, string(id), inDisplayName, in.Config, in.Instructions, normalizedProjectRevision(row.Revision))
-	if err != nil {
-		return Project{}, apierr.Internal("PROJECT_SETTINGS_UPDATE_FAILED", "Failed to update project settings")
+	instructions := in.Instructions
+	var contextSources []domain.ProjectContextLocalSourceRecord
+	if instructions != nil {
+		prepared, sources, err := m.prepareProjectContextLocalSources(id, row.Path, *instructions)
+		if err != nil {
+			return Project{}, err
+		}
+		instructions, contextSources = &prepared, sources
+	}
+	var updated bool
+	if len(contextSources) > 0 {
+		writer, ok := m.store.(projectContextSourceWriter)
+		if !ok {
+			return Project{}, apierr.Invalid("PROJECT_CONTEXT_LOCAL_SOURCE_UNAVAILABLE", "Local attachments are not supported by this daemon", nil)
+		}
+		updated, err = writer.UpdateProjectSettingsWithContextSources(ctx, string(id), inDisplayName, in.Config, instructions, normalizedProjectRevision(row.Revision), contextSources)
+		if err != nil {
+			return Project{}, contextSourceStoreError(err, "PROJECT_SETTINGS_UPDATE_FAILED", "Failed to update project settings")
+		}
+	} else {
+		updated, err = m.store.UpdateProjectSettings(ctx, string(id), inDisplayName, in.Config, instructions, normalizedProjectRevision(row.Revision))
+		if err != nil {
+			return Project{}, apierr.Internal("PROJECT_SETTINGS_UPDATE_FAILED", "Failed to update project settings")
+		}
 	}
 	if !updated {
 		// Zero rows means the project vanished or, when instructions were sent,

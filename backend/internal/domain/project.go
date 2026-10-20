@@ -46,16 +46,17 @@ type ProjectRecord struct {
 
 // ProjectInstructions contains durable context guidance scoped by session role.
 type ProjectInstructions struct {
-	Shared      string `json:"shared,omitempty"`
-	Worker      string `json:"worker,omitempty"`
-	Coordinator string `json:"coordinator,omitempty"`
+	Shared      string                     `json:"shared,omitempty"`
+	Worker      string                     `json:"worker,omitempty"`
+	Coordinator string                     `json:"coordinator,omitempty"`
+	Attachments []ProjectContextAttachment `json:"attachments,omitempty"`
 }
 
 const maxProjectInstructionBytes = 64 * 1024
 
 // IsZero reports whether the Project has any shared or role-scoped instructions.
 func (i ProjectInstructions) IsZero() bool {
-	return i.Shared == "" && i.Worker == "" && i.Coordinator == ""
+	return i.Shared == "" && i.Worker == "" && i.Coordinator == "" && len(i.Attachments) == 0
 }
 
 // Validate checks the UTF-8 and total-size limits for one Project revision.
@@ -65,6 +66,19 @@ func (i ProjectInstructions) Validate() error {
 	}
 	if len(i.Shared)+len(i.Worker)+len(i.Coordinator) > maxProjectInstructionBytes {
 		return fmt.Errorf("project instructions must be %d KiB or smaller in total", maxProjectInstructionBytes/1024)
+	}
+	if len(i.Attachments) > MaxProjectContextBindings {
+		return fmt.Errorf("project context may have at most %d attachments", MaxProjectContextBindings)
+	}
+	seen := make(map[string]struct{}, len(i.Attachments))
+	for _, attachment := range i.Attachments {
+		if err := attachment.Validate(); err != nil {
+			return err
+		}
+		if _, exists := seen[attachment.ID]; exists {
+			return fmt.Errorf("project context attachment id %q is duplicated", attachment.ID)
+		}
+		seen[attachment.ID] = struct{}{}
 	}
 	return nil
 }

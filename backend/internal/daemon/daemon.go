@@ -932,6 +932,10 @@ func Run() error {
 	}
 
 	bs.HostID = hostIdentity.HostID
+	projectSvc.SetProjectContextMachineID(hostIdentity.HostID)
+	if machineSetter, ok := sessMgr.(interface{ SetProjectContextMachineID(string) }); ok {
+		machineSetter.SetProjectContextMachineID(hostIdentity.HostID)
+	}
 	// Pushes include the authoritative host identity so a phone can reject
 	// same-numbered sessions on another machine. No identity means no push.
 	if pushDevices != nil && hostIdentity.HostID != "" {

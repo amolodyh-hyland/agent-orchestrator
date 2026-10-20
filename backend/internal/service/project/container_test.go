@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -28,6 +29,11 @@ func TestCreateContainerUsesScratchWithoutGitAndPersistsInstructions(t *testing.
 		Shared:      "Keep the scope clear.",
 		Worker:      "Make focused changes.",
 		Coordinator: "Coordinate without changing worker rules.",
+		Attachments: []domain.ProjectContextAttachment{{
+			ID: "runbook", SourceKind: domain.ProjectContextInlineText, Text: "Reference only.",
+			MediaType: "text/plain", Roles: []domain.ProjectContextRole{domain.ProjectContextRoleShared},
+			Position: 1, Enabled: true,
+		}},
 	}
 	created, err := manager.CreateContainer(ctx, project.CreateContainerInput{
 		DisplayName:  "Planning",
@@ -47,7 +53,7 @@ func TestCreateContainerUsesScratchWithoutGitAndPersistsInstructions(t *testing.
 	if created.Revision != 1 || created.FolderMissing {
 		t.Fatalf("container revision/folder state = %d/%t, want 1/false", created.Revision, created.FolderMissing)
 	}
-	if created.Instructions == nil || *created.Instructions != instructions {
+	if created.Instructions == nil || !reflect.DeepEqual(*created.Instructions, instructions) {
 		t.Fatalf("container instructions = %#v, want %#v", created.Instructions, instructions)
 	}
 	entries, err := os.ReadDir(emptyDir)
@@ -68,7 +74,7 @@ func TestCreateContainerUsesScratchWithoutGitAndPersistsInstructions(t *testing.
 		_ = store.Close()
 		t.Fatalf("update Project instructions: %v", err)
 	}
-	if updated.Revision != 2 || updated.Instructions == nil || *updated.Instructions != updatedInstructions {
+	if updated.Revision != 2 || updated.Instructions == nil || !reflect.DeepEqual(*updated.Instructions, updatedInstructions) {
 		t.Fatalf("updated Project metadata = revision %d, instructions %#v", updated.Revision, updated.Instructions)
 	}
 	if err := store.Close(); err != nil {
@@ -85,7 +91,7 @@ func TestCreateContainerUsesScratchWithoutGitAndPersistsInstructions(t *testing.
 	if err != nil {
 		t.Fatalf("get Project after restart: %v", err)
 	}
-	if result.Project == nil || result.Project.ID != created.ID || result.Project.Revision != 2 || result.Project.Instructions == nil || *result.Project.Instructions != updatedInstructions {
+	if result.Project == nil || result.Project.ID != created.ID || result.Project.Revision != 2 || result.Project.Instructions == nil || !reflect.DeepEqual(*result.Project.Instructions, updatedInstructions) {
 		t.Fatalf("Project after restart = %#v", result)
 	}
 
