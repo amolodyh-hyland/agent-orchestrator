@@ -26,10 +26,12 @@ export function HarnessHealthTab({ details, checking, authCheckFailed, updateErr
 		: { tone: "off", label: t("settings.harness.installationUnknown") };
 	// An expired login token the harness renews by itself is signed in, not a problem to fix.
 	const renewsOnRun = details.authStatus === "configured" && Boolean(readinessAgent?.authentication.diagnostics?.some((step) => step.code === "token_renewal_pending"));
+	const nativeSignIn = details.authStatus === "configured" && Boolean(readinessAgent?.authentication.diagnostics?.some((step) => step.code === "cli_managed_credential"));
 	const authTone: HarnessTone = authCheckFailed || readinessAgent?.authentication.freshness !== "fresh" ? "off"
 		: renewsOnRun || details.authStatus === "authorized" || details.authStatus === "not_applicable" ? "ok"
 		: details.authStatus === "unauthorized" ? "error" : "off";
 	const authLabel = renewsOnRun ? t("settings.harness.health.authRenewsOnRun")
+		: nativeSignIn ? `${details.authSummary} · ${t("settings.harness.health.authUnverified")}`
 		: details.authStatus === "configured" ? t("settings.harness.health.authUnverified") : details.authSummary;
 	// Only facts AO has observed: a row with nothing to report is left out rather than filled with a placeholder.
 	const credential = detectedCredential(details, t);

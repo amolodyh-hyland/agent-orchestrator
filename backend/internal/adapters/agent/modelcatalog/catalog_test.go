@@ -641,7 +641,7 @@ func TestClaudeFallbackEfforts(t *testing.T) {
 	}
 }
 
-func TestClaudeWithoutDiscoveryDoesNotInventModels(t *testing.T) {
+func TestClaudeWithoutDiscoveryOffersUnverifiedAliases(t *testing.T) {
 	request := claudeRequest(t)
 	request.Binary = "/missing/claude"
 	request.Env["ANTHROPIC_MODEL"] = "claude-opus-4-5-20251101"
@@ -649,8 +649,8 @@ func TestClaudeWithoutDiscoveryDoesNotInventModels(t *testing.T) {
 	if err == nil {
 		t.Fatal("missing provider discovery was reported as success")
 	}
-	if len(got.Models) != 0 || !got.AllowCustom {
-		t.Fatalf("catalog = %#v, want no invented choices with manual entry allowed", got)
+	if len(got.Models) != len(ClaudeFallbackModelIDs()) || !got.AllowCustom || got.Source != "built-in" {
+		t.Fatalf("catalog = %#v, want built-in aliases with manual entry allowed", got)
 	}
 }
 

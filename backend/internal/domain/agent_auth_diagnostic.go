@@ -88,6 +88,8 @@ func NewAgentAuthDiagnostic(method, code string) AgentAuthDiagnostic {
 		d.NextStep = "Run the same executable and status command on the selected host. If it reports a login in your terminal, compare the user, config directory and environment seen by AO before signing in again."
 	case "cli_signed_in":
 		d.Reason = "The CLI reported a stored login; this check alone does not prove provider access."
+	case "cli_managed_credential":
+		d.Reason = "The CLI reports signed in and manages the credential. AO does not need to extract it to recognize this login; provider access is unverified."
 	case "credential_present":
 		d.Reason = "A local credential is configured; its presence alone does not prove provider access."
 	case "credential_missing":

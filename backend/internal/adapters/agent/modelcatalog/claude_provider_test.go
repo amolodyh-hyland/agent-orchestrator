@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -107,9 +108,8 @@ func TestClaudeConfiguredUnknownDefaultKeepsRawLabel(t *testing.T) {
 	t.Fatal("configured custom pin was not carried into the catalog")
 }
 
-// Failed discovery leaves cache selection to the shared service. It must not
-// replace a cached provider list with invented aliases.
-func TestClaudeCatalogReturnsNoInventedModelsWithProviderError(t *testing.T) {
+// The service still prefers a matching cached provider list over these aliases.
+func TestClaudeCatalogReturnsLabelledAliasesWithProviderError(t *testing.T) {
 	tests := []struct {
 		name string
 		list ClaudeModelListFunc
@@ -149,8 +149,13 @@ func TestClaudeCatalogReturnsNoInventedModelsWithProviderError(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			catalog, err := discoverClaudeCatalog(context.Background(), claudeRequest(t), tc.list)
-			if len(catalog.Models) != 0 {
-				t.Fatalf("failed discovery invented models: %+v", catalog.Models)
+			if len(catalog.Models) != len(ClaudeFallbackModelIDs()) || catalog.Source != "built-in" {
+				t.Fatalf("fallback catalog = %+v", catalog)
+			}
+			for _, model := range catalog.Models {
+				if !strings.Contains(model.Label, "built-in alias; availability unverified") {
+					t.Fatalf("unlabelled fallback: %+v", model)
+				}
 			}
 			if !catalog.AllowCustom {
 				t.Fatal("manual model entry must remain available without a cache")
@@ -191,8 +196,8 @@ func TestClaudeGatewayCatalogFailureLeavesFallbackToCache(t *testing.T) {
 	if catalog.CustomModelEntry != ports.CustomModelEntryDirect || !catalog.AllowCustom {
 		t.Fatalf("custom entry = (%q, %v), want direct enabled", catalog.CustomModelEntry, catalog.AllowCustom)
 	}
-	if len(catalog.Models) != 0 {
-		t.Fatalf("models = %#v, want no replacement list on discovery failure", catalog.Models)
+	if len(catalog.Models) != len(ClaudeFallbackModelIDs()) || catalog.Source != "built-in" {
+		t.Fatalf("models = %#v, want explicitly unverified CLI aliases", catalog.Models)
 	}
 }
 
@@ -210,6 +215,16 @@ func TestClaudeProviderModelsAreDeduped(t *testing.T) {
 	}
 	if len(catalog.Models) != 2 {
 		t.Fatalf("models = %+v, want duplicates collapsed and whitespace trimmed", catalog.Models)
+	}
+}
+
+func TestClaudeProfileSelectionInvalidatesCatalog(t *testing.T) {
+	request := claudeRequest(t)
+	request.Env["ANTHROPIC_PROFILE"] = "work"
+	first := (Discoverer{}).CatalogFingerprint(context.Background(), request)
+	request.Env["ANTHROPIC_PROFILE"] = "personal"
+	if second := (Discoverer{}).CatalogFingerprint(context.Background(), request); second == first {
+		t.Fatal("profile switch must invalidate a provider catalog even if native account metadata is absent")
 	}
 }
 

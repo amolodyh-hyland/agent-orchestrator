@@ -3,12 +3,14 @@ package claudecode
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -134,7 +136,7 @@ func (p *Plugin) authStatusAndDiagnostics(ctx context.Context, workingDir string
 	// Bedrock credential at api.anthropic.com.
 	//
 	var steps []domain.AgentAuthDiagnostic
-	resolved := p.resolveProviderContext(ctx, binary, workingDir, env, func(ctx context.Context, binary, cwd string, env map[string]string) (claudeAuthReport, bool) {
+	resolved := p.resolveProviderContext(ctx, binary, workingDir, env, false, func(ctx context.Context, binary, cwd string, env map[string]string) (claudeAuthReport, bool) {
 		report, ok, step := p.claudeCLIAuthReportDiagnostic(ctx, binary, cwd, env)
 		steps = append(steps, step)
 		return report, ok
@@ -142,7 +144,7 @@ func (p *Plugin) authStatusAndDiagnostics(ctx context.Context, workingDir string
 	reportedProvider, _ := agentcreds.ParseProvider(resolved.report.APIProvider)
 	// The CLI report speaks for the agent's credential only when it answered
 	// for the same provider.
-	reportApplies := resolved.cliOK && (resolved.provider == agentcreds.ProviderFirstParty || resolved.provider == reportedProvider)
+	reportApplies := resolved.cliOK && (resolved.cliManaged || resolved.provider == agentcreds.ProviderFirstParty || resolved.provider == reportedProvider)
 	report := claudeAuthReport{}
 	if reportApplies {
 		report = resolved.report
@@ -158,6 +160,13 @@ func (p *Plugin) authStatusAndDiagnostics(ctx context.Context, workingDir string
 		ports.RecordAuthEvidence(ctx, evidence)
 	} else if reportApplies {
 		ports.RecordAuthEvidence(ctx, domain.CommandSource(binary, "auth", "status"))
+	}
+	if resolved.cliSignedOut {
+		return ports.AgentAuthStatusUnauthorized, report, steps, nil
+	}
+	if resolved.cliManaged {
+		steps = append(steps, domain.NewAgentAuthDiagnostic("provider_validation", "cli_managed_credential"))
+		return ports.AgentAuthStatusConfigured, report, steps, nil
 	}
 
 	// Rungs 1 and 2 — the provider gate and the network probe. This is the
@@ -189,13 +198,15 @@ func (p *Plugin) authStatusAndDiagnostics(ctx context.Context, workingDir string
 }
 
 type claudeProviderContext struct {
-	opts       agentcreds.ResolveOptions
-	report     claudeAuthReport
-	cliOK      bool
-	provider   agentcreds.Provider
-	providerOK bool
-	credential agentcreds.Credential
-	found      bool
+	opts         agentcreds.ResolveOptions
+	report       claudeAuthReport
+	cliOK        bool
+	provider     agentcreds.Provider
+	providerOK   bool
+	credential   agentcreds.Credential
+	found        bool
+	cliManaged   bool
+	cliSignedOut bool
 }
 
 // resolveProviderContext is the single discovery path shared by auth checks
@@ -206,6 +217,7 @@ func (p *Plugin) resolveProviderContext(
 	ctx context.Context,
 	binary, workingDir string,
 	env map[string]string,
+	forModels bool,
 	reportFn func(context.Context, string, string, map[string]string) (claudeAuthReport, bool),
 ) claudeProviderContext {
 	opts := (agentcreds.ResolveOptions{
@@ -219,15 +231,48 @@ func (p *Plugin) resolveProviderContext(
 		reported = report.APIProvider
 	}
 	provider, providerOK := agentcreds.ResolveProvider(reported, opts)
+	cliManaged := cliOK && report.managesCredential(opts)
+	reportedProvider, reportedOK := agentcreds.ParseProvider(reported)
+	cliSignedOut := cliOK && report.LoggedIn != nil && !*report.LoggedIn && report.AuthMethod == "none" && reportedOK && provider == reportedProvider
+	if cliOK && report.LoggedIn != nil && !*report.LoggedIn {
+		opts.DisableStoredCredentials = true
+	}
 	credential, found := agentcreds.Credential{}, false
-	if providerOK {
-		credential, found = agentcreds.ResolveLocal(ctx, provider, opts)
+	// Native status covers profiles, federation, SSO and helper credentials
+	// without exporting them. Legacy discovery is only useful for model listing.
+	readLocal := !cliManaged || forModels && (report.AuthMethod == "" || report.AuthMethod == "claude.ai" || report.AuthMethod == "api_key" || report.AuthMethod == "oauth_token")
+	if providerOK && readLocal && !cliSignedOut {
+		credentialOpts := opts
+		if cliManaged {
+			credentialOpts.Env = func(name string) string {
+				if report.AuthMethod == "claude.ai" && slices.Contains(claudeCredentialEnv, name) ||
+					report.AuthMethod == "api_key" && name == "CLAUDE_CODE_OAUTH_TOKEN" ||
+					report.AuthMethod == "oauth_token" && (name == "ANTHROPIC_API_KEY" || name == "ANTHROPIC_AUTH_TOKEN") {
+					return ""
+				}
+				return opts.Env(name)
+			}
+			if report.AuthMethod == "oauth_token" {
+				credentialOpts.DisableStoredCredentials = true
+			}
+			// The legacy Keychain service names are not scoped to config overrides.
+			if opts.Env("CLAUDE_CONFIG_DIR") != "" {
+				credentialOpts.AllowKeychain = false
+			}
+		}
+		credential, found = claudeResolveLocal(ctx, provider, credentialOpts)
+		if cliManaged && found && (report.AuthMethod == "api_key" && credential.Kind != agentcreds.KindAPIKey && credential.Kind != agentcreds.KindAuthToken ||
+			report.AuthMethod == "claude.ai" && credential.Kind != agentcreds.KindOAuthToken) {
+			credential, found = agentcreds.Credential{}, false
+		}
 	}
 	return claudeProviderContext{
 		opts: opts, report: report, cliOK: cliOK, provider: provider,
-		providerOK: providerOK, credential: credential, found: found,
+		providerOK: providerOK, credential: credential, found: found, cliManaged: cliManaged, cliSignedOut: cliSignedOut,
 	}
 }
+
+var claudeResolveLocal = agentcreds.ResolveLocal
 
 // probeAuthStatus runs the provider gate and the network probe.
 //
@@ -350,6 +395,22 @@ type claudeAuthReport struct {
 	Email            string `json:"email"`
 	OrgName          string `json:"orgName"`
 	SubscriptionType string `json:"subscriptionType"`
+	OrgID            string `json:"orgId"`
+	ConfigDirectory  string `json:"configDirectory"`
+}
+
+func (r claudeAuthReport) managesCredential(opts agentcreds.ResolveOptions) bool {
+	if r.LoggedIn == nil || !*r.LoggedIn {
+		return false
+	}
+	if r.AuthMethod == "" {
+		for _, name := range claudeCredentialEnv {
+			if opts.Env(name) != "" {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // account is the display identity of a signed-in report. A signed-out or
@@ -361,10 +422,12 @@ func (r claudeAuthReport) account() domain.AgentAccountIdentity {
 	identity := domain.AgentAccountIdentity{Email: r.Email, Organization: r.OrgName, Plan: r.SubscriptionType}
 	method := strings.ToLower(strings.TrimSpace(r.AuthMethod))
 	switch {
-	case method == "claude.ai" || strings.Contains(method, "oauth"):
-		identity.Method = domain.AgentAccountMethodAccount
-	case strings.Contains(method, "key"):
+	case method == "api_key" || method == "api_key_helper":
 		identity.Method = domain.AgentAccountMethodAPIKey
+	case method == "oauth_token":
+		identity.Method = domain.AgentAccountMethodToken
+	case method == "claude.ai" || strings.Contains(method, "oauth") || identity.Email != "" || identity.Organization != "":
+		identity.Method = domain.AgentAccountMethodAccount
 	}
 	return identity
 }
@@ -409,7 +472,7 @@ type claudeCommandOutput struct {
 }
 
 var claudeAuthCommand = func(ctx context.Context, binary, workingDir string, env map[string]string) (claudeCommandOutput, error) {
-	cmd := aoprocess.CommandContext(ctx, binary, "auth", "status")
+	cmd := aoprocess.CommandContext(ctx, binary, "auth", "status", "--json")
 	if strings.TrimSpace(workingDir) != "" {
 		cmd.Dir = workingDir
 	}
@@ -520,7 +583,7 @@ var claudeModelAuthReport = func(ctx context.Context, binary, workingDir string,
 func ProviderCatalogFingerprint(ctx context.Context, binary, workingDir string, env map[string]string) string {
 	probeCtx, cancel := context.WithTimeout(ctx, claudeAuthProbeTimeout)
 	defer cancel()
-	resolved := (&Plugin{}).resolveProviderContext(probeCtx, binary, workingDir, env, claudeModelAuthReport)
+	resolved := (&Plugin{}).resolveProviderContext(probeCtx, binary, workingDir, env, true, claudeModelAuthReport)
 	reported := ""
 	if resolved.cliOK {
 		reported = strings.TrimSpace(resolved.report.APIProvider)
@@ -529,7 +592,9 @@ func ProviderCatalogFingerprint(ctx context.Context, binary, workingDir string, 
 	if resolved.found {
 		credential = resolved.credential.Fingerprint()
 	}
-	return string(resolved.provider) + "\x00" + reported + "\x00" + credential
+	reportJSON, _ := json.Marshal(resolved.report)
+	identity := sha256.Sum256(reportJSON)
+	return fmt.Sprintf("%s\x00%s\x00%s\x00%x", resolved.provider, reported, credential, identity)
 }
 
 // ProviderModels returns the Claude model IDs the configured provider actually
@@ -546,7 +611,7 @@ func ProviderCatalogFingerprint(ctx context.Context, binary, workingDir string, 
 func ProviderModels(ctx context.Context, binary, workingDir string, env map[string]string) ([]ports.AgentModelInfo, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, agentcreds.DefaultTimeout)
 	defer cancel()
-	resolved := (&Plugin{}).resolveProviderContext(probeCtx, binary, workingDir, env, claudeModelAuthReport)
+	resolved := (&Plugin{}).resolveProviderContext(probeCtx, binary, workingDir, env, true, claudeModelAuthReport)
 	return providerModelsFor(probeCtx, resolved)
 }
 
@@ -561,12 +626,21 @@ func (e modelDiscoveryAuthError) Error() string { return e.message }
 func (e modelDiscoveryAuthError) Unwrap() error { return e.kind }
 
 func providerModelsFor(probeCtx context.Context, resolved claudeProviderContext) ([]ports.AgentModelInfo, error) {
+	if resolved.cliSignedOut {
+		return nil, modelDiscoveryAuthError{kind: ports.ErrAgentModelDiscoveryCredentialRejected, message: "Claude Code reports signed out"}
+	}
+	if resolved.cliManaged && !resolved.found {
+		return nil, errors.New("Claude Code reports signed in and manages the credential; AO cannot directly list this account's models")
+	}
 	if !resolved.providerOK {
 		return nil, errors.New("claude-code: model discovery: configured provider is unsupported")
 	}
 	// An expired stored login cannot list models until Claude Code renews it,
 	// and asking would only earn a 401 that reads like a sign-out.
 	if resolved.found && resolved.credential.ExpiredButRenewable(claudeNow()) {
+		if resolved.cliManaged {
+			return nil, errors.New("Claude Code reports signed in; account model listing awaits native token renewal")
+		}
 		return nil, modelDiscoveryAuthError{
 			kind:    ports.ErrAgentModelDiscoveryCredentialExpired,
 			message: "claude-code: model discovery: the saved Claude Code login token expired; Claude Code renews it the next time it runs",
@@ -586,6 +660,9 @@ func providerModelsFor(probeCtx context.Context, resolved claudeProviderContext)
 		claudeAuthCache.put(result)
 	}
 	if result.State != agentcreds.StateValid && len(result.Models) == 0 {
+		if resolved.cliManaged {
+			return nil, errors.New("Claude Code reports signed in; AO could not list this account's models using the legacy credential store")
+		}
 		message := fmt.Sprintf("claude-code: model discovery: %s", result.Detail)
 		if result.State == agentcreds.StateInvalid {
 			return nil, modelDiscoveryAuthError{kind: ports.ErrAgentModelDiscoveryCredentialRejected, message: message}

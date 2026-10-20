@@ -405,25 +405,35 @@ func ClaudeFallbackModelIDs() []string {
 	return append([]string(nil), claudeFallbackAliases...)
 }
 
-// discoverClaudeCatalog reports only provider-discovered models. Errors leave
-// the shared service to retain the matching cached catalog or allow manual
-// entry when no successful catalog has been saved yet.
+// Discovery errors retain matching cached provider models in the service.
+// A cold failure supplies explicitly unverified CLI aliases and manual entry.
 func discoverClaudeCatalog(
 	ctx context.Context,
 	request ports.AgentModelDiscoveryRequest,
 	list ClaudeModelListFunc,
 ) (ports.AgentModelCatalog, error) {
 	base := Manual(request.AgentID)
+	fallback := func(cause error) (ports.AgentModelCatalog, error) {
+		for _, alias := range ClaudeFallbackModelIDs() {
+			efforts, _ := ClaudeFallbackEfforts(alias)
+			base.Models = append(base.Models, ports.AgentModelInfo{
+				ID: alias, Label: alias + " (built-in alias; availability unverified)", Efforts: efforts,
+			})
+		}
+		base.SelectionMode = ports.ModelSelectionCatalog
+		base.Source = "built-in"
+		return base, fmt.Errorf("claude-code model discovery: %w; showing built-in CLI aliases, account availability unverified", cause)
+	}
 	if list == nil {
-		return base, errors.New("claude-code model discovery is unavailable")
+		return fallback(errors.New("model listing is unavailable"))
 	}
 	models, err := list(ctx, request)
 	if err != nil {
-		return base, fmt.Errorf("claude-code model discovery: %w", err)
+		return fallback(err)
 	}
 	normalized := normalize(models)
 	if len(normalized) == 0 {
-		return base, errors.New("claude-code model discovery returned no models")
+		return fallback(errors.New("provider returned no models"))
 	}
 	settings := agentcreds.ResolveClaudeSettings(ctx, request.WorkingDir, request.Env, agentcreds.ResolveOptions{})
 	// An explicitly configured alias may accompany the provider's concrete

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -174,11 +175,11 @@ func TestClaudeDiscoveryFailureUsesCachedModelsWithoutStaticFallback(t *testing.
 			t.Fatalf("refresh=%v: catalog = %#v, %v; want cached provider models and auth warning", refresh, got, err)
 		}
 	}
-	// A scope with no cache remains empty and permits manual entry.
+	// A scope with no cache offers labelled, unverified aliases and manual entry.
 	emptyService := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, &fakeModelCache{}, nil, discoverer)
 	got, err := emptyService.Models(context.Background(), "claude-code", "", true)
-	if err != nil || len(got.Models) != 0 || !got.AllowCustom || got.WarningCode != ports.ModelCatalogWarningAuthExpired {
-		t.Fatalf("uncached catalog = %#v, %v; want manual entry with the auth warning", got, err)
+	if err != nil || len(got.Models) != len(modelcatalog.ClaudeFallbackModelIDs()) || got.Source != "built-in" || !got.Stale || !got.AllowCustom || got.WarningCode != ports.ModelCatalogWarningAuthExpired || !strings.Contains(got.Warning, "account availability unverified") {
+		t.Fatalf("uncached catalog = %#v, %v; want unverified aliases with the auth warning", got, err)
 	}
 }
 

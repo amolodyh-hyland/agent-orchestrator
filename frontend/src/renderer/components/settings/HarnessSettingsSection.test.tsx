@@ -634,6 +634,34 @@ describe("HarnessSettingsSection", () => {
 		expect(report).toContain("Authentication attempted: 2026-10-10T11:00:00Z");
 	});
 
+	it("recognises a CLI-managed company login without claiming provider verification", async () => {
+		const readiness = readyCatalog();
+		Object.assign(readiness.agents.find((agent) => agent.id === "claude-code")!.authentication, {
+			state: "configured", account: { method: "account", organization: "Fixture Company", plan: "enterprise" },
+			diagnostics: [{ method: "provider_validation", code: "cli_managed_credential",
+				reason: "The CLI reports signed in and manages the credential.", checkedAt: "2026-10-10T10:00:00Z", cached: false, durationMs: 0 }],
+		});
+		mockInstalledOperations("npm", readiness);
+		const models = { agentId: "claude-code", source: "built-in", stale: true,
+			models: ["sonnet", "opus", "haiku"].map((id) => ({ id, label: `${id} (built-in alias; availability unverified)` })) };
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/models"
+			? { data: models } as never : (get as (path: string, options: unknown) => Promise<never>)(path, options));
+		const post = vi.mocked(apiClient.POST).getMockImplementation()!;
+		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/models/refresh"
+			? { data: models } as never : (post as (path: string, options: unknown) => Promise<never>)(path, options));
+		renderSection();
+		const page = await findAgentRow("claude-code");
+		await userEvent.click(within(page).getByRole("tab", { name: "Health" }));
+		expect(within(page).getByText("Connected · Credentials not verified")).toBeInTheDocument();
+		expect(within(page).getByText("Signed in with an account")).toBeInTheDocument();
+		expect(within(page).queryByText(/missing|Login required/i)).toBeNull();
+		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
+		const list = await within(page).findByRole("list", { name: "Available models" });
+		for (const model of models.models) expect(within(list).getByText(model.label)).toBeInTheDocument();
+		expect(within(page).queryByText("Log in to Claude Code to load its models.")).toBeNull();
+	});
+
 	it("shows a login the harness renews by itself as connected and copies its provider evidence", async () => {
 		const readiness = readyCatalog();
 		Object.assign(readiness.agents[1].authentication, {
