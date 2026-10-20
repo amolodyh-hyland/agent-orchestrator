@@ -302,6 +302,13 @@ func TestBranchSwitchUsesTheModeAStepDownSettledOn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EditMessage: %v", err)
 	}
+	replacement, err := h.svc.Controller(testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := replacement.Settings().ApprovalMode; got != ports.PermissionModeAuto {
+		t.Fatalf("replacement preference=%q, want accepted auto", got)
+	}
 	driver.fresh.emit(
 		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-101"},
 		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-101", TurnState: domain.TurnStateCompleted},

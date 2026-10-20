@@ -74,6 +74,7 @@ WHERE id = ? AND archived_at IS NULL AND repo_origin_url = '';
 UPDATE projects SET archived_at = ?, metadata_revision = metadata_revision + 1 WHERE id = ? AND archived_at IS NULL;
 
 -- name: PinProjectSessionPermissions :exec
-UPDATE sessions SET session_permissions = sqlc.arg(permissions)
+UPDATE sessions SET session_permissions = sqlc.arg(permissions),
+    permission_ceiling = CASE WHEN permission_ceiling = '' THEN sqlc.arg(permissions) ELSE permission_ceiling END
 WHERE project_id = sqlc.arg(project_id) AND kind = sqlc.arg(kind)
-  AND LENGTH(session_permissions) = 0;
+  AND LENGTH(session_permissions) = 0 AND LENGTH(permission_ceiling) = 0;

@@ -164,8 +164,10 @@ const (
 // SessionMetadata is the typed, off-status metadata for a session: operational
 // handles and seed inputs used by Session Manager and reaper.
 type SessionMetadata struct {
-	// Permissions pins the resolved launch policy independently of future project defaults.
+	// Permissions records the effective runtime mode, empty when no mode was accepted.
 	Permissions PermissionMode `json:"permissions,omitempty"`
+	// PermissionCeiling retains the requested launch bound independently of runtime reports.
+	PermissionCeiling PermissionMode `json:"-"`
 
 	Branch            string `json:"branch,omitempty"`
 	WorkspacePath     string `json:"workspacePath,omitempty"`

@@ -2185,14 +2185,20 @@ function PermissionFallbackRow({ activity }: { activity: ConversationActivity })
 			<ShieldX aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
 			<div className="flex min-w-0 flex-col gap-0.5">
 				<span className="text-[11px] text-foreground">
-					Permission mode lowered to{" "}
-					<strong className="font-medium">{detail?.effective ?? "a less permissive mode"}</strong>
-					{detail?.requested ? (
+					{detail?.manualApprovalsRequired ? (
+						<strong className="font-medium">Manual approvals required — no work started</strong>
+					) : (
 						<>
-							{" "}
-							from <span className="text-muted-foreground">{detail.requested}</span>
+							Permission mode lowered to{" "}
+							<strong className="font-medium">{detail?.effective ?? "a less permissive mode"}</strong>
+							{detail?.requested ? (
+								<>
+									{" "}
+									from <span className="text-muted-foreground">{detail.requested}</span>
+								</>
+							) : null}
 						</>
-					) : null}
+					)}
 				</span>
 				{rejected.map((rejection) => (
 					<span className="text-[10.5px] leading-snug text-muted-foreground break-words" key={rejection.mode}>

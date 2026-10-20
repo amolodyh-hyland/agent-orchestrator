@@ -298,6 +298,17 @@ describe("system events", () => {
 		expect(screen.queryByText("Permission mode lowered from bypass-permissions to auto")).not.toBeInTheDocument();
 	});
 
+	it("shows the persisted manual approval requirement when every rung was refused", () => {
+        render(<ActivityRow activity={activity({activityKind: "system", detail: {
+            event: "permission.fallback", requested: "bypass-permissions", effective: "",
+            manualApprovalsRequired: true,
+            rejected: [{mode: "accept-edits", reason: "Mode acceptEdits is not available"}],
+        }})} />);
+        expect(screen.getByText("Manual approvals required — no work started")).toBeInTheDocument();
+        expect(screen.getByText(/Mode acceptEdits is not available/)).toBeInTheDocument();
+        expect(screen.queryByText(/Permission mode lowered to/)).not.toBeInTheDocument();
+    });
+
 	it("records where the provider demanded credentials", () => {
 		render(
 			<ActivityRow

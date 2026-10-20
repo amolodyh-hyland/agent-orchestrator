@@ -435,6 +435,9 @@ const SummaryView = memo(function SummaryView({
 				<>
 					<ActivityTimeline hostId={hostId} prs={prSummaries} session={session} />
 					{!session.cloud && session.workspaceId !== STANDALONE_WORKSPACE_ID && <SessionProjectContext key={`${hostId}:${session.id}`} hostId={hostId} sessionId={session.id} startupPending={session.provisionState === "provisioning"} />}
+					{session.mode === "chat" && session.permissions ? (
+						<p className="mt-2 text-xs text-muted-foreground">Runtime permission mode: <span className="text-foreground">{session.permissions}</span></p>
+					) : null}
 					{hostId || !accountsPreview ? null : <SessionAccountSummary session={session} />}
 					<ResumeAgentControl
 						className="w-full"

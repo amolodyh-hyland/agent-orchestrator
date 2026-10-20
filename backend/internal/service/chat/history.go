@@ -1217,6 +1217,9 @@ func (s *Service) newReplacementController(
 	generation string,
 	provider ports.ChatConversation,
 ) *Controller {
+	// The cached conversation record retains the launch-time settings. Preserve
+	// the current preference, including a permission downgrade, on replacement.
+	conversation.Settings = source.Settings()
 	replacement := newController(
 		id, source.owner(), conversation, generation, source.harness, provider,
 		s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)

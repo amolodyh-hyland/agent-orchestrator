@@ -1093,3 +1093,50 @@ func TestSpawnOrchestratorFallsBackToTerminalWhenChatUnsupported(t *testing.T) {
 func TestSpawnOrchestratorAsyncFailurePreservesSessionForRetry(t *testing.T) {
 	testResumeFailedAsyncChatSpawn(t, domain.KindOrchestrator)
 }
+
+func TestFailedChatRetryRetainsRequestedPermissionCeiling(t *testing.T) {
+	for _, projectDefault := range []ports.PermissionMode{ports.PermissionModeAuto, ports.PermissionModeBypassPermissions} {
+		t.Run(string(projectDefault), func(t *testing.T) {
+			ctx := context.Background()
+			launcher := &recordingLauncher{startErr: &ports.PermissionRejectedError{Mode: ports.PermissionModeAcceptEdits, Reason: "not available"}}
+			m, st, _ := newChatManager(launcher)
+			m.dataDir = t.TempDir()
+			m.browserCapabilities = browsersvc.NewAuthority()
+			deferred := deferredBackground(m)
+			cfg := asyncChatSpawnConfig("keep the requested permissions")
+			cfg.AgentConfig.Permissions = ports.PermissionModeAcceptEdits
+			rec, _, _, err := m.Spawn(ctx, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			(*deferred)[0]()
+			failed := st.sessions[rec.ID]
+			if failed.ProvisionState != domain.SessionProvisionFailed {
+				t.Fatalf("initial state=%q", failed.ProvisionState)
+			}
+			if failed.Metadata.PermissionCeiling != ports.PermissionModeAcceptEdits {
+				t.Fatalf("lost ceiling: %+v", failed.Metadata)
+			}
+			failed.Metadata.Permissions = ""
+			st.sessions[rec.ID] = failed
+			project := st.projects[string(chatTestProject)]
+			project.Config.AgentConfig.Permissions = projectDefault
+			project.Config.Worker.AgentConfig.Permissions = projectDefault
+			st.projects[string(chatTestProject)] = project
+			launcher.startErr = nil
+			if _, err := m.ResumeAgentWithMode(ctx, rec.ID); err != nil {
+				t.Fatal(err)
+			}
+			(*deferred)[1]()
+			if len(launcher.started) != 2 {
+				t.Fatalf("starts=%d", len(launcher.started))
+			}
+			if got := launcher.started[1].Permissions; got != ports.PermissionModeAcceptEdits {
+				t.Fatalf("retry escalated to %q above accept-edits ceiling", got)
+			}
+			if got := st.sessions[rec.ID].Metadata.PermissionCeiling; got != ports.PermissionModeAcceptEdits {
+				t.Fatalf("retry changed ceiling to %q", got)
+			}
+		})
+	}
+}

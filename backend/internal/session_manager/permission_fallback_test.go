@@ -171,3 +171,13 @@ func TestInterfaceTransitionErrorCodeNamesAPermissionRejection(t *testing.T) {
 		})
 	}
 }
+
+func TestRestorePermissionCannotExceedPersistedCeiling(t *testing.T) {
+	for _, runtime := range []domain.PermissionMode{"", domain.PermissionModeDefault, domain.PermissionModeAuto, domain.PermissionModeBypassPermissions, domain.PermissionModeAcceptEdits} {
+		rec := domain.SessionRecord{Harness: domain.HarnessClaudeCode, Kind: domain.KindWorker, Metadata: domain.SessionMetadata{PermissionCeiling: domain.PermissionModeAcceptEdits, Permissions: runtime}}
+		project := domain.ProjectConfig{AgentConfig: domain.AgentConfig{Permissions: domain.PermissionModeBypassPermissions}}
+		if got := restoredAgentConfig(rec, project).Permissions; got != domain.PermissionModeAcceptEdits {
+			t.Fatalf("runtime %q restored as %q above accept-edits ceiling", runtime, got)
+		}
+	}
+}

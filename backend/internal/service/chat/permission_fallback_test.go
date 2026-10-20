@@ -147,6 +147,9 @@ func newFallbackFixture(t *testing.T, opts fallbackOptions) *fallbackFixture {
 			return fmt.Sprintf("id-%03d", counter)
 		},
 		OnPermissionsChanged: func(id domain.SessionID, mode domain.PermissionMode) {
+			if updated, err := st.UpdateSessionPermissions(context.Background(), id, mode); err != nil || !updated {
+				t.Errorf("persist runtime permission: updated=%v err=%v", updated, err)
+			}
 			f.changedMu.Lock()
 			defer f.changedMu.Unlock()
 			if id != testSession {
@@ -164,6 +167,13 @@ func newFallbackFixture(t *testing.T, opts fallbackOptions) *fallbackFixture {
 	f.ctrl, f.startErr = f.svc.Start(context.Background(), startCfg)
 	if f.startErr == nil {
 		t.Cleanup(func() { _ = f.svc.Stop(context.Background(), testSession) })
+		if f.ctrl.Settings().ApprovalMode == opts.permissions {
+			// Turn tests observe reports after the initial accepted launch. Keep
+			// launch downgrades visible to the launch and notice-ordering tests.
+			f.changedMu.Lock()
+			f.changed = nil
+			f.changedMu.Unlock()
+		}
 	}
 	return f
 }
@@ -196,10 +206,11 @@ func (f *fallbackFixture) persistedMode(t *testing.T) ports.PermissionMode {
 
 // fallbackNotice is the decoded detail of a permission.fallback timeline row.
 type fallbackNotice struct {
-	Event     string `json:"event"`
-	Requested string `json:"requested"`
-	Effective string `json:"effective"`
-	Rejected  []struct {
+	ManualApprovalsRequired bool   `json:"manualApprovalsRequired"`
+	Event                   string `json:"event"`
+	Requested               string `json:"requested"`
+	Effective               string `json:"effective"`
+	Rejected                []struct {
 		Mode   string `json:"mode"`
 		Reason string `json:"reason"`
 	} `json:"rejected"`
@@ -432,13 +443,16 @@ func TestEveryModeRejectedFailsClearlyListingThem(t *testing.T) {
 	if turn.State != domain.TurnStateFailed {
 		t.Fatalf("turn state = %q, want failed", turn.State)
 	}
+	notices := f.fallbackNotices(t)
+	if len(notices) != 1 || !notices[0].ManualApprovalsRequired || notices[0].Effective != "" || len(notices[0].Rejected) != 3 {
+		t.Fatalf("manual approval requirement was not persisted: %+v", notices)
+	}
 	if f.ctrl.Settings().ApprovalMode != bypass || len(f.changedModes()) != 0 {
 		t.Fatalf("a total failure changed the mode: %q, reported %v", f.ctrl.Settings().ApprovalMode, f.changedModes())
 	}
 }
 
-// A turn that ran with the requested mode, or that failed outright, leaves no
-// notice: the timeline only says a mode was lowered when one really was.
+// An accepted request or an unrelated failure leaves no permission notice.
 func TestNoTimelineNoticeWithoutAStepDown(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -447,7 +461,6 @@ func TestNoTimelineNoticeWithoutAStepDown(t *testing.T) {
 	}{
 		{"requested mode accepted", nil, false},
 		{"unrelated failure", map[ports.PermissionMode]error{bypass: errProviderBusy}, true},
-		{"every mode rejected", reject(bypass, autoMode, acceptEdit), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFallbackFixture(t, fallbackOptions{permissions: bypass, reject: tc.reject})
@@ -498,6 +511,16 @@ func TestStepDownDoesNotOverwriteAConcurrentChoice(t *testing.T) {
 	}
 	if got := f.ctrl.Settings().ApprovalMode; got != acceptEdit {
 		t.Fatalf("approval mode = %q, want the user's concurrent choice %q", got, acceptEdit)
+	}
+	if got := f.changedModes(); !reflect.DeepEqual(got, []ports.PermissionMode{autoMode}) {
+		t.Fatalf("reported runtime mode = %v, want accepted auto independently of the newer preference", got)
+	}
+	if got := f.persistedMode(t); got != acceptEdit {
+		t.Fatalf("persisted preference = %q, want accept-edits", got)
+	}
+	notices := f.fallbackNotices(t)
+	if len(notices) != 1 || notices[0].Effective != string(autoMode) {
+		t.Fatalf("runtime notice = %+v", notices)
 	}
 }
 
@@ -559,6 +582,59 @@ func TestLaunchStepsDownWhenTheProviderRejectsTheMode(t *testing.T) {
 	notices := f.fallbackNotices(t)
 	if len(notices) != 1 || notices[0].Requested != string(bypass) || notices[0].Effective != string(acceptEdit) || len(notices[0].Rejected) != 2 {
 		t.Fatalf("timeline notices = %+v, want one bypass -> accept-edits notice listing two rejected modes", notices)
+	}
+}
+
+// A failed launch clears the runtime field. Accepting the same requested mode
+// on retry must restore it before any turn, then dedupe later accepted turns.
+func TestRetryPersistsFirstAcceptedRuntimePermission(t *testing.T) {
+	for _, mode := range []ports.PermissionMode{bypass, autoMode, acceptEdit} {
+		t.Run(string(mode), func(t *testing.T) {
+			f, recorder := newLaunchFixture(t, mode, false, reject(bypass, autoMode, acceptEdit))
+			if !errors.Is(f.startErr, ports.ErrPermissionRejected) {
+				t.Fatalf("first Start: %v", f.startErr)
+			}
+			assertRuntime := func(want ports.PermissionMode) {
+				t.Helper()
+				session, ok, err := f.st.GetSession(context.Background(), testSession)
+				if err != nil || !ok {
+					t.Fatalf("read session: found=%v err=%v", ok, err)
+				}
+				if session.Metadata.Permissions != want {
+					t.Fatalf("persisted runtime mode=%q, want %q", session.Metadata.Permissions, want)
+				}
+			}
+			assertRuntime("")
+			recorder.mu.Lock()
+			delete(recorder.reject, mode)
+			recorder.mu.Unlock()
+			var err error
+			f.ctrl, err = f.svc.Start(context.Background(), chatsvc.StartConfig{
+				SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex,
+				WorkspacePath: t.TempDir(), Permissions: mode,
+			})
+			if err != nil {
+				t.Fatalf("retry Start: %v", err)
+			}
+			t.Cleanup(func() { _ = f.svc.Stop(context.Background(), testSession) })
+			assertRuntime(mode)
+			first, err := f.send("first")
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.conv.emit(
+				ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: first.ProviderTurnID},
+				ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: first.ProviderTurnID, TurnState: domain.TurnStateCompleted},
+			)
+			waitForTurnToSettle(t, f)
+			if _, err := f.send("second"); err != nil {
+				t.Fatal(err)
+			}
+			assertRuntime(mode)
+			if got, want := f.changedModes(), []ports.PermissionMode{"", mode}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("runtime reports=%v, want %v (one accepted launch report)", got, want)
+			}
+		})
 	}
 }
 
@@ -805,5 +881,29 @@ func assertNoticeWrittenLast(t *testing.T, observed []noticeState) {
 	}
 	if !reflect.DeepEqual(observed[0].reported, []ports.PermissionMode{autoMode}) {
 		t.Errorf("when the notice was written the session record had been told %v, want [%s]", observed[0].reported, autoMode)
+	}
+}
+
+func TestAcceptedPermissionChangeUpdatesSessionRuntimeMode(t *testing.T) {
+	f := newFallbackFixture(t, fallbackOptions{permissions: bypass})
+	if f.startErr != nil {
+		t.Fatal(f.startErr)
+	}
+	settings := f.ctrl.Settings()
+	settings.ApprovalMode = acceptEdit
+	if _, err := f.svc.SetTurnSettings(context.Background(), testSession, settings); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.changedModes()) != 0 {
+		t.Fatal("reported a pending choice as the runtime mode before acceptance")
+	}
+	if _, err := f.send("with new permissions"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.changedModes(); !reflect.DeepEqual(got, []ports.PermissionMode{acceptEdit}) {
+		t.Fatalf("runtime mode reported=%v", got)
+	}
+	if notices := f.fallbackNotices(t); len(notices) != 0 {
+		t.Fatalf("a user choice was reported as a fallback: %+v", notices)
 	}
 }

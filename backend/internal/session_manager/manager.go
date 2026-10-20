@@ -2435,11 +2435,30 @@ func effectiveAgentConfig(harness domain.AgentHarness, kind domain.SessionKind, 
 
 func restoredAgentConfig(rec domain.SessionRecord, cfg domain.ProjectConfig) ports.AgentConfig {
 	merged := effectiveAgentConfig(rec.Harness, rec.Kind, cfg)
+	if permission := restoredSessionPermission(rec); permission != "" {
+		merged.Permissions = permission
+	}
 	if rec.Harness == domain.HarnessClaudeCode {
 		merged.Model = rec.Metadata.Model
 		merged.Effort = rec.Metadata.Effort
 	}
 	return merged
+}
+
+func restoredSessionPermission(rec domain.SessionRecord) domain.PermissionMode {
+	ceiling, runtimeMode := rec.Metadata.PermissionCeiling, rec.Metadata.Permissions
+	if ceiling == "" {
+		return runtimeMode
+	}
+	if runtimeMode == ceiling {
+		return runtimeMode
+	}
+	for _, lower := range ports.PermissionFallbackModes(ceiling) {
+		if runtimeMode == lower {
+			return runtimeMode
+		}
+	}
+	return ceiling
 }
 
 func applySpawnAgentConfig(base, override ports.AgentConfig) ports.AgentConfig {
@@ -3658,9 +3677,6 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	if effort := strings.TrimSpace(rec.Metadata.Effort); effort != "" {
 		agentConfig.Effort = effort
 	}
-	if rec.Metadata.Permissions != "" {
-		agentConfig.Permissions = rec.Metadata.Permissions
-	}
 	var env map[string]string
 	rec, env, err = m.prepareWorkerLaunchEnv(ctx, rec, project.Config.Env)
 	if err != nil {
@@ -3938,9 +3954,8 @@ func (m *Manager) PersistChatModel(ctx context.Context, id domain.SessionID, mod
 }
 
 // PersistChatPermissions records the permission mode a chat session really runs
-// with after the provider refused the requested one and the permission fallback
-// stepped down. It replaces the mode pinned at spawn, so a restore resumes with
-// the mode that works and the session reads back what it is running with.
+// with, independently of its requested ceiling. Empty records a launch where
+// no mode was accepted; it must not erase the permission bound used by retries.
 func (m *Manager) PersistChatPermissions(ctx context.Context, id domain.SessionID, permissions domain.PermissionMode) error {
 	store, ok := m.store.(sessionPermissionsStore)
 	if !ok {
@@ -5686,6 +5701,7 @@ func normalizeWorkspacePath(p string) string {
 // ---- helpers ----
 
 func seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now time.Time) domain.SessionRecord {
+	permissions := applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, projectConfig), cfg.AgentConfig).Permissions
 	return domain.SessionRecord{
 		ProjectID:         cfg.ProjectID,
 		IssueID:           cfg.IssueID,
@@ -5701,7 +5717,7 @@ func seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now t
 		// Resolved before this point and persisted here. There is no UPDATE
 		// statement that can change it afterwards.
 		Mode:              domain.NormalizeSessionMode(cfg.RequestedMode),
-		Metadata:          domain.SessionMetadata{Permissions: applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, projectConfig), cfg.AgentConfig).Permissions},
+		Metadata:          domain.SessionMetadata{Permissions: permissions, PermissionCeiling: permissions},
 		RequestedOutput:   cfg.RequestedOutput,
 		OutputType:        domain.SessionOutputNone,
 		AutoReviewEnabled: projectConfig.AutoReview,

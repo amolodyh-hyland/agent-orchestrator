@@ -544,19 +544,12 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 			}
 		}
 	}
-	effectiveApproval := settings.Approval
 	if modeFor != nil {
 		if mode := modeFor(settings.Approval); mode != "" {
-			// Some ACP agents rebuild their permission modes after a model switch.
-			// Claude, for example, removes Auto for Haiku and clamps itself back to
-			// Default. Respect that authoritative catalog instead of immediately
-			// reapplying AO's default Auto choice and aborting session creation.
-			if ports.NormalizePermissionMode(settings.Approval) == ports.PermissionModeAuto {
-				if offered, known := c.configOptionOffers("mode", mode); known && !offered {
-					if fallbackOffered, _ := c.configOptionOffers("mode", "default"); fallbackOffered {
-						mode = "default"
-						effectiveApproval = ports.PermissionModeDefault
-					}
+			if offered, known := c.configOptionOffers("mode", mode); known && !offered {
+				return &ports.PermissionRejectedError{
+					Mode:   ports.NormalizePermissionMode(settings.Approval),
+					Reason: fmt.Sprintf("ACP session does not offer permission mode %q", mode),
 				}
 			}
 			if _, err := c.conn.SetSessionMode(ctx, acpsdk.SetSessionModeRequest{
@@ -565,8 +558,12 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 				if isACPMethodNotFound(err) {
 					return fmt.Errorf("%w: session/set_mode %q", ErrACPSetterUnsupported, mode)
 				}
-				return fmt.Errorf("set ACP session mode %q: %w", mode, err)
+				return fmt.Errorf("set ACP session mode %q: %w", mode, permissionModeRejection(settings.Approval, mode, err))
 			}
+			c.applyAcceptedConfigOption("mode", ports.ChatConfigOptionValue{Select: mode})
+			c.mu.Lock()
+			c.permissionMode = ports.NormalizePermissionMode(settings.Approval)
+			c.mu.Unlock()
 		}
 	}
 	for _, option := range options {
@@ -578,7 +575,7 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 	}
 	if settings.Approval != "" {
 		c.mu.Lock()
-		c.permissionMode = ports.NormalizePermissionMode(effectiveApproval)
+		c.permissionMode = ports.NormalizePermissionMode(settings.Approval)
 		c.mu.Unlock()
 	}
 	return nil

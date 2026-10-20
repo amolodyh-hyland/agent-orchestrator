@@ -175,8 +175,7 @@ type Options struct {
 	// the next prompt routes. Nil leaves session metadata unchanged.
 	OnModelChanged func(domain.SessionID, string)
 	// OnPermissionsChanged records the permission mode a session really runs
-	// with after the permission fallback lowered it from the requested one. Nil
-	// leaves the session record unchanged.
+	// with after a launch or turn accepts it. Nil leaves the session record unchanged.
 	OnPermissionsChanged func(domain.SessionID, domain.PermissionMode)
 	// StopProviderHost destroys current ownership on explicit teardown or failed hibernation,
 	// even if its daemon attachment already failed. Never used by StopAll.
@@ -835,6 +834,15 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		return openErr
 	})
 	if err != nil {
+		if fallbackOutcome.Effective == "" && len(fallbackOutcome.Rejected) > 0 {
+			if owner.Kind == domain.ConversationOwnerSession && s.onPermissionsChanged != nil {
+				s.onPermissionsChanged(cfg.SessionID, "")
+			}
+			if noticeErr := s.store.UpsertActivity(ctx, conversation.ID, "",
+				permissionFallbackActivity(s.newID(), requestedPermissions, fallbackOutcome), s.now()); noticeErr != nil {
+				return nil, errors.Join(err, fmt.Errorf("persist manual approval requirement: %w", noticeErr))
+			}
+		}
 		return nil, err
 	}
 	effectivePermissions := fallbackOutcome.Effective
@@ -845,9 +853,13 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			s.log.Warn("could not record the permission fallback on the conversation",
 				"sessionID", cfg.SessionID, "effective", effectivePermissions, "error", settingsErr)
 		}
-		if s.onPermissionsChanged != nil {
-			s.onPermissionsChanged(cfg.SessionID, effectivePermissions)
-		}
+	}
+	// Every accepted launch must restore the runtime field, even when it accepts
+	// the requested mode unchanged after failed-launch cleanup cleared that field.
+	if owner.Kind == domain.ConversationOwnerSession && s.onPermissionsChanged != nil {
+		s.onPermissionsChanged(cfg.SessionID, effectivePermissions)
+	}
+	if fallbackOutcome.steppedDown(requestedPermissions) {
 		// Last, for the same reason as on a turn: publishing the notice makes clients
 		// refetch, and the settings and session record must already be current.
 		if activityErr := s.store.UpsertActivity(ctx, conversation.ID, "",
@@ -1024,6 +1036,10 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
 	controller.permissionFallbackOff = cfg.DisablePermissionFallback
 	controller.onPermissionsChanged = s.recordEffectivePermissions(owner)
+	// Seed deduplication only from the accepted launch result reported above,
+	// never from the conversation's requested preference.
+	controller.effectivePermission = effectivePermissions
+	controller.hasEffectivePermission = true
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {
 		providerTurnID := controller.restoreLiveTurnOwnership(liveRows.Turns)
@@ -2394,7 +2410,18 @@ func (s *Service) SetConfigOption(
 	}
 	options = permissionConfigOptions(record.Harness, options)
 	settings, _ := settingsFromConfigOptions(previous, options)
+	var runtimeApproval domain.PermissionMode
+	for _, option := range options {
+		for _, choice := range option.Choices {
+			if choice.Value == option.Current.Select && choice.PermissionMode != "" {
+				runtimeApproval = choice.PermissionMode
+			}
+		}
+	}
 	if record.Harness == domain.HarnessClaudeCode {
+		if configID != "mode" {
+			settings.ApprovalMode = previous.ApprovalMode
+		}
 		// Provider-owned defaults stay implicit so future Claude defaults still apply.
 		if settings.Model == "default" {
 			settings.Model = ""
@@ -2418,6 +2445,9 @@ func (s *Service) SetConfigOption(
 		// Code's model menu) change the model; it must persist the pick the same
 		// way the turn-settings route does.
 		s.persistPickedModel(id, previous, settings)
+	}
+	if runtimeApproval != "" {
+		controller.recordRuntimePermission(runtimeApproval)
 	}
 	return options, nil
 }

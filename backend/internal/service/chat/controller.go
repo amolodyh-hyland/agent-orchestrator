@@ -214,9 +214,11 @@ type Controller struct {
 	// controller. The zero value leaves it on, so callers that never mention it
 	// get the default behavior.
 	permissionFallbackOff bool
-	// onPermissionsChanged reports the mode a turn actually ran with after the
-	// fallback lowered it, so the session record can show it.
-	onPermissionsChanged func(domain.SessionID, domain.PermissionMode)
+	// onPermissionsChanged reports the mode the provider actually accepted, so
+	// the session record can show it independently of the requested preference.
+	onPermissionsChanged   func(domain.SessionID, domain.PermissionMode)
+	effectivePermission    ports.PermissionMode
+	hasEffectivePermission bool
 
 	// sendMu serializes command dispatch so only one operation mutates the
 	// provider conversation at a time.
@@ -1840,10 +1842,18 @@ func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (p
 		return sendErr
 	})
 	if err != nil {
+		if outcome.Effective == "" && len(outcome.Rejected) > 0 {
+			if noticeErr := c.store.UpsertActivity(ctx, c.conversation.ID, "",
+				permissionFallbackActivity(c.newID(), requested, outcome), c.now()); noticeErr != nil {
+				return ports.ChatTurnRef{}, errors.Join(err, fmt.Errorf("persist manual approval requirement: %w", noticeErr))
+			}
+		}
 		return ports.ChatTurnRef{}, err
 	}
 	if outcome.steppedDown(requested) {
 		c.adoptEffectivePermission(ctx, requested, outcome)
+	} else {
+		c.recordRuntimePermission(outcome.Effective)
 	}
 	return ref, nil
 }
@@ -1854,6 +1864,7 @@ func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (p
 // made while the turn was being sent is left alone.
 func (c *Controller) adoptEffectivePermission(ctx context.Context, requested ports.PermissionMode, outcome permissionFallbackOutcome) {
 	c.adoptEffectiveMode(ctx, requested, outcome.Effective)
+	c.recordRuntimePermission(outcome.Effective)
 	// The notice goes last, and whatever the user chose meanwhile: the turn did run
 	// with the lower mode. Writing it publishes an event that makes clients refetch
 	// the conversation, so the settings (the picker's mode) and the session record
@@ -1866,7 +1877,7 @@ func (c *Controller) adoptEffectivePermission(ctx context.Context, requested por
 }
 
 // adoptEffectiveMode stores the mode a turn really ran with as the conversation's
-// approval mode and reports it for the session record, unless the user changed the
+// approval mode, unless the user changed the
 // mode while the turn was being sent.
 func (c *Controller) adoptEffectiveMode(ctx context.Context, requested, effective ports.PermissionMode) {
 	c.configMu.Lock()
@@ -1882,7 +1893,15 @@ func (c *Controller) adoptEffectiveMode(ctx context.Context, requested, effectiv
 		c.log.Warn("could not record the permission fallback on the conversation",
 			"sessionID", c.sessionID, "effective", effective, "error", err)
 	}
-	if c.onPermissionsChanged != nil {
+}
+
+func (c *Controller) recordRuntimePermission(effective ports.PermissionMode) {
+	c.mu.Lock()
+	changed := !c.hasEffectivePermission || c.effectivePermission != effective
+	c.effectivePermission = effective
+	c.hasEffectivePermission = true
+	c.mu.Unlock()
+	if changed && c.reviewID == "" && c.onPermissionsChanged != nil {
 		c.onPermissionsChanged(c.sessionID, effective)
 	}
 }

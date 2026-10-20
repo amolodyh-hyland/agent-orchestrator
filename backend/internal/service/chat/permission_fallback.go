@@ -33,9 +33,9 @@ type permissionFallback struct {
 	stage string
 }
 
-// permissionFallbackOutcome is what a successful run settled on.
+// permissionFallbackOutcome records the accepted mode or the exhausted attempts.
 type permissionFallbackOutcome struct {
-	// Effective is the mode the provider accepted.
+	// Effective is the mode the provider accepted, or empty on exhaustion.
 	Effective ports.PermissionMode
 	// Rejected lists the modes the provider refused before Effective, in order,
 	// with its reasons. Empty when the requested mode was accepted.
@@ -73,7 +73,7 @@ func (f permissionFallback) run(
 		// would claim a ladder was walked when none was.
 		f.log.Warn("permission mode rejected by the provider; no less permissive mode to try",
 			"sessionID", f.session, "stage", f.stage, "mode", requested, "reason", rejectionReason(err))
-		return permissionFallbackOutcome{Effective: requested}, err
+		return permissionFallbackOutcome{Rejected: []ports.PermissionRejection{{Mode: requested, Reason: rejectionReason(err)}}}, fmt.Errorf("manual approvals required; no permitted permission mode was accepted: %w", err)
 	}
 
 	rejected := []ports.PermissionRejection{{Mode: requested, Reason: rejectionReason(err)}}
@@ -105,7 +105,7 @@ func (f permissionFallback) run(
 	exhausted := &ports.PermissionFallbackExhaustedError{Rejected: rejected}
 	f.log.Error("permission fallback exhausted: every mode was rejected",
 		"sessionID", f.session, "stage", f.stage, "rejected", rejectedModes(rejected))
-	return permissionFallbackOutcome{Effective: requested}, exhausted
+	return permissionFallbackOutcome{Rejected: rejected}, fmt.Errorf("manual approvals required; no permitted permission mode was accepted: %w", exhausted)
 }
 
 func rejectionReason(err error) string {
@@ -136,17 +136,23 @@ func permissionFallbackActivity(
 	for _, rejection := range outcome.Rejected {
 		rejected = append(rejected, map[string]string{"mode": string(rejection.Mode), "reason": rejection.Reason})
 	}
+	manual := outcome.Effective == ""
+	summary := fmt.Sprintf("Permission mode lowered from %s to %s", requested, outcome.Effective)
+	if manual {
+		summary = "Manual approvals required: every permitted permission mode was rejected; no work started"
+	}
 	detail, _ := json.Marshal(map[string]any{
-		"event":     "permission.fallback",
-		"requested": requested,
-		"effective": outcome.Effective,
-		"rejected":  rejected,
+		"event":                   "permission.fallback",
+		"requested":               requested,
+		"effective":               outcome.Effective,
+		"rejected":                rejected,
+		"manualApprovalsRequired": manual,
 	})
 	return domain.ConversationActivity{
 		ID:             id,
 		Kind:           domain.ActivityKindSystem,
 		Status:         domain.ActivityStatusCompleted,
-		Summary:        fmt.Sprintf("Permission mode lowered from %s to %s", requested, outcome.Effective),
+		Summary:        summary,
 		Detail:         detail,
 		ProviderItemID: "ao-permission-fallback-" + id,
 	}

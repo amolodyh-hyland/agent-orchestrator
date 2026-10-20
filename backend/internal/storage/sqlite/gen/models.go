@@ -746,6 +746,7 @@ type Session struct {
 	StaleBinaryVersion               string
 	StaleBinaryLaunch                string
 	StaleBinarySwitchFailedAt        sql.NullTime
+	PermissionCeiling                string
 }
 
 type SessionAgentAccount struct {
