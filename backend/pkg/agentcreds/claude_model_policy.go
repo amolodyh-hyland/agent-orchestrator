@@ -1,6 +1,7 @@
 package agentcreds
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -33,9 +34,12 @@ func (p ClaudeModelPolicy) Fingerprint() string {
 }
 
 type claudePolicyDocument struct {
-	values       map[string]json.RawMessage
-	broken       bool
-	userFallback bool
+	delegationPolicies []json.RawMessage
+	dynamic            bool
+	empty              bool
+	values             map[string]json.RawMessage
+	broken             bool
+	userFallback       bool
 }
 
 func readClaudePolicyDocument(ctx context.Context, path string) claudePolicyDocument {
@@ -55,7 +59,7 @@ func readClaudePolicyDocument(ctx context.Context, path string) claudePolicyDocu
 		return claudePolicyDocument{broken: true}
 	}
 	if len(strings.TrimSpace(string(data))) == 0 {
-		return claudePolicyDocument{}
+		return claudePolicyDocument{empty: true}
 	}
 	return parseClaudePolicyDocument(data)
 }
@@ -65,7 +69,21 @@ func parseClaudePolicyDocument(data []byte) claudePolicyDocument {
 	if len(data) > 1<<20 || json.Unmarshal(data, &values) != nil || values == nil {
 		return claudePolicyDocument{broken: true}
 	}
-	return claudePolicyDocument{values: values}
+	doc := claudePolicyDocument{values: values}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	_, _ = decoder.Token()
+	for decoder.More() {
+		name, _ := decoder.Token()
+		var raw json.RawMessage
+		_ = decoder.Decode(&raw)
+		if name == "aoMulticaDelegation" {
+			doc.delegationPolicies = append(doc.delegationPolicies, raw)
+		}
+		if name == "policyHelper" && string(raw) != "null" {
+			doc.dynamic = true
+		}
+	}
+	return doc
 }
 
 func (d claudePolicyDocument) present() bool {
@@ -131,39 +149,7 @@ func ResolveClaudeModelPolicy(ctx context.Context, workingDir string, env map[st
 		}
 		mergePolicyOverrides(&p, doc)
 	}
-	remote := readClaudePolicyDocument(ctx, filepath.Join(dir, "remote-settings.json"))
-	systemDir := opts.ManagedSettingsDir
-	if systemDir == "" {
-		switch opts.goos() {
-		case "darwin":
-			systemDir = "/Library/Application Support/ClaudeCode"
-		case "windows":
-			systemDir = `C:\Program Files\ClaudeCode`
-		default:
-			systemDir = "/etc/claude-code"
-		}
-	}
-	file := readClaudePolicyDocument(ctx, filepath.Join(systemDir, "managed-settings.json"))
-	dropIns, readErr := os.ReadDir(filepath.Join(systemDir, "managed-settings.d"))
-	if readErr != nil && !os.IsNotExist(readErr) {
-		file.broken = true
-	}
-	for _, entry := range dropIns { // os.ReadDir returns lexical order.
-		if !entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") && strings.HasSuffix(entry.Name(), ".json") {
-			file = mergeClaudePolicyDocuments(file, readClaudePolicyDocument(ctx, filepath.Join(systemDir, "managed-settings.d", entry.Name())))
-		}
-	}
-	osPolicy := claudePolicyDocument{}
-	if opts.ManagedSettingsDir == "" {
-		osPolicy = readClaudeOSPolicy(ctx, opts, readClaudeRegistryValue)
-	}
-	sources := []claudePolicyDocument{remote, osPolicy, file}
-	if osPolicy.userFallback {
-		sources = []claudePolicyDocument{remote, file}
-		if !remote.present() && !file.present() {
-			sources = append(sources, osPolicy)
-		}
-	}
+	remote, sources := readClaudeManagedPolicySources(ctx, opts, dir)
 	merge := false
 	for _, source := range sources {
 		raw, control := source.values["managedSourcesBehavior"]
@@ -222,6 +208,43 @@ func ResolveClaudeModelPolicy(ctx context.Context, workingDir string, env map[st
 	return p
 }
 
+func readClaudeManagedPolicySources(ctx context.Context, opts ResolveOptions, dir string) (claudePolicyDocument, []claudePolicyDocument) {
+	remote := readClaudePolicyDocument(ctx, filepath.Join(dir, "remote-settings.json"))
+	systemDir := opts.ManagedSettingsDir
+	if systemDir == "" {
+		switch opts.goos() {
+		case "darwin":
+			systemDir = "/Library/Application Support/ClaudeCode"
+		case "windows":
+			systemDir = `C:\Program Files\ClaudeCode`
+		default:
+			systemDir = "/etc/claude-code"
+		}
+	}
+	file := readClaudePolicyDocument(ctx, filepath.Join(systemDir, "managed-settings.json"))
+	dropIns, readErr := os.ReadDir(filepath.Join(systemDir, "managed-settings.d"))
+	if readErr != nil && !os.IsNotExist(readErr) {
+		file.broken = true
+	}
+	for _, entry := range dropIns { // os.ReadDir returns lexical order.
+		if !entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") && strings.HasSuffix(entry.Name(), ".json") {
+			file = mergeClaudePolicyDocuments(file, readClaudePolicyDocument(ctx, filepath.Join(systemDir, "managed-settings.d", entry.Name())))
+		}
+	}
+	osPolicy := claudePolicyDocument{}
+	if opts.ManagedSettingsDir == "" {
+		osPolicy = readClaudeOSPolicy(ctx, opts, readClaudeRegistryValue)
+	}
+	sources := []claudePolicyDocument{remote, osPolicy, file}
+	if osPolicy.userFallback {
+		sources = []claudePolicyDocument{remote, file}
+		if !remote.present() && !file.present() {
+			sources = append(sources, osPolicy)
+		}
+	}
+	return remote, sources
+}
+
 func appendPolicyUnique(values []string, extra ...string) []string {
 	for _, value := range extra {
 		if !slices.Contains(values, value) {
@@ -236,6 +259,9 @@ func mergeClaudePolicyDocuments(base, next claudePolicyDocument) claudePolicyDoc
 		base.values = make(map[string]json.RawMessage)
 	}
 	base.broken = base.broken || next.broken
+	base.empty = base.empty || next.empty
+	base.dynamic = base.dynamic || next.dynamic
+	base.delegationPolicies = append(base.delegationPolicies, next.delegationPolicies...)
 	for key, value := range next.values {
 		if (key == "availableModels" || key == "deniedModels") && base.values[key] != nil {
 			merged := appendPolicyUnique(policyStringList(base.values[key]), policyStringList(value)...)
@@ -317,7 +343,7 @@ func readClaudeOSPolicy(ctx context.Context, opts ResolveOptions, readRegistry c
 				return claudePolicyDocument{broken: true}
 			}
 			doc := parseClaudePolicyDocument(value.data)
-			if !doc.present() && hive == "HKLM" {
+			if !doc.present() && len(doc.delegationPolicies) == 0 && !doc.dynamic && hive == "HKLM" {
 				continue
 			}
 			doc.userFallback = hive == "HKCU"
@@ -342,6 +368,8 @@ func readClaudeMacPolicy(ctx context.Context, runner commandRunner, paths []stri
 		}
 		doc := parseClaudePolicyDocument(data)
 		merged.broken = merged.broken || doc.broken
+		merged.dynamic = merged.dynamic || doc.dynamic
+		merged.delegationPolicies = append(merged.delegationPolicies, doc.delegationPolicies...)
 		if merged.values == nil {
 			merged.values = make(map[string]json.RawMessage)
 		}

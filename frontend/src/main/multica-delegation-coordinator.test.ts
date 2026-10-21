@@ -34,8 +34,8 @@ function fakeClient() {
 		cancelDelegation: vi.fn(async (id: string) => { calls.push(`cancel:${id}`); return { ok: true as const, data: accepted! }; }),
 	};
 }
-function coordinator(enabled = true) {
- const result = createMulticaDelegationCoordinator({ journal, client: () => client, enabled, confirmations });
+function coordinator(enabled = true, extras: Partial<Pick<Parameters<typeof createMulticaDelegationCoordinator>[0], "policy" | "resolveRuntimeClass">> = {}) {
+ const result = createMulticaDelegationCoordinator({ journal, client: () => client, enabled, confirmations, ...extras });
  const combined = { ...result.taskOrchestrator, confirm: result.human.confirmFromUserAction, cancel: result.human.cancelFromUserAction };
  return { taskOrchestrator: combined, projectOrchestrator: combined };
 }
@@ -45,6 +45,7 @@ beforeEach(async () => {
 	dir = await mkdtemp(path.join(os.tmpdir(), "ao-delegation-")); file = path.join(dir, "journal.json");
 	rows = new Map(); calls = []; accepted = null; client = fakeClient();
 	journal = {
+		evaluatePolicy: async () => ({ code: "policy_absent" }),
 		get: async (id) => structuredClone(rows.get(id) ?? null),
 		find: async (project, task) => structuredClone([...rows.values()].reverse().find((r) => r.projectId === project && r.taskId === task) ?? null),
 		reserve: async (r) => {
@@ -256,4 +257,115 @@ describe("shared confirmed delegation coordinator", () => {
 		expect(client.cancelDelegation).toHaveBeenLastCalledWith(remote.delegation_id, true, "new-opaque-revision");
 	});
 
+});
+
+
+describe("optional managed delegation policy", () => {
+	it("allows personal use without policy and sends only minimum decision metadata", async () => {
+		const policy = vi.fn(async () => ({ code: "policy_absent" }));
+		journal.evaluatePolicy = policy;
+		const service = coordinator().taskOrchestrator;
+		const record = await service.confirm(intent, approved);
+		expect(await service.process(record.requestId)).toMatchObject({ state: "accepted" });
+		expect(policy).toHaveBeenCalledTimes(3);
+		expect(policy.mock.calls[0]).toEqual([{
+			serverOrigin: binding.origin, workspaceId: binding.workspaceId, profileId: intent.payload.agent_id,
+			runtimeId: intent.payload.expected_runtime_id, runtimeClass: "unknown", dataScopes: ["task_brief"], action: "delegate",
+		}]);
+		expect(JSON.stringify(policy.mock.calls)).not.toContain(intent.payload.task.instructions);
+	});
+	it("accepts managed allow with an explicitly resolved runtime class", async () => {
+		const resolveRuntimeClass = vi.fn(async () => "remote" as const);
+		journal.evaluatePolicy = vi.fn(async (request) => ({ code: request.runtimeClass === "remote" ? "policy_allowed" : "policy_denied" }));
+		const service = coordinator(true, { resolveRuntimeClass }).taskOrchestrator;
+		const record = await service.confirm(intent, approved);
+		expect((await service.process(record.requestId)).state).toBe("accepted");
+		expect(resolveRuntimeClass).toHaveBeenCalledTimes(3);
+	});
+	it.each(["policy_denied", "policy_unavailable", "policy_runtime_unknown"])("blocks proof minting and reservation on %s", async (code) => {
+		journal.evaluatePolicy = async () => ({ code });
+		const proof = vi.fn(confirmations.confirmationProof);
+		const localAllow = vi.fn(async () => ({ code: "policy_allowed" }));
+		const service = createMulticaDelegationCoordinator({ journal, client: () => client, enabled: true, confirmations: { ...confirmations, confirmationProof: proof }, policy: localAllow });
+		await expect(service.human.confirmFromUserAction(intent, approved)).rejects.toThrow(code);
+		expect(proof).not.toHaveBeenCalled();
+		expect(localAllow).not.toHaveBeenCalled();
+		expect(rows.size).toBe(0);
+		expect(client.delegate).not.toHaveBeenCalled();
+	});
+	it("lets plug-ins narrow but never replace managed denials or widen local controls", async () => {
+		journal.evaluatePolicy = async () => ({ code: "policy_allowed" });
+		await expect(coordinator(true, { policy: async () => ({ code: "policy_denied" }) }).taskOrchestrator.confirm(intent, approved)).rejects.toThrow("policy_denied");
+		const service = coordinator(false, { policy: async () => ({ code: "policy_allowed" }) }).taskOrchestrator;
+		const record = await service.confirm(intent, approved);
+		await service.process(record.requestId);
+		expect(client.delegate).not.toHaveBeenCalled();
+	});
+	it.each(["policy_denied", "policy_unavailable"])("rechecks policy at dispatch after confirmation: %s", async (code) => {
+		const service = coordinator().taskOrchestrator;
+		const record = await service.confirm(intent, approved);
+		journal.evaluatePolicy = async () => ({ code });
+		expect(await service.process(record.requestId)).toMatchObject({ state: "submitting", attempted: false, failureCode: code });
+		expect(client.delegate).not.toHaveBeenCalled();
+		journal.evaluatePolicy = async () => ({ code: "policy_allowed" });
+		expect(await service.process(record.requestId)).toMatchObject({ state: "accepted", failureCode: null });
+	});
+	it("rechecks after the durable attempt marker and does not lose ambiguous submissions", async () => {
+		const service = coordinator().taskOrchestrator;
+		const record = await service.confirm(intent, approved);
+		let checks = 0;
+		journal.evaluatePolicy = async () => ({ code: ++checks === 1 ? "policy_allowed" : "policy_denied" });
+		expect(await service.process(record.requestId)).toMatchObject({ state: "submission_unknown", failureCode: "policy_denied" });
+		expect(client.delegate).not.toHaveBeenCalled();
+		accepted = remote;
+		expect(await service.process(record.requestId)).toMatchObject({ state: "accepted", failureCode: null });
+		expect(client.listDelegations).toHaveBeenCalled();
+	});
+	it("never retries an ambiguous admission when policy is revoked, while retaining cancellation", async () => {
+		const service = coordinator().taskOrchestrator;
+		const record = await service.confirm(intent, approved);
+		client.delegate.mockResolvedValueOnce({ ok: false, code: "timeout" } as never);
+		await service.process(record.requestId);
+		journal.evaluatePolicy = async () => ({ code: "policy_denied" });
+		expect(await service.process(record.requestId)).toMatchObject({ state: "submission_unknown", failureCode: "policy_denied" });
+		expect(client.delegate).toHaveBeenCalledTimes(1);
+		accepted = remote;
+		await service.cancel(record.requestId, { ...approved, id: "cancel" });
+		expect(client.cancelDelegation).toHaveBeenCalled();
+	});
+	it.each([undefined, true, { code: "unknown-private-policy" }, { code: "policy_allowed", raw: "private-policy" }])("fails closed on unknown or unprojected policy outcomes", async (outcome) => {
+		journal.evaluatePolicy = async () => outcome;
+		await expect(coordinator().taskOrchestrator.confirm(intent, approved)).rejects.toThrow("policy_unavailable");
+		expect(rows.size).toBe(0);
+	});
+	it("does not leak policy exceptions into confirmation errors, journal state or logs", async () => {
+		const service = coordinator().taskOrchestrator;
+		const record = await service.confirm(intent, approved);
+		const logs = vi.spyOn(console, "error").mockImplementation(() => undefined);
+		journal.evaluatePolicy = async () => { throw new Error("private-policy /secret/path mul_token"); };
+		await expect(service.confirm(intent, approved)).rejects.toThrow(/^policy_unavailable$/);
+		expect(await service.process(record.requestId)).toMatchObject({ failureCode: "policy_unavailable" });
+		expect(await readFile(file, "utf8")).not.toContain("private-policy");
+		expect(logs).not.toHaveBeenCalled();
+		logs.mockRestore();
+	});
+	it("keeps personal use working when runtime metadata is unavailable, but blocks a managed allow", async () => {
+		const resolveRuntimeClass = async () => { throw new Error("private runtime lookup error"); };
+		const service = coordinator(true, { resolveRuntimeClass }).taskOrchestrator;
+		const record = await service.confirm(intent, approved);
+		journal.evaluatePolicy = async (request) => ({ code: request.runtimeClass === "unknown" ? "policy_runtime_unknown" : "policy_allowed" });
+		expect(await service.process(record.requestId)).toMatchObject({ failureCode: "policy_runtime_unknown", attempted: false });
+		expect(client.delegate).not.toHaveBeenCalled();
+	});
+	it("bounds a hung plug-in and reports a safe unavailable reason", async () => {
+		vi.useFakeTimers();
+		try {
+			journal.evaluatePolicy = () => new Promise(() => undefined);
+			const result = coordinator().taskOrchestrator.confirm(intent, approved);
+			const assertion = expect(result).rejects.toThrow(/^policy_unavailable$/);
+			await vi.advanceTimersByTimeAsync(5000);
+			await assertion;
+			expect(rows.size).toBe(0);
+		} finally { vi.useRealTimers(); }
+	});
 });

@@ -80,7 +80,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	mountTerminalMux(r, termMgr, log)
 	mountControl(r, control)
 	mountAgentSwitchPolicyControl(r, control.AgentSwitchPolicy)
-	mountMulticaDelegationJournal(r, deps.MulticaDelegations, deps.DelegationAuth)
+	mountMulticaDelegationJournal(r, deps.MulticaDelegations, deps.DelegationAuth, deps.MulticaDelegationPolicy)
 	mountTelemetry(r, cfg, deps.Telemetry)
 	mountMobile(r, deps.Mobile)
 	mountBrowserLive(r, deps.BrowserLive)

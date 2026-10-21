@@ -111,3 +111,66 @@ loopback port and drives two independently constructed TypeScript coordinators
 against its SQLite store. It checks forged/unsigned HTTP writes, proof binding,
 concurrent confirmation/processing, strict schemas, escaped secrets, and the
 terminal-predecessor rerun gate. It never launches the actual daemon.
+
+## Optional managed policy (TK-MA65)
+
+The coordinator always evaluates the journal's managed-policy resolver before
+minting a confirmation proof, before marking an admission attempt, and again
+immediately before `delegate`. `createDaemonDelegationJournal` evaluates policy
+through the existing signed, nonce-bound journal route (`evaluatePolicy`), with
+no new listener, renderer/preload IPC, or confirmation issuer. Policy documents
+stay in the daemon. Only a fixed code crosses back to the main process.
+
+`backend/pkg/agentcreds/multica_delegation_policy.go` uses the same cached remote,
+OS-managed, system-file and drop-in reader as AO's Claude model-policy resolver.
+It never reads user/project settings as authority, reads credentials, fetches
+policy, or executes a policy helper. Managed sources can supply the optional
+`aoMulticaDelegation` object. With no object configured, `policy_absent` permits
+normal explicit confirmation; it does not enable rollout or override any other
+client/server check. Unreadable or malformed managed sources fail closed because
+the resolver cannot establish whether they contain a delegation restriction.
+
+The object has `version: 1`, a non-empty `revision`, an RFC3339 `validUntil`, and
+`effect: "allow"` or `"deny"`. An allow requires explicit arrays named
+`serverOrigins`, `workspaceIds`, `profileIds`, `runtimeClasses`, `dataScopes`, and
+`actions`. Each request must match every array exactly; an empty array denies
+all choices in that dimension. A deny needs no allowlists. Null, unknown fields,
+unknown versions/effects, expired or malformed validity, and dynamic helpers are
+unavailable. Every configured delegation object is a ceiling, including separate
+drop-ins and OS-managed documents; their intersection applies even when the
+underlying model settings use replacement precedence. Local settings and higher
+managed sources cannot widen another delegation ceiling. The existing Windows
+user-policy fallback selection remains in effect.
+
+The request contains only canonical server origin, workspace/profile/runtime IDs,
+runtime class, the fixed approved data scope `task_brief`, and action `delegate`.
+It excludes task title/instructions, local paths, user identity, and credentials.
+The current wire payload supports only that task brief; this does not authorize
+file reads, root sharing or upload. Adding such payloads requires extending the
+approval and policy contracts together.
+
+A trusted main-process `resolveRuntimeClass` callback must establish `local` or
+`remote` for the exact configured binding/runtime ID and is called afresh at each
+check. Do not infer location from a loopback Multica server or profile name.
+TK-MA63's Public API runtime metadata does not establish execution location, so
+an omitted resolver supplies `unknown`. Personal use without managed policy still
+works; a managed allow with unknown location blocks with `policy_runtime_unknown`
+until trusted location metadata is available. Remote execution requires an
+explicit `remote` match in every configured ceiling.
+
+An additional main-process `policy` plug-in may narrow the managed decision; it
+cannot replace the mandatory journal resolver. It returns only `{code}` with
+`policy_absent`, `policy_allowed`, `policy_denied`, `policy_unavailable`, or
+`policy_runtime_unknown`. Unknown outcomes, extra fields, exceptions and a
+five-second evaluation timeout become `policy_unavailable`. No source-provided
+reason, revision, policy text or error message is logged, persisted, or exposed.
+
+Before confirmation, a block throws only its safe reason code and creates no
+proof or journal reservation. At dispatch, the same code is persisted in the
+existing `failureCode` field, leaving the intent pending. A restored policy can
+permit that exact confirmed intent later. If policy changes after the durable
+attempt marker, the conservative `submission_unknown` marker remains, even if
+this process has not submitted; subsequent processing reconciles by the same key
+before any replay. Policy blocks do not turn an earlier ambiguous admission into
+a rejection. Status reconciliation and explicitly confirmed cancellation remain
+available. No database schema or migration changes are required.

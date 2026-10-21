@@ -25,6 +25,8 @@ import (
 
 // APIDeps bundles every service the API layer's controllers depend on.
 type APIDeps struct {
+	MulticaDelegationPolicy DelegationPolicyResolver
+
 	MulticaDelegations MulticaDelegationJournal
 	DelegationAuth     *delegationauth.Authority
 	Awake              controllers.AwakeService

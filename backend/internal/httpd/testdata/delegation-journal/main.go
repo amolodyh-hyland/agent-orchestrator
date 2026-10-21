@@ -9,12 +9,14 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/delegationauth"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
 )
 
 func main() {
@@ -37,7 +39,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	handler := httpd.NewRouterWithControl(config.Config{DataDir: os.Args[1]}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, httpd.APIDeps{MulticaDelegations: store, DelegationAuth: authority}, httpd.ControlDeps{})
+	handler := httpd.NewRouterWithControl(config.Config{DataDir: os.Args[1]}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, httpd.APIDeps{MulticaDelegations: store, DelegationAuth: authority,
+		MulticaDelegationPolicy: func(ctx context.Context, req agentcreds.DelegationPolicyRequest) agentcreds.DelegationPolicyDecision {
+			return agentcreds.ResolveManagedDelegationPolicy(ctx, req, agentcreds.ResolveOptions{ConfigDir: os.Args[1], ManagedSettingsDir: filepath.Join(os.Args[1], "managed"), GOOS: "linux", Env: func(string) string { return "" }}, time.Now())
+		},
+	}, httpd.ControlDeps{})
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: time.Second}
 	defer func() { _ = server.Close() }()
 	go func() { _ = server.Serve(listener) }()

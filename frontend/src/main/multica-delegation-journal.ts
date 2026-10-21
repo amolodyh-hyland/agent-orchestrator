@@ -18,7 +18,7 @@ async function responseText(response: Response): Promise<string> {
 }
 
 export function createDaemonDelegationJournal(origin: () => string | null, authority: MainProcessDelegationAuthority, fetcher: typeof fetch = fetch): DelegationJournal {
-	async function request(operation: string, body: object): Promise<DelegationRecord | null> {
+	async function request(operation: string, body: object): Promise<unknown> {
 		const base = origin();
 		if (!base) throw new Error("journal_unavailable");
 		const parsed = new URL(base);
@@ -34,25 +34,27 @@ export function createDaemonDelegationJournal(origin: () => string | null, autho
 		if (!authority.verifyResponseMAC(responseBody, requestMAC, response.headers.get("X-AO-Delegation-Response-MAC"))) throw new Error("journal_unavailable");
 		const value: unknown = JSON.parse(responseBody);
 		if (!value || typeof value !== "object" || !("record" in value)) throw new Error("journal_unavailable");
+		if (operation === "evaluatePolicy") return value.record;
 		const record = value.record;
 		if (record === null) return null;
 		if (!record || typeof record !== "object" || !("requestId" in record) || !("version" in record) || typeof record.requestId !== "string" || !Number.isSafeInteger(record.version)) throw new Error("journal_unavailable");
 		return record as DelegationRecord;
 	}
 	async function write(operation: string, record: DelegationRecord, confirmationProof?: string) {
-		const saved = await request(operation, { record, ...(confirmationProof ? { confirmationProof } : {}) });
+		const saved = await request(operation, { record, ...(confirmationProof ? { confirmationProof } : {}) }) as DelegationRecord | null;
 		if (!saved || saved.projectId !== record.projectId || saved.taskId !== record.taskId || saved.payloadHash !== record.payloadHash || !isDeepStrictEqual(saved.intent, record.intent)) throw new Error("journal_unavailable");
 		if (operation === "save" && !isDeepStrictEqual(saved, { ...record, version: record.version + 1 })) throw new Error("journal_unavailable");
 		return saved;
 	}
 	return {
+		evaluatePolicy: (policyRequest) => request("evaluatePolicy", { policyRequest }),
 		get: async (requestId) => {
-			const record = await request("get", { requestId });
+			const record = await request("get", { requestId }) as DelegationRecord | null;
 			if (record && record.requestId !== requestId) throw new Error("journal_unavailable");
 			return record;
 		},
 		find: async (projectId, taskId) => {
-			const record = await request("find", { projectId, taskId });
+			const record = await request("find", { projectId, taskId }) as DelegationRecord | null;
 			if (record && (record.projectId !== projectId || record.taskId !== taskId)) throw new Error("journal_unavailable");
 			return record;
 		},

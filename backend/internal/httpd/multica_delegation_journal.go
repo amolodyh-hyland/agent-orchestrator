@@ -7,12 +7,14 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/delegationauth"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
 )
 
 // MulticaDelegationJournal is the daemon-owned durable dispatch boundary.
@@ -23,9 +25,17 @@ type MulticaDelegationJournal interface {
 	SaveMulticaDelegation(context.Context, domain.MulticaDelegationRecord) (domain.MulticaDelegationRecord, error)
 }
 
-func mountMulticaDelegationJournal(r chi.Router, journal MulticaDelegationJournal, authority *delegationauth.Authority) {
+// DelegationPolicyResolver evaluates only metadata and returns a safe decision code.
+type DelegationPolicyResolver func(context.Context, agentcreds.DelegationPolicyRequest) agentcreds.DelegationPolicyDecision
+
+func mountMulticaDelegationJournal(r chi.Router, journal MulticaDelegationJournal, authority *delegationauth.Authority, policy DelegationPolicyResolver) {
 	if journal == nil {
 		return
+	}
+	if policy == nil {
+		policy = func(ctx context.Context, request agentcreds.DelegationPolicyRequest) agentcreds.DelegationPolicyDecision {
+			return agentcreds.ResolveManagedDelegationPolicy(ctx, request, agentcreds.ResolveOptions{}, time.Now())
+		}
 	}
 	r.Post("/internal/multica-delegation-journal", func(w http.ResponseWriter, req *http.Request) {
 		if !localControlRequest(req) || authority == nil {
@@ -38,16 +48,27 @@ func mountMulticaDelegationJournal(r chi.Router, journal MulticaDelegationJourna
 			return
 		}
 		var body struct {
-			RequestNonce      string                         `json:"requestNonce"`
-			Operation         string                         `json:"operation"`
-			RequestID         string                         `json:"requestId"`
-			ProjectID         string                         `json:"projectId"`
-			TaskID            string                         `json:"taskId"`
-			Record            domain.MulticaDelegationRecord `json:"record"`
-			ConfirmationProof string                         `json:"confirmationProof,omitempty"`
+			PolicyRequest     agentcreds.DelegationPolicyRequest `json:"policyRequest"`
+			RequestNonce      string                             `json:"requestNonce"`
+			Operation         string                             `json:"operation"`
+			RequestID         string                             `json:"requestId"`
+			ProjectID         string                             `json:"projectId"`
+			TaskID            string                             `json:"taskId"`
+			Record            domain.MulticaDelegationRecord     `json:"record"`
+			ConfirmationProof string                             `json:"confirmationProof,omitempty"`
 		}
 		if domain.StrictDelegationJSON(raw, &body) != nil || body.RequestNonce == "" {
 			envelope.WriteJSON(w, http.StatusBadRequest, map[string]string{"status": "invalid_request"})
+			return
+		}
+		if body.Operation == "evaluatePolicy" {
+			decision := policy(req.Context(), body.PolicyRequest)
+			switch decision.Code {
+			case "policy_absent", "policy_allowed", "policy_denied", "policy_unavailable", "policy_runtime_unknown":
+			default:
+				decision.Code = "policy_unavailable"
+			}
+			writeDelegationJournalResponse(w, req, authority, decision)
 			return
 		}
 		if body.Operation == "reserve" && !authority.Confirm(body.Record, body.ConfirmationProof) {
