@@ -38,6 +38,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/codexops"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon/supervisor"
+	"github.com/aoagents/agent-orchestrator/backend/internal/delegationauth"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
@@ -199,8 +200,9 @@ func Run() error {
 
 	log := newLogger()
 	var browserRuntimeToken string
+	var delegationAuthority *delegationauth.Authority
 	if os.Getenv(browserruntime.RuntimeTokenStdinEnv) == "1" {
-		browserRuntimeToken, err = browserruntime.ReadRuntimeToken(os.Stdin)
+		browserRuntimeToken, delegationAuthority, err = delegationauth.ReadDesktopHandoff(os.Stdin)
 		if err != nil {
 			return err
 		}
@@ -997,6 +999,7 @@ func Run() error {
 		Settings:           settingsSvc,
 		Multica:            multicaService,
 		MulticaDelegations: store,
+		DelegationAuth:     delegationAuthority,
 		CDC:                store,
 		Events:             cdcPipe.Broadcaster,
 		Activity:           lcStack.LCM,

@@ -1,10 +1,12 @@
 package domain
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -47,27 +49,8 @@ func (r MulticaDelegationRecord) Validate() error {
 	if _, err := time.Parse(time.RFC3339Nano, r.ConfirmedAt); err != nil {
 		return ErrDelegationInvalid
 	}
-	var intent struct {
-		Binding struct {
-			ServerKey   string `json:"serverKey"`
-			Origin      string `json:"origin"`
-			WorkspaceID string `json:"workspaceId"`
-		} `json:"binding"`
-		Payload struct {
-			AgentID   string `json:"agent_id"`
-			RuntimeID string `json:"expected_runtime_id"`
-			Source    struct {
-				System    string `json:"system"`
-				ProjectID string `json:"project_id"`
-				TaskID    string `json:"task_id"`
-			} `json:"source"`
-			Task struct {
-				Title        string `json:"title"`
-				Instructions string `json:"instructions"`
-			} `json:"task"`
-		} `json:"payload"`
-	}
-	if json.Unmarshal(r.Intent, &intent) != nil {
+	var intent MulticaDelegationIntent
+	if StrictDelegationJSON(r.Intent, &intent) != nil {
 		return ErrDelegationInvalid
 	}
 	p := intent.Payload
@@ -85,23 +68,24 @@ func (r MulticaDelegationRecord) Validate() error {
 		return ErrDelegationInvalid
 	}
 	data, err := json.Marshal(r)
-	if err != nil || len(data) > 100000 || delegationSecret.Match(data) {
+	if err != nil || len(data) > 100000 || delegationHasSecret(data) {
 		return ErrDelegationInvalid
 	}
 
-	var remote struct {
-		DelegationID string `json:"delegation_id"`
-		TaskID       string `json:"task_id"`
-		WorkspaceID  string `json:"workspace_id"`
-		AgentID      string `json:"agent_id"`
-		RuntimeID    string `json:"runtime_id"`
-		Status       string `json:"status"`
-		Terminal     bool   `json:"terminal"`
-		Revision     string `json:"revision"`
-	}
+	var remote MulticaDelegationRemote
 	hasRemote := len(r.Remote) > 0 && string(r.Remote) != "null"
 	if hasRemote {
-		if json.Unmarshal(r.Remote, &remote) != nil || remote.DelegationID == "" || remote.TaskID == "" || remote.WorkspaceID != intent.Binding.WorkspaceID || remote.AgentID != p.AgentID || remote.RuntimeID != p.RuntimeID || remote.Revision == "" {
+		if StrictDelegationJSON(r.Remote, &remote) != nil || remote.DelegationID == "" || remote.TaskID == "" || remote.WorkspaceID != intent.Binding.WorkspaceID || remote.AgentID != p.AgentID || remote.RuntimeID != p.RuntimeID || remote.Revision == "" {
+			return ErrDelegationInvalid
+		}
+		if remote.CreatedAt != "" {
+			if _, err := time.Parse(time.RFC3339Nano, remote.CreatedAt); err != nil {
+				return ErrDelegationInvalid
+			}
+		}
+		switch remote.FailureReason {
+		case "", "access_revoked", "target_unavailable", "timeout", "runtime_unavailable", "execution_failed", "execution_cancelled", "execution_unavailable":
+		default:
 			return ErrDelegationInvalid
 		}
 		terminal := remote.Status == "completed" || remote.Status == "failed" || remote.Status == "cancelled"
@@ -119,12 +103,8 @@ func (r MulticaDelegationRecord) Validate() error {
 	}
 	hasCancellation := len(r.Cancellation) > 0 && string(r.Cancellation) != "null"
 	if hasCancellation {
-		var c struct {
-			ID     string `json:"id"`
-			UserID string `json:"userId"`
-			At     string `json:"at"`
-		}
-		if json.Unmarshal(r.Cancellation, &c) != nil || c.ID == "" || c.UserID == "" {
+		var c MulticaDelegationApproval
+		if StrictDelegationJSON(r.Cancellation, &c) != nil || c.ID == "" || c.UserID == "" {
 			return ErrDelegationInvalid
 		}
 		if _, err := time.Parse(time.RFC3339Nano, c.At); err != nil {
@@ -173,4 +153,119 @@ func (r MulticaDelegationRecord) SameIntent(other MulticaDelegationRecord) bool 
 func DelegationJSONEqual(a, b json.RawMessage) bool {
 	var left, right any
 	return json.Unmarshal(a, &left) == nil && json.Unmarshal(b, &right) == nil && reflect.DeepEqual(left, right)
+}
+
+// MulticaDelegationIntent is the exact normalized handoff schema.
+type MulticaDelegationIntent struct {
+	Binding struct {
+		ServerKey   string `json:"serverKey"`
+		Origin      string `json:"origin"`
+		WorkspaceID string `json:"workspaceId"`
+	} `json:"binding"`
+	Payload struct {
+		AgentID   string `json:"agent_id"`
+		RuntimeID string `json:"expected_runtime_id"`
+		Source    struct {
+			System    string `json:"system"`
+			ProjectID string `json:"project_id"`
+			TaskID    string `json:"task_id"`
+		} `json:"source"`
+		Task struct {
+			Title        string `json:"title"`
+			Instructions string `json:"instructions"`
+		} `json:"task"`
+	} `json:"payload"`
+}
+
+// MulticaDelegationRemote contains only the safe Public API status projection.
+type MulticaDelegationRemote struct {
+	DelegationID  string `json:"delegation_id"`
+	TaskID        string `json:"task_id"`
+	WorkspaceID   string `json:"workspace_id"`
+	AgentID       string `json:"agent_id"`
+	RuntimeID     string `json:"runtime_id"`
+	Status        string `json:"status"`
+	CreatedAt     string `json:"created_at"`
+	Terminal      bool   `json:"terminal"`
+	Revision      string `json:"revision"`
+	FailureReason string `json:"failure_reason,omitempty"`
+}
+
+// MulticaDelegationApproval records the principal and explicit human action.
+type MulticaDelegationApproval struct {
+	ID     string `json:"id"`
+	UserID string `json:"userId"`
+	At     string `json:"at"`
+}
+
+// StrictDelegationJSON rejects unknown fields and trailing documents at every typed boundary.
+func StrictDelegationJSON(data []byte, value any) error {
+	d := json.NewDecoder(bytes.NewReader(data))
+	d.DisallowUnknownFields()
+	if err := d.Decode(value); err != nil {
+		return err
+	}
+	if d.Decode(new(any)) != io.EOF {
+		return ErrDelegationInvalid
+	}
+	return nil
+}
+
+func delegationHasSecret(data []byte) bool {
+	var decoded any
+	if json.Unmarshal(data, &decoded) != nil {
+		return true
+	}
+	var scan func(any) bool
+	scan = func(value any) bool {
+		switch v := value.(type) {
+		case string:
+			return delegationSecret.MatchString(v)
+		case map[string]any:
+			for key, item := range v {
+				if delegationSecret.MatchString(key) || scan(item) {
+					return true
+				}
+			}
+		case []any:
+			for _, item := range v {
+				if scan(item) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return scan(decoded)
+}
+
+// Normalize verifies a record and rebuilds raw fields from strict typed schemas.
+func (r MulticaDelegationRecord) Normalize() (MulticaDelegationRecord, error) {
+	if err := r.Validate(); err != nil {
+		return r, err
+	}
+	var intent MulticaDelegationIntent
+	if err := StrictDelegationJSON(r.Intent, &intent); err != nil {
+		return r, err
+	}
+	r.Intent, _ = json.Marshal(intent)
+	if len(r.Remote) > 0 && string(r.Remote) != "null" {
+		var remote MulticaDelegationRemote
+		if err := StrictDelegationJSON(r.Remote, &remote); err != nil {
+			return r, err
+		}
+		r.Remote, _ = json.Marshal(remote)
+	} else {
+		r.Remote = json.RawMessage(`null`)
+	}
+	if len(r.Cancellation) > 0 && string(r.Cancellation) != "null" {
+		var c MulticaDelegationApproval
+		if err := StrictDelegationJSON(r.Cancellation, &c); err != nil {
+			return r, err
+		}
+		r.Cancellation, _ = json.Marshal(c)
+	} else {
+		r.Cancellation = json.RawMessage(`null`)
+	}
+	return r, nil
 }

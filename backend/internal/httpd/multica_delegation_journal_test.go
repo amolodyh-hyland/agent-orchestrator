@@ -3,7 +3,10 @@ package httpd
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/delegationauth"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -42,19 +46,30 @@ func TestMulticaJournalInternalBoundary(t *testing.T) {
 	}{
 		{"read", "127.0.0.1:9999", "", `{"operation":"get","requestId":"request-1"}`, 200, 1},
 		{"find", "127.0.0.1:9999", "", `{"operation":"find","projectId":"p","taskId":"t"}`, 200, 1},
-		{"conflict", "127.0.0.1:9999", "", `{"operation":"reserve","record":{}}`, 409, 1},
+		{"conflict", "127.0.0.1:9999", "", `{"operation":"reserve","record":{}}`, 403, 0},
 		{"invalid", "127.0.0.1:9999", "", `{"operation":"save","record":{}}`, 400, 1},
 		{"renderer cannot confirm", "127.0.0.1:9999", "http://localhost:5173", `{"operation":"reserve"}`, 403, 0},
 		{"remote host", "evil.example", "", `{"operation":"get"}`, 403, 0},
 		{"unknown field", "127.0.0.1:9999", "", `{"operation":"get","token":"secret"}`, 400, 0},
 		{"multiple documents", "127.0.0.1:9999", "", `{"operation":"get"} {}`, 400, 0},
-		{"oversized body", "127.0.0.1:9999", "", strings.Repeat("x", 100001), 400, 0},
+		{"oversized body", "127.0.0.1:9999", "", strings.Repeat("x", 100001), 403, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			journal := &fakeDelegationJournal{}
 			r := chi.NewRouter()
-			mountMulticaDelegationJournal(r, journal)
-			req := httptest.NewRequest(http.MethodPost, "http://"+tc.host+"/internal/multica-delegation-journal", bytes.NewBufferString(tc.body))
+			authority, err := delegationauth.New(bytes.Repeat([]byte{7}, 32))
+			if err != nil {
+				t.Fatal(err)
+			}
+			mountMulticaDelegationJournal(r, journal, authority)
+			requestBody := tc.body
+			if strings.HasPrefix(requestBody, "{") {
+				requestBody = `{"requestNonce":"test-nonce",` + requestBody[1:]
+			}
+			req := httptest.NewRequest(http.MethodPost, "http://"+tc.host+"/internal/multica-delegation-journal", bytes.NewBufferString(requestBody))
+			mac := hmac.New(sha256.New, bytes.Repeat([]byte{7}, 32))
+			_, _ = mac.Write([]byte("journal-v1:" + requestBody))
+			req.Header.Set("X-AO-Delegation-MAC", hex.EncodeToString(mac.Sum(nil)))
 			if tc.origin != "" {
 				req.Header.Set("Origin", tc.origin)
 			}

@@ -99,6 +99,14 @@ func TestMulticaDelegationIntentRestartCASAndReruns(t *testing.T) {
 	rerun.RequestID = "rerun-1"
 	rerun.ConfirmationID = "rerun-approval"
 	rerun.RerunOf = record.RequestID
+	if _, err := s.ReserveMulticaDelegation(ctx, rerun); !errors.Is(err, domain.ErrDelegationConflict) {
+		t.Fatalf("unknown predecessor allowed rerun: %v", err)
+	}
+	recovered.State = "terminal"
+	recovered.Remote = json.RawMessage(`{"delegation_id":"remote-1","task_id":"remote-task","workspace_id":"workspace","agent_id":"agent","runtime_id":"runtime","status":"completed","terminal":true,"revision":"done"}`)
+	if _, err := s.SaveMulticaDelegation(ctx, recovered); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.ReserveMulticaDelegation(ctx, rerun); err != nil {
 		t.Fatal(err)
 	}

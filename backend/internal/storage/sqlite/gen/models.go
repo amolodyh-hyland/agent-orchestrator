@@ -447,13 +447,14 @@ type ModelUsageEvent struct {
 }
 
 type MulticaDelegation struct {
-	RequestID      string
-	ProjectID      string
-	TaskID         string
-	ConfirmationID string
-	IsCurrent      int64
-	Version        int64
-	Document       string
+	RequestID            string
+	ProjectID            string
+	TaskID               string
+	ConfirmationID       string
+	IsCurrent            int64
+	Version              int64
+	Document             string
+	ConfirmationVerified int64
 }
 
 type MulticaDelegationTransition struct {

@@ -1,3 +1,4 @@
+import { createMainProcessDelegationAuthority } from "./multica-delegation-authority";
 import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +17,7 @@ const remote: PublicDelegation = {
 	workspace_id: binding.workspaceId, agent_id: intent.payload.agent_id, runtime_id: intent.payload.expected_runtime_id,
 	status: "queued", terminal: false, revision: "revision-1", created_at: approved.at,
 };
+const confirmations = createMainProcessDelegationAuthority(Buffer.alloc(32, 7));
 let dir: string;
 let file: string;
 let rows: Map<string, DelegationRecord>;
@@ -32,7 +34,11 @@ function fakeClient() {
 		cancelDelegation: vi.fn(async (id: string) => { calls.push(`cancel:${id}`); return { ok: true as const, data: accepted! }; }),
 	};
 }
-function coordinator(enabled = true) { return createMulticaDelegationCoordinator({ journal, client: () => client, enabled }); }
+function coordinator(enabled = true) {
+ const result = createMulticaDelegationCoordinator({ journal, client: () => client, enabled, confirmations });
+ const combined = { ...result.taskOrchestrator, confirm: result.human.confirmFromUserAction, cancel: result.human.cancelFromUserAction };
+ return { taskOrchestrator: combined, projectOrchestrator: combined };
+}
 async function flush() { await writeFile(file, JSON.stringify([...rows])); }
 async function restart() { rows = new Map(JSON.parse(await readFile(file, "utf8"))); return coordinator(); }
 beforeEach(async () => {
@@ -49,7 +55,7 @@ beforeEach(async () => {
 				if (existing.payloadHash !== r.payloadHash || JSON.stringify(existing.intent) !== JSON.stringify(r.intent)) throw new Error("journal_conflict");
 				return existing;
 			}
-			if ((existing?.requestId ?? "") !== r.rerunOf) throw new Error("journal_conflict");
+			if ((existing?.requestId ?? "") !== r.rerunOf || (existing && existing.state !== "terminal" && existing.state !== "rejected")) throw new Error("journal_conflict");
 			rows.set(r.requestId, structuredClone(r)); await flush(); return structuredClone(r);
 		},
 		save: async (r) => {
@@ -119,7 +125,10 @@ describe("shared confirmed delegation coordinator", () => {
 		expect(repeated.requestId).toBe(r.requestId);
 		await Promise.all([service.process(r.requestId), service.process(r.requestId)]);
 		expect(client.delegate).toHaveBeenCalledTimes(1);
-		const rerun = await service.confirm(intent, { ...approved, id: "rerun-confirmation" }, r.requestId);
+		await expect(service.confirm(intent, { ...approved, id: "running-rerun" }, r.requestId)).rejects.toThrow("journal_conflict");
+ accepted = { ...remote, status: "completed", terminal: true };
+ await service.process(r.requestId);
+ const rerun = await service.confirm(intent, { ...approved, id: "rerun-confirmation" }, r.requestId);
 		expect(rerun.requestId).not.toBe(r.requestId);
 		expect(await journal.get(r.requestId)).not.toBeNull();
 		expect((await service.confirm(intent, { ...approved, id: "rerun-confirmation" }, r.requestId)).requestId).toBe(rerun.requestId);
@@ -140,7 +149,7 @@ describe("shared confirmed delegation coordinator", () => {
 		expect(calls).toEqual([]);
 	});
 	it("keeps rollout off by default but still reconciles and cancels accepted work", async () => {
-		const disabled = createMulticaDelegationCoordinator({ journal, client: () => client }).taskOrchestrator;
+		const disabled = coordinator(false).taskOrchestrator;
 		const r = await disabled.confirm(intent, approved);
 		await disabled.process(r.requestId); expect(calls).toEqual([]);
 		await coordinator().taskOrchestrator.process(r.requestId);

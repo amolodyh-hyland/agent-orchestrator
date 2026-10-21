@@ -10,7 +10,7 @@ import (
 )
 
 const findMulticaDelegation = `-- name: FindMulticaDelegation :one
-SELECT document FROM multica_delegations WHERE project_id = ? AND task_id = ? AND is_current = 1
+SELECT document FROM multica_delegations WHERE project_id = ? AND task_id = ? AND is_current = 1 AND confirmation_verified = 1
 `
 
 type FindMulticaDelegationParams struct {
@@ -26,7 +26,7 @@ func (q *Queries) FindMulticaDelegation(ctx context.Context, arg FindMulticaDele
 }
 
 const findMulticaDelegationConfirmation = `-- name: FindMulticaDelegationConfirmation :one
-SELECT document FROM multica_delegations WHERE confirmation_id = ?
+SELECT document FROM multica_delegations WHERE confirmation_id = ? AND confirmation_verified = 1
 `
 
 func (q *Queries) FindMulticaDelegationConfirmation(ctx context.Context, confirmationID string) (string, error) {
@@ -37,7 +37,7 @@ func (q *Queries) FindMulticaDelegationConfirmation(ctx context.Context, confirm
 }
 
 const getMulticaDelegation = `-- name: GetMulticaDelegation :one
-SELECT document FROM multica_delegations WHERE request_id = ?
+SELECT document FROM multica_delegations WHERE request_id = ? AND confirmation_verified = 1
 `
 
 func (q *Queries) GetMulticaDelegation(ctx context.Context, requestID string) (string, error) {
@@ -48,7 +48,7 @@ func (q *Queries) GetMulticaDelegation(ctx context.Context, requestID string) (s
 }
 
 const insertMulticaDelegation = `-- name: InsertMulticaDelegation :exec
-INSERT INTO multica_delegations(request_id, project_id, task_id, confirmation_id, is_current, version, document) VALUES (?, ?, ?, ?, 1, 0, ?)
+INSERT INTO multica_delegations(request_id, project_id, task_id, confirmation_id, is_current, version, document, confirmation_verified) VALUES (?, ?, ?, ?, 1, 0, ?, 1)
 `
 
 type InsertMulticaDelegationParams struct {
@@ -92,7 +92,7 @@ func (q *Queries) InsertMulticaDelegationTransition(ctx context.Context, arg Ins
 }
 
 const retireMulticaDelegation = `-- name: RetireMulticaDelegation :execrows
-UPDATE multica_delegations SET is_current = 0 WHERE request_id = ? AND project_id = ? AND task_id = ? AND is_current = 1
+UPDATE multica_delegations SET is_current = 0 WHERE request_id = ? AND project_id = ? AND task_id = ? AND is_current = 1 AND confirmation_verified = 1
 `
 
 type RetireMulticaDelegationParams struct {

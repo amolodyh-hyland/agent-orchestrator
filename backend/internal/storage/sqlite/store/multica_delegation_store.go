@@ -15,10 +15,10 @@ func decodeDelegation(document string, err error) (domain.MulticaDelegationRecor
 	if err != nil {
 		return record, err
 	}
-	if err := json.Unmarshal([]byte(document), &record); err != nil {
+	if err := domain.StrictDelegationJSON([]byte(document), &record); err != nil {
 		return record, err
 	}
-	return record, record.Validate()
+	return record.Normalize()
 }
 
 // GetMulticaDelegation reads and verifies a request, including earlier reruns.
@@ -33,9 +33,11 @@ func (s *Store) FindMulticaDelegation(ctx context.Context, projectID, taskID str
 
 // ReserveMulticaDelegation atomically journals intent or reuses an existing request.
 func (s *Store) ReserveMulticaDelegation(ctx context.Context, record domain.MulticaDelegationRecord) (domain.MulticaDelegationRecord, error) {
-	if err := record.Validate(); err != nil {
+	normalized, err := record.Normalize()
+	if err != nil {
 		return record, err
 	}
+	record = normalized
 	if record.Version != 0 || record.State != "submitting" || record.Attempted || string(record.Remote) != "null" || string(record.Cancellation) != "null" {
 		return record, domain.ErrDelegationInvalid
 	}
@@ -69,7 +71,7 @@ func (s *Store) ReserveMulticaDelegation(ctx context.Context, record domain.Mult
 			}
 			return record, domain.ErrDelegationConflict
 		}
-		if current.RequestID != record.RerunOf {
+		if current.RequestID != record.RerunOf || (current.State != "terminal" && current.State != "rejected") {
 			return record, domain.ErrDelegationConflict
 		}
 		count, err := q.RetireMulticaDelegation(ctx, gen.RetireMulticaDelegationParams{RequestID: record.RerunOf, ProjectID: record.ProjectID, TaskID: record.TaskID})
@@ -99,9 +101,11 @@ func (s *Store) ReserveMulticaDelegation(ctx context.Context, record domain.Mult
 
 // SaveMulticaDelegation appends a transition with optimistic version checking.
 func (s *Store) SaveMulticaDelegation(ctx context.Context, record domain.MulticaDelegationRecord) (domain.MulticaDelegationRecord, error) {
-	if err := record.Validate(); err != nil {
+	normalized, err := record.Normalize()
+	if err != nil {
 		return record, err
 	}
+	record = normalized
 	if err := s.writeMu.LockContext(ctx); err != nil {
 		return record, err
 	}

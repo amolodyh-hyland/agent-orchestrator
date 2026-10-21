@@ -35,3 +35,17 @@ func TestMulticaDelegationMigrationUpgradeAndUniqueness(t *testing.T) {
 		t.Fatalf("recreated journal = %d, %v", count, err)
 	}
 }
+
+func TestMulticaConfirmationMigrationDoesNotAdoptLegacyApprovals(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 218)
+	if _, err := db.Exec(`INSERT INTO multica_delegations(request_id,project_id,task_id,confirmation_id,is_current,version,document) VALUES('legacy','p','t','claimed-human-approval',1,0,'{}')`); err != nil {
+		t.Fatal(err)
+	}
+	upTo(t, db, 219)
+	var verified int
+	if err := db.QueryRow(`SELECT confirmation_verified FROM multica_delegations WHERE request_id='legacy'`).Scan(&verified); err != nil || verified != 0 {
+		t.Fatalf("legacy confirmation provenance = %d, %v", verified, err)
+	}
+	downTo(t, db, 218)
+	upTo(t, db, 219)
+}

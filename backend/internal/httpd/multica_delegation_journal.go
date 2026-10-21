@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/delegationauth"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 )
@@ -22,26 +23,35 @@ type MulticaDelegationJournal interface {
 	SaveMulticaDelegation(context.Context, domain.MulticaDelegationRecord) (domain.MulticaDelegationRecord, error)
 }
 
-func mountMulticaDelegationJournal(r chi.Router, journal MulticaDelegationJournal) {
+func mountMulticaDelegationJournal(r chi.Router, journal MulticaDelegationJournal, authority *delegationauth.Authority) {
 	if journal == nil {
 		return
 	}
 	r.Post("/internal/multica-delegation-journal", func(w http.ResponseWriter, req *http.Request) {
-		if !localControlRequest(req) {
+		if !localControlRequest(req) || authority == nil {
+			envelope.WriteJSON(w, http.StatusForbidden, map[string]string{"status": "forbidden"})
+			return
+		}
+		raw, readErr := io.ReadAll(http.MaxBytesReader(w, req.Body, 100000))
+		if readErr != nil || !authority.Authorize(raw, req.Header.Get("X-AO-Delegation-MAC")) {
 			envelope.WriteJSON(w, http.StatusForbidden, map[string]string{"status": "forbidden"})
 			return
 		}
 		var body struct {
-			Operation string                         `json:"operation"`
-			RequestID string                         `json:"requestId"`
-			ProjectID string                         `json:"projectId"`
-			TaskID    string                         `json:"taskId"`
-			Record    domain.MulticaDelegationRecord `json:"record"`
+			RequestNonce      string                         `json:"requestNonce"`
+			Operation         string                         `json:"operation"`
+			RequestID         string                         `json:"requestId"`
+			ProjectID         string                         `json:"projectId"`
+			TaskID            string                         `json:"taskId"`
+			Record            domain.MulticaDelegationRecord `json:"record"`
+			ConfirmationProof string                         `json:"confirmationProof,omitempty"`
 		}
-		decoder := json.NewDecoder(http.MaxBytesReader(w, req.Body, 100000))
-		decoder.DisallowUnknownFields()
-		if decoder.Decode(&body) != nil || decoder.Decode(new(any)) != io.EOF {
+		if domain.StrictDelegationJSON(raw, &body) != nil || body.RequestNonce == "" {
 			envelope.WriteJSON(w, http.StatusBadRequest, map[string]string{"status": "invalid_request"})
+			return
+		}
+		if body.Operation == "reserve" && !authority.Confirm(body.Record, body.ConfirmationProof) {
+			envelope.WriteJSON(w, http.StatusForbidden, map[string]string{"status": "confirmation_required"})
 			return
 		}
 		var record domain.MulticaDelegationRecord
@@ -59,7 +69,7 @@ func mountMulticaDelegationJournal(r chi.Router, journal MulticaDelegationJourna
 			err = domain.ErrDelegationInvalid
 		}
 		if errors.Is(err, sql.ErrNoRows) && (body.Operation == "get" || body.Operation == "find") {
-			envelope.WriteJSON(w, http.StatusOK, map[string]any{"record": nil})
+			writeDelegationJournalResponse(w, req, authority, nil)
 			return
 		}
 		if err != nil {
@@ -73,6 +83,19 @@ func mountMulticaDelegationJournal(r chi.Router, journal MulticaDelegationJourna
 			envelope.WriteJSON(w, status, map[string]string{"status": "journal_unavailable"})
 			return
 		}
-		envelope.WriteJSON(w, http.StatusOK, map[string]any{"record": record})
+		writeDelegationJournalResponse(w, req, authority, record)
 	})
+}
+
+func writeDelegationJournalResponse(w http.ResponseWriter, req *http.Request, authority *delegationauth.Authority, record any) {
+	body, err := json.Marshal(map[string]any{"record": record})
+	if err != nil {
+		envelope.WriteJSON(w, http.StatusInternalServerError, map[string]string{"status": "journal_unavailable"})
+		return
+	}
+	body = append(body, '\n')
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-AO-Delegation-Response-MAC", authority.ResponseMAC(body, req.Header.Get("X-AO-Delegation-MAC")))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
 }

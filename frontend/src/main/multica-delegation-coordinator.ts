@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import type { MainProcessDelegationAuthority } from "./multica-delegation-authority";
 import type { createMulticaPublicApi, PublicApiBinding, PublicApiFailureCode } from "./multica-public-api";
 import { createDelegation, delegation, type CreatePublicDelegation, type PublicDelegation } from "./multica-public-api-model";
 
@@ -15,17 +16,19 @@ export type DelegationRecord = {
 export interface DelegationJournal {
 	get(requestId: string): Promise<DelegationRecord | null>;
 	find(projectId: string, taskId: string): Promise<DelegationRecord | null>;
-	reserve(record: DelegationRecord): Promise<DelegationRecord>;
+	reserve(record: DelegationRecord, confirmationProof: string): Promise<DelegationRecord>;
 	save(record: DelegationRecord): Promise<DelegationRecord>;
 }
 export interface MulticaDelegationCoordinator {
-	confirm(intent: DelegationIntent, approved: UserConfirmation, rerunOf?: string): Promise<DelegationRecord>;
 	process(requestId: string): Promise<DelegationRecord>;
 	processTask(projectId: string, taskId: string): Promise<DelegationRecord>;
-	cancel(requestId: string, approved: UserConfirmation): Promise<DelegationRecord>;
+}
+export interface MainProcessDelegationActions {
+	confirmFromUserAction(intent: DelegationIntent, approved: UserConfirmation, rerunOf?: string): Promise<DelegationRecord>;
+	cancelFromUserAction(requestId: string, approved: UserConfirmation): Promise<DelegationRecord>;
 }
 type Client = Pick<ReturnType<typeof createMulticaPublicApi>, "binding" | "delegate" | "getDelegation" | "listDelegations" | "cancelDelegation">;
-type Options = { journal: DelegationJournal; client: (binding: PublicApiBinding) => Client; enabled?: boolean };
+type Options = { journal: DelegationJournal; client: (binding: PublicApiBinding) => Client; enabled?: boolean; confirmations: MainProcessDelegationAuthority };
 
 export const delegationPayloadHash = (p: CreatePublicDelegation) => createHash("sha256").update(
 	[p.agent_id, p.expected_runtime_id, p.source.system, p.source.project_id, p.source.task_id, p.task.title, p.task.instructions]
@@ -35,7 +38,9 @@ const hash = delegationPayloadHash;
 const equal = isDeepStrictEqual;
 function confirmation(value: UserConfirmation): UserConfirmation {
 	if (!value?.id?.trim() || !value.userId?.trim() || !Number.isFinite(Date.parse(value.at))) throw new Error("confirmation_required");
-	return { id: value.id, userId: value.userId, at: value.at };
+	const normalized = { id: value.id, userId: value.userId, at: value.at };
+	if (!equal(normalized, value)) throw new Error("confirmation_required");
+	return normalized;
 }
 function verify(record: DelegationRecord): void {
 	confirmation({ id: record.confirmationId, userId: record.confirmedBy, at: record.confirmedAt });
@@ -44,7 +49,7 @@ function verify(record: DelegationRecord): void {
 }
 const rejected: readonly PublicApiFailureCode[] = ["invalid_request", "runtime_binding_changed", "idempotency_conflict", "target_unavailable", "runtime_unsupported", "invocation_not_allowed", "forbidden", "unauthorized", "insufficient_scope", "policy_denied", "feature_disabled"];
 
-export function createMulticaDelegationCoordinator(options: Options): { taskOrchestrator: MulticaDelegationCoordinator; projectOrchestrator: MulticaDelegationCoordinator } {
+export function createMulticaDelegationCoordinator(options: Options): { human: MainProcessDelegationActions; taskOrchestrator: MulticaDelegationCoordinator; projectOrchestrator: MulticaDelegationCoordinator } {
 	const { journal } = options;
 	const queues = new Map<string, Promise<unknown>>();
 	function serial<T>(id: string, fn: () => Promise<T>): Promise<T> {
@@ -106,12 +111,13 @@ export function createMulticaDelegationCoordinator(options: Options): { taskOrch
 		}
 		return record;
 	}
-	const coordinator: MulticaDelegationCoordinator = {
-		async confirm(intent: DelegationIntent, approved: UserConfirmation, rerunOf = ""): Promise<DelegationRecord> {
+	const human: MainProcessDelegationActions = {
+		async confirmFromUserAction(intent: DelegationIntent, approved: UserConfirmation, rerunOf = ""): Promise<DelegationRecord> {
 			const by = confirmation(approved);
 			const payload = createDelegation(intent.payload);
 			if (payload.source.system !== "ao") throw new Error("invalid_source");
 			const binding = { serverKey: intent.binding.serverKey, origin: intent.binding.origin, workspaceId: intent.binding.workspaceId };
+			if (!equal({ binding, payload }, intent)) throw new Error("invalid_request");
 			const record: DelegationRecord = {
 				requestId: randomUUID(), projectId: payload.source.project_id, taskId: payload.source.task_id,
 				confirmationId: by.id, confirmedBy: by.userId, confirmedAt: by.at, rerunOf,
@@ -120,15 +126,9 @@ export function createMulticaDelegationCoordinator(options: Options): { taskOrch
 			};
 			verify(record);
 			clientFor(record);
-			return journal.reserve(record);
+			return journal.reserve(record, options.confirmations.confirmationProof(record));
 		},
-		process: (requestId: string) => serial(requestId, () => process(requestId)),
-		async processTask(projectId: string, taskId: string) {
-			const record = await journal.find(projectId, taskId);
-			if (!record) throw new Error("confirmation_required");
-			return coordinator.process(record.requestId);
-		},
-		cancel: (requestId: string, approved: UserConfirmation) => serial(requestId, async () => {
+		cancelFromUserAction: (requestId: string, approved: UserConfirmation) => serial(requestId, async () => {
 			const by = confirmation(approved);
 			const record = await load(requestId);
 			if (record.remote?.terminal || record.state === "rejected") return record;
@@ -136,5 +136,13 @@ export function createMulticaDelegationCoordinator(options: Options): { taskOrch
 			return process(requestId);
 		}),
 	};
-	return { taskOrchestrator: coordinator, projectOrchestrator: coordinator };
+	const coordinator: MulticaDelegationCoordinator = {
+		process: (requestId: string) => serial(requestId, () => process(requestId)),
+		async processTask(projectId: string, taskId: string) {
+			const record = await journal.find(projectId, taskId);
+			if (!record) throw new Error("confirmation_required");
+			return coordinator.process(record.requestId);
+		},
+	};
+	return { human, taskOrchestrator: coordinator, projectOrchestrator: coordinator };
 }
