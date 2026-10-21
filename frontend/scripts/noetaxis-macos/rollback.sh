@@ -7,11 +7,12 @@ script_dir="$(cd "$(/usr/bin/dirname "$0")" && pwd)"
 allow_ao_session=0
 allow_background=0
 restore_db=0
+fast=0
 backup_dir=""
 
 usage() {
 	cat <<'EOF'
-Usage: rollback.sh [--backup-dir <directory>] [--restore-db] [--allow-ao-session] [--allow-background-processes]
+Usage: rollback.sh [--backup-dir <directory>] [--restore-db] [--allow-ao-session] [--allow-background-processes] [--fast]
 
 Restore the app from the newest complete backup by default. Database files are
 restored only when --restore-db is supplied.
@@ -21,11 +22,16 @@ tray; Quit / Cmd+Q only close its window on macOS). The rollback refuses while t
 bundled daemon or agent chat hosts run unless --allow-background-processes is
 given; it never stops a process for you. --restore-db is refused while the
 daemon runs, whatever the flag, because a running daemon holds the database.
+--fast uses bundle-only process checks, as in the fast updater's automatic rollback;
+it leaves external/unverified processes alone and never stops anything itself.
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
+		--fast)
+			fast=1
+			;;
 		--backup-dir)
 			[[ $# -ge 2 ]] || { noetaxis_error "--backup-dir requires a path."; exit 2; }
 			backup_dir="$2"
@@ -83,7 +89,11 @@ if [[ -z "$backup_dir" || ! -f "$backup_dir/BACKUP_COMPLETE" ]]; then
 fi
 
 noetaxis_check_safe_origin "$allow_ao_session"
-noetaxis_assert_idle "$target_app" "$allow_background"
+if [[ "$fast" -eq 1 ]]; then
+	noetaxis_assert_fast_idle "$target_app"
+else
+	noetaxis_assert_idle "$target_app" "$allow_background"
+fi
 # A live daemon holds ao.db and its -wal/-shm files open; replacing them underneath it
 # can corrupt the database, so --allow-background-processes never covers --restore-db.
 if [[ "$restore_db" -eq 1 ]] && noetaxis_daemon_running "$target_app"; then

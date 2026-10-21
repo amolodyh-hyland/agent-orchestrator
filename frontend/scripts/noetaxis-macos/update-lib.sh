@@ -143,7 +143,7 @@ noetaxis_wait_until() {
 # "pid<TAB>command" for each candidate whose executable vnode belongs to this bundle.
 noetaxis_own_bundle_processes() {
 	local app_path="$1" pid command_line
-	for pid in $(pgrep -if "$(noetaxis_regex_escape "$app_path/Contents/")" 2>/dev/null || true); do
+	for pid in $(pgrep -if "$(noetaxis_regex_escape "$app_path/Contents/${2:-}")" 2>/dev/null || true); do
 		[[ "$pid" =~ ^[0-9]+$ ]] || continue
 		[[ "$pid" -ne "$$" ]] || continue
 		command_line="$(ps -ww -o command= -p "$pid" 2>/dev/null || true)"
@@ -163,13 +163,14 @@ noetaxis_process_kind() {
 
 # Own processes of one kind (desktop, daemon, chat-host, helper) or "any", as "pid<TAB>command".
 noetaxis_own_pids_of_kind() {
-	local app_path="$1" kind="$2" pid command_line
+	local app_path="$1" kind="$2" pid command_line suffix=""
+	if [[ "${update_fast:-0}" -eq 1 && "$kind" == daemon ]]; then suffix='Resources/daemon/ao daemon'; fi
 	while IFS=$'\t' read -r pid command_line; do
 		[[ -n "$pid" ]] || continue
 		if [[ "$kind" == any || "$(noetaxis_process_kind "$app_path" "$command_line")" == "$kind" ]]; then
 			printf '%s\t%s\n' "$pid" "$command_line"
 		fi
-	done < <(noetaxis_own_bundle_processes "$app_path")
+	done < <(noetaxis_own_bundle_processes "$app_path" "$suffix")
 }
 
 noetaxis_none_running_of_kind() {
@@ -178,10 +179,11 @@ noetaxis_none_running_of_kind() {
 
 # The Electron main process of the bundle (Contents/MacOS/<name> with no arguments).
 noetaxis_own_main_pid() {
-	local app_path="$1" pid command_line
+	local app_path="$1" pid command_line suffix=""
+	if [[ "${update_fast:-0}" -eq 1 ]]; then suffix='MacOS/'; fi
 	while IFS=$'\t' read -r pid command_line; do
 		if noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" 'MacOS/'; then printf '%s' "$pid"; return 0; fi
-	done < <(noetaxis_own_bundle_processes "$app_path")
+	done < <(noetaxis_own_bundle_processes "$app_path" "$suffix")
 	return 1
 }
 
@@ -551,6 +553,156 @@ noetaxis_update_capture_state() {
 		printf 'multica_stack_running=%s\n' "$(printf '%s' "$cap_stack_running" | /usr/bin/tr '\n' ' ')"
 		printf 'schema_before=%s\n' "$cap_schema_before"
 	} > "$dir/state.env"
+}
+
+noetaxis_fast_verify_checksums() {
+	local directory="$1"
+	if [[ ! -s "$directory/SHA256SUMS" ]] || ! /usr/bin/grep -Eq '^[0-9a-f]{64}  MANIFEST\.sha256$' "$directory/SHA256SUMS"; then
+		noetaxis_error 'Fast update requires SHA256SUMS covering MANIFEST.sha256 from the complete build output.'
+		return 24
+	fi
+	if ! (cd "$directory" && /usr/bin/shasum -a 256 -c SHA256SUMS); then
+		noetaxis_error 'SHA256SUMS verification failed; nothing was stopped.'
+		return 24
+	fi
+}
+
+noetaxis_fast_capture() {
+	local app_path="$1" dir="$2"
+	if noetaxis_shipit_running; then noetaxis_error 'ShipIt is running; wait for it to finish.'; return 22; fi
+	cap_dir="$dir"
+	cap_cli="$app_path/Contents/Resources/daemon/ao"
+	cap_live_file="$dir/live-sessions.tsv"
+	: > "$cap_live_file"
+	if [[ -f "$app_path/Contents/Info.plist" ]]; then
+		cap_old_version="$(noetaxis_plist_value "$app_path/Contents/Info.plist" CFBundleShortVersionString)"
+	fi
+	if [[ -x "$cap_cli" ]] && ! noetaxis_update_verify_daemon "$app_path"; then
+		noetaxis_error "Refusing to update: $noetaxis_update_identity_detail"
+		return 57
+	fi
+	if [[ -f "$ao_home/data/ao.db" ]]; then
+		cap_schema_before="$(noetaxis_read_schema_version "$ao_home/data/ao.db" || true)"
+	fi
+	if [[ "$update_restore_sessions" -eq 1 ]]; then
+		noetaxis_update_capture_sessions || noetaxis_update_warn 'Session list unavailable; AO will restore sessions on launch.'
+	fi
+}
+
+noetaxis_fast_print_plan() {
+	printf '\nPLAN (--fast): %s -> %s\n' "$cap_old_version" "$noetaxis_update_new_version"
+	printf 'Quit AO Completely; stop its verified daemon; wait up to 60s for bundle processes, then TERM/recheck/KILL only verified bundle survivors.\n'
+	printf 'Back up ao.db (+ WAL/SHM), app-state.json, update-settings.json, editor-settings.json and the old app under %s/ao-backups.\n' "$user_home"
+	printf 'Swap %s, relaunch, check health; automatically roll back on failure.\n' "$1"
+	printf 'External agent CLIs are never signalled and wait at most 10s; sessions will be restored by AO on launch.\n'
+}
+
+noetaxis_fast_main_gone() {
+	local app_path="$1" pid command_line
+	for pid in $(pgrep -if "$(noetaxis_regex_escape "$app_path/Contents/MacOS/")" 2>/dev/null || true); do
+		command_line="$(ps -ww -o command= -p "$pid" 2>/dev/null || true)"
+		if noetaxis_command_matches_bundle_pattern "$app_path" "$command_line" 'MacOS/'; then return 1; fi
+	done
+	return 0
+}
+
+noetaxis_fast_quit() {
+	local app_path="$1" pid output
+	pid="$(noetaxis_own_main_pid "$app_path" || true)"
+	if [[ -z "$pid" ]]; then
+		if noetaxis_fast_main_gone "$app_path"; then return 0; fi
+		noetaxis_error 'Cannot verify the main app executable; quit AO completely yourself and rerun. No process was signalled.'
+		return 54
+	fi
+	noetaxis_update_step 'Quitting AO Completely (--fast)'
+	if [[ "$update_manual_quit" -eq 1 ]] || ! output="$(noetaxis_tray_quit "$pid" 2>&1)"; then
+		noetaxis_update_say "Could not script the tray (${output:-manual quit requested}). Automation > <terminal> > System Events and Accessibility > <terminal> may be required. Click \"Quit AO Completely\" in the menu bar now; waiting up to ${update_quit_timeout}s."
+	fi
+	if ! noetaxis_wait_until 'Quit AO Completely' "$update_quit_timeout" noetaxis_fast_main_gone "$app_path"; then
+		noetaxis_error 'AO did not quit completely. Nothing was installed.'
+		return 54
+	fi
+	noetaxis_update_append noetaxis_update_summary_stopped 'desktop app quit completely'
+}
+
+noetaxis_fast_bundle_snapshot() {
+	local app_path="$1" pid info executable
+	for pid in $(pgrep -if "$(noetaxis_regex_escape "$app_path/Contents/")" 2>/dev/null || true); do
+		[[ "$pid" =~ ^[0-9]+$ && "$pid" -ne "$$" ]] || continue
+		info="$(noetaxis_process_info "$pid")" || continue
+		executable="$(noetaxis_process_executable_path "$pid")" || continue
+		noetaxis_executable_path_is_in_bundle "$app_path" "$executable" || continue
+		[[ "$(noetaxis_process_info "$pid")" == "$info" ]] || continue
+		printf '%s\t%s\n' "$executable" "$info"
+	done
+}
+
+noetaxis_fast_bundle_gone() {
+	local app_path="$1" pid
+	for pid in $(pgrep -if "$(noetaxis_regex_escape "$app_path/Contents/")" 2>/dev/null || true); do
+		[[ "$pid" =~ ^[0-9]+$ && "$pid" -ne "$$" ]] || continue
+		if noetaxis_process_executable_is_in_bundle "$app_path" "$pid"; then return 1; fi
+	done
+	return 0
+}
+
+noetaxis_fast_signal() {
+	local app_path="$1" signal="$2" executable="$3" info="$4" pid current_executable
+	[[ "${update_fast:-0}" -eq 1 && ( "$signal" == TERM || "$signal" == KILL ) ]] || return 1
+	if noetaxis_shipit_running; then return 22; fi
+	pid="${info%%$'\t'*}"
+	[[ "$(noetaxis_process_info "$pid")" == "$info" ]] || return 0
+	current_executable="$(noetaxis_process_executable_path "$pid")" || return 0
+	[[ "$current_executable" == "$executable" ]] || return 0
+	noetaxis_executable_path_is_in_bundle "$app_path" "$current_executable" || return 0
+	[[ "$(noetaxis_process_info "$pid")" == "$info" ]] || return 0
+	NOETAXIS_CONFIRMED_BUNDLE=1 "${NOETAXIS_KILL:-/bin/kill}" "-$signal" "$pid" || return 1
+	noetaxis_update_say "SIG$signal sent to verified bundle pid $pid (--fast; identity rechecked)"
+}
+
+noetaxis_fast_stop_bundle() {
+	local app_path="$1" survivors="$cap_dir/fast-survivors.tsv" executable info signal wait_seconds=60
+	if [[ "$update_stop_timeout_given" -eq 1 && "$update_stop_timeout" -lt 60 ]]; then wait_seconds="$update_stop_timeout"; fi
+	noetaxis_update_step 'Waiting for remaining bundle processes (--fast)'
+	if noetaxis_wait_until 'bundle processes to exit' "$wait_seconds" noetaxis_fast_bundle_gone "$app_path"; then return 0; fi
+	noetaxis_fast_bundle_snapshot "$app_path" > "$survivors"
+	for signal in TERM KILL; do
+		while IFS=$'\t' read -r executable info; do
+			[[ -n "$info" ]] || continue
+			noetaxis_fast_signal "$app_path" "$signal" "$executable" "$info" || true
+		done < "$survivors"
+		if noetaxis_wait_until "bundle processes after SIG$signal" 5 noetaxis_fast_bundle_gone "$app_path"; then
+			noetaxis_update_append noetaxis_update_summary_stopped "verified bundle survivors (SIG$signal, --fast)"
+			return 0
+		fi
+	done
+	noetaxis_error 'Verified bundle processes still run; nothing was swapped.'
+	return 56
+}
+
+noetaxis_fast_agent_candidates() {
+	pgrep -ifl '(^|/)(claude|codex|gemini|copilot|aider|opencode)( |$)' 2>/dev/null || true
+}
+
+noetaxis_fast_agents_gone() {
+	[[ -z "$(noetaxis_fast_agent_candidates)" ]]
+}
+
+noetaxis_fast_stop_all() {
+	local app_path="$1" wait_seconds=10 remaining
+	noetaxis_fast_quit "$app_path" || return $?
+	if ! noetaxis_update_stop_daemon "$app_path"; then
+		noetaxis_update_verify_daemon "$app_path" || return 57
+	fi
+	noetaxis_fast_stop_bundle "$app_path" || return $?
+	if [[ "$update_stop_timeout_given" -eq 1 && "$update_stop_timeout" -lt 10 ]]; then wait_seconds="$update_stop_timeout"; fi
+	noetaxis_wait_until 'external agent CLIs (informational only)' "$wait_seconds" noetaxis_fast_agents_gone || true
+	remaining="$(noetaxis_fast_agent_candidates)"
+	if [[ -n "$remaining" ]]; then
+		noetaxis_update_say "Agent CLI candidates still running (informational only; untouched):
+$remaining"
+	fi
+	noetaxis_assert_fast_idle "$app_path"
 }
 
 # ---------------------------------------------------------------------------
@@ -931,6 +1083,7 @@ noetaxis_tray_quit() {
 }
 
 noetaxis_update_quit_app() {
+	if [[ "${update_fast:-0}" -eq 1 ]]; then noetaxis_fast_quit "$1"; return $?; fi
 	local app_path="$1" main_pid pid command_line output status_code=0
 	if noetaxis_none_running_of_kind "$app_path" desktop; then
 		noetaxis_update_say "the desktop app is not running"
@@ -1013,6 +1166,10 @@ noetaxis_update_stop_daemon() {
 			return 0
 		fi
 	fi
+	if [[ "${update_fast:-0}" -eq 1 ]]; then
+		noetaxis_update_say 'The daemon still runs after ao stop; the fast bundle-survivor step will recheck its identity before signalling it.'
+		return 0
+	fi
 	noetaxis_error "The AO daemon is still running:"
 	noetaxis_own_pids_of_kind "$app_path" daemon | noetaxis_describe_processes >&2
 	printf 'Nothing was installed. Stop it yourself ("%s" stop) and rerun%s. No process was force-killed.\n' "$cli" "$([[ "$update_force" -eq 1 ]] && printf '' || printf ', or rerun with --force to send SIGTERM')" >&2
@@ -1024,6 +1181,7 @@ noetaxis_update_helpers_gone() {
 }
 
 noetaxis_update_stop_helpers() {
+	if [[ "${update_fast:-0}" -eq 1 ]]; then noetaxis_fast_stop_bundle "$1"; return $?; fi
 	local app_path="$1" cli pid command_line foreign
 	cli="$app_path/Contents/Resources/daemon/ao"
 	if [[ "${update_kill_survivors:-0}" -eq 1 ]]; then noetaxis_update_survivors "$app_path" || return $?; fi
@@ -1171,6 +1329,7 @@ noetaxis_physical_file() {
 }
 
 noetaxis_update_desktop_started() {
+	if [[ "${update_fast:-0}" -eq 1 ]]; then [[ -n "$(noetaxis_own_main_pid "$1" || true)" ]]; return $?; fi
 	! noetaxis_none_running_of_kind "$1" desktop
 }
 
@@ -1308,7 +1467,7 @@ noetaxis_update_restore_sessions() {
 # --restore-sessions also applies when the update ends on the previous app (a healthy rollback, or
 # a reopen after a failure before the swap): the agents this run stopped should come back there too.
 noetaxis_update_restore_if_asked() {
-	if [[ "$update_restore_sessions" -eq 1 && "$update_sessions_ended" -eq 1 ]]; then
+	if [[ "$update_restore_sessions" -eq 1 && ( "$update_sessions_ended" -eq 1 || "${update_fast:-0}" -eq 1 ) ]]; then
 		noetaxis_update_restore_sessions "$1"
 	fi
 }
@@ -1370,14 +1529,19 @@ EOF
 noetaxis_update_rollback_swap() {
 	local failed_app="$1" restore_db="$2" status_code=0 rollback_args
 	rollback_args=(--backup-dir "$backup_dir")
+	if [[ "${update_fast:-0}" -eq 1 ]]; then rollback_args+=(--fast); fi
 	if [[ "$restore_db" -eq 1 ]]; then
 		rollback_args+=(--restore-db)
 	fi
 	# The approved set of a rollback is what the new app, started by this run, runs right now.
-	noetaxis_update_snapshot_processes "$failed_app" > "$cap_dir/approved-rollback.tsv" || true
-	update_approved_file="$cap_dir/approved-rollback.tsv"
+	if [[ "${update_fast:-0}" -eq 0 ]]; then
+		noetaxis_update_snapshot_processes "$failed_app" > "$cap_dir/approved-rollback.tsv" || true
+		update_approved_file="$cap_dir/approved-rollback.tsv"
+	fi
 	noetaxis_update_quit_app "$failed_app" || return 61
-	noetaxis_update_stop_daemon "$failed_app" || return 61
+	if ! noetaxis_update_stop_daemon "$failed_app"; then
+		[[ "${update_fast:-0}" -eq 1 ]] && noetaxis_update_verify_daemon "$failed_app" || return 61
+	fi
 	noetaxis_update_stop_helpers "$failed_app" || return 61
 	noetaxis_update_step "Restoring the backed-up app$([[ "$restore_db" -eq 1 ]] && printf ' and database')"
 	"$script_dir/rollback.sh" "${rollback_args[@]}" || status_code=$?
@@ -1389,7 +1553,8 @@ noetaxis_update_rollback_swap() {
 }
 
 noetaxis_update_auto_rollback() {
-	local reason="$1" app_path="$2" schema_now=""
+	local reason="$1" app_path="$2" schema_now="" fast_args=()
+	if [[ "${update_fast:-0}" -eq 1 ]]; then fast_args+=(--fast); fi
 	update_rolled_back=1
 	noetaxis_update_step "The new app is not healthy ($reason): rolling back automatically"
 	if ! noetaxis_update_rollback_swap "$app_path" 0; then
@@ -1411,7 +1576,7 @@ noetaxis_update_auto_rollback() {
 	if [[ -n "$schema_now" && -n "$cap_schema_before" && "$schema_now" =~ ^[0-9]+$ && "$cap_schema_before" =~ ^[0-9]+$ && "$schema_now" -gt "$cap_schema_before" ]]; then
 		if [[ "$update_rollback_restore_db" -eq 1 ]]; then
 			noetaxis_update_say "the database was migrated from schema $cap_schema_before to $schema_now; restoring the backed-up database (--rollback-restore-db)"
-			if noetaxis_update_quit_app "$app_path" && noetaxis_update_stop_daemon "$app_path" && noetaxis_update_stop_helpers "$app_path" && "$script_dir/rollback.sh" --backup-dir "$backup_dir" --restore-db && noetaxis_update_start_and_wait "$app_path" "the previous app with the restored database"; then
+			if noetaxis_update_quit_app "$app_path" && noetaxis_update_stop_daemon "$app_path" && noetaxis_update_stop_helpers "$app_path" && "$script_dir/rollback.sh" --backup-dir "$backup_dir" --restore-db ${fast_args[@]+"${fast_args[@]}"} && noetaxis_update_start_and_wait "$app_path" "the previous app with the restored database"; then
 				noetaxis_update_append noetaxis_update_summary_extra "database restored from $backup_dir; previous app healthy"
 				noetaxis_update_restore_if_asked "$app_path"
 				return 60

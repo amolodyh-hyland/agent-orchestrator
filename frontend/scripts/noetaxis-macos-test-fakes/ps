@@ -2,6 +2,7 @@
 . "${NOETAXIS_FAKES:?}/sim-lib.sh"
 pid="${@: -1}"
 if [[ "$*" == *'-axo '* ]]; then
+	sim_log 'ps-machine-wide'
 	sim_tick
 	while IFS='|' read -r row command; do
 		[[ -n "$row" ]] || continue
