@@ -76,9 +76,11 @@ by a compatible server. `runtime_binding_changed` requires a fresh preview and
 confirmation upstream; the client never chooses a replacement runtime.
 
 Calls are serialized per connection. A 429 pauses subsequent calls for the
-server's `Retry-After` interval (seconds or HTTP date, including intervals over
-five minutes). Calls during that interval return `rate_limited` and the
-remaining delay. Invalid/missing headers use five seconds. There are no automatic
+server's `Retry-After` interval (seconds or HTTP date), capped at 60 seconds by
+`MAX_RETRY_AFTER_MS`. This bounds the effect of an excessive server delay on
+status reconciliation and explicit cancellation. Calls during that interval
+return `rate_limited` and the remaining delay. Invalid/missing headers use five
+seconds. There are no automatic
 write retries. After ambiguous submission, callers retain the same key and
 payload. Timeouts, malformed/oversized responses and redirect failures do not
 prove a write failed to reach Multica.

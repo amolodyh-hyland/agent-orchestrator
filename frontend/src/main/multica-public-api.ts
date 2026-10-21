@@ -28,6 +28,7 @@ export type PublicApiOptions = {
 };
 
 const MAX_BODY_BYTES = 1024 * 1024;
+const MAX_RETRY_AFTER_MS = 60_000;
 const REMOTE_CODES: readonly PublicApiFailureCode[] = [
 	"invalid_request", "credential_required", "unsupported_credential", "invalid_token", "scoped_token_required", "insufficient_scope",
 	"workspace_binding_required", "workspace_id_required", "not_found", "unauthorized", "forbidden", "runtime_binding_changed",
@@ -66,9 +67,9 @@ function key(value: unknown): string {
 
 function retryAfter(value: string | null, now: number): number {
 	if (value === null) return 5000;
-	const seconds = /^\d+$/.test(value.trim()) ? Number(value.trim()) : NaN;
-	const ms = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(value) - now;
-	return Number.isFinite(ms) && ms >= 0 ? Math.min(ms, Number.MAX_SAFE_INTEGER - now) : 5000;
+	if (/^\d+$/.test(value.trim())) return Math.min(Number(value.trim()) * 1000, MAX_RETRY_AFTER_MS);
+	const ms = Date.parse(value) - now;
+	return Number.isFinite(ms) && ms >= 0 ? Math.min(ms, MAX_RETRY_AFTER_MS) : 5000;
 }
 
 async function readBody(response: Response): Promise<string> {

@@ -198,9 +198,9 @@ describe("safe projections and malformed responses", () => {
 		expect(await client.getRuntime(R)).toEqual({ ok: false, code: "bad_response" });
 	});
 
-	it("rejects invalid JSON, HTML, oversized bodies, invalid pagination and malformed errors", async () => {
+	it("rejects invalid JSON, HTML, invalid pagination and malformed errors", async () => {
 		const client = await connected();
-		for (const [type, body] of [["application/json", "{broken"], ["text/html", "<html>secret</html>"], ["application/json", "x".repeat(1024 * 1024 + 1)]]) {
+		for (const [type, body] of [["application/json", "{broken"], ["text/html", "<html>secret</html>"]]) {
 			reply = (_req, res) => { res.writeHead(200, { "content-type": type }); res.end(body); };
 			expect(await client.listAgents()).toEqual({ ok: false, code: "bad_response" });
 		}
@@ -208,6 +208,20 @@ describe("safe projections and malformed responses", () => {
 		expect(await client.listAgents()).toEqual({ ok: false, code: "bad_response" });
 		respond(403, { ...problem(403, "forbidden"), status: 200 });
 		expect(await client.listAgents()).toEqual({ ok: false, code: "bad_response" });
+	});
+
+	it("rejects otherwise-valid JSON over 1 MiB and cancels its stream", async () => {
+		const payload = JSON.stringify({ agents: [], ignored: "x".repeat(1024 * 1024) });
+		const cancel = vi.fn();
+		const stream = new ReadableStream<Uint8Array>({
+			start: (controller) => controller.enqueue(new TextEncoder().encode(payload)),
+			pull: (controller) => controller.close(),
+			cancel,
+		}, { highWaterMark: 0 });
+		const client = await connected({ fetch: async () => new Response(stream, { status: 200, headers: { "content-type": "application/json" } }) });
+		expect(await client.listAgents()).toEqual({ ok: false, code: "bad_response" });
+		expect(cancel).toHaveBeenCalledTimes(1);
+		expect(stream.locked).toBe(false);
 	});
 
 	it("never exposes remote problem detail, request IDs, raw transport errors or credential errors", async () => {
@@ -353,16 +367,36 @@ describe("confirmed delegation and rate limits", () => {
 		expect(calls).toHaveLength(0);
 	});
 
-	it.each(["600", "Wed, 21 Oct 2026 00:10:00 GMT"])("honors Retry-After %s across reads and writes without automatic resubmission", async (header) => {
+	it.each(["20", "Wed, 21 Oct 2026 00:00:20 GMT"])("honors Retry-After %s across reads and writes without automatic resubmission", async (header) => {
 		let time = Date.parse("2026-10-21T00:00:00Z");
 		const client = await connected({ delegationsEnabled: true, now: () => time });
 		respond(429, problem(429, "rate_limited"), { "retry-after": header });
-		expect(await client.listAgents()).toEqual({ ok: false, code: "rate_limited", status: 429, retryAfterMs: 600000 });
-		expect(await client.delegate(intent, "request-1", true)).toEqual({ ok: false, code: "rate_limited", retryAfterMs: 600000 });
+		expect(await client.listAgents()).toEqual({ ok: false, code: "rate_limited", status: 429, retryAfterMs: 20000 });
+		expect(await client.delegate(intent, "request-1", true)).toEqual({ ok: false, code: "rate_limited", retryAfterMs: 20000 });
 		expect(calls).toHaveLength(1);
-		time += 600001;
+		time += 20001;
 		respond(200, { agents: [] });
 		expect(await client.listAgents()).toEqual({ ok: true, data: { agents: [] } });
+	});
+
+	it.each(["315360000", "Wed, 21 Oct 2037 00:00:00 GMT", "9".repeat(400)])("caps Retry-After %s so reconciliation and cancellation resume within 60 seconds", async (header) => {
+		let time = Date.parse("2026-10-21T00:00:00Z");
+		const client = await connected({ now: () => time });
+		respond(429, problem(429, "rate_limited"), { "retry-after": header });
+		expect(await client.listAgents()).toEqual({ ok: false, code: "rate_limited", status: 429, retryAfterMs: 60000 });
+		expect(await client.listDelegations({ idempotencyKey: "request-1" })).toEqual({ ok: false, code: "rate_limited", retryAfterMs: 60000 });
+		expect(await client.getDelegation(D)).toEqual({ ok: false, code: "rate_limited", retryAfterMs: 60000 });
+		time += 59999;
+		expect(await client.cancelDelegation(D, true)).toEqual({ ok: false, code: "rate_limited", retryAfterMs: 1 });
+		expect(calls).toHaveLength(1);
+		time += 1;
+		const cancelled = { ...accepted, status: "cancelled", terminal: true };
+		respond(200, cancelled);
+		expect(await client.cancelDelegation(D, true)).toEqual({ ok: true, data: cancelled });
+		expect(await client.getDelegation(D)).toEqual({ ok: true, data: cancelled });
+		respond(200, { delegations: [cancelled] });
+		expect(await client.listDelegations({ idempotencyKey: "request-1" })).toEqual({ ok: true, data: { delegations: [cancelled] } });
+		expect(calls).toHaveLength(4);
 	});
 
 	it("applies a rate-limit response to already queued requests", async () => {
