@@ -446,6 +446,24 @@ type ModelUsageEvent struct {
 	BillingProviderSource sql.NullString
 }
 
+type MulticaDelegation struct {
+	RequestID      string
+	ProjectID      string
+	TaskID         string
+	ConfirmationID string
+	IsCurrent      int64
+	Version        int64
+	Document       string
+}
+
+type MulticaDelegationTransition struct {
+	RequestID  string
+	Version    int64
+	State      string
+	RecordedAt string
+	Document   string
+}
+
 type Notification struct {
 	ID          string
 	SessionID   domain.SessionID

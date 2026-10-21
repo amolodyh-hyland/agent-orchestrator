@@ -44,7 +44,7 @@ execution ended. An empty reconciliation list does not authorize a new key.
 
 `delegate` requires `delegationsEnabled: true`, a caller-supplied idempotency
 key, the confirmed expected runtime ID and `confirmed: true`. These transport
-guards do not replace the durable confirmation/intent coordinator. No
+guards supplement the [durable confirmation/intent coordinator](multica-delegation-coordinator.md). No
 orchestrator, assignment event or project automation is wired to this client.
 The server rollout flag remains independently disabled by default.
 

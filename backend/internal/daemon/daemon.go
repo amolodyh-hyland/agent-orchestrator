@@ -996,6 +996,7 @@ func Run() error {
 		Conversations:      chatSvc,
 		Settings:           settingsSvc,
 		Multica:            multicaService,
+		MulticaDelegations: store,
 		CDC:                store,
 		Events:             cdcPipe.Broadcaster,
 		Activity:           lcStack.LCM,
