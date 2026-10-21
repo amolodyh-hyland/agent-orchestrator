@@ -26,6 +26,7 @@ function setStreaming(hostId: string, streaming: boolean) {
 export function connectRemoteNotificationStreams(queryClient: QueryClient): () => void {
 	const connections = new Map<string, { base: string; close: () => void }>();
 	const invalidate = (hostId: string) => {
+ void queryClient.invalidateQueries({ queryKey: ["notification-badge", `remote:${hostId}`] });
 		void queryClient.invalidateQueries({ queryKey: remoteNotificationsQueryKey(hostId, "unread") });
 		void queryClient.invalidateQueries({ queryKey: remoteNotificationsQueryKey(hostId, "all") });
 	};
@@ -42,7 +43,7 @@ export function connectRemoteNotificationStreams(queryClient: QueryClient): () =
 			if (!base || connections.has(hostId)) continue;
 			const close = probeRemoteSse(
 				`${base.replace(/\/+$/, "")}/api/v1/notifications/stream`,
-				["notification_created", "notification_resolved", "notification_deleted", "notification_cleared"],
+				["notification_read", "notification_created", "notification_resolved", "notification_deleted", "notification_cleared"],
 				() => invalidate(hostId),
 				() => { setStreaming(hostId, true); invalidate(hostId); },
 				() => { setStreaming(hostId, false); invalidate(hostId); },
@@ -107,6 +108,7 @@ export function useRemoteNotificationHosts(status: NotificationListStatus, enabl
 		hosts: connected.map((hostId, index) => ({
 			hostId,
 			label: labelForHost(hostId) ?? hostId,
+			updatedAt: queries[index]?.dataUpdatedAt,
 			data: queries[index]?.isError ? undefined : queries[index]?.data,
 			isError: queries[index]?.isError ?? false,
 			isLoading: queries[index]?.isLoading ?? false,
@@ -115,4 +117,38 @@ export function useRemoteNotificationHosts(status: NotificationListStatus, enabl
 			? queries.reduce((count, query) => count + (query.isError ? 0 : query.data?.unreadCount ?? 0), 0)
 			: 0,
 	};
+}
+
+export async function clearRemoteNotificationsThrough(
+	hostId: string,
+	boundary: { id: string; createdAt: string; excludeEqual?: boolean },
+	queryClient: QueryClient,
+): Promise<void> {
+	await queryClient.cancelQueries({ queryKey: ["remote-notifications", hostId] }, { revert: false });
+	const { error } = await clientForHost(hostId).POST(
+		"/api/v1/notifications/clear-through",
+		{ body: boundary },
+	);
+	if (error) throw new Error(apiErrorMessage(error));
+	await queryClient.invalidateQueries({
+		queryKey: ["remote-notifications", hostId],
+	});
+}
+export async function countRemoteUnseenNotifications(
+	hostId: string,
+	seen: { at: number; ids: string[]; timestamp?: string },
+): Promise<number> {
+	const { data, error } = await clientForHost(hostId).GET(
+		"/api/v1/notifications/unseen-count",
+		{
+			params: {
+				query: {
+					since: seen.timestamp ?? new Date(seen.at).toISOString(),
+					seenIds: JSON.stringify(seen.ids),
+				},
+			},
+		},
+	);
+	if (error || !data) throw new Error(apiErrorMessage(error));
+	return data.count;
 }

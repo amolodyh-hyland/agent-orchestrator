@@ -4,6 +4,7 @@ import { computeSseRetryDelayMs } from "./sse-backoff";
 import type { NotificationDTO, NotificationsCache, NotificationsPage } from "./notifications";
 
 const {
+	apiPostMock,
 	apiDeleteMock,
 	apiGetMock,
 	getApiBaseUrlMock,
@@ -13,7 +14,8 @@ const {
 	subscribeApiBaseUrlMock,
 	unsubscribeBaseUrlMock,
 } = vi.hoisted(() => ({
-	apiDeleteMock: vi.fn(),
+	apiPostMock: vi.fn(),
+ apiDeleteMock: vi.fn(),
 	apiGetMock: vi.fn(),
 	getApiBaseUrlMock: vi.fn(() => "http://127.0.0.1:3001"),
 	onStatusMock: vi.fn(),
@@ -24,7 +26,7 @@ const {
 }));
 
 vi.mock("./api-client", () => ({
-	apiClient: { DELETE: apiDeleteMock, GET: apiGetMock },
+	apiClient: { POST: apiPostMock, DELETE: apiDeleteMock, GET: apiGetMock },
 	apiErrorMessage: () => "Request failed",
 	getApiBaseUrl: getApiBaseUrlMock,
 	subscribeApiBaseUrl: subscribeApiBaseUrlMock,
@@ -43,6 +45,8 @@ import {
 	applyOptimisticNotificationDelete,
 	applyResolvedNotification,
 	clearAllNotifications,
+ countUnseenNotifications,
+ clearNotificationsThrough,
 	createNotificationsTransport,
 	deleteNotification,
 	fetchNotificationsPage,
@@ -622,6 +626,16 @@ describe("createNotificationsTransport", () => {
 		await vi.waitFor(() => expect(invalidateSpy).toHaveBeenCalledTimes(2));
 	});
 
+	it("refreshes persisted read state when another window selects a row", async () => {
+		const qc = queryClient();
+		const invalidate = vi.spyOn(qc, "invalidateQueries");
+		const stop = createNotificationsTransport(qc).connect();
+		EventSourceStub.instances[0].dispatch("notification_read", {});
+		await vi.waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: unreadNotificationsQueryKey }));
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: recentNotificationsQueryKey });
+		stop();
+	});
+
 	it("removes a deleted notification from every live cache", async () => {
 		const qc = queryClient();
 		const cancelSpy = vi.spyOn(qc, "cancelQueries");
@@ -915,4 +929,20 @@ describe("createNotificationsTransport", () => {
 		expect(EventSourceStub.instances).toHaveLength(2);
 		expect(EventSourceStub.instances[1].url).toBe("http://127.0.0.1:4555/api/v1/notifications/stream");
 	});
+});
+
+it("queries an exact unseen count with the full server timestamp and seen ids", async () => {
+ apiGetMock.mockResolvedValue({ data: { count: 150 } });
+ const timestamp = "2026-10-20T12:00:00.123456789Z";
+ expect(await countUnseenNotifications({ at: Date.parse(timestamp), timestamp, ids: ["seen"] })).toBe(150);
+ expect(apiGetMock).toHaveBeenCalledWith("/api/v1/notifications/unseen-count", { params: { query: { since: timestamp, seenIds: '["seen"]' } } });
+});
+it("sends a stable range boundary to the server and reconciles history", async () => {
+ apiPostMock.mockResolvedValue({ data: { count: 150 } });
+ const client = new QueryClient();
+ const invalidate = vi.spyOn(client, "invalidateQueries");
+ const boundary = { id: "clicked", createdAt: "2026-10-20T12:00:00.123456789Z", excludeEqual: true };
+ await clearNotificationsThrough(boundary, client);
+ expect(apiPostMock).toHaveBeenCalledWith("/api/v1/notifications/clear-through", { body: boundary });
+ expect(invalidate).toHaveBeenCalledWith({ queryKey: recentNotificationsQueryKey });
 });

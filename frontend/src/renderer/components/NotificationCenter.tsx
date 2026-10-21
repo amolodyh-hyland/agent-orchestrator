@@ -1,3 +1,7 @@
+import { compareNotificationBoundary, compareNotificationText } from "../lib/notification-order";
+import { useNotificationBadge } from "../hooks/useNotificationBadge";
+import { getApiBaseUrl } from "../lib/api-client";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "./ui/context-menu";
 import { AppLink } from "./AppLink";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -34,6 +38,9 @@ import { formatTimeCompact } from "../lib/format-time";
 import { LOCAL_HOST, parseRefKey, refKey, sessionUiKey, type HostId } from "../lib/hosts";
 import {
 	createNotificationsTransport,
+ countUnseenNotifications,
+ clearNotificationsThrough,
+ type NotificationBoundary,
 	getCachedNotifications,
 	getCachedUnreadCount,
 	isNotificationsCacheFromClear,
@@ -53,7 +60,7 @@ import { TopbarButton } from "./TopbarButton";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { useCloudNotifications } from "../hooks/useCloudNotifications";
-import { clearRemoteNotification, clearRemoteNotifications, connectRemoteNotificationStreams, fetchRemoteNotificationsPage, markRemoteNotificationsRead, remoteNotificationsQueryKey, useRemoteNotificationHosts } from "../hooks/useRemoteNotifications";
+import { clearRemoteNotification, clearRemoteNotificationsThrough, countRemoteUnseenNotifications, clearRemoteNotifications, connectRemoteNotificationStreams, fetchRemoteNotificationsPage, markRemoteNotificationsRead, remoteNotificationsQueryKey, useRemoteNotificationHosts } from "../hooks/useRemoteNotifications";
 import type { CloudCpNotification } from "../lib/cloud-cp/types";
 
 type SessionMeta = { projectId: string; projectName: string; sessionName: string };
@@ -63,6 +70,7 @@ type NotificationCenterProps = {
 };
 
 const REMOTE_NOTIFICATION_PREFIX = "remote-notification:";
+const notificationSourceKey = (hostId: string) => hostId === LOCAL_HOST ? "" : `host:${hostId}`;
 const notificationKey = (hostId: HostId, id: string) => refKey({ host: hostId, id });
 
 function useNotificationTargetNavigation() {
@@ -186,7 +194,10 @@ export function NotificationRuntime() {
 	const { openPrimary } = useNotificationTargetNavigation();
 	const unreadQuery = useNotificationsQuery("unread");
 	const remoteUnread = useRemoteNotificationHosts("unread");
-	const unreadCount = getCachedUnreadCount(unreadQuery.data) + remoteUnread.totalUnreadCount;
+	const unreadCount = useNotificationBadge([
+		{ key: `local:${getApiBaseUrl()}`, items: getCachedNotifications(unreadQuery.data), total: getCachedUnreadCount(unreadQuery.data), countUnseen: countUnseenNotifications },
+		...remoteUnread.hosts.map((host) => ({ key: `remote:${host.hostId}`, items: host.data?.notifications ?? [], total: host.data?.unreadCount ?? 0, countUnseen: (seen: { at: number; ids: string[]; timestamp?: string }) => countRemoteUnseenNotifications(host.hostId, seen) })),
+	]);
 	const params = useParams({ strict: false }) as { hostId?: string; sessionId?: string };
 	const routeRef = useRef(params);
 	routeRef.current = params;
@@ -281,14 +292,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const [actionError, setActionError] = useState<string | null>(null);
-	const [markReadError, setMarkReadError] = useState<string | null>(null);
-	// Bumped by the mark-read Retry control so a failed ack can run again even
-	// when visibleUnreadKey is unchanged (removing ids from the ref alone does not).
-	const [ackRetryNonce, setAckRetryNonce] = useState(0);
 	const [open, setOpen] = useState(false);
-	// Opening marks unread as read, which would drop the highlight under the
-	// cursor. Keep the open-time unread ids highlighted until the panel closes.
-	const [highlightedIds, setHighlightedIds] = useState<Set<string>>(() => new Set());
 	const [clearingNotificationIds, setClearingNotificationIds] = useState<Set<string>>(() => new Set());
 	const [restoringSessionId, setRestoringSessionId] = useState<string | undefined>();
 	const [clearingAll, setClearingAll] = useState(false);
@@ -325,7 +329,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	useEffect(() => {
 		for (const host of remoteAll.hosts) {
 			if (!host.data) continue;
-			const key = JSON.stringify([host.data.notifications.map((item) => item.id), host.data.nextCursor]);
+			const key = JSON.stringify([host.data.notifications.map((item) => item.id), host.data.nextCursor, host.updatedAt]);
 			const previous = remoteFirstPageKeys.current.get(host.hostId);
 			remoteFirstPageKeys.current.set(host.hostId, key);
 			if (previous === undefined || previous === key) continue;
@@ -352,136 +356,24 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			hostId: host.hostId, label: host.label, notification,
 		}))),
 	].sort((a, b) => b.notification.createdAt.localeCompare(a.notification.createdAt)), [notifications, remoteItems]);
-	const unreadCount = getCachedUnreadCount(unreadQuery.data) + remoteUnread.totalUnreadCount + (cloudAll.data?.unreadCount ?? 0);
+	const unreadCount = useNotificationBadge([
+		{ key: `local:${getApiBaseUrl()}`, items: getCachedNotifications(unreadQuery.data), total: getCachedUnreadCount(unreadQuery.data), countUnseen: countUnseenNotifications },
+		...remoteUnread.hosts.map((host) => ({ key: `remote:${host.hostId}`, items: host.data?.notifications ?? [], total: host.data?.unreadCount ?? 0, countUnseen: (seen: { at: number; ids: string[]; timestamp?: string }) => countRemoteUnseenNotifications(host.hostId, seen) })),
+		{ key: cloudAll.badgeKey ?? "cloud", items: cloudItems, total: cloudAll.data?.unreadCount ?? 0, countUnseen: cloudAll.countUnseen },
+	], open);
 	const confirmedClearSnapshot = isNotificationsCacheFromClear(queryClient);
 	const { openSession } = useNotificationTargetNavigation();
 	const navigateToSession = useNavigateToSession();
-	const markAllMutate = markAllRead.mutateAsync;
-
-	// Concrete ids only — never `[]` — so unread pages past the first stay
-	// reachable and arrive as unread (still highlighted) when the all-list loads them.
-	const acknowledgedIdsRef = useRef<Set<string>>(new Set());
-	const acknowledgedRemoteIdsRef = useRef<Set<string>>(new Set());
-	const remoteHostsRef = useRef(remoteItems);
-	remoteHostsRef.current = remoteItems;
-	const visibleRemoteUnreadKey = remoteItems.flatMap((host) =>
-		host.notifications.filter((item) => item.status === "unread")
-			.map((item) => notificationKey(host.hostId, item.id)),
-	).join("|");
-	const visibleUnreadIds = useMemo(() => {
-		const ids = new Set<string>();
-		for (const item of getCachedNotifications(unreadQuery.data)) {
-			if (item.status === "unread") ids.add(item.id);
-		}
-		for (const item of notifications) {
-			if (item.status === "unread") ids.add(item.id);
-		}
-		return [...ids];
-	}, [notifications, unreadQuery.data]);
-	const visibleUnreadKey = visibleUnreadIds.join("|");
-
-	// Opening the panel acknowledges what has actually been loaded. Later unread
-	// rows are acknowledged as they appear, keeping the unread pagination cursor.
-	useEffect(() => {
-		if (!open) {
-			setHighlightedIds(new Set());
-			setMarkReadError(null);
-			acknowledgedIdsRef.current = new Set();
-			return;
-		}
-		if (unreadQuery.isLoading) return;
-
-		const visibleIds = visibleUnreadKey === "" ? [] : visibleUnreadKey.split("|");
-		const newly = visibleIds.filter((id) => !acknowledgedIdsRef.current.has(id));
-		if (newly.length === 0) return;
-
-		for (const id of newly) acknowledgedIdsRef.current.add(id);
-		setHighlightedIds((current) => {
-			const next = new Set(current);
-			let changed = false;
-			for (const id of newly) {
-				const key = notificationKey(LOCAL_HOST, id);
-				if (next.has(key)) continue;
-				next.add(key);
-				changed = true;
-			}
-			return changed ? next : current;
-		});
-
-		setMarkReadError(null);
-		void captureRendererEvent("ao.renderer.notification_mark_read_requested", { scope: "all" });
-		void markAllMutate(newly)
-			.then(() => captureRendererEvent("ao.renderer.notification_mark_read_succeeded", { scope: "all" }))
+	const markNotificationRead = useCallback((notification: NotificationDTO, hostId: HostId) => {
+		if (notification.status !== "unread") return;
+		void captureRendererEvent("ao.renderer.notification_mark_read_requested", { scope: "single" });
+		void (hostId === LOCAL_HOST ? markAllRead.mutateAsync([notification.id]) : markRemoteNotificationsRead(hostId, [notification.id], queryClient))
+			.then(() => captureRendererEvent("ao.renderer.notification_mark_read_succeeded", { scope: "single" }))
 			.catch((error: unknown) => {
-				void captureRendererEvent("ao.renderer.notification_mark_read_failed", { scope: "all" });
-				for (const id of newly) acknowledgedIdsRef.current.delete(id);
-				setMarkReadError(error instanceof Error ? error.message : t("notify.couldNotMarkAllRead"));
+				void captureRendererEvent("ao.renderer.notification_mark_read_failed", { scope: "single" });
+				setActionError(error instanceof Error ? error.message : t("notify.couldNotMarkAllRead"));
 			});
-	}, [ackRetryNonce, markAllMutate, open, t, unreadQuery.isLoading, visibleUnreadKey]);
-	useEffect(() => {
-		if (!open) {
-			acknowledgedRemoteIdsRef.current.clear();
-			return;
-		}
-		for (const host of remoteHostsRef.current) {
-			if (host.notifications.length === 0) continue;
-			const unreadIds = host.notifications
-				.filter((item) => item.status === "unread")
-				.map((item) => item.id)
-				.filter((id) => !acknowledgedRemoteIdsRef.current.has(notificationKey(host.hostId, id)));
-			if (unreadIds.length === 0) continue;
-			for (const id of unreadIds) acknowledgedRemoteIdsRef.current.add(notificationKey(host.hostId, id));
-			setHighlightedIds((current) => {
-				const next = new Set(current);
-				for (const id of unreadIds) next.add(notificationKey(host.hostId, id));
-				return next;
-			});
-			void (async () => {
-				try {
-					await markRemoteNotificationsRead(host.hostId, unreadIds, queryClient);
-				} catch (error) {
-					for (const id of unreadIds) acknowledgedRemoteIdsRef.current.delete(notificationKey(host.hostId, id));
-					setMarkReadError(`${host.label}: ${error instanceof Error ? error.message : t("notify.couldNotMarkAllRead")}`);
-				}
-			})();
-		}
-	}, [ackRetryNonce, open, queryClient, t, visibleRemoteUnreadKey]);
-
-	// Cloud rows are acknowledged the same way: concrete loaded ids only, so a
-	// row that arrives mid-refresh is highlighted before it is marked read.
-	const openRef = useRef(open);
-	openRef.current = open;
-	const acknowledgedCloudIdsRef = useRef<Set<string>>(new Set());
-	const markCloudRead = cloudAll.markRead;
-	const cloudLoading = cloudAll.isLoading;
-	const cloudUnreadKey = useMemo(
-		() => visibleCloudItems.filter((item) => item.status === "unread").map((item) => item.id).join("|"),
-		[visibleCloudItems],
-	);
-	useEffect(() => {
-		if (!open) {
-			acknowledgedCloudIdsRef.current = new Set();
-			return;
-		}
-		if (cloudLoading) return;
-		const unreadIds = cloudUnreadKey === "" ? [] : cloudUnreadKey.split("|");
-		const newly = unreadIds.filter((id) => !acknowledgedCloudIdsRef.current.has(id));
-		if (newly.length === 0) return;
-
-		for (const id of newly) acknowledgedCloudIdsRef.current.add(id);
-		setHighlightedIds((current) => {
-			const next = new Set(current);
-			for (const id of newly) next.add(cloudRowKey(id));
-			return next;
-		});
-		setMarkReadError(null);
-		void markCloudRead(newly).catch((error: unknown) => {
-			for (const id of newly) acknowledgedCloudIdsRef.current.delete(id);
-			if (openRef.current) {
-				setMarkReadError(error instanceof Error ? error.message : t("notify.couldNotMarkAllRead"));
-			}
-		});
-	}, [ackRetryNonce, cloudLoading, cloudUnreadKey, markCloudRead, open, t]);
+	}, [markAllRead, queryClient, t]);
 
 	const setPanelOpen = useCallback((nextOpen: boolean) => {
 		setOpen(nextOpen);
@@ -495,11 +387,6 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			keepLatestNotificationsPage(queryClient, recentNotificationsQueryKey);
 		}
 	}, [queryClient]);
-
-	const retryMarkRead = () => {
-		setMarkReadError(null);
-		setAckRetryNonce((nonce) => nonce + 1);
-	};
 
 	const openSessionAndDismiss = useCallback((notification: NotificationDTO, hostId: HostId) => {
 		openSession(notification, hostId);
@@ -581,11 +468,11 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		}).finally(() => setClearingAll(false));
 	}, [clearAll, clearCloud, clearLocal, clearingAll, queryClient, remoteAll.hosts, t]);
 
-	const handleClear = useCallback((notification: NotificationDTO, hostId: HostId) => {
-		setActionError(null);
+	const handleClear = useCallback((notification: NotificationDTO, hostId: HostId, batch = false) => {
+		if (!batch) setActionError(null);
 		const key = notificationKey(hostId, notification.id);
 		setClearingNotificationIds((current) => new Set(current).add(key));
-		void (hostId === LOCAL_HOST ? clearOne.mutateAsync(notification) : (async () => {
+		return (hostId === LOCAL_HOST ? clearOne.mutateAsync(notification) : (async () => {
 			await clearRemoteNotification(hostId, notification.id, queryClient);
 			remoteHistoryGeneration.current += 1;
 			setRemoteLoadingEarlierHost(null);
@@ -608,11 +495,11 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			});
 	}, [clearOne, queryClient, t]);
 
-	const handleClearCloud = useCallback((notification: CloudCpNotification) => {
+	const handleClearCloud = useCallback((notification: CloudCpNotification, batch = false) => {
 		const clearingId = cloudRowKey(notification.id);
-		setActionError(null);
+		if (!batch) setActionError(null);
 		setClearingNotificationIds((current) => new Set(current).add(clearingId));
-		void clearCloudOne(notification)
+		return clearCloudOne(notification)
 			.catch((error: unknown) => {
 				setActionError(error instanceof Error ? error.message : t("notify.couldNotClearOne"));
 			})
@@ -663,8 +550,58 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			...entries.map((entry) => ({ kind: "host" as const, ...entry })),
 			...visibleCloudItems.map((item) => ({ kind: "cloud" as const, item })),
 		];
-		return merged.sort((a, b) => Date.parse(b.kind === "cloud" ? b.item.createdAt : b.notification.createdAt) - Date.parse(a.kind === "cloud" ? a.item.createdAt : a.notification.createdAt));
+		return merged.sort((a, b) => {
+			const left = a.kind === "cloud" ? a.item : a.notification;
+			const right = b.kind === "cloud" ? b.item : b.notification;
+			return (
+				compareNotificationBoundary(right, left) ||
+				compareNotificationText(
+					a.kind === "cloud" ? "cloud" : notificationSourceKey(a.hostId),
+					b.kind === "cloud" ? "cloud" : notificationSourceKey(b.hostId),
+				)
+			);
+		});
 	}, [entries, visibleCloudItems]);
+	const clearAfter = (boundary: NotificationBoundary, source: string) => {
+		const forSource = (target: string): NotificationBoundary =>
+			target < source ? { ...boundary, excludeEqual: true } : boundary;
+		if (clearingAll) return;
+		setClearingAll(true);
+		setActionError(null);
+		remoteHistoryGeneration.current += 1;
+		setRemoteOlderPages({});
+		setRemoteLoadingEarlierHost(null);
+		void Promise.allSettled([
+			clearNotificationsThrough(
+				forSource(notificationSourceKey(LOCAL_HOST)),
+				queryClient,
+			),
+			...remoteAll.hosts.map((host) =>
+				clearRemoteNotificationsThrough(
+					host.hostId,
+					forSource(notificationSourceKey(host.hostId)),
+					queryClient,
+				),
+			),
+			...(cloudAll.clearThrough
+				? [cloudAll.clearThrough(forSource("cloud"))]
+				: []),
+		])
+			.then((results) => {
+				const failure = results.find(
+					(result): result is PromiseRejectedResult =>
+						result.status === "rejected",
+				);
+				if (failure)
+					setActionError(
+						failure.reason instanceof Error
+							? failure.reason.message
+							: t("notify.couldNotClearAll"),
+					);
+			})
+			.finally(() => setClearingAll(false));
+	};
+
 	const isEmpty = rows.length === 0;
 
 	return (
@@ -708,21 +645,6 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 				<NotificationWorkspaceState>
 					{({ retryWorkspace, loadedRemoteSessionIds, sessionMeta, sessionsReady, terminatedIds, workspaceError }) => (
 						<>
-							{markReadError ? (
-					<div
-						aria-live="polite"
-						className="flex items-center justify-between gap-2 border-b border-border bg-error/5 px-4 py-2 text-caption text-error"
-					>
-						<span>{markReadError}</span>
-						<button
-							className="shrink-0 font-medium underline underline-offset-2 hover:text-foreground"
-							onClick={retryMarkRead}
-							type="button"
-						>
-							{t("notify.retry")}
-						</button>
-					</div>
-				) : null}
 				{actionError ? (
 					<div className="border-b border-border bg-error/5 px-4 py-2 text-caption text-error">{actionError}</div>
 				) : null}
@@ -785,24 +707,37 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 								const cloudOfferRestore = cloudTerminated && cloud.type === "needs_input";
 								const clearingKey = cloudRowKey(cloud.id);
 								return (
-									<CloudNotificationItem
-										highlighted={highlightedIds.has(clearingKey) || cloud.status === "unread"}
+									<NotificationRowMenu
 										key={clearingKey}
-										notification={cloud}
-										onOpenSession={openCloudSessionAndDismiss}
-										onRestore={restoreCloudAndOpen}
-										onClear={handleClearCloud}
-										clearing={clearingNotificationIds.has(clearingKey)}
-										clearDisabled={clearingNotificationIds.has(clearingKey) || clearingAll || clearAll.isPending}
-										restoring={Boolean(cloudSessionId) && restoringSessionId === cloudRowKey(cloudSessionId)}
-										restoreDisabled={restoringSessionId !== undefined}
-										projectId={cloudMeta?.projectId}
-										projectName={cloudMeta?.projectName}
-										sessionName={cloudMeta?.sessionName}
-										sessionsReady={sessionsReady}
-										terminated={cloudTerminated}
-										offerRestore={cloudOfferRestore}
-									/>
+										label={cloud.title}
+										source="cloud"
+										onRead={() => {
+											if (cloud.status !== "unread") return;
+											void cloudAll.markRead([cloud.id]).catch((error: unknown) =>
+												setActionError(error instanceof Error ? error.message : t("notify.couldNotMarkAllRead")),
+											);
+										}}
+										onClearAfter={() => clearAfter({ id: cloud.id, createdAt: cloud.createdAt }, "cloud")}
+										disabled={clearingAll || clearingNotificationIds.size > 0}
+									>
+										<CloudNotificationItem
+											highlighted={cloud.status === "unread"}
+											notification={cloud}
+											onOpenSession={openCloudSessionAndDismiss}
+											onRestore={restoreCloudAndOpen}
+											onClear={(item) => { void handleClearCloud(item); }}
+											clearing={clearingNotificationIds.has(clearingKey)}
+											clearDisabled={clearingNotificationIds.has(clearingKey) || clearingAll || clearAll.isPending}
+											restoring={Boolean(cloudSessionId) && restoringSessionId === cloudRowKey(cloudSessionId)}
+											restoreDisabled={restoringSessionId !== undefined}
+											projectId={cloudMeta?.projectId}
+											projectName={cloudMeta?.projectName}
+											sessionName={cloudMeta?.sessionName}
+											sessionsReady={sessionsReady}
+											terminated={cloudTerminated}
+											offerRestore={cloudOfferRestore}
+										/>
+									</NotificationRowMenu>
 								);
 							}
 							const { hostId, label, notification } = row;
@@ -819,24 +754,31 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 							// gated behind a restore action.
 							const offerRestore = sessionReady && terminated && notification.type === "needs_input";
 							return (
-								<NotificationItem
-									highlighted={highlightedIds.has(key) || notification.status === "unread"}
+								<NotificationRowMenu
 									key={key}
-									notification={notification}
-									onOpenSession={() => openSessionAndDismiss(notification, hostId)}
-									onRestore={() => restoreAndOpen(notification, hostId)}
-									onClear={() => handleClear(notification, hostId)}
-									clearing={clearingNotificationIds.has(key)}
-									clearDisabled={clearingNotificationIds.has(key) || clearingAll}
-									restoring={restoringSessionId === sessionKey}
-									restoreDisabled={restoringSessionId !== undefined}
-									hostLabel={label}
-									projectName={meta?.projectName}
-									sessionName={meta?.sessionName}
-									sessionsReady={sessionReady}
-									terminated={terminated}
-									offerRestore={offerRestore}
-								/>
+									label={notification.title}
+									onRead={() => markNotificationRead(notification, hostId)}
+									onClearAfter={() => clearAfter({ id: notification.id, createdAt: notification.createdAt }, notificationSourceKey(hostId))}
+									disabled={clearingAll || clearingNotificationIds.size > 0}
+								>
+									<NotificationItem
+										highlighted={notification.status === "unread"}
+										notification={notification}
+										onOpenSession={() => openSessionAndDismiss(notification, hostId)}
+										onRestore={() => restoreAndOpen(notification, hostId)}
+										onClear={() => handleClear(notification, hostId)}
+										clearing={clearingNotificationIds.has(key)}
+										clearDisabled={clearingNotificationIds.has(key) || clearingAll}
+										restoring={restoringSessionId === sessionKey}
+										restoreDisabled={restoringSessionId !== undefined}
+										hostLabel={label}
+										projectName={meta?.projectName}
+										sessionName={meta?.sessionName}
+										sessionsReady={sessionReady}
+										terminated={terminated}
+										offerRestore={offerRestore}
+									/>
+								</NotificationRowMenu>
 							);
 						})}
 						{allQuery.isFetchNextPageError ? (
@@ -887,6 +829,58 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 				</NotificationWorkspaceState>
 			</PopoverContent>
 		</Popover>
+	);
+}
+
+function NotificationRowMenu({ children, label, source, onRead, onClearAfter, disabled }: {
+	children: ReactNode;
+	label: string;
+	source?: string;
+	onRead: () => void;
+	onClearAfter: () => void;
+	disabled: boolean;
+}) {
+	const { t } = useTranslation();
+	return (
+		<ContextMenu>
+			<ContextMenuTrigger asChild>
+				<div
+					role="listitem"
+					aria-label={`${t("notify.title")}: ${label}`}
+					data-notification-source={source}
+					tabIndex={0}
+					onClickCapture={(event) => {
+						if (!(event.target as HTMLElement).closest("[data-notification-clear]")) onRead();
+					}}
+					onKeyDownCapture={(event) => {
+						if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+						event.preventDefault();
+						event.stopPropagation();
+						const rect = event.currentTarget.getBoundingClientRect();
+						event.currentTarget.dispatchEvent(new MouseEvent("contextmenu", {
+							bubbles: true, clientX: rect.left, clientY: rect.bottom,
+						}));
+					}}
+					onKeyDown={(event) => {
+						if ((event.key !== "Enter" && event.key !== " ") ||
+							(event.target as HTMLElement).closest("button, a, [data-notification-clear]")) return;
+						if (event.target === event.currentTarget) {
+							event.preventDefault();
+							const target = event.currentTarget.querySelector<HTMLElement>('[role="button"]');
+							if (target) { target.click(); return; }
+						}
+						onRead();
+					}}
+				>
+					{children}
+				</div>
+			</ContextMenuTrigger>
+			<ContextMenuContent>
+				<ContextMenuItem disabled={disabled} onSelect={onClearAfter}>
+					{t("notify.clearAllAfter")}
+				</ContextMenuItem>
+			</ContextMenuContent>
+		</ContextMenu>
 	);
 }
 
@@ -953,7 +947,7 @@ const NotificationItem = memo(function NotificationItem({
 		if (canOpenSession) onOpenSession(notification);
 	};
 	return (
-		<div role="listitem">
+		<div>
 			<div
 				className={cn(
 					"group grid grid-cols-notification items-start gap-3 px-4 py-3 text-left transition-[background-color,opacity,transform] duration-fast will-change-transform",
@@ -1064,6 +1058,7 @@ const NotificationItem = memo(function NotificationItem({
 					<Tooltip delayDuration={0}>
 						<TooltipTrigger asChild>
 							<button
+								data-notification-clear
 								aria-label={t("notify.clearOne", { title: hostLabel ? `${hostLabel}: ${copy.title}` : copy.title })}
 								title=""
 								className="grid size-notification-icon place-items-center rounded-md text-passive transition-colors hover:bg-interactive-active hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
@@ -1139,7 +1134,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 		if (canOpenSession && projectId) onOpenSession(projectId, sessionId);
 	};
 	return (
-		<div data-notification-source="cloud" role="listitem">
+		<div data-notification-source="cloud">
 			<div
 				className={cn(
 					"group grid grid-cols-notification items-start gap-3 px-4 py-3 text-left transition-[background-color,opacity,transform] duration-fast will-change-transform",
@@ -1230,6 +1225,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 					<Tooltip delayDuration={0}>
 						<TooltipTrigger asChild>
 							<button
+								data-notification-clear
 								aria-label={t("notify.clearOne", { title: notification.title })}
 								title=""
 								className="grid size-notification-icon place-items-center rounded-md text-passive transition-colors hover:bg-interactive-active hover:text-foreground disabled:pointer-events-none disabled:opacity-40"

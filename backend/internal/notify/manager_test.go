@@ -249,3 +249,18 @@ func TestManagerReconcilePublishesRecoveredResolutions(t *testing.T) {
 		t.Fatal("expected published resolution")
 	}
 }
+
+func TestReadRefreshReachesProjectSubscribers(t *testing.T) {
+	hub := NewHub()
+	ch, unsubscribe := hub.Subscribe("mer")
+	defer unsubscribe()
+	_ = hub.Publish(context.Background(), domain.NotificationEvent{Kind: domain.NotificationReadChanged})
+	select {
+	case event := <-ch:
+		if event.Kind != domain.NotificationReadChanged {
+			t.Fatalf("event = %+v", event)
+		}
+	default:
+		t.Fatal("project subscriber missed read refresh")
+	}
+}

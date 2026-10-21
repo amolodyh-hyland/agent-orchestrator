@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -405,4 +406,31 @@ func notificationsFromGen(rows []gen.Notification) []domain.NotificationRecord {
 		out = append(out, notificationFromGen(row))
 	}
 	return out
+}
+
+func (s *Store) CountUnreadNotificationsSince(ctx context.Context, at time.Time, ids []string) (int64, error) {
+	if ids == nil {
+		ids = []string{}
+	}
+	raw, err := json.Marshal(ids)
+	if err != nil {
+		return 0, err
+	}
+	return s.qr.CountUnreadNotificationsSince(ctx, gen.CountUnreadNotificationsSinceParams{SinceAt: at, SeenIds: string(raw)})
+}
+
+func (s *Store) ClearNotificationsThrough(ctx context.Context, boundary domain.NotificationBoundary) (int64, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	var count int64
+	err := s.inTx(ctx, "clear notifications through boundary", func(q *gen.Queries) error {
+		var err error
+		count, err = q.DismissNotificationsThrough(ctx, gen.DismissNotificationsThroughParams{ThroughAt: boundary.CreatedAt, ThroughID: boundary.ID, ExcludeEqual: boundary.ExcludeEqual})
+		if err != nil {
+			return err
+		}
+		_, err = q.DeleteResolvedDismissedNotifications(ctx)
+		return err
+	})
+	return count, err
 }

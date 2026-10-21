@@ -123,6 +123,8 @@ const (
 	NotificationDeleted NotificationEventKind = "deleted"
 	// NotificationCleared announces that notification history was deleted.
 	NotificationCleared NotificationEventKind = "cleared"
+	// NotificationReadChanged asks clients to refresh persisted read state.
+	NotificationReadChanged NotificationEventKind = "read"
 )
 
 // NotificationEvent is one live notification-stream message.
@@ -155,4 +157,11 @@ func (r NotificationRecord) Validate() error {
 		return ErrInvalidNotificationStatus
 	}
 	return nil
+}
+
+// NotificationBoundary identifies an immutable position in newest-first history.
+type NotificationBoundary struct {
+	ExcludeEqual bool      `json:"excludeEqual,omitempty"`
+	ID           string    `json:"id"`
+	CreatedAt    time.Time `json:"createdAt"`
 }

@@ -1276,6 +1276,7 @@
 	"standalone.workspaceName": "Scratchpad",
 	"notify.bell": "Notifications",
 	"notify.clearAll": "Clear all",
+	"notify.clearAllAfter": "Clear all after this",
 	"notify.clearOne": "Clear notification: {{title}}",
 	"notify.clearOneShort": "Clear notification",
 	"notify.cloud": "Cloud",

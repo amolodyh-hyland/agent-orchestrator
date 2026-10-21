@@ -183,7 +183,7 @@ func resolvePullRequestNotificationTx(ctx context.Context, tx pgx.Tx, pr domain.
 
 func publishPullRequestNotificationEventTx(ctx context.Context, tx pgx.Tx, orgID, recipientID, notificationID, kind, eventID string) error {
 	var snapshot []byte
-	if err := tx.QueryRow(ctx, `SELECT jsonb_build_object('id',id::text,'orgId',org_id::text,'recipientUserId',recipient_user_id::text,'projectId',project_id::text,'sessionId',session_id::text,'source',source,'type',type,'title',title,'body',body,'status',status,'eventId',source_event_id,'metadata',metadata,'resolvedAt',resolved_at,'createdAt',created_at,'updatedAt',updated_at) FROM ao_notifications WHERE org_id=$1 AND id=$2`, orgID, notificationID).Scan(&snapshot); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT jsonb_build_object('id',id::text,'orgId',org_id::text,'recipientUserId',recipient_user_id::text,'projectId',project_id::text,'sessionId',session_id::text,'source',source,'type',type,'title',title,'body',body,'status',status,'eventId',source_event_id,'metadata',metadata,'resolvedAt',resolved_at,'createdAt',created_at,'updatedAt',updated_at,'revision',revision::text) FROM ao_notifications WHERE org_id=$1 AND id=$2`, orgID, notificationID).Scan(&snapshot); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO ao_notification_events(org_id,recipient_user_id,notification_id,kind,source_event_id,snapshot) VALUES($1,$2,$3,$4,$5,$6)`, orgID, recipientID, notificationID, kind, eventID, snapshot); err != nil {

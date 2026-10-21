@@ -3,11 +3,14 @@ package store_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 func TestNotificationStore_InsertListAndDedupe(t *testing.T) {
@@ -679,5 +682,158 @@ func TestNotificationStore_MarkNotificationsReadOnlyTouchesGivenIDs(t *testing.T
 	count, err := s.CountUnreadNotifications(ctx)
 	if err != nil || count != 1 {
 		t.Fatalf("unread count = %d err=%v, want 1 (ntf_3 must stay reachable)", count, err)
+	}
+}
+
+func TestNotificationReadAndDismissalSurviveRestart(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s, err := sqlitetest.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedProject(t, s, "persist")
+	sess, err := s.CreateSession(ctx, sampleRecord("persist"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, id := range []string{"new", "clicked", "cleared"} {
+		rec := domain.NotificationRecord{ID: id, Title: id, SessionID: sess.ID, ProjectID: sess.ProjectID, Type: domain.NotificationReviewCompleted, Status: domain.NotificationUnread, CreatedAt: time.Date(2026, 10, 20, 12, i, 0, 0, time.UTC), SourceKey: id}
+		if _, _, err := s.CreateNotification(ctx, rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := s.MarkNotificationRead(ctx, "clicked"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.DeleteNotification(ctx, "cleared"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = sqlite.OpenPreMigrated(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	rows, err := s.ListNotifications(ctx, domain.NotificationListAll, time.Time{}, "", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %+v", rows)
+	}
+	states := map[string]domain.NotificationStatus{}
+	for _, row := range rows {
+		states[row.ID] = row.Status
+	}
+	if states["new"] != domain.NotificationUnread || states["clicked"] != domain.NotificationRead {
+		t.Fatalf("states = %+v", states)
+	}
+}
+
+func TestNotificationRangeAndBadgeBeyondPageSize(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "range")
+	session, err := s.CreateSession(ctx, sampleRecord("range"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	seed := func(i int) domain.NotificationRecord {
+		t.Helper()
+		row := domain.NotificationRecord{ID: fmt.Sprintf("n%03d", i), Title: "Review complete", SessionID: session.ID, ProjectID: session.ProjectID, Type: domain.NotificationReviewCompleted, Status: domain.NotificationUnread, CreatedAt: base.Add(time.Duration(i) * time.Second), SourceKey: fmt.Sprintf("source-%d", i)}
+		if _, _, err := s.CreateNotification(ctx, row); err != nil {
+			t.Fatal(err)
+		}
+		return row
+	}
+	for i := 0; i < 150; i++ {
+		seed(i)
+	}
+	page, err := s.ListNotifications(ctx, domain.NotificationListAll, time.Time{}, "", 100)
+	if err != nil || len(page) != 100 {
+		t.Fatalf("page=%d err=%v", len(page), err)
+	}
+	boundary := domain.NotificationBoundary{ID: page[50].ID, CreatedAt: page[50].CreatedAt}
+	// A new arrival while the menu is open must remain above the immutable boundary.
+	seed(150)
+	count, err := s.ClearNotificationsThrough(ctx, boundary)
+	if err != nil || count != 100 {
+		t.Fatalf("cleared=%d err=%v, want 100 including 50 unloaded", count, err)
+	}
+	count, err = s.CountUnreadNotifications(ctx)
+	if err != nil || count != 51 {
+		t.Fatalf("remaining=%d err=%v", count, err)
+	}
+	watermark := base.Add(150 * time.Second)
+	for i := 151; i <= 300; i++ {
+		seed(i)
+	}
+	count, err = s.CountUnreadNotificationsSince(ctx, watermark, []string{"n150"})
+	if err != nil || count != 150 {
+		t.Fatalf("unseen=%d err=%v, want 150 despite page limit", count, err)
+	}
+}
+
+func TestNotificationBoundaryEqualTimestamps(t *testing.T) {
+	for _, boundaryID := range []string{"a", "b", "c"} {
+		t.Run(boundaryID, func(t *testing.T) {
+			s := newTestStore(t)
+			ctx := context.Background()
+			seedProject(t, s, "ties")
+			session, err := s.CreateSession(ctx, sampleRecord("ties"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			at := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+			for _, id := range []string{"a", "b", "c"} {
+				row := domain.NotificationRecord{ID: id, Title: id, SessionID: session.ID, ProjectID: session.ProjectID, Type: domain.NotificationReviewCompleted, Status: domain.NotificationUnread, CreatedAt: at, SourceKey: id}
+				if _, _, err := s.CreateNotification(ctx, row); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, seenIDs := range [][]string{nil, {}} {
+				unseen, err := s.CountUnreadNotificationsSince(ctx, at, seenIDs)
+				if err != nil || unseen != 3 {
+					t.Fatalf("seenIDs=%v unseen=%d err=%v", seenIDs, unseen, err)
+				}
+			}
+			unseen, err := s.CountUnreadNotificationsSince(ctx, at, []string{"b"})
+			if err != nil || unseen != 2 {
+				t.Fatalf("unseen=%d err=%v", unseen, err)
+			}
+			count, err := s.ClearNotificationsThrough(ctx, domain.NotificationBoundary{ID: boundaryID, CreatedAt: at})
+			if err != nil || count != int64(boundaryID[0]-'a'+1) {
+				t.Fatalf("cleared=%d err=%v", count, err)
+			}
+		})
+	}
+}
+
+func TestNotificationCrossHostBoundaryExcludesEqualRow(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "equal")
+	session, err := s.CreateSession(ctx, sampleRecord("equal"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 20, 12, 0, 0, 123456789, time.UTC)
+	for _, id := range []string{"a", "b"} {
+		row := domain.NotificationRecord{ID: id, Title: id, SessionID: session.ID, ProjectID: session.ProjectID, Type: domain.NotificationReviewCompleted, Status: domain.NotificationUnread, CreatedAt: at, SourceKey: id}
+		if _, _, err := s.CreateNotification(ctx, row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	count, err := s.ClearNotificationsThrough(ctx, domain.NotificationBoundary{ID: "b", CreatedAt: at, ExcludeEqual: true})
+	if err != nil || count != 1 {
+		t.Fatalf("cleared=%d err=%v", count, err)
+	}
+	unseen, err := s.CountUnreadNotificationsSince(ctx, at, []string{"b"})
+	if err != nil || unseen != 0 {
+		t.Fatalf("seen boundary counted unread=%d err=%v", unseen, err)
 	}
 }

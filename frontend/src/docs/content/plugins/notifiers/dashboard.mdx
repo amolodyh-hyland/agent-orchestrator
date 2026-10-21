@@ -9,9 +9,9 @@ Use the notification center to review new and older alerts, open the related ses
 
 - browse one newest-first feed and load older records by scrolling;
 - open the related session or pull request;
-- open the panel to mark loaded unread records as read;
+- open the panel to reset the bell badge without changing unread highlights;
 - catch up through paginated history after the app reconnects.
 
 Electron app toasts are a presentation of the same durable records while the desktop is running. There is no `ao notify`, `ao setup`, routing preset, JSONL notification store, or external notifier configuration in the current CLI.
 
-Opening the panel marks loaded unread items as read; it does not clear them. Clear one item or the whole feed to remove alerts from the center. Paired mobile devices can receive push notifications when permission is granted and the daemon can reach the push service. Use Connect Mobile device controls to mute or unpair a device. This does not enable legacy Slack, Discord, or webhook notifier plugins.
+Opening the panel resets the bell badge while unread items stay highlighted until selected. Read state is saved by the daemon and shared across windows. Clear one item or the whole feed to remove alerts from the center. Right-click an item, or focus its row and press Shift+F10 or the context-menu key, then choose **Clear all after this** to clear that item and all older notifications, including history that has not loaded yet. Newer items stay in the feed. The bell counts unseen notifications across the full history, independently of unread highlighting. Cloud read changes synchronize across open windows through the recipient’s durable notification stream. Paired mobile devices can receive push notifications when permission is granted and the daemon can reach the push service. Use Connect Mobile device controls to mute or unpair a device. This does not enable legacy Slack, Discord, or webhook notifier plugins.

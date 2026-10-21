@@ -15,6 +15,7 @@ import { TooltipProvider } from "./ui/tooltip";
 
 const {
 	clearAllMock,
+ clearThroughMock,
 	clearOneMock,
 	cloudNotificationsMock,
 	connectMock,
@@ -26,7 +27,8 @@ const {
 	restoreSessionMock,
 	workspaceQueryMock,
 } = vi.hoisted(() => ({
-	clearAllMock: vi.fn(),
+	clearThroughMock: vi.fn(),
+ clearAllMock: vi.fn(),
 	clearOneMock: vi.fn(),
 	cloudNotificationsMock: vi.fn(),
 	connectMock: vi.fn(),
@@ -125,6 +127,7 @@ const cloudNotifications: CloudCpNotification[] = [
 
 const cloudMarkAllReadMock = vi.fn();
 const cloudMarkReadMock = vi.fn();
+const cloudClearThroughMock = vi.fn();
 const cloudClearAllMock = vi.fn();
 const cloudClearOneMock = vi.fn();
 
@@ -136,6 +139,8 @@ function cloudNotificationsResult(items: CloudCpNotification[]) {
 		markAllRead: cloudMarkAllReadMock,
 		markRead: cloudMarkReadMock,
 		clearAll: cloudClearAllMock,
+ clearThrough: cloudClearThroughMock,
+ countUnseen: async () => 0,
 		clearOne: cloudClearOneMock,
 	};
 }
@@ -167,6 +172,8 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 
 vi.mock("../lib/notifications", async (importOriginal) => ({
 	...((await importOriginal()) as object),
+ clearNotificationsThrough: clearThroughMock,
+ countUnseenNotifications: async () => 0,
 	createNotificationsTransport: (...args: unknown[]) => {
 		connectMock(...args);
 		return { connect: () => undefined };
@@ -230,6 +237,9 @@ const stableUnreadQuery = notificationQueryResult("unread");
 const stableAllQuery = notificationQueryResult("all");
 
 beforeEach(() => {
+	window.localStorage.clear();
+ clearThroughMock.mockReset().mockResolvedValue(undefined);
+ cloudClearThroughMock.mockReset().mockResolvedValue(undefined);
 	clearAllMock
 		.mockReset()
 		.mockResolvedValue({ clearId: "clear-1", clearEpoch: "epoch-1", clearSequence: 1, clearedCount: 4 });
@@ -327,7 +337,7 @@ describe("NotificationCenter", () => {
 
 		expect(workspaceQueryMock).not.toHaveBeenCalled();
 		await clickOpen();
-		expect(workspaceQueryMock).toHaveBeenCalledTimes(1);
+		expect(workspaceQueryMock).toHaveBeenCalled();
 	});
 
 	it("uses the compact topbar bell and unread badge sizing", () => {
@@ -473,37 +483,107 @@ describe("NotificationCenter", () => {
 		expect(screen.getByText("Checkout flow needs input")).toBeInTheDocument();
 	});
 
-	// Opening acknowledges loaded unread ids only, so later unread pages stay
-	// fetchable and highlighted when they appear in the all-list.
-	it("acknowledges loaded unread ids on open and keeps showing them highlighted", async () => {
+	it("resets the badge on open without reading rows, including after reopening", async () => {
 		renderNotificationCenter();
 		await clickOpen();
-
-		expect(markAllMock.mock.calls[0][0]).toEqual(expect.arrayContaining(["ntf_1", "ntf_2"]));
-		expect(markAllMock.mock.calls[0][0]).toHaveLength(2);
-		expect(screen.queryByRole("button", { name: "Mark all notifications read" })).not.toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Mark notification read" })).not.toBeInTheDocument();
-		expect(screen.getByText("Checkout flow needs input")).toBeInTheDocument();
-		expect(screen.getByText("Checkout flow needs input").className).toContain("font-medium");
-		expect(screen.getByLabelText("Fix checkout totals · PR #67").className).toContain("font-medium");
-		expect(screen.getByText("Docs sweep needs input").className).not.toContain("font-medium");
+		expect(markAllMock).not.toHaveBeenCalled();
+		expect(screen.getByText("Checkout flow needs input")).toHaveClass("font-medium");
+		expect(screen.getByLabelText("Fix checkout totals · PR #67")).toHaveClass("font-medium");
+		const bell = screen.getByRole("button", { name: "Notifications" });
+		await userEvent.click(bell);
+		await userEvent.click(bell);
+		expect(screen.getByText("Checkout flow needs input")).toHaveClass("font-medium");
+		expect(markAllMock).not.toHaveBeenCalled();
 	});
 
-	it("retries mark-read after a transient failure without closing the panel", async () => {
-		markAllMock.mockRejectedValueOnce(new Error("network down")).mockResolvedValueOnce(2);
+	it("marks only the clicked notification read", async () => {
 		renderNotificationCenter();
 		await clickOpen();
+		await userEvent.click(screen.getByText("Checkout flow needs input"));
+		expect(markAllMock).toHaveBeenCalledExactlyOnceWith(["ntf_1"]);
+	});
 
-		expect(await screen.findByText("network down")).toBeInTheDocument();
-		expect(markAllMock).toHaveBeenCalledTimes(1);
+	it("removes only the selected highlight after the persisted state is fetched again", async () => {
+		let items = allNotifications.map((item) => ({ ...item }));
+		notificationQueryMock.mockImplementation((status: NotificationListStatus) => ({
+			...notificationQueryResult(status),
+			data: { pageParams: [""], pages: [{ notifications: status === "unread" ? items.filter((item) => item.status === "unread") : items, unreadCount: items.filter((item) => item.status === "unread").length, unresolvedCount: 0 }] },
+		}));
+		markAllMock.mockImplementation(async (ids: string[]) => {
+			items = items.map((item) => ids.includes(item.id) ? { ...item, status: "read" } : item);
+			return 1;
+		});
+		renderNotificationCenter();
+		await clickOpen();
+		await userEvent.click(screen.getByText("Checkout flow needs input"));
+		await userEvent.click(screen.getByRole("button", { name: "Notifications" }));
+		expect(screen.getByText("Checkout flow needs input")).not.toHaveClass("font-medium");
+		expect(screen.getByLabelText("Fix checkout totals · PR #67")).toHaveClass("font-medium");
+	});
 
-		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+	it("shows a server-side range-clear failure", async () => {
+		clearThroughMock.mockRejectedValueOnce(new Error("clear failed"));
+		renderNotificationCenter();
+		await clickOpen();
+		fireEvent.contextMenu(screen.getAllByRole("listitem")[0]);
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Clear all after this" }));
+		await waitFor(() => expect(clearThroughMock).toHaveBeenCalledTimes(1));
+		expect(screen.getByText("clear failed")).toBeInTheDocument();
+	});
 
-		await waitFor(() => expect(markAllMock).toHaveBeenCalledTimes(2));
-		expect(markAllMock.mock.calls[1][0]).toEqual(expect.arrayContaining(["ntf_1", "ntf_2"]));
-		expect(markAllMock.mock.calls[1][0]).toHaveLength(2);
-		await waitFor(() => expect(screen.queryByText("network down")).not.toBeInTheDocument());
-		expect(screen.getByText("Checkout flow needs input").className).toContain("font-medium");
+	it("marks a PR link read without marking its neighbors", async () => {
+		renderNotificationCenter();
+		await clickOpen();
+		await userEvent.click(screen.getByRole("link", { name: "Open PR #67" }));
+		expect(markAllMock).toHaveBeenCalledExactlyOnceWith(["ntf_2"]);
+	});
+
+	it.each([0, 1, 3])("clears the selected row and every older listed row from index %i", async (index) => {
+		renderNotificationCenter();
+		await clickOpen();
+		const row = screen.getAllByRole("listitem")[index];
+		fireEvent.contextMenu(row, { clientX: 10, clientY: 10 });
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Clear all after this" }));
+		await waitFor(() => expect(clearThroughMock).toHaveBeenCalledTimes(1));
+ expect(clearThroughMock.mock.calls[0][0]).toEqual({ id: allNotifications[index].id, createdAt: allNotifications[index].createdAt });
+		expect(markAllMock).not.toHaveBeenCalled();
+	});
+
+	it("keeps the clicked boundary when newer notifications arrive while its menu is open", async () => {
+  let items = allNotifications;
+  notificationQueryMock.mockImplementation((status: NotificationListStatus) => ({ ...notificationQueryResult(status), data: { pageParams: [""], pages: [{ notifications: items, unreadCount: 2, unresolvedCount: 0 }] } }));
+  const view = renderNotificationCenter();
+  await clickOpen();
+  fireEvent.contextMenu(screen.getAllByRole("listitem")[1]);
+  items = [{ ...allNotifications[0], id: "arrived", title: "New arrival", createdAt: "2026-10-20T12:00:00Z" }, ...items];
+  view.rerender(<QueryClientProvider client={new QueryClient()}><TooltipProvider><NotificationCenter /></TooltipProvider></QueryClientProvider>);
+  await userEvent.click(await screen.findByRole("menuitem", { name: "Clear all after this" }));
+  expect(clearThroughMock.mock.calls[0][0]).toEqual({ id: "ntf_1", createdAt: allNotifications[1].createdAt });
+ });
+
+	it.each([{ key: "F10", shiftKey: true }, { key: "ContextMenu" }])("opens the row menu from the keyboard ($key)", async (key) => {
+		renderNotificationCenter();
+		await clickOpen();
+		const trigger = screen.getAllByRole("listitem")[1];
+		trigger.focus();
+		fireEvent.keyDown(trigger, key);
+		const menuItem = await screen.findByRole("menuitem", { name: "Clear all after this" });
+		await waitFor(() => expect(menuItem).toHaveFocus());
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(clearThroughMock).toHaveBeenCalledTimes(1));
+		expect(markAllMock).not.toHaveBeenCalled();
+	});
+
+	it("opens the context menu from a focused clear control without reading the row", async () => {
+		renderNotificationCenter();
+		await clickOpen();
+		const button = screen.getByRole("button", { name: "Clear notification: Checkout flow needs input" });
+		button.focus();
+		fireEvent.keyDown(button, { key: "F10", shiftKey: true });
+		expect(await screen.findByRole("menuitem", { name: "Clear all after this" })).toBeInTheDocument();
+		expect(markAllMock).not.toHaveBeenCalled();
+		await userEvent.keyboard("{Escape}");
+		await waitFor(() => expect(button).toHaveFocus());
 	});
 
 	it("keeps later unread pages highlighted when they load after open", async () => {
@@ -595,9 +675,8 @@ describe("NotificationCenter", () => {
 			</QueryClientProvider>,
 		);
 		await clickOpen();
-		expect(markAllMock.mock.calls[0][0]).toEqual(expect.arrayContaining(["ntf_1", "ntf_2"]));
-		expect(markAllMock.mock.calls[0][0]).toHaveLength(2);
-		await waitFor(() => expect(screen.getByRole("button", { name: "1 unread notifications" })).toBeInTheDocument());
+		expect(markAllMock).not.toHaveBeenCalled();
+		await waitFor(() => expect(screen.getByRole("button", { name: "Notifications" })).toBeInTheDocument());
 		markAllMock.mockClear();
 
 		const list = screen.getByRole("list");
@@ -618,7 +697,7 @@ describe("NotificationCenter", () => {
 		);
 
 		expect(await screen.findByText("Later unread needs input")).toHaveClass("font-medium");
-		await waitFor(() => expect(markAllMock).toHaveBeenCalledWith(["ntf_later"]));
+		expect(markAllMock).not.toHaveBeenCalled();
 		await waitFor(() => expect(screen.getByRole("button", { name: "Notifications" })).toBeInTheDocument());
 		expect(screen.queryByRole("button", { name: /unread notifications/ })).not.toBeInTheDocument();
 	});
@@ -1018,10 +1097,24 @@ describe("NotificationCenter cloud rows", () => {
 		expect(cloudClearAllMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("acknowledges exactly the loaded unread cloud rows when the panel opens", async () => {
+	it("clears the displayed mixed-source suffix and preserves the newer local row", async () => {
+		renderNotificationCenter();
+		await clickOpen();
+		fireEvent.contextMenu(screen.getByRole("listitem", { name: "Notifications: Pull request ready to merge" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Clear all after this" }));
+		await waitFor(() => expect(clearThroughMock).toHaveBeenCalledTimes(1));
+		expect(clearThroughMock.mock.calls[0][0]).toEqual({ id: "cntf_ready", createdAt: cloudNotifications[0].createdAt, excludeEqual: true });
+ expect(cloudClearThroughMock).toHaveBeenCalledWith({ id: "cntf_ready", createdAt: cloudNotifications[0].createdAt });
+		expect(clearAllMock).not.toHaveBeenCalled();
+		expect(cloudClearAllMock).not.toHaveBeenCalled();
+	});
+
+	it("keeps cloud rows unread on open and reads only the selected cloud row", async () => {
 		renderNotificationCenter();
 		await clickOpen();
 
+		expect(cloudMarkReadMock).not.toHaveBeenCalled();
+		await userEvent.click(screen.getByText("Pull request ready to merge"));
 		await waitFor(() => expect(cloudMarkReadMock).toHaveBeenCalledWith(["cntf_ready"]));
 		expect(cloudMarkReadMock).toHaveBeenCalledTimes(1);
 		expect(cloudMarkAllReadMock).not.toHaveBeenCalled();

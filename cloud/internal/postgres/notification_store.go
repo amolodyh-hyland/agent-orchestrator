@@ -316,12 +316,16 @@ func (s *Store) ListNotifications(
 			last := page.Items[len(page.Items)-1]
 			page.NextCursor = &domain.NotificationCursor{CreatedAt: last.CreatedAt, ID: last.ID}
 		}
+		seenIDs := filter.SeenIDs
+		if seenIDs == nil {
+			seenIDs = []string{}
+		}
 		return tx.QueryRow(ctx, `
-			SELECT count(*) FILTER (WHERE status = 'unread'),
+			SELECT count(*) FILTER (WHERE status = 'unread' AND (updated_at > $3 OR (updated_at = $3 AND NOT id::text = ANY($4::text[])))),
 				COALESCE((SELECT max(sequence) FROM ao_notification_events
 					WHERE org_id = $1 AND recipient_user_id = $2), 0)
 			FROM ao_notifications
-			WHERE org_id = $1 AND recipient_user_id = $2`, orgID, principal.UserID,
+			WHERE org_id = $1 AND recipient_user_id = $2`, orgID, principal.UserID, filter.SeenAt, seenIDs,
 		).Scan(&page.UnreadCount, &page.LatestSequence)
 	})
 	return page, err
@@ -373,34 +377,79 @@ func (s *Store) ListNotificationEvents(
 }
 
 func (s *Store) MarkNotificationsRead(
-	ctx context.Context,
-	principal domain.Principal,
-	orgID string,
-	ids []string,
-) (int64, error) {
-	var changed int64
+	ctx context.Context, principal domain.Principal, orgID string, ids []string, through ...domain.NotificationCursor,
+) (domain.NotificationReadResult, error) {
+	var result domain.NotificationReadResult
 	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
 		if ids != nil && len(ids) == 0 {
 			return nil
 		}
-		query := `
-			UPDATE ao_notifications
-			SET status = 'read', updated_at = now()
-			WHERE org_id = $1 AND recipient_user_id = $2
-			  AND status = 'unread'`
+		// Range clearing locks/stamps already-read rows as well: a re-raise
+		// must get a revision after this transaction's marker, even when that
+		// row did not need its read status changed.
+		query := `SELECT id, status FROM ao_notifications
+   WHERE org_id = $1 AND recipient_user_id = $2`
+		if len(through) == 0 {
+			query += ` AND status = 'unread'`
+		}
 		args := []any{orgID, principal.UserID}
 		if ids != nil {
 			query += ` AND id = ANY($3::uuid[])`
 			args = append(args, ids)
 		}
-		tag, err := tx.Exec(ctx, query, args...)
+		if len(through) > 0 {
+			args = append(args, through[0].CreatedAt, through[0].ID)
+			op := "<="
+			if through[0].ExcludeEqual {
+				op = "<"
+			}
+			query += fmt.Sprintf(` AND (created_at, id::text) %s ($%d, $%d)`, op, len(args)-1, len(args))
+		}
+		rows, err := tx.Query(ctx, `WITH targeted AS MATERIALIZED (`+query+` ORDER BY id FOR UPDATE)
+   UPDATE ao_notifications notification SET status = 'read', updated_at = now()
+   FROM targeted WHERE notification.id = targeted.id
+   RETURNING `+notificationColumns+`, targeted.status`, args...)
 		if err != nil {
 			return normalizeConstraintError(err)
 		}
-		changed = tag.RowsAffected()
-		return nil
+		var updated []domain.Notification
+		for rows.Next() {
+			var item domain.Notification
+			var previousStatus string
+			if err := rows.Scan(append(notificationScanTargets(&item), &previousStatus)...); err != nil {
+				rows.Close()
+				return err
+			}
+			result.ClearedRevision = max(result.ClearedRevision, item.Revision)
+			if previousStatus == "unread" {
+				updated = append(updated, item)
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		for _, item := range updated {
+			snapshot, err := json.Marshal(item)
+			if err != nil {
+				return err
+			}
+			_, err = tx.Exec(ctx, `INSERT INTO ao_notification_events
+    (org_id, recipient_user_id, notification_id, kind, source_event_id, snapshot)
+    VALUES ($1, $2, $3, $4, $5, $6)`, orgID, principal.UserID, item.ID,
+				string(domain.NotificationEventUpdated), "read:"+item.ID, snapshot)
+			if err != nil {
+				return err
+			}
+		}
+		result.Updated = int64(len(updated))
+		if result.Updated > 0 {
+			_, err = tx.Exec(ctx, `SELECT pg_notify('ao_notification_event', $1)`, orgID)
+		}
+		return err
 	})
-	return changed, err
+	return result, err
 }
 
 const notificationSelect = `SELECT ` + notificationColumns + ` FROM ao_notifications notification`
@@ -410,11 +459,11 @@ const notificationColumns = `notification.id::text, notification.org_id::text,
 	notification.session_id::text, notification.source, notification.type,
 	notification.title, notification.body, notification.dedupe_key,
 	notification.status, notification.source_event_id, notification.metadata,
-	notification.resolved_at, notification.created_at, notification.updated_at`
+	notification.resolved_at, notification.created_at, notification.updated_at, notification.revision`
 
 const notificationReturning = `id::text, org_id::text, recipient_user_id::text,
 	project_id::text, session_id::text, source, type, title, body, dedupe_key,
-	status, source_event_id, metadata, resolved_at, created_at, updated_at`
+	status, source_event_id, metadata, resolved_at, created_at, updated_at, revision`
 
 func scanNotification(row rowScanner, notification *domain.Notification) error {
 	return row.Scan(notificationScanTargets(notification)...)
@@ -427,6 +476,6 @@ func notificationScanTargets(notification *domain.Notification) []any {
 		&notification.Type, &notification.Title, &notification.Body,
 		&notification.DedupeKey, &notification.Status, &notification.EventID,
 		&notification.Metadata, &notification.ResolvedAt,
-		&notification.CreatedAt, &notification.UpdatedAt,
+		&notification.CreatedAt, &notification.UpdatedAt, &notification.Revision,
 	}
 }

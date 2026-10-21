@@ -69,7 +69,13 @@ type NotificationAcceptance struct {
 	Duplicate bool
 }
 
+type NotificationReadResult struct {
+	Updated         int64 `json:"updated"`
+	ClearedRevision int64 `json:"clearedRevision,string"`
+}
+
 type Notification struct {
+	Revision        int64           `json:"revision,string"`
 	ID              string          `json:"id"`
 	OrgID           string          `json:"orgId"`
 	RecipientUserID string          `json:"recipientUserId"`
@@ -99,14 +105,17 @@ type NotificationEvent struct {
 }
 
 type NotificationCursor struct {
-	CreatedAt time.Time
-	ID        string
+	ExcludeEqual bool
+	CreatedAt    time.Time
+	ID           string
 }
 
 type NotificationFilter struct {
-	Status NotificationStatus
-	Cursor *NotificationCursor
-	Limit  int
+	SeenAt  time.Time
+	SeenIDs []string
+	Status  NotificationStatus
+	Cursor  *NotificationCursor
+	Limit   int
 }
 
 type NotificationPage struct {

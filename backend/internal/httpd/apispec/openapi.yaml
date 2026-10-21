@@ -3792,6 +3792,43 @@ paths:
       summary: Mark a notification read
       tags:
       - notifications
+  /api/v1/notifications/clear-through:
+    post:
+      operationId: clearNotificationsThrough
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationBoundaryRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationCountResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Dismiss all history at or older than a stable boundary
+      tags:
+      - notifications
   /api/v1/notifications/read-all:
     post:
       operationId: markAllNotificationsRead
@@ -3859,6 +3896,50 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Stream notification changes
+      tags:
+      - notifications
+  /api/v1/notifications/unseen-count:
+    get:
+      operationId: countUnseenNotifications
+      parameters:
+      - description: RFC3339 timestamp of the badge watermark.
+        in: query
+        name: since
+        schema:
+          description: RFC3339 timestamp of the badge watermark.
+          type: string
+      - description: JSON array of notification ids seen at the watermark timestamp.
+        in: query
+        name: seenIds
+        schema:
+          description: JSON array of notification ids seen at the watermark timestamp.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationCountResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Count unseen notifications beyond a badge watermark
       tags:
       - notifications
   /api/v1/orchestrators:
@@ -17462,6 +17543,27 @@ components:
           type: boolean
       required:
       - muted
+      type: object
+    NotificationBoundaryRequest:
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        excludeEqual:
+          type: boolean
+        id:
+          type: string
+      required:
+      - id
+      - createdAt
+      type: object
+    NotificationCountResponse:
+      properties:
+        count:
+          format: int64
+          type: integer
+      required:
+      - count
       type: object
     NotificationEnvelope:
       properties:

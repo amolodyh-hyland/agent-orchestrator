@@ -143,7 +143,7 @@ type Store interface {
 	AcceptNotificationEvent(context.Context, string, string, string, int64, domain.AgentNotificationEvent) (domain.NotificationAcceptance, error)
 	ListNotifications(context.Context, domain.Principal, string, domain.NotificationFilter) (domain.NotificationPage, error)
 	ListNotificationEvents(context.Context, domain.Principal, string, int64, int) ([]domain.NotificationEvent, bool, error)
-	MarkNotificationsRead(context.Context, domain.Principal, string, []string) (int64, error)
+	MarkNotificationsRead(context.Context, domain.Principal, string, []string, ...domain.NotificationCursor) (domain.NotificationReadResult, error)
 }
 
 // WorkerTokens issues and verifies the short-lived credentials sandbox workers

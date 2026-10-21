@@ -3641,3 +3641,19 @@ type SwitchSessionAgentAccountRequest struct {
 type ProjectContextResponse struct {
 	Manifest *domain.ProjectContextManifest `json:"manifest"`
 }
+
+// NotificationBoundaryRequest is a stable inclusive history boundary.
+type NotificationBoundaryRequest struct {
+	ExcludeEqual bool      `json:"excludeEqual,omitempty"`
+	ID           string    `json:"id"`
+	CreatedAt    time.Time `json:"createdAt"`
+}
+
+type CountUnseenNotificationsQuery struct {
+	Since   string `query:"since,omitempty" description:"RFC3339 timestamp of the badge watermark."`
+	SeenIDs string `query:"seenIds,omitempty" description:"JSON array of notification ids seen at the watermark timestamp."`
+}
+
+type NotificationCountResponse struct {
+	Count int64 `json:"count"`
+}

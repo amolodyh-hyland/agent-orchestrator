@@ -146,6 +146,8 @@ export interface CloudCpPageInfo {
 // ---------------------------------------------------------------------------
 
 export interface CloudCpNotification {
+	/** Database mutation revision (string to preserve bigint precision). */
+	revision?: string;
 	id: string;
 	source: "cloud";
 	eventId?: string;
@@ -171,6 +173,8 @@ export interface CloudCpNotificationEvent {
 }
 
 export interface CloudCpNotificationListQuery extends CloudCpListQuery {
+ seenAt?: string;
+ seenIds?: string;
 	status?: "unread" | "read" | "all";
 }
 

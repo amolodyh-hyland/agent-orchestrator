@@ -1299,6 +1299,7 @@
 	"notify.all": "Todas",
 	"notify.bell": "Notificações",
 	"notify.clearAll": "Limpar tudo",
+	"notify.clearAllAfter": "Limpar todas a partir daqui",
 	"notify.clearOne": "Limpar notificação: {{title}}",
 	"notify.clearOneShort": "Limpar notificação",
 	"notify.cloud": "Nuvem",

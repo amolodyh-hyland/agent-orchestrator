@@ -329,3 +329,33 @@ func TestClearAllReturnsCommittedResultWhenPublishFails(t *testing.T) {
 		t.Fatalf("logs = %q", logs.String())
 	}
 }
+
+func TestReadMutationsNotifyOtherWindows(t *testing.T) {
+	for _, all := range []bool{false, true} {
+		t.Run(fmt.Sprint(all), func(t *testing.T) {
+			barrier := &recordingLocker{}
+			publisher := &capturePublisher{barrier: barrier, t: t}
+			st := &fakeStore{markOK: true, markRow: domain.NotificationRecord{ID: "n1", Status: domain.NotificationRead}}
+			mgr := New(Deps{Store: st, Publisher: publisher, Barrier: barrier})
+			if all {
+				if _, err := mgr.MarkAllRead(context.Background(), []string{"n1"}); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if _, _, err := mgr.MarkRead(context.Background(), "n1"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if len(publisher.events) != 1 || publisher.events[0].Kind != domain.NotificationReadChanged {
+				t.Fatalf("events = %+v", publisher.events)
+			}
+		})
+	}
+}
+
+func (f *fakeStore) CountUnreadNotificationsSince(context.Context, time.Time, []string) (int64, error) {
+	return f.unreadCount, f.err
+}
+func (f *fakeStore) ClearNotificationsThrough(context.Context, domain.NotificationBoundary) (int64, error) {
+	return f.clearAllCount, f.err
+}
