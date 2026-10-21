@@ -240,8 +240,8 @@ func TestNotificationReadEventsAndPagedBoundaries(t *testing.T) {
 	// A new arrival after the row's menu opens is newer than the captured boundary.
 	watermarkID := seed(150)
 	changed, err := store.MarkNotificationsRead(ctx, principal, fixture.orgID, nil, boundary)
-	if err != nil || changed != 100 {
-		t.Fatalf("changed=%d err=%v", changed, err)
+	if err != nil || changed.Updated != 100 {
+		t.Fatalf("changed=%+v err=%v", changed, err)
 	}
 	events, more, err := store.ListNotificationEvents(ctx, principal, fixture.orgID, 0, 200)
 	if err != nil || more || len(events) != 100 {
@@ -293,11 +293,75 @@ func TestNotificationReadBoundaryKeepsEqualItemOnNewerHost(t *testing.T) {
 		}
 	}
 	changed, err := store.MarkNotificationsRead(ctx, principal, fixture.orgID, nil, domain.NotificationCursor{ID: ids[1], CreatedAt: at, ExcludeEqual: true})
-	if err != nil || changed != 1 {
-		t.Fatalf("changed=%d err=%v", changed, err)
+	if err != nil || changed.Updated != 1 {
+		t.Fatalf("changed=%+v err=%v", changed, err)
 	}
 	page, err := store.ListNotifications(ctx, principal, fixture.orgID, domain.NotificationFilter{Status: domain.NotificationStatusUnread, Limit: 100})
 	if err != nil || len(page.Items) != 1 || page.Items[0].ID != ids[1] {
 		t.Fatalf("page=%+v err=%v", page, err)
+	}
+}
+
+// The re-raising transaction starts before the clear but writes after its
+// commit, before a caller has received/processed the clear response. now() is
+// consequently older than the clear; only the row revision orders this race.
+func TestNotificationClearRevisionSurvivesInterleavedReraise(t *testing.T) {
+	for _, initialStatus := range []string{"unread", "read"} {
+		t.Run(initialStatus, func(t *testing.T) {
+			store, admin, fixture := openNotificationTestStore(t)
+			ctx := context.Background()
+			principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+			at := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
+			id := uuid.NewString()
+			if _, err := admin.Exec(ctx, `INSERT INTO ao_notifications
+    (id, org_id, recipient_user_id, project_id, session_id, type, title, dedupe_key, source_event_id, status, created_at, updated_at)
+    VALUES ($1::uuid, $2, $3, $4, $5, 'needs_input', 'Needs input', $1::uuid::text, $1::uuid::text, $7, $6, $6)`,
+				id, fixture.orgID, fixture.userID, fixture.projectID, fixture.sessionID, at, initialStatus); err != nil {
+				t.Fatal(err)
+			}
+			reraising, err := admin.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reraising.Rollback(ctx)
+			// Establish the old transaction's timestamp before the read transaction.
+			var started time.Time
+			if err := reraising.QueryRow(ctx, `SELECT now()`).Scan(&started); err != nil {
+				t.Fatal(err)
+			}
+			result, err := store.MarkNotificationsRead(ctx, principal, fixture.orgID, nil, domain.NotificationCursor{ID: id, CreatedAt: at})
+			wantUpdated := int64(1)
+			if initialStatus == "read" {
+				wantUpdated = 0
+			}
+			if err != nil || result.Updated != wantUpdated || result.ClearedRevision == 0 {
+				t.Fatalf("clear result=%+v err=%v", result, err)
+			}
+			var revision int64
+			var updatedAt time.Time
+			if err := reraising.QueryRow(ctx, `UPDATE ao_notifications SET status = 'unread', updated_at = now()
+    WHERE id = $1 RETURNING revision, updated_at`, id).Scan(&revision, &updatedAt); err != nil {
+				t.Fatal(err)
+			}
+			if err := reraising.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if !updatedAt.Equal(started) || revision <= result.ClearedRevision {
+				t.Fatalf("re-raise revision=%d clear=%d updated=%s started=%s", revision, result.ClearedRevision, updatedAt, started)
+			}
+			page, err := store.ListNotifications(ctx, principal, fixture.orgID, domain.NotificationFilter{})
+			if err != nil || len(page.Items) != 1 || page.Items[0].Status != "unread" || page.Items[0].Revision != revision {
+				t.Fatalf("page=%+v err=%v", page, err)
+			}
+			// A second range clear must dismiss the new generation too.
+			second, err := store.MarkNotificationsRead(ctx, principal, fixture.orgID, nil, domain.NotificationCursor{ID: id, CreatedAt: at})
+			if err != nil || second.Updated != 1 || second.ClearedRevision <= revision {
+				t.Fatalf("second clear=%+v err=%v", second, err)
+			}
+			events, _, err := store.ListNotificationEvents(ctx, principal, fixture.orgID, 0, 100)
+			if err != nil || len(events) != int(wantUpdated)+1 || events[len(events)-1].Notification.Revision != second.ClearedRevision {
+				t.Fatalf("read event must carry its revision: events=%+v err=%v", events, err)
+			}
+		})
 	}
 }

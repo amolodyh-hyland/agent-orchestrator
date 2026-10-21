@@ -198,11 +198,11 @@ func (s *Server) markNotificationRead(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	if changed == 0 {
+	if changed.Updated == 0 {
 		writeError(w, r, http.StatusNotFound, "not_found", "The notification was not found.")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"updated": changed})
+	writeJSON(w, http.StatusOK, map[string]any{"updated": changed.Updated})
 }
 
 func (s *Server) markAllNotificationsRead(w http.ResponseWriter, r *http.Request) {
@@ -230,5 +230,5 @@ func (s *Server) markAllNotificationsRead(w http.ResponseWriter, r *http.Request
 		s.writeStoreError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"updated": changed, "clearedAt": time.Now().UTC()})
+	writeJSON(w, http.StatusOK, changed)
 }

@@ -462,7 +462,7 @@ describe("cloud control-plane session lifecycle", () => {
 it("sends recipient-scoped server count and stable range boundaries", async () => {
  const fetchMock = vi.fn()
   .mockResolvedValueOnce(new Response(JSON.stringify({ items: [], page: { hasMore: false }, unreadCount: 150, latestSequence: 1 }), { status: 200, headers: { "Content-Type": "application/json" } }))
-  .mockResolvedValueOnce(new Response(JSON.stringify({ updated: 150, clearedAt: "2026-10-21T00:00:00Z" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+  .mockResolvedValueOnce(new Response(JSON.stringify({ updated: 150, clearedRevision: "9007199254740993" }), { status: 200, headers: { "Content-Type": "application/json" } }));
  const client = createCloudCpClient({ baseUrl: "https://cloud.example.test/", getToken: async () => "token", fetchImpl: fetchMock as typeof fetch });
  const at = "2026-10-20T12:00:00.123456Z";
  const page = await client.listNotifications("org/1", { limit: 1, seenAt: at, seenIds: '["seen"]' });
@@ -472,7 +472,7 @@ it("sends recipient-scoped server count and stable range boundaries", async () =
  expect(url.searchParams.get("seenAt")).toBe(at);
  expect(url.searchParams.get("seenIds")).toBe('["seen"]');
  const boundary = { id: "clicked-local-id", createdAt: at, excludeEqual: true };
- await client.clearNotificationsThrough("org/1", boundary);
+ expect(await client.clearNotificationsThrough("org/1", boundary)).toEqual({ updated: 150, clearedRevision: "9007199254740993" });
  expect(fetchMock.mock.calls[1][0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org%2F1/notifications/read-all");
  expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ through: boundary });
 });

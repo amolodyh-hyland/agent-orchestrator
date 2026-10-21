@@ -19,8 +19,9 @@ vi.mock("../lib/cloud-cp/stream-bridge", () => ({ subscribeNotificationEventsBri
 vi.mock("../lib/cloud-notification-hints", () => ({ subscribeCloudNotificationHints: () => () => undefined }));
 
 const at = (value: string) => Date.parse(value);
-const row = (overrides: Partial<{ id: string; createdAt: string; updatedAt: string; status: "unread" | "read" }> = {}) => ({
+const row = (overrides: Partial<{ revision: string; id: string; createdAt: string; updatedAt: string; status: "unread" | "read" }> = {}) => ({
 	id: "cntf_1",
+	revision: "1",
 	createdAt: "2026-07-21T10:00:00Z",
 	updatedAt: "2026-07-21T10:00:00Z",
 	status: "read" as const,
@@ -67,14 +68,15 @@ describe("isCleared", () => {
 });
 
 it("a later range clear dismisses a previously revived row again", () => {
- const through = { id: "z", createdAt: "2026-07-22T00:00:00Z", clearedAt: at("2026-07-23T00:00:00Z") };
+ const through = { id: "z", createdAt: "2026-07-22T00:00:00Z", clearedRevision: "10" };
  expect(isCleared(row({ status: "read" }), { before: 0, ids: { cntf_1: null }, through })).toBe(true);
- expect(isCleared(row({ status: "unread", updatedAt: "2026-07-24T00:00:00Z" }), { before: 0, ids: { cntf_1: null }, through })).toBe(false);
+ expect(isCleared(row({ status: "unread", revision: "11", updatedAt: "2026-07-24T00:00:00Z" }), { before: 0, ids: { cntf_1: null }, through })).toBe(false);
 });
 
 function cloudRow(overrides: Partial<CloudCpNotification> = {}): CloudCpNotification {
 	return {
 		id: "cntf_1",
+	revision: "1",
 		source: "cloud",
 		orgId: "org-1",
 		type: "ready_to_merge",
@@ -117,7 +119,16 @@ describe("useCloudNotifications clearing", () => {
 			latestSequence: 0,
 		}));
 		markNotificationsRead.mockReset().mockResolvedValue({ updated: 1 });
- clearNotificationsThrough.mockReset().mockResolvedValue({ updated: 150, clearedAt: "2026-10-20T12:00:00Z" });
+ clearNotificationsThrough.mockReset().mockResolvedValue({ updated: 150, clearedRevision: "10" });
+	});
+
+	it("discards unsafe timestamp range markers persisted by older clients", async () => {
+		localStorage.setItem("ao.cloudNotifications.cleared:https://cloud.test:org-1:user-1", JSON.stringify({
+			before: 0, ids: {}, through: { id: "z", createdAt: "2026-07-22T00:00:00Z", clearedAt: at("2026-07-23T00:00:00Z") },
+		}));
+		items = [cloudRow({ status: "unread" })];
+		const { result } = renderCloudNotifications();
+		await waitFor(() => expect(result.current.items[0]?.status).toBe("unread"));
 	});
 
 	it("persists a range boundary covering unloaded Cloud history", async () => {
@@ -131,6 +142,42 @@ describe("useCloudNotifications clearing", () => {
   const saved = JSON.parse(localStorage.getItem("ao.cloudNotifications.cleared:https://cloud.test:org-1:user-1")!);
   expect(isCleared(cloudRow({ id: "unloaded", createdAt: "2026-07-20T00:00:00Z" }), saved)).toBe(true);
  });
+
+	it("keeps a re-raise between commit and clear response visible across remounts", async () => {
+		items = [cloudRow({ status: "unread", revision: "9007199254740994" })];
+		const original = items[0];
+		let reply!: (result: { updated: number; clearedRevision: string }) => void;
+		clearNotificationsThrough.mockImplementation(() => new Promise((resolve) => { reply = resolve; }));
+		const first = renderCloudNotifications();
+		await waitFor(() => expect(first.result.current.items).toHaveLength(1));
+		let clearing!: Promise<void>;
+		act(() => { clearing = first.result.current.clearThrough(original); });
+		// Read transaction commits revision ...995, then the server re-raises
+		// the row before that transaction's HTTP response reaches this window.
+		// Timestamps deliberately tie: bigint revisions must decide visibility.
+		items = [cloudRow({ ...original, status: "unread", revision: "9007199254740996" })];
+		await act(async () => {
+			reply({ updated: 1, clearedRevision: "9007199254740995" });
+			await clearing;
+		});
+		await waitFor(() => expect(first.result.current.items[0]?.status).toBe("unread"));
+		first.unmount();
+		const second = renderCloudNotifications();
+		await waitFor(() => expect(second.result.current.items[0]?.revision).toBe("9007199254740996"));
+		// A later click must not hide the revived generation again.
+		items = items.map((item) => ({ ...item, status: "read", revision: "9007199254740997" }));
+		await act(() => second.result.current.refetch());
+		expect(second.result.current.items).toHaveLength(1);
+	});
+
+	it("does not advance a wider clear when clearing a narrower range again", async () => {
+		const ranges = [
+			{ id: "z", createdAt: "2026-07-23T00:00:00Z", clearedRevision: "10" },
+			{ id: "z", createdAt: "2026-07-21T00:00:00Z", clearedRevision: "20" },
+		];
+		expect(isCleared(row({ status: "unread", revision: "15", createdAt: "2026-07-22T00:00:00Z" }), { before: 0, ids: {}, ranges })).toBe(false);
+		expect(isCleared(row({ status: "read", revision: "19", createdAt: "2026-07-20T00:00:00Z" }), { before: 0, ids: {}, ranges })).toBe(true);
+	});
 
  it("refreshes a second open window when its recipient-scoped read event arrives", async () => {
   items = [cloudRow({ status: "unread" })];

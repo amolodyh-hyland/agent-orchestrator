@@ -378,14 +378,20 @@ func (s *Store) ListNotificationEvents(
 
 func (s *Store) MarkNotificationsRead(
 	ctx context.Context, principal domain.Principal, orgID string, ids []string, through ...domain.NotificationCursor,
-) (int64, error) {
-	var changed int64
+) (domain.NotificationReadResult, error) {
+	var result domain.NotificationReadResult
 	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
 		if ids != nil && len(ids) == 0 {
 			return nil
 		}
-		query := `UPDATE ao_notifications SET status = 'read', updated_at = now()
-   WHERE org_id = $1 AND recipient_user_id = $2 AND status = 'unread'`
+		// Range clearing locks/stamps already-read rows as well: a re-raise
+		// must get a revision after this transaction's marker, even when that
+		// row did not need its read status changed.
+		query := `SELECT id, status FROM ao_notifications
+   WHERE org_id = $1 AND recipient_user_id = $2`
+		if len(through) == 0 {
+			query += ` AND status = 'unread'`
+		}
 		args := []any{orgID, principal.UserID}
 		if ids != nil {
 			query += ` AND id = ANY($3::uuid[])`
@@ -399,18 +405,25 @@ func (s *Store) MarkNotificationsRead(
 			}
 			query += fmt.Sprintf(` AND (created_at, id::text) %s ($%d, $%d)`, op, len(args)-1, len(args))
 		}
-		rows, err := tx.Query(ctx, query+` RETURNING `+notificationReturning, args...)
+		rows, err := tx.Query(ctx, `WITH targeted AS MATERIALIZED (`+query+` ORDER BY id FOR UPDATE)
+   UPDATE ao_notifications notification SET status = 'read', updated_at = now()
+   FROM targeted WHERE notification.id = targeted.id
+   RETURNING `+notificationColumns+`, targeted.status`, args...)
 		if err != nil {
 			return normalizeConstraintError(err)
 		}
 		var updated []domain.Notification
 		for rows.Next() {
 			var item domain.Notification
-			if err := rows.Scan(notificationScanTargets(&item)...); err != nil {
+			var previousStatus string
+			if err := rows.Scan(append(notificationScanTargets(&item), &previousStatus)...); err != nil {
 				rows.Close()
 				return err
 			}
-			updated = append(updated, item)
+			result.ClearedRevision = max(result.ClearedRevision, item.Revision)
+			if previousStatus == "unread" {
+				updated = append(updated, item)
+			}
 		}
 		err = rows.Err()
 		rows.Close()
@@ -430,13 +443,13 @@ func (s *Store) MarkNotificationsRead(
 				return err
 			}
 		}
-		changed = int64(len(updated))
-		if changed > 0 {
+		result.Updated = int64(len(updated))
+		if result.Updated > 0 {
 			_, err = tx.Exec(ctx, `SELECT pg_notify('ao_notification_event', $1)`, orgID)
 		}
 		return err
 	})
-	return changed, err
+	return result, err
 }
 
 const notificationSelect = `SELECT ` + notificationColumns + ` FROM ao_notifications notification`
@@ -446,11 +459,11 @@ const notificationColumns = `notification.id::text, notification.org_id::text,
 	notification.session_id::text, notification.source, notification.type,
 	notification.title, notification.body, notification.dedupe_key,
 	notification.status, notification.source_event_id, notification.metadata,
-	notification.resolved_at, notification.created_at, notification.updated_at`
+	notification.resolved_at, notification.created_at, notification.updated_at, notification.revision`
 
 const notificationReturning = `id::text, org_id::text, recipient_user_id::text,
 	project_id::text, session_id::text, source, type, title, body, dedupe_key,
-	status, source_event_id, metadata, resolved_at, created_at, updated_at`
+	status, source_event_id, metadata, resolved_at, created_at, updated_at, revision`
 
 func scanNotification(row rowScanner, notification *domain.Notification) error {
 	return row.Scan(notificationScanTargets(notification)...)
@@ -463,6 +476,6 @@ func notificationScanTargets(notification *domain.Notification) []any {
 		&notification.Type, &notification.Title, &notification.Body,
 		&notification.DedupeKey, &notification.Status, &notification.EventID,
 		&notification.Metadata, &notification.ResolvedAt,
-		&notification.CreatedAt, &notification.UpdatedAt,
+		&notification.CreatedAt, &notification.UpdatedAt, &notification.Revision,
 	}
 }

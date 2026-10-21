@@ -398,7 +398,7 @@ export interface CloudCpClient {
 	subscribeSessionEvents(orgId: string, sessionId: string, options: CloudCpSessionEventsOptions): Promise<void>;
 	listNotifications(orgId: string, query?: CloudCpNotificationListQuery, options?: CloudCpRequestOptions): Promise<CloudCpNotificationListResponse>;
 	listNotificationEvents(orgId: string, after?: number, options?: CloudCpRequestOptions): Promise<CloudCpNotificationEventsResponse>;
-	clearNotificationsThrough(orgId: string, through: { id: string; createdAt: string; excludeEqual?: boolean }): Promise<{ updated: number; clearedAt: string }>;
+	clearNotificationsThrough(orgId: string, through: { id: string; createdAt: string; excludeEqual?: boolean }): Promise<{ updated: number; clearedRevision: string }>;
  markNotificationsRead(orgId: string, notificationIds?: string[], options?: CloudCpRequestOptions): Promise<{ updated: number }>;
 	subscribeNotificationEvents(orgId: string, options: CloudCpNotificationEventsOptions): Promise<void>;
 

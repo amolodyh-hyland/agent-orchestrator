@@ -146,6 +146,8 @@ export interface CloudCpPageInfo {
 // ---------------------------------------------------------------------------
 
 export interface CloudCpNotification {
+	/** Database mutation revision (string to preserve bigint precision). */
+	revision?: string;
 	id: string;
 	source: "cloud";
 	eventId?: string;

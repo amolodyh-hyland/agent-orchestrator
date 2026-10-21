@@ -1500,6 +1500,8 @@ export interface components {
             duplicate: boolean;
         };
         CloudNotification: {
+            /** @description Database mutation revision; optional for older servers and durable snapshots. */
+            revision?: string;
             /** Format: uuid */
             id: string;
             /** Format: uuid */
@@ -5673,12 +5675,19 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Unread notifications for the current recipient were marked read, optionally bounded inclusively by (createdAt, id). The response includes updated and the server clearedAt timestamp. */
+            /** @description Unread notifications for the current recipient were marked read, optionally bounded inclusively by (createdAt, id). The response includes updated and the transaction-owned clearedRevision. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        /** Format: int64 */
+                        updated: number;
+                        /** @description Greatest row revision stamped inside the transaction; 0 for an empty range. */
+                        clearedRevision: string;
+                    };
+                };
             };
             default: components["responses"]["Error"];
         };

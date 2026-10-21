@@ -69,7 +69,13 @@ type NotificationAcceptance struct {
 	Duplicate bool
 }
 
+type NotificationReadResult struct {
+	Updated         int64 `json:"updated"`
+	ClearedRevision int64 `json:"clearedRevision,string"`
+}
+
 type Notification struct {
+	Revision        int64           `json:"revision,string"`
 	ID              string          `json:"id"`
 	OrgID           string          `json:"orgId"`
 	RecipientUserID string          `json:"recipientUserId"`

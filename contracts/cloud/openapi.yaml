@@ -2255,7 +2255,18 @@ paths:
                     createdAt: {type: string, format: date-time}
       responses:
         "200":
-          description: Unread notifications for the current recipient were marked read, optionally bounded inclusively by (createdAt, id). The response includes updated and the server clearedAt timestamp.
+          description: Unread notifications for the current recipient were marked read, optionally bounded inclusively by (createdAt, id). The response includes updated and the transaction-owned clearedRevision.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [updated, clearedRevision]
+                properties:
+                  updated: {type: integer, format: int64}
+                  clearedRevision:
+                    type: string
+                    pattern: '^[0-9]+$'
+                    description: Greatest row revision stamped inside the transaction; 0 for an empty range.
         default:
           $ref: "#/components/responses/Error"
 components:
@@ -2474,6 +2485,10 @@ components:
       additionalProperties: false
       required: [id, orgId, recipientUserId, source, type, title, body, status, metadata, createdAt, updatedAt]
       properties:
+        revision:
+          type: string
+          pattern: '^[0-9]+$'
+          description: Database mutation revision; optional for older servers and durable snapshots.
         id:
           type: string
           format: uuid

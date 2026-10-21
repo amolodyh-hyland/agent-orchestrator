@@ -129,7 +129,7 @@ func TestListNotificationsPassesRecipientAndFilterAndReturnsCloudPage(t *testing
 
 func TestNotificationReadHandlersKeepUserAndOrgScope(t *testing.T) {
 	t.Parallel()
-	store := &notificationHandlerStore{}
+	store := &notificationHandlerStore{readResult: domain.NotificationReadResult{ClearedRevision: 9007199254740993}}
 	srv := New(Options{Store: store})
 
 	recorder := httptest.NewRecorder()
@@ -146,6 +146,9 @@ func TestNotificationReadHandlersKeepUserAndOrgScope(t *testing.T) {
 	srv.markAllNotificationsRead(recorder, req)
 	if recorder.Code != http.StatusOK || store.readIDs != nil {
 		t.Fatalf("read all status=%d ids=%v body=%s", recorder.Code, store.readIDs, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"clearedRevision":"9007199254740993"`) || strings.Contains(recorder.Body.String(), "clearedAt") {
+		t.Fatalf("response lost transaction-owned revision: %s", recorder.Body.String())
 	}
 }
 
@@ -187,6 +190,7 @@ type notificationHandlerStore struct {
 	listFilter    domain.NotificationFilter
 	readIDs       []string
 	readErr       error
+	readResult    domain.NotificationReadResult
 }
 
 func (s *notificationHandlerStore) AcceptNotificationEvent(_ context.Context, _, _, _ string, _ int64, _ domain.AgentNotificationEvent) (domain.NotificationAcceptance, error) {
@@ -203,10 +207,12 @@ func (s *notificationHandlerStore) ListNotificationEvents(context.Context, domai
 	return nil, false, nil
 }
 
-func (s *notificationHandlerStore) MarkNotificationsRead(_ context.Context, _ domain.Principal, _ string, ids []string, through ...domain.NotificationCursor) (int64, error) {
+func (s *notificationHandlerStore) MarkNotificationsRead(_ context.Context, _ domain.Principal, _ string, ids []string, through ...domain.NotificationCursor) (domain.NotificationReadResult, error) {
 	s.readIDs = ids
 	if s.readErr != nil {
-		return 0, s.readErr
+		return domain.NotificationReadResult{}, s.readErr
 	}
-	return int64(len(ids)), nil
+	result := s.readResult
+	result.Updated = int64(len(ids))
+	return result, nil
 }

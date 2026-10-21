@@ -81,7 +81,7 @@ export function useCloudNotifications(
 	}, [clears, query.data?.items]);
 
 	// A cleared row the control plane re-raises (in place: status back to unread,
-	// updated_at bumped) is revived for good, so marking it read later cannot
+	// revision advanced) is revived for good, so marking it read later cannot
 	// hide it again.
 	useEffect(() => {
 		const state = parseClears(readClearsRaw(storageKey));
@@ -165,14 +165,11 @@ export function useCloudNotifications(
 			if (!ready || orgId === "") return;
 			const result = await client.clearNotificationsThrough(orgId, boundary);
 			const previous = parseClears(readClearsRaw(storageKey));
-			const through = { ...boundary, clearedAt: timestamp(result.clearedAt) };
-			const old = previous.through;
-			if (old && compareBoundary(through, old) === 0)
-				through.excludeEqual = Boolean(
-					old.excludeEqual && through.excludeEqual,
-				);
-			if (!old || compareBoundary(through, old) >= 0)
-				writeClears(storageKey, { ...previous, through });
+			const through = { ...boundary, clearedRevision: result.clearedRevision };
+			// Keep distinct ranges: a later, narrower clear must not advance the
+			// revision of a wider range and hide unrelated re-raised rows.
+			const ranges = clearRanges(previous).filter((old) => !covers(through, old));
+			writeClears(storageKey, { ...previous, through: undefined, ranges: [...ranges, through] });
 			await invalidateAll();
 		},
 		[client, invalidateAll, orgId, ready, storageKey],
@@ -183,10 +180,26 @@ export function useCloudNotifications(
 /**
  * `before` hides every row created at or before it (clear all). `ids` holds
  * per-row markers: the row's server `updatedAt` when it was cleared, or null
- * for a row that was re-raised after a clear and must stay visible.
+ * for a row that was re-raised after a clear and must stay visible. Range clears
+ * use database revisions and retain independent boundaries for repeated clears.
  */
-export type CloudClears = { through?: { id: string; createdAt: string; clearedAt: number; excludeEqual?: boolean }; before: number; ids: Record<string, number | null> };
-type CloudNotificationRow = { id: string; createdAt: string; updatedAt: string; status: "unread" | "read" };
+type CloudRangeClear = { id: string; createdAt: string; clearedRevision: string; excludeEqual?: boolean };
+export type CloudClears = { through?: CloudRangeClear; ranges?: CloudRangeClear[]; before: number; ids: Record<string, number | null> };
+type CloudNotificationRow = { id: string; createdAt: string; updatedAt: string; status: "unread" | "read"; revision?: string };
+
+// Discard the old wall-clock range marker on upgrade: it cannot distinguish a
+// re-raise committed before the clear response was generated. Failing open is
+// safer than persistently hiding an unread generation.
+function clearRanges(clears: CloudClears): CloudRangeClear[] {
+	return [...(Array.isArray(clears.ranges) ? clears.ranges : []), ...(clears.through ? [clears.through] : [])]
+		.filter((range) => range && typeof range.clearedRevision === "string" && /^\d+$/.test(range.clearedRevision));
+}
+
+function covers(outer: CloudRangeClear, inner: CloudRangeClear): boolean {
+	const order = compareBoundary(outer, inner);
+	return BigInt(outer.clearedRevision) >= BigInt(inner.clearedRevision) &&
+		(order > 0 || (order === 0 && (!outer.excludeEqual || Boolean(inner.excludeEqual))));
+}
 
 // Keep the most recent per-row markers; older rows fall under the clear-all
 // cutoff anyway. Capped so the stored map cannot grow without bound.
@@ -200,29 +213,33 @@ const timestamp = (value: string) => Date.parse(value) || 0;
 function clearMarker(
 	item: CloudNotificationRow,
 	clears: CloudClears,
-): number | null | undefined {
-	const through = clears.through;
-	const inRange =
-		through &&
-		(compareBoundary(item, through) < 0 ||
-			(compareBoundary(item, through) === 0 && !through.excludeEqual));
-	const rangeMarker = inRange ? through.clearedAt : undefined;
-	if (item.id in clears.ids) {
-		const marker = clears.ids[item.id];
-		if (
-			rangeMarker !== undefined &&
-			(marker !== null || timestamp(item.updatedAt) <= rangeMarker)
-		)
-			return Math.max(rangeMarker, marker ?? 0);
-		return marker;
+): number | null | { revision: bigint } | undefined {
+	let rangeRevision: bigint | undefined;
+	for (const range of clearRanges(clears)) {
+		const order = compareBoundary(item, range);
+		if (order < 0 || (order === 0 && !range.excludeEqual)) {
+			const revision = BigInt(range.clearedRevision);
+			if (rangeRevision === undefined || revision > rangeRevision) rangeRevision = revision;
+		}
 	}
-	if (rangeMarker !== undefined) return rangeMarker;
+	if (rangeRevision !== undefined && item.revision && /^\d+$/.test(item.revision)) {
+		// The database stamps every selected row while holding its lock. A
+		// later mutation necessarily has a greater revision, including a
+		// re-raise between commit and receipt of the clear response.
+		if (BigInt(item.revision) <= rangeRevision) return { revision: rangeRevision };
+		if (item.id in clears.ids) return clears.ids[item.id];
+		return { revision: rangeRevision };
+	}
+	if (item.id in clears.ids) return clears.ids[item.id];
 	return timestamp(item.createdAt) <= clears.before ? clears.before : undefined;
 }
 
 function isRevived(item: CloudNotificationRow, clears: CloudClears): boolean {
 	const marker = clearMarker(item, clears);
-	return typeof marker === "number" && item.status === "unread" && timestamp(item.updatedAt) > marker;
+	if (item.status !== "unread" || marker === undefined || marker === null) return false;
+	return typeof marker === "number"
+		? timestamp(item.updatedAt) > marker
+		: BigInt(item.revision!) > marker.revision;
 }
 
 export function isCleared(item: CloudNotificationRow, clears: CloudClears): boolean {
@@ -254,6 +271,7 @@ function parseClears(raw: string): CloudClears {
 		const parsed = JSON.parse(raw) as Partial<CloudClears>;
 		return {
 			through: parsed.through,
+			ranges: parsed.ranges,
 			before: typeof parsed.before === "number" ? parsed.before : 0,
 			ids: parsed.ids && typeof parsed.ids === "object" ? parsed.ids : {},
 		};
