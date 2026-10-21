@@ -1,3 +1,4 @@
+import { createMainProcessDelegationAuthority } from "./main/multica-delegation-authority";
 import { registerProjectContextIpc } from "./main/project-context-ipc";
 import { syncMacWindowButtons } from "./main/window-chrome";
 import { MAC_TITLEBAR_HEIGHT, MAC_WINDOW_BUTTON_X, MAC_WINDOW_BUTTON_RADIUS } from "./shared/window-chrome";
@@ -1686,6 +1687,11 @@ if (process.platform !== "win32") {
 // AO_APP_RUN_ID in the environment wins, which lets a test or a wrapper pin it.
 const appRunId = process.env.AO_APP_RUN_ID ?? `apprun-${randomUUID()}`;
 const browserRuntimeToken = randomBytes(32).toString("base64url");
+// Private composition-root capability for TK-MA66's explicit user-action flow.
+const delegationConfirmation = (() => {
+	const key = randomBytes(32);
+	return { key, authority: createMainProcessDelegationAuthority(key) };
+})();
 let stagedBundledTmuxBinary: string | null = null;
 
 async function ensureBundledTmuxStaged(): Promise<void> {
@@ -2481,7 +2487,7 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 	// worker processes when it spawns them.
 	if (child.stdin) {
 		child.stdin.on("error", () => undefined);
-		child.stdin.end(`${browserRuntimeToken}\n`);
+		child.stdin.end(`${JSON.stringify({ browserToken: browserRuntimeToken, delegationKey: delegationConfirmation.key.toString("base64url") })}\n`);
 	} else {
 		console.warn("AO: browser runtime token handoff pipe was unavailable");
 	}

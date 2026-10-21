@@ -214,6 +214,8 @@ var shippedMigrations = map[int64]string{
 	215: "0215_session_harness_releases.sql",
 	216: "0216_project_context_snapshots.sql",
 	217: "0217_session_permission_ceiling.sql",
+	218: "0218_multica_delegations.sql",
+	219: "0219_multica_confirmation_verification.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

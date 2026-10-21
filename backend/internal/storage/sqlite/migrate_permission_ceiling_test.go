@@ -3,7 +3,8 @@ package sqlite
 import "testing"
 
 func TestPermissionCeilingMigrationIsVersion217(t *testing.T) {
-	db := openMigratedTestDB(t)
+	db := openMigratedDatabaseCopy(t, 216)
+	upTo(t, db, 217)
 	var version int64
 	if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&version); err != nil || version != 217 {
 		t.Fatalf("fresh database version = %d err=%v, want 217", version, err)

@@ -1,0 +1,36 @@
+{
+  "requestId": "request-1",
+  "projectId": "project-1",
+  "taskId": "task-1",
+  "confirmationId": "approval-1",
+  "confirmedBy": "user-1",
+  "confirmedAt": "2026-10-21T12:00:00Z",
+  "rerunOf": "",
+  "intent": {
+    "binding": {
+      "serverKey": "local",
+      "origin": "http://127.0.0.1:4444",
+      "workspaceId": "10000000-0000-4000-8000-000000000001"
+    },
+    "payload": {
+      "agent_id": "20000000-0000-4000-8000-000000000002",
+      "expected_runtime_id": "30000000-0000-4000-8000-000000000003",
+      "source": {
+        "system": "ao",
+        "project_id": "project-1",
+        "task_id": "task-1"
+      },
+      "task": {
+        "title": "Review",
+        "instructions": "Review approved changes"
+      }
+    }
+  },
+  "payloadHash": "62c05df010f008d536a6e50aca46e6a39e334b906a8cef9b084b0f15434a4328",
+  "version": 0,
+  "state": "submitting",
+  "failureCode": null,
+  "attempted": false,
+  "remote": null,
+  "cancellation": null
+}

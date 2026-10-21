@@ -258,6 +258,7 @@ func TestLANManagerBlocksLoopbackOnlyControlRoutes(t *testing.T) {
 		"/internal/telemetry/cli-invoked",
 		"/internal/agent-switch-observability/prepare-disable",
 		"/internal/agent-switch-observability/apply-policy",
+		"/internal/multica-delegation-journal",
 		"/api/v1/mobile/status",
 		"/api/v1/mobile/keep-awake",
 		"/api/v1/mobile/devices",
