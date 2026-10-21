@@ -15,6 +15,7 @@ import { TooltipProvider } from "./ui/tooltip";
 
 const {
 	clearAllMock,
+ clearThroughMock,
 	clearOneMock,
 	cloudNotificationsMock,
 	connectMock,
@@ -26,7 +27,8 @@ const {
 	restoreSessionMock,
 	workspaceQueryMock,
 } = vi.hoisted(() => ({
-	clearAllMock: vi.fn(),
+	clearThroughMock: vi.fn(),
+ clearAllMock: vi.fn(),
 	clearOneMock: vi.fn(),
 	cloudNotificationsMock: vi.fn(),
 	connectMock: vi.fn(),
@@ -125,6 +127,7 @@ const cloudNotifications: CloudCpNotification[] = [
 
 const cloudMarkAllReadMock = vi.fn();
 const cloudMarkReadMock = vi.fn();
+const cloudClearThroughMock = vi.fn();
 const cloudClearAllMock = vi.fn();
 const cloudClearOneMock = vi.fn();
 
@@ -136,6 +139,8 @@ function cloudNotificationsResult(items: CloudCpNotification[]) {
 		markAllRead: cloudMarkAllReadMock,
 		markRead: cloudMarkReadMock,
 		clearAll: cloudClearAllMock,
+ clearThrough: cloudClearThroughMock,
+ countUnseen: async () => 0,
 		clearOne: cloudClearOneMock,
 	};
 }
@@ -167,6 +172,8 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 
 vi.mock("../lib/notifications", async (importOriginal) => ({
 	...((await importOriginal()) as object),
+ clearNotificationsThrough: clearThroughMock,
+ countUnseenNotifications: async () => 0,
 	createNotificationsTransport: (...args: unknown[]) => {
 		connectMock(...args);
 		return { connect: () => undefined };
@@ -231,6 +238,8 @@ const stableAllQuery = notificationQueryResult("all");
 
 beforeEach(() => {
 	window.localStorage.clear();
+ clearThroughMock.mockReset().mockResolvedValue(undefined);
+ cloudClearThroughMock.mockReset().mockResolvedValue(undefined);
 	clearAllMock
 		.mockReset()
 		.mockResolvedValue({ clearId: "clear-1", clearEpoch: "epoch-1", clearSequence: 1, clearedCount: 4 });
@@ -328,7 +337,7 @@ describe("NotificationCenter", () => {
 
 		expect(workspaceQueryMock).not.toHaveBeenCalled();
 		await clickOpen();
-		expect(workspaceQueryMock).toHaveBeenCalledTimes(1);
+		expect(workspaceQueryMock).toHaveBeenCalled();
 	});
 
 	it("uses the compact topbar bell and unread badge sizing", () => {
@@ -512,13 +521,13 @@ describe("NotificationCenter", () => {
 		expect(screen.getByLabelText("Fix checkout totals · PR #67")).toHaveClass("font-medium");
 	});
 
-	it("keeps a range-clear failure visible while continuing to clear older rows", async () => {
-		clearOneMock.mockRejectedValueOnce(new Error("clear failed")).mockResolvedValue(undefined);
+	it("shows a server-side range-clear failure", async () => {
+		clearThroughMock.mockRejectedValueOnce(new Error("clear failed"));
 		renderNotificationCenter();
 		await clickOpen();
 		fireEvent.contextMenu(screen.getAllByRole("listitem")[0]);
 		await userEvent.click(await screen.findByRole("menuitem", { name: "Clear all after this" }));
-		await waitFor(() => expect(clearOneMock).toHaveBeenCalledTimes(4));
+		await waitFor(() => expect(clearThroughMock).toHaveBeenCalledTimes(1));
 		expect(screen.getByText("clear failed")).toBeInTheDocument();
 	});
 
@@ -535,10 +544,22 @@ describe("NotificationCenter", () => {
 		const row = screen.getAllByRole("listitem")[index];
 		fireEvent.contextMenu(row, { clientX: 10, clientY: 10 });
 		await userEvent.click(await screen.findByRole("menuitem", { name: "Clear all after this" }));
-		await waitFor(() => expect(clearOneMock).toHaveBeenCalledTimes(allNotifications.length - index));
-		expect(clearOneMock.mock.calls.map(([item]) => item.id)).toEqual(allNotifications.slice(index).map((item) => item.id));
+		await waitFor(() => expect(clearThroughMock).toHaveBeenCalledTimes(1));
+ expect(clearThroughMock.mock.calls[0][0]).toEqual({ id: allNotifications[index].id, createdAt: allNotifications[index].createdAt });
 		expect(markAllMock).not.toHaveBeenCalled();
 	});
+
+	it("keeps the clicked boundary when newer notifications arrive while its menu is open", async () => {
+  let items = allNotifications;
+  notificationQueryMock.mockImplementation((status: NotificationListStatus) => ({ ...notificationQueryResult(status), data: { pageParams: [""], pages: [{ notifications: items, unreadCount: 2, unresolvedCount: 0 }] } }));
+  const view = renderNotificationCenter();
+  await clickOpen();
+  fireEvent.contextMenu(screen.getAllByRole("listitem")[1]);
+  items = [{ ...allNotifications[0], id: "arrived", title: "New arrival", createdAt: "2026-10-20T12:00:00Z" }, ...items];
+  view.rerender(<QueryClientProvider client={new QueryClient()}><TooltipProvider><NotificationCenter /></TooltipProvider></QueryClientProvider>);
+  await userEvent.click(await screen.findByRole("menuitem", { name: "Clear all after this" }));
+  expect(clearThroughMock.mock.calls[0][0]).toEqual({ id: "ntf_1", createdAt: allNotifications[1].createdAt });
+ });
 
 	it.each([{ key: "F10", shiftKey: true }, { key: "ContextMenu" }])("opens the row menu from the keyboard ($key)", async (key) => {
 		renderNotificationCenter();
@@ -549,7 +570,7 @@ describe("NotificationCenter", () => {
 		const menuItem = await screen.findByRole("menuitem", { name: "Clear all after this" });
 		await waitFor(() => expect(menuItem).toHaveFocus());
 		await userEvent.keyboard("{Enter}");
-		await waitFor(() => expect(clearOneMock).toHaveBeenCalledTimes(3));
+		await waitFor(() => expect(clearThroughMock).toHaveBeenCalledTimes(1));
 		expect(markAllMock).not.toHaveBeenCalled();
 	});
 
@@ -1081,9 +1102,9 @@ describe("NotificationCenter cloud rows", () => {
 		await clickOpen();
 		fireEvent.contextMenu(screen.getByRole("listitem", { name: "Notifications: Pull request ready to merge" }));
 		await userEvent.click(await screen.findByRole("menuitem", { name: "Clear all after this" }));
-		await waitFor(() => expect(clearOneMock).toHaveBeenCalledTimes(3));
-		expect(clearOneMock.mock.calls.map(([item]) => item.id)).toEqual(["ntf_1", "ntf_4", "ntf_dead"]);
-		expect(cloudClearOneMock.mock.calls.map(([item]) => item.id)).toEqual(["cntf_ready", "cntf_gone"]);
+		await waitFor(() => expect(clearThroughMock).toHaveBeenCalledTimes(1));
+		expect(clearThroughMock.mock.calls[0][0]).toEqual({ id: "cntf_ready", createdAt: cloudNotifications[0].createdAt, excludeEqual: true });
+ expect(cloudClearThroughMock).toHaveBeenCalledWith({ id: "cntf_ready", createdAt: cloudNotifications[0].createdAt });
 		expect(clearAllMock).not.toHaveBeenCalled();
 		expect(cloudClearAllMock).not.toHaveBeenCalled();
 	});

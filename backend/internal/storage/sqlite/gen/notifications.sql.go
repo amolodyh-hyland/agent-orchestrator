@@ -42,6 +42,25 @@ func (q *Queries) CountUnreadNotifications(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const countUnreadNotificationsSince = `-- name: CountUnreadNotificationsSince :one
+SELECT count(*) FROM notifications
+WHERE status = 'unread' AND dismissed_at IS NULL
+  AND (created_at > ?1
+    OR (created_at = ?1 AND id NOT IN (SELECT value FROM json_each(?2))))
+`
+
+type CountUnreadNotificationsSinceParams struct {
+	SinceAt time.Time
+	SeenIds interface{}
+}
+
+func (q *Queries) CountUnreadNotificationsSince(ctx context.Context, arg CountUnreadNotificationsSinceParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countUnreadNotificationsSince, arg.SinceAt, arg.SeenIds)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countUnresolvedNotifications = `-- name: CountUnresolvedNotifications :one
 SELECT COUNT(*)
 FROM notifications
@@ -199,6 +218,27 @@ WHERE id = ?
 
 func (q *Queries) DismissNotification(ctx context.Context, id string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, dismissNotification, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const dismissNotificationsThrough = `-- name: DismissNotificationsThrough :execrows
+UPDATE notifications SET dismissed_at = CURRENT_TIMESTAMP, status = 'read'
+WHERE dismissed_at IS NULL
+  AND (created_at < ?1
+    OR (created_at = ?1 AND (id < ?2 OR (id = ?2 AND NOT ?3))))
+`
+
+type DismissNotificationsThroughParams struct {
+	ThroughAt    time.Time
+	ThroughID    string
+	ExcludeEqual interface{}
+}
+
+func (q *Queries) DismissNotificationsThrough(ctx context.Context, arg DismissNotificationsThroughParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, dismissNotificationsThrough, arg.ThroughAt, arg.ThroughID, arg.ExcludeEqual)
 	if err != nil {
 		return 0, err
 	}

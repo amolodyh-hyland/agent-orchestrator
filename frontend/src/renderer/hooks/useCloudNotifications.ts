@@ -1,3 +1,4 @@
+import { compareNotificationBoundary as compareBoundary } from "../lib/notification-order";
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { subscribeCloudNotificationHints } from "../lib/cloud-notification-hints";
@@ -43,7 +44,7 @@ export function useCloudNotifications(
 		// title/body. A hint arrives over the terminal WebSocket before the durable
 		// inbox row commits, so it acts as a low-latency refetch trigger; REST/SSE
 		// remain the recovery source after a reconnect.
-		const refresh = () => { void queryClient.invalidateQueries({ queryKey: notificationsKey }); };
+		const refresh = () => { void queryClient.invalidateQueries({ queryKey: notificationsKey }); void queryClient.invalidateQueries({ queryKey: ["notification-badge", `cloud:${base}:${orgId}:${userId}`] }); };
 		const stopHints = subscribeCloudNotificationHints(refresh);
 		let after: number | undefined;
 		const reconnect = async () => {
@@ -122,7 +123,7 @@ export function useCloudNotifications(
 		const ids: CloudClears["ids"] = {};
 		for (const [id, marker] of Object.entries(state.ids)) if (marker !== null) ids[id] = marker;
 		for (const item of loaded) ids[item.id] = timestamp(item.updatedAt);
-		writeClears(storageKey, { before: newest, ids });
+		writeClears(storageKey, { ...state, before: newest, ids });
 		try {
 			await markAllRead();
 		} catch (error) {
@@ -143,7 +144,40 @@ export function useCloudNotifications(
 			throw error;
 		}
 	}, [markRead, orgId, ready, storageKey]);
-	return { ...query, items, badgeKey: `cloud:${base}:${orgId}:${userId}`, markAllRead, markRead, clearAll, clearOne };
+	const countUnseen = useCallback(
+		async (seen: { at: number; ids: string[]; timestamp?: string }) => {
+			if (!ready || orgId === "") return 0;
+			const page = await client.listNotifications(orgId, {
+				limit: 1,
+				seenAt: seen.timestamp ?? new Date(seen.at).toISOString(),
+				seenIds: JSON.stringify(seen.ids),
+			});
+			return page.unreadCount;
+		},
+		[client, orgId, ready],
+	);
+	const clearThrough = useCallback(
+		async (boundary: {
+			id: string;
+			createdAt: string;
+			excludeEqual?: boolean;
+		}) => {
+			if (!ready || orgId === "") return;
+			const result = await client.clearNotificationsThrough(orgId, boundary);
+			const previous = parseClears(readClearsRaw(storageKey));
+			const through = { ...boundary, clearedAt: timestamp(result.clearedAt) };
+			const old = previous.through;
+			if (old && compareBoundary(through, old) === 0)
+				through.excludeEqual = Boolean(
+					old.excludeEqual && through.excludeEqual,
+				);
+			if (!old || compareBoundary(through, old) >= 0)
+				writeClears(storageKey, { ...previous, through });
+			await invalidateAll();
+		},
+		[client, invalidateAll, orgId, ready, storageKey],
+	);
+	return { ...query, items, countUnseen, clearThrough, badgeKey: `cloud:${base}:${orgId}:${userId}`, markAllRead, markRead, clearAll, clearOne };
 }
 
 /**
@@ -151,7 +185,7 @@ export function useCloudNotifications(
  * per-row markers: the row's server `updatedAt` when it was cleared, or null
  * for a row that was re-raised after a clear and must stay visible.
  */
-export type CloudClears = { before: number; ids: Record<string, number | null> };
+export type CloudClears = { through?: { id: string; createdAt: string; clearedAt: number; excludeEqual?: boolean }; before: number; ids: Record<string, number | null> };
 type CloudNotificationRow = { id: string; createdAt: string; updatedAt: string; status: "unread" | "read" };
 
 // Keep the most recent per-row markers; older rows fall under the clear-all
@@ -163,8 +197,26 @@ const clearStorageKey = (base: string, orgId: string, userId: string) =>
 
 const timestamp = (value: string) => Date.parse(value) || 0;
 
-function clearMarker(item: CloudNotificationRow, clears: CloudClears): number | null | undefined {
-	if (item.id in clears.ids) return clears.ids[item.id];
+function clearMarker(
+	item: CloudNotificationRow,
+	clears: CloudClears,
+): number | null | undefined {
+	const through = clears.through;
+	const inRange =
+		through &&
+		(compareBoundary(item, through) < 0 ||
+			(compareBoundary(item, through) === 0 && !through.excludeEqual));
+	const rangeMarker = inRange ? through.clearedAt : undefined;
+	if (item.id in clears.ids) {
+		const marker = clears.ids[item.id];
+		if (
+			rangeMarker !== undefined &&
+			(marker !== null || timestamp(item.updatedAt) <= rangeMarker)
+		)
+			return Math.max(rangeMarker, marker ?? 0);
+		return marker;
+	}
+	if (rangeMarker !== undefined) return rangeMarker;
 	return timestamp(item.createdAt) <= clears.before ? clears.before : undefined;
 }
 
@@ -201,6 +253,7 @@ function parseClears(raw: string): CloudClears {
 	try {
 		const parsed = JSON.parse(raw) as Partial<CloudClears>;
 		return {
+			through: parsed.through,
 			before: typeof parsed.before === "number" ? parsed.before : 0,
 			ids: parsed.ids && typeof parsed.ids === "object" ? parsed.ids : {},
 		};
@@ -214,7 +267,7 @@ function writeClears(storageKey: string, clears: CloudClears) {
 	const ids = Object.entries(clears.ids)
 		.sort(([, a], [, b]) => rank(b) - rank(a))
 		.slice(0, MAX_CLEARED_IDS);
-	restoreClears(storageKey, JSON.stringify({ before: clears.before, ids: Object.fromEntries(ids) }));
+	restoreClears(storageKey, JSON.stringify({ ...clears, ids: Object.fromEntries(ids) }));
 }
 
 function restoreClears(storageKey: string, raw: string) {

@@ -280,3 +280,23 @@ func targetForRecord(rec domain.NotificationRecord) Target {
 	}
 	return Target{Kind: TargetSession, SessionID: rec.SessionID}
 }
+
+func (m *Manager) CountUnseen(ctx context.Context, at time.Time, ids []string) (int64, error) {
+	if at.IsZero() {
+		return m.store.CountUnreadNotifications(ctx)
+	}
+	return m.store.CountUnreadNotificationsSince(ctx, at, ids)
+}
+
+func (m *Manager) ClearThrough(ctx context.Context, boundary domain.NotificationBoundary) (int64, error) {
+	if boundary.ID == "" || boundary.CreatedAt.IsZero() {
+		return 0, apierr.Invalid("INVALID_NOTIFICATION_BOUNDARY", "Notification id and creation time are required", nil)
+	}
+	m.barrier.Lock()
+	defer m.barrier.Unlock()
+	count, err := m.store.ClearNotificationsThrough(ctx, boundary)
+	if err == nil && count > 0 {
+		m.publishRead(ctx)
+	}
+	return count, err
+}

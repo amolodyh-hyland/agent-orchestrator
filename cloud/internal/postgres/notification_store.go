@@ -316,12 +316,16 @@ func (s *Store) ListNotifications(
 			last := page.Items[len(page.Items)-1]
 			page.NextCursor = &domain.NotificationCursor{CreatedAt: last.CreatedAt, ID: last.ID}
 		}
+		seenIDs := filter.SeenIDs
+		if seenIDs == nil {
+			seenIDs = []string{}
+		}
 		return tx.QueryRow(ctx, `
-			SELECT count(*) FILTER (WHERE status = 'unread'),
+			SELECT count(*) FILTER (WHERE status = 'unread' AND (updated_at > $3 OR (updated_at = $3 AND NOT id::text = ANY($4::text[])))),
 				COALESCE((SELECT max(sequence) FROM ao_notification_events
 					WHERE org_id = $1 AND recipient_user_id = $2), 0)
 			FROM ao_notifications
-			WHERE org_id = $1 AND recipient_user_id = $2`, orgID, principal.UserID,
+			WHERE org_id = $1 AND recipient_user_id = $2`, orgID, principal.UserID, filter.SeenAt, seenIDs,
 		).Scan(&page.UnreadCount, &page.LatestSequence)
 	})
 	return page, err
@@ -373,32 +377,64 @@ func (s *Store) ListNotificationEvents(
 }
 
 func (s *Store) MarkNotificationsRead(
-	ctx context.Context,
-	principal domain.Principal,
-	orgID string,
-	ids []string,
+	ctx context.Context, principal domain.Principal, orgID string, ids []string, through ...domain.NotificationCursor,
 ) (int64, error) {
 	var changed int64
 	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
 		if ids != nil && len(ids) == 0 {
 			return nil
 		}
-		query := `
-			UPDATE ao_notifications
-			SET status = 'read', updated_at = now()
-			WHERE org_id = $1 AND recipient_user_id = $2
-			  AND status = 'unread'`
+		query := `UPDATE ao_notifications SET status = 'read', updated_at = now()
+   WHERE org_id = $1 AND recipient_user_id = $2 AND status = 'unread'`
 		args := []any{orgID, principal.UserID}
 		if ids != nil {
 			query += ` AND id = ANY($3::uuid[])`
 			args = append(args, ids)
 		}
-		tag, err := tx.Exec(ctx, query, args...)
+		if len(through) > 0 {
+			args = append(args, through[0].CreatedAt, through[0].ID)
+			op := "<="
+			if through[0].ExcludeEqual {
+				op = "<"
+			}
+			query += fmt.Sprintf(` AND (created_at, id::text) %s ($%d, $%d)`, op, len(args)-1, len(args))
+		}
+		rows, err := tx.Query(ctx, query+` RETURNING `+notificationReturning, args...)
 		if err != nil {
 			return normalizeConstraintError(err)
 		}
-		changed = tag.RowsAffected()
-		return nil
+		var updated []domain.Notification
+		for rows.Next() {
+			var item domain.Notification
+			if err := rows.Scan(notificationScanTargets(&item)...); err != nil {
+				rows.Close()
+				return err
+			}
+			updated = append(updated, item)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		for _, item := range updated {
+			snapshot, err := json.Marshal(item)
+			if err != nil {
+				return err
+			}
+			_, err = tx.Exec(ctx, `INSERT INTO ao_notification_events
+    (org_id, recipient_user_id, notification_id, kind, source_event_id, snapshot)
+    VALUES ($1, $2, $3, $4, $5, $6)`, orgID, principal.UserID, item.ID,
+				string(domain.NotificationEventUpdated), "read:"+item.ID, snapshot)
+			if err != nil {
+				return err
+			}
+		}
+		changed = int64(len(updated))
+		if changed > 0 {
+			_, err = tx.Exec(ctx, `SELECT pg_notify('ao_notification_event', $1)`, orgID)
+		}
+		return err
 	})
 	return changed, err
 }

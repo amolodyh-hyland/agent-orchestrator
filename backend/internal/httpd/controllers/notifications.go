@@ -25,6 +25,8 @@ type NotificationService interface {
 	MarkAllRead(ctx context.Context, ids []string) (int64, error)
 	Delete(ctx context.Context, id string) (notificationsvc.Notification, error)
 	ClearAll(ctx context.Context) (notificationsvc.ClearResult, error)
+	CountUnseen(context.Context, time.Time, []string) (int64, error)
+	ClearThrough(context.Context, domain.NotificationBoundary) (int64, error)
 }
 
 // NotificationStream is the live notification stream used by SSE clients.
@@ -41,6 +43,8 @@ type NotificationsController struct {
 // Register mounts bounded notification REST routes on the supplied router.
 func (c *NotificationsController) Register(r chi.Router) {
 	r.Get("/notifications", c.list)
+	r.Get("/notifications/unseen-count", c.countUnseen)
+	r.Post("/notifications/clear-through", c.clearThrough)
 	r.Post("/notifications/read-all", c.markAllRead)
 	r.Patch("/notifications/{id}", c.markRead)
 	r.Delete("/notifications/{id}", c.delete)
@@ -309,4 +313,48 @@ func notificationTargetFromRecord(rec domain.NotificationRecord) NotificationTar
 		return NotificationTarget{Kind: "pr", SessionID: string(rec.SessionID), PRURL: rec.PRURL}
 	}
 	return NotificationTarget{Kind: "session", SessionID: string(rec.SessionID)}
+}
+
+func (c *NotificationsController) countUnseen(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/notifications/unseen-count")
+		return
+	}
+	var at time.Time
+	var ids []string
+	var err error
+	if raw := r.URL.Query().Get("since"); raw != "" {
+		at, err = time.Parse(time.RFC3339Nano, raw)
+	}
+	if raw := r.URL.Query().Get("seenIds"); err == nil && raw != "" {
+		err = json.Unmarshal([]byte(raw), &ids)
+	}
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_QUERY", "Invalid badge watermark", nil)
+		return
+	}
+	count, err := c.Svc.CountUnseen(r.Context(), at, ids)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, NotificationCountResponse{Count: count})
+}
+
+func (c *NotificationsController) clearThrough(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/notifications/clear-through")
+		return
+	}
+	var req NotificationBoundaryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid boundary", nil)
+		return
+	}
+	count, err := c.Svc.ClearThrough(r.Context(), domain.NotificationBoundary{ID: req.ID, CreatedAt: req.CreatedAt, ExcludeEqual: req.ExcludeEqual})
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, NotificationCountResponse{Count: count})
 }

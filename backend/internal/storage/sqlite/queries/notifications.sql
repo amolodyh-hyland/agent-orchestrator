@@ -184,3 +184,15 @@ SET dismissed_at = CURRENT_TIMESTAMP,
     status = 'read'
 WHERE id = ?
   AND dismissed_at IS NULL;
+
+-- name: CountUnreadNotificationsSince :one
+SELECT count(*) FROM notifications
+WHERE status = 'unread' AND dismissed_at IS NULL
+  AND (created_at > sqlc.arg(since_at)
+    OR (created_at = sqlc.arg(since_at) AND id NOT IN (SELECT value FROM json_each(sqlc.arg(seen_ids)))));
+
+-- name: DismissNotificationsThrough :execrows
+UPDATE notifications SET dismissed_at = CURRENT_TIMESTAMP, status = 'read'
+WHERE dismissed_at IS NULL
+  AND (created_at < sqlc.arg(through_at)
+    OR (created_at = sqlc.arg(through_at) AND (id < sqlc.arg(through_id) OR (id = sqlc.arg(through_id) AND NOT sqlc.arg(exclude_equal)))));

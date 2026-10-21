@@ -66,6 +66,12 @@ describe("isCleared", () => {
 	});
 });
 
+it("a later range clear dismisses a previously revived row again", () => {
+ const through = { id: "z", createdAt: "2026-07-22T00:00:00Z", clearedAt: at("2026-07-23T00:00:00Z") };
+ expect(isCleared(row({ status: "read" }), { before: 0, ids: { cntf_1: null }, through })).toBe(true);
+ expect(isCleared(row({ status: "unread", updatedAt: "2026-07-24T00:00:00Z" }), { before: 0, ids: { cntf_1: null }, through })).toBe(false);
+});
+
 function cloudRow(overrides: Partial<CloudCpNotification> = {}): CloudCpNotification {
 	return {
 		id: "cntf_1",
@@ -85,13 +91,14 @@ describe("useCloudNotifications clearing", () => {
 	let items: CloudCpNotification[];
 	const listNotifications = vi.fn();
 	const markNotificationsRead = vi.fn();
+ const clearNotificationsThrough = vi.fn();
 
 	function renderCloudNotifications(
 		userId = "user-1",
 		queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
 	) {
 		cloudCpMock.mockReturnValue({
-			client: { listNotifications, markNotificationsRead },
+			client: { listNotifications, markNotificationsRead, clearNotificationsThrough },
 			ready: true,
 			baseUrl: "https://cloud.test",
 			userId,
@@ -110,7 +117,37 @@ describe("useCloudNotifications clearing", () => {
 			latestSequence: 0,
 		}));
 		markNotificationsRead.mockReset().mockResolvedValue({ updated: 1 });
+ clearNotificationsThrough.mockReset().mockResolvedValue({ updated: 150, clearedAt: "2026-10-20T12:00:00Z" });
 	});
+
+	it("persists a range boundary covering unloaded Cloud history", async () => {
+  items = [cloudRow({ id: "newer", createdAt: "2026-07-22T10:00:00Z", status: "unread" }), cloudRow({ status: "unread" })];
+  const { result } = renderCloudNotifications();
+  await waitFor(() => expect(result.current.items).toHaveLength(2));
+  const boundary = { id: items[1].id, createdAt: items[1].createdAt };
+  await act(() => result.current.clearThrough(boundary));
+  expect(clearNotificationsThrough).toHaveBeenCalledWith("org-1", boundary);
+  expect(result.current.items.map((item) => item.id)).toEqual(["newer"]);
+  const saved = JSON.parse(localStorage.getItem("ao.cloudNotifications.cleared:https://cloud.test:org-1:user-1")!);
+  expect(isCleared(cloudRow({ id: "unloaded", createdAt: "2026-07-20T00:00:00Z" }), saved)).toBe(true);
+ });
+
+ it("refreshes a second open window when its recipient-scoped read event arrives", async () => {
+  items = [cloudRow({ status: "unread" })];
+  const first = renderCloudNotifications();
+  await waitFor(() => expect(first.result.current.items[0]?.status).toBe("unread"));
+  const callbacks: Array<(event: { sequence: number }) => void> = [];
+  subscribeNotificationsMock.mockImplementation((options) => { callbacks.push(options!.onEvent); return new Promise<void>(() => {}); });
+  const secondClient = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false, staleTime: Infinity } } });
+  const wrapper = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client: secondClient }, children);
+  const second = renderHook(() => useCloudNotifications("all"), { wrapper });
+  await waitFor(() => expect(second.result.current.items[0]?.status).toBe("unread"));
+  markNotificationsRead.mockImplementation(async () => { items = items.map((item) => ({ ...item, status: "read" })); return { updated: 1 }; });
+  await act(() => first.result.current.markRead([items[0].id]));
+  expect(second.result.current.items[0]?.status).toBe("unread");
+  act(() => callbacks[0]({ sequence: 1 }));
+  await waitFor(() => expect(second.result.current.items[0]?.status).toBe("read"));
+ });
 
 	it("hides a read row without asking the control plane to mark it read again", async () => {
 		const { result } = renderCloudNotifications();

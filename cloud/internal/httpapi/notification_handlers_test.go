@@ -203,7 +203,7 @@ func (s *notificationHandlerStore) ListNotificationEvents(context.Context, domai
 	return nil, false, nil
 }
 
-func (s *notificationHandlerStore) MarkNotificationsRead(_ context.Context, _ domain.Principal, _ string, ids []string) (int64, error) {
+func (s *notificationHandlerStore) MarkNotificationsRead(_ context.Context, _ domain.Principal, _ string, ids []string, through ...domain.NotificationCursor) (int64, error) {
 	s.readIDs = ids
 	if s.readErr != nil {
 		return 0, s.readErr

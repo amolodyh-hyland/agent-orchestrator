@@ -2161,6 +2161,14 @@ paths:
             minimum: 1
             maximum: 100
             default: 50
+        - name: seenAt
+          in: query
+          description: Count only unread rows updated after this badge watermark.
+          schema: {type: string, format: date-time}
+        - name: seenIds
+          in: query
+          description: JSON array of ids already seen at exactly seenAt.
+          schema: {type: string}
       responses:
         "200":
           description: Recipient-scoped cloud notification inbox.
@@ -2231,9 +2239,23 @@ paths:
       tags: [Events]
       parameters:
         - $ref: "#/components/parameters/OrgId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                through:
+                  type: object
+                  required: [id, createdAt]
+                  properties:
+                    excludeEqual: {type: boolean, default: false}
+                    id: {type: string}
+                    createdAt: {type: string, format: date-time}
       responses:
         "200":
-          description: Every unread notification for the current recipient was marked read.
+          description: Unread notifications for the current recipient were marked read, optionally bounded inclusively by (createdAt, id). The response includes updated and the server clearedAt timestamp.
         default:
           $ref: "#/components/responses/Error"
 components:

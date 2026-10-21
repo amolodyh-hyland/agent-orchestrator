@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -132,6 +133,20 @@ func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	filter := domain.NotificationFilter{Status: status, Limit: limit}
+	if raw := r.URL.Query().Get("seenAt"); raw != "" {
+		filter.SeenAt, err = time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "Invalid seenAt")
+			return
+		}
+	}
+	if raw := r.URL.Query().Get("seenIds"); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &filter.SeenIDs); err != nil {
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "Invalid seenIds")
+			return
+		}
+	}
+
 	if cursor != nil {
 		filter.Cursor = &domain.NotificationCursor{CreatedAt: cursor.Time, ID: cursor.ID}
 	}
@@ -191,10 +206,29 @@ func (s *Server) markNotificationRead(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) markAllNotificationsRead(w http.ResponseWriter, r *http.Request) {
-	changed, err := s.store.MarkNotificationsRead(r.Context(), principalFrom(r), chi.URLParam(r, "orgId"), nil)
+	var request struct {
+		Through *struct {
+			ExcludeEqual bool      `json:"excludeEqual,omitempty"`
+			ID           string    `json:"id"`
+			CreatedAt    time.Time `json:"createdAt"`
+		} `json:"through,omitempty"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&request); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Invalid notification boundary")
+		return
+	}
+	var through []domain.NotificationCursor
+	if request.Through != nil {
+		if request.Through.ID == "" || len(request.Through.ID) > 256 || request.Through.CreatedAt.IsZero() {
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "Notification id and creation time are required")
+			return
+		}
+		through = append(through, domain.NotificationCursor{ID: request.Through.ID, CreatedAt: request.Through.CreatedAt, ExcludeEqual: request.Through.ExcludeEqual})
+	}
+	changed, err := s.store.MarkNotificationsRead(r.Context(), principalFrom(r), chi.URLParam(r, "orgId"), nil, through...)
 	if err != nil {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"updated": changed})
+	writeJSON(w, http.StatusOK, map[string]any{"updated": changed, "clearedAt": time.Now().UTC()})
 }

@@ -352,3 +352,10 @@ func TestReadMutationsNotifyOtherWindows(t *testing.T) {
 		})
 	}
 }
+
+func (f *fakeStore) CountUnreadNotificationsSince(context.Context, time.Time, []string) (int64, error) {
+	return f.unreadCount, f.err
+}
+func (f *fakeStore) ClearNotificationsThrough(context.Context, domain.NotificationBoundary) (int64, error) {
+	return f.clearAllCount, f.err
+}

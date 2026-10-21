@@ -208,3 +208,96 @@ func openNotificationTestStore(t *testing.T) (*Store, *pgxpool.Pool, notificatio
 	})
 	return store, admin, fixture
 }
+
+func TestNotificationReadEventsAndPagedBoundaries(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	base := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	seed := func(i int) string {
+		t.Helper()
+		id := uuid.NewString()
+		_, err := admin.Exec(ctx, `INSERT INTO ao_notifications
+   (id, org_id, recipient_user_id, project_id, session_id, type, title, dedupe_key, source_event_id, created_at, updated_at)
+   VALUES ($1::uuid, $2, $3, $4, $5, 'needs_input', 'Needs input', $1::uuid::text, $1::uuid::text, $6, $6)`,
+			id, fixture.orgID, fixture.userID, fixture.projectID, fixture.sessionID, base.Add(time.Duration(i)*time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	var boundary domain.NotificationCursor
+	for i := 0; i < 150; i++ {
+		id := seed(i)
+		if i == 99 {
+			boundary = domain.NotificationCursor{ID: id, CreatedAt: base.Add(99 * time.Second)}
+		}
+	}
+	page, err := store.ListNotifications(ctx, principal, fixture.orgID, domain.NotificationFilter{Limit: 100})
+	if err != nil || len(page.Items) != 100 || page.UnreadCount != 150 {
+		t.Fatalf("page=%+v err=%v", page, err)
+	}
+	// A new arrival after the row's menu opens is newer than the captured boundary.
+	watermarkID := seed(150)
+	changed, err := store.MarkNotificationsRead(ctx, principal, fixture.orgID, nil, boundary)
+	if err != nil || changed != 100 {
+		t.Fatalf("changed=%d err=%v", changed, err)
+	}
+	events, more, err := store.ListNotificationEvents(ctx, principal, fixture.orgID, 0, 200)
+	if err != nil || more || len(events) != 100 {
+		t.Fatalf("events=%d more=%v err=%v", len(events), more, err)
+	}
+	for _, event := range events {
+		if event.RecipientUserID != fixture.userID || event.Kind != domain.NotificationEventUpdated || event.Notification.Status != "read" {
+			t.Fatalf("event=%+v", event)
+		}
+		if event.Notification.CreatedAt.After(boundary.CreatedAt) {
+			t.Fatalf("newer row read: %+v", event)
+		}
+	}
+	// One recipient's durable stream must never leak to another recipient.
+	outsider, _, err := store.ListNotificationEvents(ctx, domain.Principal{UserID: uuid.NewString()}, fixture.orgID, 0, 200)
+	if err == nil && len(outsider) != 0 {
+		t.Fatalf("recipient isolation failed: %+v", outsider)
+	}
+	watermark := base.Add(150 * time.Second)
+	for i := 151; i <= 300; i++ {
+		seed(i)
+	}
+	page, err = store.ListNotifications(ctx, principal, fixture.orgID, domain.NotificationFilter{Limit: 100, SeenAt: watermark})
+	// The watermark row is unread too; passing its id below excludes that tie.
+	if err != nil || page.UnreadCount != 151 {
+		t.Fatalf("unseen=%d err=%v", page.UnreadCount, err)
+	}
+	page, err = store.ListNotifications(ctx, principal, fixture.orgID, domain.NotificationFilter{Limit: 1, SeenAt: watermark, SeenIDs: []string{watermarkID}})
+	if err != nil || len(page.Items) != 1 || page.UnreadCount != 150 {
+		t.Fatalf("unseen=%d rows=%d err=%v", page.UnreadCount, len(page.Items), err)
+	}
+}
+
+func TestNotificationReadBoundaryKeepsEqualItemOnNewerHost(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	at := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
+	ids := []string{uuid.NewString(), uuid.NewString()}
+	if ids[0] > ids[1] {
+		ids[0], ids[1] = ids[1], ids[0]
+	}
+	for _, id := range ids {
+		_, err := admin.Exec(ctx, `INSERT INTO ao_notifications
+   (id, org_id, recipient_user_id, project_id, session_id, type, title, dedupe_key, source_event_id, created_at, updated_at)
+   VALUES ($1::uuid, $2, $3, $4, $5, 'needs_input', 'Needs input', $1::uuid::text, $1::uuid::text, $6, $6)`, id, fixture.orgID, fixture.userID, fixture.projectID, fixture.sessionID, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	changed, err := store.MarkNotificationsRead(ctx, principal, fixture.orgID, nil, domain.NotificationCursor{ID: ids[1], CreatedAt: at, ExcludeEqual: true})
+	if err != nil || changed != 1 {
+		t.Fatalf("changed=%d err=%v", changed, err)
+	}
+	page, err := store.ListNotifications(ctx, principal, fixture.orgID, domain.NotificationFilter{Status: domain.NotificationStatusUnread, Limit: 100})
+	if err != nil || len(page.Items) != 1 || page.Items[0].ID != ids[1] {
+		t.Fatalf("page=%+v err=%v", page, err)
+	}
+}

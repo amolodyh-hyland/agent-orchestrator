@@ -1563,6 +1563,23 @@ export interface paths {
         patch: operations["markNotificationRead"];
         trace?: never;
     };
+    "/api/v1/notifications/clear-through": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Dismiss all history at or older than a stable boundary */
+        post: operations["clearNotificationsThrough"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/notifications/read-all": {
         parameters: {
             query?: never;
@@ -1589,6 +1606,23 @@ export interface paths {
         };
         /** Stream notification changes */
         get: operations["streamNotifications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notifications/unseen-count": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Count unseen notifications beyond a badge watermark */
+        get: operations["countUnseenNotifications"];
         put?: never;
         post?: never;
         delete?: never;
@@ -6142,6 +6176,16 @@ export interface components {
         MuteDeviceRequest: {
             /** @description True to stop sending push notifications to this device. */
             muted: boolean;
+        };
+        NotificationBoundaryRequest: {
+            /** Format: date-time */
+            createdAt: string;
+            excludeEqual?: boolean;
+            id: string;
+        };
+        NotificationCountResponse: {
+            /** Format: int64 */
+            count: number;
         };
         NotificationEnvelope: {
             notification: components["schemas"]["NotificationResponse"];
@@ -12764,6 +12808,57 @@ export interface operations {
             };
         };
     };
+    clearNotificationsThrough: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationBoundaryRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationCountResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     markAllNotificationsRead: {
         parameters: {
             query?: never;
@@ -12834,6 +12929,58 @@ export interface operations {
                 };
                 content: {
                     "text/event-stream": string;
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    countUnseenNotifications: {
+        parameters: {
+            query?: {
+                /** @description RFC3339 timestamp of the badge watermark. */
+                since?: string;
+                /** @description JSON array of notification ids seen at the watermark timestamp. */
+                seenIds?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationCountResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Internal Server Error */

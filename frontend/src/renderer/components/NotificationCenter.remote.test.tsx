@@ -8,7 +8,8 @@ import { NotificationCenter, NotificationRuntime } from "./NotificationCenter";
 import { TooltipProvider } from "./ui/tooltip";
 
 const mocks = vi.hoisted(() => ({
-	clearLocal: vi.fn(),
+	clearThroughLocal: vi.fn(),
+ clearLocal: vi.fn(),
 	clearAllLocal: vi.fn(),
 	clearRemote: vi.fn(),
 	markLocal: vi.fn(),
@@ -67,6 +68,12 @@ vi.mock("../hooks/useNotificationsQuery", () => ({
 	useClearNotificationMutation: () => ({ isPending: false, mutateAsync: mocks.clearLocal }),
 	useClearAllNotificationsMutation: () => ({ isPending: false, mutateAsync: mocks.clearAllLocal }),
 }));
+vi.mock("../lib/notifications", async (importOriginal) => ({
+ ...((await importOriginal()) as object),
+ clearNotificationsThrough: mocks.clearThroughLocal,
+ countUnseenNotifications: async () => 0,
+}));
+
 vi.mock("../hooks/useRemoteNotifications", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../hooks/useRemoteNotifications")>()),
 	connectRemoteNotificationStreams: () => () => undefined,
@@ -112,13 +119,15 @@ beforeEach(() => {
 	remoteWorkspaceFailed = false;
 	remoteTerminatedA = false;
 	remoteErrorB = false;
-	mocks.markLocal.mockResolvedValue(1);
+	mocks.clearThroughLocal.mockResolvedValue(undefined);
+ mocks.markLocal.mockResolvedValue(1);
 	mocks.markRemote.mockResolvedValue({ data: { updatedCount: 1 } });
 	mocks.clearRemote.mockResolvedValue({ data: { notification: hostB }, response: { status: 200 } });
 	mocks.clearLocal.mockResolvedValue(local);
 	mocks.clearAllLocal.mockResolvedValue({ clearedCount: 1 });
 	mocks.clientForHost.mockImplementation((hostId: string) => ({
-		POST: (...args: unknown[]) => mocks.markRemote(hostId, ...args),
+		POST: (path: string, ...args: unknown[]) => path.endsWith("clear-through") ? mocks.clearRemote(hostId, path, ...args) : mocks.markRemote(hostId, path, ...args),
+ GET: async () => ({ data: { count: 0 } }),
 		DELETE: (...args: unknown[]) => mocks.clearRemote(hostId, ...args),
 	}));
 });
@@ -324,7 +333,8 @@ it("clears only the displayed suffix, qualifying identical ids by host", async (
  fireEvent.contextMenu(screen.getByRole("listitem", { name: "Notifications: A ping" }));
  await userEvent.click(await screen.findByRole("menuitem", { name: "Clear all after this" }));
  await waitFor(() => expect(mocks.clearRemote).toHaveBeenCalledTimes(2));
- expect(mocks.clearRemote).toHaveBeenCalledWith("host-a", "/api/v1/notifications/{id}", { params: { path: { id: "same-notification" } } });
- expect(mocks.clearRemote).toHaveBeenCalledWith("host-b", "/api/v1/notifications/{id}", { params: { path: { id: "same-notification" } } });
+ expect(mocks.clearRemote).toHaveBeenCalledWith("host-a", "/api/v1/notifications/clear-through", { body: { id: "same-notification", createdAt: hostA.createdAt } });
+ expect(mocks.clearRemote).toHaveBeenCalledWith("host-b", "/api/v1/notifications/clear-through", { body: { id: "same-notification", createdAt: hostA.createdAt } });
  expect(mocks.clearLocal).not.toHaveBeenCalled();
+ expect(mocks.clearThroughLocal).toHaveBeenCalledWith({ id: hostA.id, createdAt: hostA.createdAt, excludeEqual: true }, expect.anything());
 });

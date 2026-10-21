@@ -158,3 +158,10 @@ func (r NotificationRecord) Validate() error {
 	}
 	return nil
 }
+
+// NotificationBoundary identifies an immutable position in newest-first history.
+type NotificationBoundary struct {
+	ExcludeEqual bool      `json:"excludeEqual,omitempty"`
+	ID           string    `json:"id"`
+	CreatedAt    time.Time `json:"createdAt"`
+}

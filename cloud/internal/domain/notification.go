@@ -99,14 +99,17 @@ type NotificationEvent struct {
 }
 
 type NotificationCursor struct {
-	CreatedAt time.Time
-	ID        string
+	ExcludeEqual bool
+	CreatedAt    time.Time
+	ID           string
 }
 
 type NotificationFilter struct {
-	Status NotificationStatus
-	Cursor *NotificationCursor
-	Limit  int
+	SeenAt  time.Time
+	SeenIDs []string
+	Status  NotificationStatus
+	Cursor  *NotificationCursor
+	Limit   int
 }
 
 type NotificationPage struct {

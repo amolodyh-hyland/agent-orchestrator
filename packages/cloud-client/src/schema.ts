@@ -5570,6 +5570,10 @@ export interface operations {
                 status?: "all" | "unread" | "read";
                 cursor?: string;
                 limit?: number;
+                /** @description Count only unread rows updated after this badge watermark. */
+                seenAt?: string;
+                /** @description JSON array of ids already seen at exactly seenAt. */
+                seenIds?: string;
             };
             header?: never;
             path: {
@@ -5655,9 +5659,21 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": {
+                    through?: {
+                        /** @default false */
+                        excludeEqual?: boolean;
+                        id: string;
+                        /** Format: date-time */
+                        createdAt: string;
+                    };
+                };
+            };
+        };
         responses: {
-            /** @description Every unread notification for the current recipient was marked read. */
+            /** @description Unread notifications for the current recipient were marked read, optionally bounded inclusively by (createdAt, id). The response includes updated and the server clearedAt timestamp. */
             200: {
                 headers: {
                     [name: string]: unknown;

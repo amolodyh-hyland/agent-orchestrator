@@ -398,7 +398,8 @@ export interface CloudCpClient {
 	subscribeSessionEvents(orgId: string, sessionId: string, options: CloudCpSessionEventsOptions): Promise<void>;
 	listNotifications(orgId: string, query?: CloudCpNotificationListQuery, options?: CloudCpRequestOptions): Promise<CloudCpNotificationListResponse>;
 	listNotificationEvents(orgId: string, after?: number, options?: CloudCpRequestOptions): Promise<CloudCpNotificationEventsResponse>;
-	markNotificationsRead(orgId: string, notificationIds?: string[], options?: CloudCpRequestOptions): Promise<{ updated: number }>;
+	clearNotificationsThrough(orgId: string, through: { id: string; createdAt: string; excludeEqual?: boolean }): Promise<{ updated: number; clearedAt: string }>;
+ markNotificationsRead(orgId: string, notificationIds?: string[], options?: CloudCpRequestOptions): Promise<{ updated: number }>;
 	subscribeNotificationEvents(orgId: string, options: CloudCpNotificationEventsOptions): Promise<void>;
 
 	createTerminalTicket(
@@ -884,7 +885,8 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 				signal: o?.signal,
 			}),
 		subscribeSessionEvents,
-		listNotifications: (orgId, query, o) => requestJson("GET", `/orgs/${seg(orgId)}/notifications`, { query: { status: query?.status, limit: query?.limit, cursor: query?.cursor }, signal: o?.signal }),
+		listNotifications: (orgId, query, o) => requestJson("GET", `/orgs/${seg(orgId)}/notifications`, { query: { status: query?.status, limit: query?.limit, cursor: query?.cursor, seenAt: query?.seenAt, seenIds: query?.seenIds }, signal: o?.signal }),
+		clearNotificationsThrough: (orgId, through) => requestJson("POST", `/orgs/${seg(orgId)}/notifications/read-all`, { body: { through } }),
 		listNotificationEvents: (orgId, after, o) => requestJson("GET", `/orgs/${seg(orgId)}/notification-events`, { query: { after }, signal: o?.signal }),
 		markNotificationsRead: (orgId, notificationIds, o) => notificationIds === undefined || notificationIds.length === 0
 			? requestJson("POST", `/orgs/${seg(orgId)}/notifications/read-all`, { signal: o?.signal })

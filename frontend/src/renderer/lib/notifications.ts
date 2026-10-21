@@ -778,3 +778,45 @@ function rebaseOversizedFirstPage(queryClient: QueryClient, queryKey: Notificati
 	}
 	void queryClient.invalidateQueries({ queryKey, exact: true, refetchType: "active" });
 }
+
+export type NotificationBoundary = {
+	id: string;
+	createdAt: string;
+	excludeEqual?: boolean;
+};
+export async function clearNotificationsThrough(
+	boundary: NotificationBoundary,
+	queryClient: QueryClient,
+): Promise<void> {
+	await queryClient.cancelQueries(
+		{ queryKey: ["notifications", "history"] },
+		{ revert: false },
+	);
+	const { error } = await apiClient.POST(
+		"/api/v1/notifications/clear-through",
+		{ body: boundary },
+	);
+	if (error)
+		throw new Error(apiErrorMessage(error, "Could not clear notifications"));
+	await reconcileNotifications(queryClient);
+}
+export async function countUnseenNotifications(seen: {
+	at: number;
+	ids: string[];
+	timestamp?: string;
+}): Promise<number> {
+	const { data, error } = await apiClient.GET(
+		"/api/v1/notifications/unseen-count",
+		{
+			params: {
+				query: {
+					since: seen.timestamp ?? new Date(seen.at).toISOString(),
+					seenIds: JSON.stringify(seen.ids),
+				},
+			},
+		},
+	);
+	if (error || !data)
+		throw new Error(apiErrorMessage(error, "Could not count notifications"));
+	return data.count;
+}

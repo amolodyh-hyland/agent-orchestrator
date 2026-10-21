@@ -171,6 +171,8 @@ export interface CloudCpNotificationEvent {
 }
 
 export interface CloudCpNotificationListQuery extends CloudCpListQuery {
+ seenAt?: string;
+ seenIds?: string;
 	status?: "unread" | "read" | "all";
 }
 

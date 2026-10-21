@@ -505,6 +505,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersNotificationIDParam":              "NotificationIDParam",
 	"ControllersNotificationTarget":               "NotificationTarget",
 	"ControllersNotificationResponse":             "NotificationResponse",
+	"ControllersNotificationBoundaryRequest":      "NotificationBoundaryRequest",
+	"ControllersNotificationCountResponse":        "NotificationCountResponse",
 	"ControllersListNotificationsResponse":        "ListNotificationsResponse",
 	"ControllersMarkNotificationReadRequest":      "MarkNotificationReadRequest",
 	"ControllersNotificationEnvelope":             "NotificationEnvelope",
@@ -2334,6 +2336,9 @@ func notificationOperations() []operation {
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},
+		{method: http.MethodGet, path: "/api/v1/notifications/unseen-count", id: "countUnseenNotifications", tag: "notifications", summary: "Count unseen notifications beyond a badge watermark", pathParams: []any{controllers.CountUnseenNotificationsQuery{}}, resps: []respUnit{{http.StatusOK, controllers.NotificationCountResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}}},
+		{method: http.MethodPost, path: "/api/v1/notifications/clear-through", id: "clearNotificationsThrough", tag: "notifications", summary: "Dismiss all history at or older than a stable boundary", reqBody: controllers.NotificationBoundaryRequest{}, resps: []respUnit{{http.StatusOK, controllers.NotificationCountResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}}},
+
 		{
 			method: http.MethodPatch, path: "/api/v1/notifications/{id}", id: "markNotificationRead", tag: "notifications",
 			summary:    "Mark a notification read",

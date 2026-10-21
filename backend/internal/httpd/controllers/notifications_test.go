@@ -399,3 +399,42 @@ func TestNotificationsAPI_StreamWithoutPublisherIs501(t *testing.T) {
 	body, status, _ := doRequest(t, srv, "GET", "/api/v1/notifications/stream", "")
 	assertErrorCode(t, body, status, http.StatusNotImplemented, "NOT_IMPLEMENTED")
 }
+
+func (f *fakeNotificationService) CountUnseen(context.Context, time.Time, []string) (int64, error) {
+	return 150, f.err
+}
+func (f *fakeNotificationService) ClearThrough(context.Context, domain.NotificationBoundary) (int64, error) {
+	return 150, f.err
+}
+
+func TestNotificationBoundaryAndCountRoutes(t *testing.T) {
+	svc := &fakeNotificationService{}
+	srv := newNotificationTestServer(t, svc)
+	for _, query := range []string{"?since=invalid", "?seenIds=not-json"} {
+		resp, err := srv.Client().Get(srv.URL + "/api/v1/notifications/unseen-count" + query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("status=%d", resp.StatusCode)
+		}
+	}
+	resp, err := srv.Client().Get(srv.URL + "/api/v1/notifications/unseen-count?since=2026-10-20T12:00:00.123456789Z&seenIds=%5B%22n1%22%5D")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil || resp.StatusCode != http.StatusOK || !strings.Contains(string(raw), `"count":150`) {
+		t.Fatalf("status=%d body=%s err=%v", resp.StatusCode, raw, err)
+	}
+	resp2, err := srv.Client().Post(srv.URL+"/api/v1/notifications/clear-through", "application/json", strings.NewReader(`{"id":"n1","createdAt":"2026-10-20T12:00:00.123456789Z"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d", resp2.StatusCode)
+	}
+}
