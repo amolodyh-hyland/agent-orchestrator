@@ -213,8 +213,7 @@ var shippedMigrations = map[int64]string{
 	214: "0214_app_settings_version_refresh.sql",
 	215: "0215_session_harness_releases.sql",
 	216: "0216_project_context_snapshots.sql",
-
-	20261020213549770: "20261020213549770_session_permission_ceiling.sql",
+	217: "0217_session_permission_ceiling.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

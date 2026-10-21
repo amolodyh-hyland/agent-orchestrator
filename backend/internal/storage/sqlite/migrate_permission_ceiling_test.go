@@ -2,6 +2,28 @@ package sqlite
 
 import "testing"
 
+func TestPermissionCeilingMigrationIsVersion217(t *testing.T) {
+	db := openMigratedTestDB(t)
+	var version int64
+	if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&version); err != nil || version != 217 {
+		t.Fatalf("fresh database version = %d err=%v, want 217", version, err)
+	}
+}
+
+func TestPermissionCeilingMigrationDownAndUpAgain(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 216)
+	upTo(t, db, 217)
+	downTo(t, db, 216)
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'permission_ceiling'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("permission_ceiling survived down: count=%d err=%v", n, err)
+	}
+	upTo(t, db, 217)
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'permission_ceiling'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("permission_ceiling after re-up: count=%d err=%v", n, err)
+	}
+}
+
 func TestPermissionCeilingMigrationBackfillsExistingSessionPolicy(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 216)
 	if _, err := db.Exec(`INSERT INTO projects(id,path,registered_at) VALUES('p','/repo',CURRENT_TIMESTAMP)`); err != nil {
