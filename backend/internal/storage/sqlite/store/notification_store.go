@@ -409,6 +409,9 @@ func notificationsFromGen(rows []gen.Notification) []domain.NotificationRecord {
 }
 
 func (s *Store) CountUnreadNotificationsSince(ctx context.Context, at time.Time, ids []string) (int64, error) {
+	if ids == nil {
+		ids = []string{}
+	}
 	raw, err := json.Marshal(ids)
 	if err != nil {
 		return 0, err

@@ -795,6 +795,12 @@ func TestNotificationBoundaryEqualTimestamps(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			for _, seenIDs := range [][]string{nil, {}} {
+				unseen, err := s.CountUnreadNotificationsSince(ctx, at, seenIDs)
+				if err != nil || unseen != 3 {
+					t.Fatalf("seenIDs=%v unseen=%d err=%v", seenIDs, unseen, err)
+				}
+			}
 			unseen, err := s.CountUnreadNotificationsSince(ctx, at, []string{"b"})
 			if err != nil || unseen != 2 {
 				t.Fatalf("unseen=%d err=%v", unseen, err)
