@@ -302,7 +302,7 @@ describe("optional managed delegation policy", () => {
 		expect((await service.process(record.requestId)).state).toBe("accepted");
 		expect(resolveRuntimeClass).toHaveBeenCalledTimes(3);
 	});
-	it.each(["policy_denied", "policy_unavailable", "policy_runtime_unknown"])("blocks proof minting and reservation on %s", async (code) => {
+	it.each(["policy_denied", "policy_unavailable", "policy_runtime_unknown", "policy_location_unsafe"])("blocks proof minting and reservation on %s", async (code) => {
 		journal.evaluatePolicy = async () => ({ code });
 		const proof = vi.fn(confirmations.confirmationProof);
 		const localAllow = vi.fn(async () => ({ code: "policy_allowed" }));
@@ -321,7 +321,7 @@ describe("optional managed delegation policy", () => {
 		await service.process(record.requestId);
 		expect(client.delegate).not.toHaveBeenCalled();
 	});
-	it.each(["policy_denied", "policy_unavailable"])("rechecks policy at dispatch after confirmation: %s", async (code) => {
+	it.each(["policy_denied", "policy_unavailable", "policy_location_unsafe"])("rechecks policy at dispatch after confirmation: %s", async (code) => {
 		const service = coordinator().taskOrchestrator;
 		const record = await service.confirm(intent, approved);
 		journal.evaluatePolicy = async () => ({ code });

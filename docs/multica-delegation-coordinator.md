@@ -138,18 +138,26 @@ non-symlinked, and not group/other writable. On macOS, native extended ACL check
 also reject mutation grants to anyone except root or wheel (gid 0); admin and
 staff are not authority. This includes write/append, deletion, child deletion,
 attribute/security changes and ownership changes, even for inherited grants.
-Denies cannot offset an unsafe allow. Native ACL lookup, decoding or principal
+Denies cannot offset an unsafe allow. For present sources, native ACL lookup, decoding or principal
 resolution errors fail closed with `policy_unavailable`; no ACL details leave
 the resolver. ACL absence is verified with native security metadata, rather than
 treating a failed ACL lookup as absence. macOS builds require cgo to verify ACLs;
 without it, managed delegation fails closed with `policy_unavailable`. A macOS
 presence pass first checks the known policy files, drop-in directory, enrollment
 markers and managed preference plist inventory without reading ACLs or policy
-content. Confirmed absence takes the personal `policy_absent` path even without
-cgo; lookup/inventory errors still block. Present sources must then pass all
-protection checks. Both macOS desktop build paths explicitly enable and verify
-cgo. Legacy `packages/build-binaries.sh` cross-builds keep cgo disabled: their
-macOS binaries permit personal use but block managed-policy delegation.
+content. Before concluding absence, every standard source/enrollment location's
+directory and ancestors must also be root-owned, non-symlinked, and not writable
+or deletable by non-root principals. With cgo these checks include native ACLs;
+unsafe or unverifiable empty locations return only `policy_location_unsafe`.
+Deleting the sole policy from an unsafe directory therefore cannot make the
+machine unmanaged. Only protected, empty locations take the personal
+`policy_absent` path. Lookup/inventory errors still block, and present sources
+must pass all protection checks. Without cgo, empty locations still require root
+ownership, safe mode bits and no symlinks, but ACL grants cannot be detected.
+This residual ACL risk is limited to no-cgo builds; both shipped macOS desktop
+build paths explicitly enable and verify cgo. Legacy
+`packages/build-binaries.sh` cross-builds keep cgo disabled: their macOS binaries
+permit personal use under those mode checks but block managed-policy delegation.
 Linux and Windows retain their existing checks. Files must be regular, open with
 `O_NOFOLLOW`, and retain their identity, size and modification time across the
 bounded read. Once macOS enrollment is present, missing sources also require
@@ -204,7 +212,8 @@ the final send guard.
 
 Additional main-process policy hooks may only narrow the managed decision. Their
 only result is `{code}`: `policy_absent`, `policy_allowed`, `policy_denied`,
-`policy_unavailable`, or `policy_runtime_unknown`. Extra fields, unknown outcomes,
+`policy_unavailable`, `policy_runtime_unknown`, or `policy_location_unsafe`.
+Extra fields, unknown outcomes,
 exceptions and five-second evaluation timeouts become `policy_unavailable`.
 Source-provided reasons, revisions, policy text and error messages are never
 logged, persisted or exposed.

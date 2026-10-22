@@ -69,7 +69,14 @@ done:
 */
 import "C"
 
-import "strings"
+import (
+	"os"
+	"strings"
+)
+
+func protectedEmptyPolicyOwner(path string, info os.FileInfo) bool {
+	return protectedPolicyOwner(path, info)
+}
 
 func protectedPolicyACL(path string) bool {
 	if strings.IndexByte(path, 0) >= 0 {

@@ -3,15 +3,97 @@
 package agentcreds
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 )
 
 type policyFileOwnerFixture struct {
 	os.FileInfo
 	uid uint32
+}
+
+func TestDelegationRemovedPolicyRequiresProtectedEmptyLocations(t *testing.T) {
+	for _, location := range []string{"protected", "writable directory", "writable ancestor", "user-owned directory", "missing directory", "symlink directory"} {
+		t.Run(location, func(t *testing.T) {
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			directory := filepath.Join(root, "managed")
+			if err := os.Mkdir(directory, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			req, policy := delegationPolicyFixture()
+			data, err := json.Marshal(map[string]any{"aoMulticaDelegation": policy})
+			if err != nil {
+				t.Fatal(err)
+			}
+			file := filepath.Join(directory, "managed-settings.json")
+			if err := os.WriteFile(file, data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			fs := fixturePolicyFiles(root)
+			// Root ownership is simulated; directory permissions and deletion are real.
+			fs.emptyOwner = func(path string, info os.FileInfo) bool {
+				uid := uint32(0)
+				if location == "user-owned directory" && path == directory {
+					uid = 501
+				}
+				if path != root && path != directory {
+					return true
+				}
+				return protectedEmptyPolicyOwner(path, policyFileOwnerFixture{FileInfo: info, uid: uid})
+			}
+			if location == "writable directory" || location == "missing directory" {
+				if err := os.Chmod(directory, 0o777); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if location == "writable ancestor" || location == "missing directory" {
+				if err := os.Chmod(root, 0o777); err != nil {
+					t.Fatal(err)
+				}
+			}
+			opts := ResolveOptions{ConfigDir: t.TempDir(), ManagedSettingsDir: directory, GOOS: "darwin", Env: envFrom(nil)}
+			check := func() DelegationPolicyDecision {
+				return resolveManagedDelegationPolicy(context.Background(), req, opts, func() time.Time {
+					return time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+				}, fs)
+			}
+			if got := check(); got.Code == "policy_absent" {
+				t.Fatal("present managed policy counted as unmanaged")
+			}
+			if err := os.Remove(file); err != nil {
+				t.Fatal(err)
+			}
+			if location == "missing directory" {
+				if err := os.Remove(directory); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if location == "symlink directory" {
+				if err := os.Rename(directory, directory+"-actual"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(directory+"-actual", directory); err != nil {
+					t.Fatal(err)
+				}
+			}
+			want := "policy_location_unsafe"
+			if location == "protected" {
+				want = "policy_absent"
+			}
+			projection, err := json.Marshal(check())
+			if err != nil || string(projection) != `{"code":"`+want+`"}` {
+				t.Fatalf("deleting sole policy bypassed protection: %s, err=%v", projection, err)
+			}
+		})
+	}
 }
 
 func (f policyFileOwnerFixture) Sys() any { return &syscall.Stat_t{Uid: f.uid} }

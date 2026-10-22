@@ -124,7 +124,7 @@ export function createMulticaDelegationCoordinator(options: Options): { human: M
 		const beforeSend: DelegationSendGuard = () => checkPolicy(record, false);
 		const result = await client.delegate(record.intent.payload, record.requestId, true, beforeSend);
 		if (result.ok) return observe(record, result.data);
-		if (["policy_denied", "policy_unavailable", "policy_runtime_unknown"].includes(result.code)) return journal.save({ ...record, failureCode: result.code });
+		if (["policy_denied", "policy_unavailable", "policy_runtime_unknown", "policy_location_unsafe"].includes(result.code)) return journal.save({ ...record, failureCode: result.code });
 		// A failed replay never proves that an earlier ambiguous submission was rejected.
 		if (firstAttempt) {
 			if (rejected.includes(result.code)) return journal.save({ ...record, state: "rejected", failureCode: result.code });

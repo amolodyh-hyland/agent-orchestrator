@@ -6,7 +6,7 @@ import { agent, array, createDelegation, delegation, object, runtime, text, uuid
 
 export type PublicApiFailureCode =
 	| "invalid_request" | "connection_changed" | "no_token" | "credential_unavailable" | "storage_unavailable"
-	| "delegations_disabled" | "confirmation_required" | "policy_denied" | "policy_unavailable" | "policy_runtime_unknown"
+	| "delegations_disabled" | "confirmation_required" | "policy_denied" | "policy_unavailable" | "policy_runtime_unknown" | "policy_location_unsafe"
 	| "credential_required" | "unsupported_credential" | "invalid_token" | "scoped_token_required" | "insufficient_scope"
 	| "workspace_binding_required" | "workspace_id_required" | "not_found" | "unauthorized" | "forbidden"
 	| "runtime_binding_changed" | "idempotency_conflict" | "revision_conflict" | "target_unavailable" | "runtime_unsupported" | "invocation_not_allowed" | "feature_disabled"
@@ -136,7 +136,7 @@ export function createMulticaPublicApi(options: PublicApiOptions) {
 			if (body) {
 				let code: unknown;
 				try { code = await beforeSend?.(); } catch { code = "policy_unavailable"; }
-				if (code !== null) return failure(code === "policy_denied" || code === "policy_runtime_unknown" ? code : "policy_unavailable");
+				if (code !== null) return failure(code === "policy_denied" || code === "policy_runtime_unknown" || code === "policy_location_unsafe" ? code : "policy_unavailable");
 				if (!current()) return failure("connection_changed");
 				if (controller.signal.aborted) return failure("timeout");
 			}

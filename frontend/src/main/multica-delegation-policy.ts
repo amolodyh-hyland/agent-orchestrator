@@ -1,7 +1,7 @@
 import type { PublicApiBinding } from "./multica-public-api";
 
 export type DelegationRuntimeClass = "local" | "remote" | "unknown";
-export type DelegationPolicyBlockCode = "policy_denied" | "policy_unavailable" | "policy_runtime_unknown";
+export type DelegationPolicyBlockCode = "policy_denied" | "policy_unavailable" | "policy_runtime_unknown" | "policy_location_unsafe";
 export type DelegationPolicyRequest = Readonly<{
 	serverOrigin: string; workspaceId: string; profileId: string; runtimeId: string;
 	runtimeClass: DelegationRuntimeClass; dataScopes: readonly ["task_brief"]; action: "delegate";
@@ -34,7 +34,7 @@ export async function policyBlock(resolver: DelegationPolicyResolver, request: D
 		if (!value || typeof value !== "object" || Object.keys(value).length !== 1 || !("code" in value)) return "policy_unavailable";
 		switch (value.code) {
 			case "policy_absent": case "policy_allowed": return null;
-			case "policy_denied": case "policy_runtime_unknown": return value.code;
+			case "policy_denied": case "policy_runtime_unknown": case "policy_location_unsafe": return value.code;
 			default: return "policy_unavailable";
 		}
 	} catch { return "policy_unavailable"; }

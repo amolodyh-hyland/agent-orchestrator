@@ -13,14 +13,28 @@ import (
 )
 
 type delegationPolicyFiles struct {
-	lstat   func(string) (os.FileInfo, error)
-	open    func(string) (*os.File, error)
-	owner   func(string, os.FileInfo) bool
-	readDir func(string) ([]os.DirEntry, error)
+	lstat      func(string) (os.FileInfo, error)
+	open       func(string) (*os.File, error)
+	owner      func(string, os.FileInfo) bool
+	emptyOwner func(string, os.FileInfo) bool
+	readDir    func(string) ([]os.DirEntry, error)
 }
 
 func nativeDelegationPolicyFiles() delegationPolicyFiles {
-	return delegationPolicyFiles{lstat: os.Lstat, open: openProtectedPolicyFile, owner: protectedPolicyOwner, readDir: os.ReadDir}
+	return delegationPolicyFiles{lstat: os.Lstat, open: openProtectedPolicyFile, owner: protectedPolicyOwner, emptyOwner: protectedEmptyPolicyOwner, readDir: os.ReadDir}
+}
+
+func (fs delegationPolicyFiles) protectEmptyLocations(paths []string) error {
+	if fs.emptyOwner == nil {
+		return errors.New("unverified empty policy directories")
+	}
+	fs.owner = fs.emptyOwner
+	for _, path := range paths {
+		if err := fs.ancestors(path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (fs delegationPolicyFiles) safe(path string, info os.FileInfo, directory bool) bool {
@@ -161,7 +175,7 @@ func (fs delegationPolicyFiles) managedSourcesPresent(paths, preferences []strin
 	return false, nil
 }
 
-func delegationProtectedSources(ctx context.Context, opts ResolveOptions, fs delegationPolicyFiles) ([]claudePolicyDocument, bool) {
+func delegationProtectedSources(ctx context.Context, opts ResolveOptions, fs delegationPolicyFiles) ([]claudePolicyDocument, bool, string) {
 	systemDir := opts.ManagedSettingsDir
 	if systemDir == "" {
 		switch opts.goos() {
@@ -178,7 +192,7 @@ func delegationProtectedSources(ctx context.Context, opts ResolveOptions, fs del
 	if opts.ManagedSettingsDir == "" && opts.goos() == "darwin" {
 		current, err := user.Current()
 		if err != nil || filepath.Base(current.Username) != current.Username {
-			return []claudePolicyDocument{{broken: true}}, true
+			return []claudePolicyDocument{{broken: true}}, true, ""
 		}
 		machine := filepath.Join(string(filepath.Separator), "Library", "Managed Preferences")
 		preferences = []string{machine, filepath.Join(machine, current.Username)}
@@ -195,23 +209,29 @@ func delegationProtectedSources(ctx context.Context, opts ResolveOptions, fs del
 		candidates = append(candidates, markers...)
 		present, err := fs.managedSourcesPresent(candidates, preferences)
 		if err != nil || ctx.Err() != nil {
-			return []claudePolicyDocument{{broken: true}}, true
+			return []claudePolicyDocument{{broken: true}}, true, ""
 		}
 		if !present {
-			return nil, false
+			if fs.protectEmptyLocations(candidates) != nil {
+				return nil, true, "policy_location_unsafe"
+			}
+			if ctx.Err() != nil {
+				return nil, true, "policy_unavailable"
+			}
+			return nil, false, ""
 		}
 	}
 	if err := fs.ancestors(dropDir); err != nil {
-		return []claudePolicyDocument{{broken: true}}, true
+		return []claudePolicyDocument{{broken: true}}, true, ""
 	}
 	if info, err := fs.lstat(dropDir); err == nil {
 		enrolled = true
 		if !fs.safe(dropDir, info, true) {
-			return []claudePolicyDocument{{broken: true}}, true
+			return []claudePolicyDocument{{broken: true}}, true, ""
 		}
 		entries, err := fs.readDir(dropDir)
 		if err != nil {
-			return []claudePolicyDocument{{broken: true}}, true
+			return []claudePolicyDocument{{broken: true}}, true, ""
 		}
 		for _, entry := range entries {
 			if !strings.HasPrefix(entry.Name(), ".") && strings.HasSuffix(entry.Name(), ".json") {
@@ -219,20 +239,20 @@ func delegationProtectedSources(ctx context.Context, opts ResolveOptions, fs del
 			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return []claudePolicyDocument{{broken: true}}, true
+		return []claudePolicyDocument{{broken: true}}, true, ""
 	}
 	if len(preferences) > 0 {
 		for _, directory := range preferences {
 			exists, err := fs.managedPreferencesEnrolled(directory)
 			if err != nil {
-				return []claudePolicyDocument{{broken: true}}, true
+				return []claudePolicyDocument{{broken: true}}, true, ""
 			}
 			enrolled = enrolled || exists
 		}
 		for _, marker := range markers {
 			exists, err := fs.enrollmentMarker(marker)
 			if err != nil {
-				return []claudePolicyDocument{{broken: true}}, true
+				return []claudePolicyDocument{{broken: true}}, true, ""
 			}
 			enrolled = enrolled || exists
 		}
@@ -242,7 +262,7 @@ func delegationProtectedSources(ctx context.Context, opts ResolveOptions, fs del
 		data, exists, err := fs.read(path)
 		enrolled = enrolled || exists
 		if err != nil || ctx.Err() != nil {
-			return []claudePolicyDocument{{broken: true}}, true
+			return []claudePolicyDocument{{broken: true}}, true, ""
 		}
 		if !exists || filepath.Base(path) == "ao-managed-enrollment" {
 			continue
@@ -257,7 +277,7 @@ func delegationProtectedSources(ctx context.Context, opts ResolveOptions, fs del
 			cancel()
 			after, _, readErr := fs.read(path)
 			if convertErr != nil || readErr != nil || !bytes.Equal(data, after) {
-				return []claudePolicyDocument{{broken: true}}, true
+				return []claudePolicyDocument{{broken: true}}, true, ""
 			}
 			data = converted
 		}
@@ -268,5 +288,5 @@ func delegationProtectedSources(ctx context.Context, opts ResolveOptions, fs del
 		documents = append(documents, registry...)
 		enrolled = enrolled || exists
 	}
-	return documents, enrolled
+	return documents, enrolled, ""
 }

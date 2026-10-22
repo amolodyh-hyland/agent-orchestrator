@@ -64,7 +64,7 @@ func mountMulticaDelegationJournal(r chi.Router, journal MulticaDelegationJourna
 		if body.Operation == "evaluatePolicy" {
 			decision := policy(req.Context(), body.PolicyRequest)
 			switch decision.Code {
-			case "policy_absent", "policy_allowed", "policy_denied", "policy_unavailable", "policy_runtime_unknown":
+			case "policy_absent", "policy_allowed", "policy_denied", "policy_unavailable", "policy_runtime_unknown", "policy_location_unsafe":
 			default:
 				decision.Code = "policy_unavailable"
 			}

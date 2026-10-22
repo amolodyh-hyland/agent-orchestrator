@@ -131,6 +131,7 @@ func resolveFixtureDelegationPolicy(ctx context.Context, req DelegationPolicyReq
 func fixturePolicyFiles(roots ...string) delegationPolicyFiles {
 	fs := nativeDelegationPolicyFiles()
 	fs.owner = func(string, os.FileInfo) bool { return true }
+	fs.emptyOwner = fs.owner
 	fs.lstat = func(path string) (os.FileInfo, error) {
 		info, err := os.Lstat(path)
 		if err != nil || !info.IsDir() {

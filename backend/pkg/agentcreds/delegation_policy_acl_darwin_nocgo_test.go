@@ -45,17 +45,21 @@ func TestDelegationDarwinNoCGOEnrollment(t *testing.T) {
 				writeClaudeSettingsFixture(t, filepath.Join(directory, source), string(data))
 			}
 			fs := fixturePolicyFiles(directory)
-			checks := 0
+			checks, emptyChecks := 0, 0
 			fs.owner = func(path string, info os.FileInfo) bool {
 				checks++
 				return protectedPolicyOwner(path, policyFileOwnerFixture{FileInfo: info, uid: 0})
+			}
+			fs.emptyOwner = func(path string, info os.FileInfo) bool {
+				emptyChecks++
+				return protectedEmptyPolicyOwner(path, policyFileOwnerFixture{FileInfo: info, uid: 0})
 			}
 			opts := ResolveOptions{ConfigDir: t.TempDir(), ManagedSettingsDir: directory, GOOS: "darwin", Env: envFrom(nil)}
 			got := resolveManagedDelegationPolicy(context.Background(), req, opts, func() time.Time {
 				return time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
 			}, fs)
 			if source == "personal" {
-				if got.Code != "policy_absent" || checks != 0 {
+				if got.Code != "policy_absent" || checks != 0 || emptyChecks == 0 {
 					t.Fatalf("personal use blocked: code=%s protection checks=%d", got.Code, checks)
 				}
 			} else if got.Code != "policy_unavailable" || checks == 0 {

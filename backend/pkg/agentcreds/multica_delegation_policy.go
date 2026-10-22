@@ -58,7 +58,10 @@ func resolveManagedDelegationPolicy(ctx context.Context, req DelegationPolicyReq
 	if err != nil || ctx.Err() != nil {
 		return result("policy_unavailable")
 	}
-	sources, enrolled := delegationProtectedSources(ctx, opts, fs)
+	sources, enrolled, sourceFailure := delegationProtectedSources(ctx, opts, fs)
+	if sourceFailure != "" {
+		return result(sourceFailure)
+	}
 	protectedPolicies := 0
 	for _, source := range sources {
 		protectedPolicies += len(source.delegationPolicies)

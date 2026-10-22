@@ -157,6 +157,7 @@ func TestDelegationNativeEnrollmentAndProtectedPreferences(t *testing.T) {
 			mdm := "/private/var/db/ConfigurationProfiles/Settings/.cloudConfigProfileInstalled"
 			fs := nativeDelegationPolicyFiles()
 			fs.owner = func(string, os.FileInfo) bool { return true }
+			fs.emptyOwner = fs.owner
 			fs.open = func(string) (*os.File, error) { return os.Open(file) }
 			fs.lstat = func(path string) (os.FileInfo, error) {
 				if path == machine && (kind == "protected allow" || kind == "managed without policy" || kind == "expired while loading" || kind == "unreadable preferences") {
@@ -229,6 +230,9 @@ func TestDelegationDarwinPresenceBeforeACLChecks(t *testing.T) {
 		filepath.Join(preferences, "com.anthropic.claudecode.plist"),
 		filepath.Join(userPreferences, "com.anthropic.claudecode.plist"),
 		filepath.Join(preferences, "other.plist"), filepath.Join(userPreferences, "other.plist"),
+		"unsafe empty /Library/Application Support/ClaudeCode", "unsafe empty /Library/Application Support",
+		"unsafe empty " + preferences, "unsafe empty " + userPreferences,
+		"unsafe empty /private/var/db/ConfigurationProfiles/Settings", "unsafe empty /private/var/db",
 	} {
 		t.Run(source, func(t *testing.T) {
 			directory := t.TempDir()
@@ -242,9 +246,13 @@ func TestDelegationDarwinPresenceBeforeACLChecks(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			checks := 0
+			checks, emptyChecks := 0, 0
 			fs := nativeDelegationPolicyFiles()
 			fs.owner = func(string, os.FileInfo) bool { checks++; return false }
+			fs.emptyOwner = func(path string, _ os.FileInfo) bool {
+				emptyChecks++
+				return path != strings.TrimPrefix(source, "unsafe empty ")
+			}
 			fs.open = func(string) (*os.File, error) {
 				t.Fatal("opened without ACL verification")
 				return nil, os.ErrPermission
@@ -262,7 +270,10 @@ func TestDelegationDarwinPresenceBeforeACLChecks(t *testing.T) {
 				if source != "personal" && (path == preferences || path == userPreferences) {
 					return dirInfo, nil
 				}
-				return nil, os.ErrNotExist
+				if strings.HasSuffix(path, ".json") || strings.HasSuffix(path, ".plist") || strings.Contains(path, ".cloudConfig") || strings.HasSuffix(path, "ao-managed-enrollment") || strings.HasSuffix(path, "managed-settings.d") || path == preferences || path == userPreferences {
+					return nil, os.ErrNotExist
+				}
+				return dirInfo, nil
 			}
 			fs.readDir = func(path string) ([]os.DirEntry, error) {
 				if source == "unreadable preferences" {
@@ -276,10 +287,13 @@ func TestDelegationDarwinPresenceBeforeACLChecks(t *testing.T) {
 			req, _ := delegationPolicyFixture()
 			got := resolveManagedDelegationPolicy(context.Background(), req, ResolveOptions{ConfigDir: directory, GOOS: "darwin", Env: envFrom(nil)}, time.Now, fs)
 			want := "policy_unavailable"
+			if strings.HasPrefix(source, "unsafe empty ") {
+				want = "policy_location_unsafe"
+			}
 			if source == "personal" || source == "empty preferences" {
 				want = "policy_absent"
-				if checks != 0 {
-					t.Fatal("personal use required an ACL reader")
+				if checks != 0 || emptyChecks == 0 {
+					t.Fatal("personal use did not verify empty locations separately")
 				}
 			}
 			if got.Code != want {

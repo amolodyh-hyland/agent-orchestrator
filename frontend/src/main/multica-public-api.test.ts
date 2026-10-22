@@ -418,7 +418,7 @@ function gate() {
 
 describe("coordinator policy at the HTTP send boundary", () => {
  for (const waitAt of ["coordinator hook", "client hook", "queue", "credentials"] as const) {
-  it.each(["revocation", "expiry"])(`blocks %s during ${waitAt} without sending an admission`, async (change) => {
+  it.each(["revocation", "expiry", "unsafe location"])(`blocks %s during ${waitAt} without sending an admission`, async (change) => {
    const entered = gate(), resumed = gate(), attempted = gate();
    let waiting = false, revoked = false, clockNow = 0;
    const expiry = 100;
@@ -426,7 +426,7 @@ describe("coordinator policy at the HTTP send boundary", () => {
    const client = await connected({ delegationsEnabled: true, ...(waitAt === "client hook" ? { policy: localHook } : {}) });
    let row: DelegationRecord | null = null;
    const journal: DelegationJournal = {
-    evaluatePolicy: async () => ({ code: revoked ? "policy_denied" : clockNow >= expiry ? "policy_unavailable" : "policy_allowed" }),
+    evaluatePolicy: async () => ({ code: revoked ? change === "unsafe location" ? "policy_location_unsafe" : "policy_denied" : clockNow >= expiry ? "policy_unavailable" : "policy_allowed" }),
     get: async () => structuredClone(row), find: async () => structuredClone(row),
     reserve: async (record) => { row = structuredClone(record); return structuredClone(row); },
     save: async (record) => { row = { ...structuredClone(record), version: record.version + 1 }; if (row.attempted) attempted.release(); return structuredClone(row); },
@@ -451,11 +451,11 @@ describe("coordinator policy at the HTTP send boundary", () => {
    try {
     if (waitAt === "queue") await attempted.promise;
     else await entered.promise;
-    if (change === "revocation") revoked = true;
+    if (change === "revocation" || change === "unsafe location") revoked = true;
     else clockNow = expiry;
    } finally { resumed.release(); }
    await queuedRead;
-   expect(await processing).toMatchObject({ failureCode: change === "revocation" ? "policy_denied" : "policy_unavailable" });
+   expect(await processing).toMatchObject({ failureCode: change === "revocation" ? "policy_denied" : change === "unsafe location" ? "policy_location_unsafe" : "policy_unavailable" });
    expect(calls.filter((call) => call.method === "POST")).toEqual([]);
   });
  }

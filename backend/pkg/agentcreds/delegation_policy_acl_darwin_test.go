@@ -164,5 +164,66 @@ func darwinACLFixtureFiles(directory string) delegationPolicyFiles {
 		}
 		return true
 	}
+	fs.emptyOwner = fs.owner
 	return fs
+}
+
+func TestDelegationDarwinDeletedPolicyCannotHideUnsafeDirectoryACL(t *testing.T) {
+	worker, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ancestor := range []bool{false, true} {
+		t.Run(map[bool]string{false: "policy directory", true: "ancestor directory"}[ancestor], func(t *testing.T) {
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			directory := filepath.Join(root, "managed")
+			if err := os.Mkdir(directory, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			req, policy := delegationPolicyFixture()
+			data, err := json.Marshal(map[string]any{"aoMulticaDelegation": policy})
+			if err != nil {
+				t.Fatal(err)
+			}
+			file := filepath.Join(directory, "managed-settings.json")
+			if err := os.WriteFile(file, data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			fs := darwinACLFixtureFiles(root)
+			opts := ResolveOptions{ConfigDir: t.TempDir(), ManagedSettingsDir: directory, GOOS: "darwin", Env: envFrom(nil)}
+			check := func(want string) {
+				t.Helper()
+				got := resolveManagedDelegationPolicy(context.Background(), req, opts, func() time.Time {
+					return time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+				}, fs)
+				if got.Code != want {
+					t.Fatalf("code=%s, want %s", got.Code, want)
+				}
+			}
+			check("policy_allowed")
+			target := directory
+			if ancestor {
+				target = root
+			}
+			principal := "user:" + worker.Username
+			if worker.Uid == "0" {
+				principal = "user:daemon"
+			}
+			if output, err := exec.Command("/bin/chmod", "+a", principal+" allow delete_child", target).CombinedOutput(); err != nil {
+				t.Fatalf("fixture ACL: %v: %s", err, output)
+			}
+			check("policy_unavailable")
+			if err := os.Remove(file); err != nil {
+				t.Fatal(err)
+			}
+			check("policy_location_unsafe")
+			if output, err := exec.Command("/bin/chmod", "-N", target).CombinedOutput(); err != nil {
+				t.Fatalf("remove fixture ACL: %v: %s", err, output)
+			}
+			check("policy_absent")
+		})
+	}
 }

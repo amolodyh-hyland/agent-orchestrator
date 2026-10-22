@@ -106,6 +106,7 @@ func TestMulticaPolicyUsesExistingPrivateBoundary(t *testing.T) {
 		{"allow", "policy_allowed", "", true, 200, "policy_allowed"},
 		{"deny", "policy_denied", "", true, 200, "policy_denied"},
 		{"unavailable", "policy_unavailable", "", true, 200, "policy_unavailable"},
+		{"unsafe location", "policy_location_unsafe", "", true, 200, "policy_location_unsafe"},
 		{"unknown redacted", "private-policy-content", "", true, 200, "policy_unavailable"},
 		{"unsigned", "policy_allowed", "", false, 403, ""},
 		{"renderer", "policy_allowed", "http://localhost:5173", true, 403, ""},
