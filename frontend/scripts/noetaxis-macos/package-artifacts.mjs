@@ -48,6 +48,7 @@ export async function writeInstallerArtifacts(outputDir) {
 		if (name.endsWith(".sh")) await chmod(path.join(installerDir, name), 0o755);
 	}
 	await cp(path.join(scriptDir, "common.sh"), path.join(installerDir, "pkg-scripts/common.sh"));
+	await cp(path.join(scriptDir, "human-install.md"), path.join(outputDir, "HUMAN-INSTALL.md"));
 	return installerDir;
 }
 

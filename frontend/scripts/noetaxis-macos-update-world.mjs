@@ -8,7 +8,7 @@ import { closeSync, existsSync, openSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { writeManifest } from "./noetaxis-macos/package-artifacts.mjs";
+import { writeArtifactChecksums, writeManifest } from "./noetaxis-macos/package-artifacts.mjs";
 import { fixtureRoot, fixtureSpawn as spawn, fixtureSpawnSync as spawnSync } from "./noetaxis-macos-fixture-registry.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -19,6 +19,8 @@ export const oldVersion = "0.13.4-noetaxis.1111111";
 export const newVersion = "0.13.4-noetaxis.2222222";
 const newRevision = "2222222aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const appName = "Agent Orchestrator.app";
+export const commandTimeoutMs = Number(process.env.NOETAXIS_TEST_COMMAND_TIMEOUT_MS ?? 150_000);
+assert.ok(Number.isSafeInteger(commandTimeoutMs) && commandTimeoutMs > 0 && commandTimeoutMs <= 2_147_483_647, "NOETAXIS_TEST_COMMAND_TIMEOUT_MS must be a positive integer of milliseconds (at most 2147483647)");
 
 export function execute(command, args, options = {}) {
 	const result = spawnSync(command, args, { encoding: "utf8", ...options });
@@ -115,6 +117,7 @@ export async function makeWorld(t, label, options = {}) {
 	await makeAppWithFakeCli(targetApp, oldVersion);
 	await makeAppWithFakeCli(newApp, newVersion, newRevision);
 	await writeManifest(newApp, path.join(artifactDir, "MANIFEST.sha256"));
+	await writeArtifactChecksums(artifactDir);
 	await symlink(path.join(fakesDir, "pgrep"), path.join(bin, "pgrep"));
 	await symlink(path.join(fakesDir, "ps"), path.join(bin, "ps"));
 
@@ -201,7 +204,7 @@ export async function makeWorld(t, label, options = {}) {
 		// Output goes to files, not pipes: a stray grandchild that outlives the script can then not hold
 		// the test up, and a timeout keeps everything the script printed plus the processes still alive
 		// under this world (evidence for the rare multi-minute stalls seen on a loaded host).
-		run(args, { input = "", scriptsDir: requestedScripts = realScriptsDir, script = "install.sh", extraEnv = {}, cwd, timeout = 150_000 } = {}) {
+		run(args, { input = "", scriptsDir: requestedScripts = realScriptsDir, script = "install.sh", extraEnv = {}, cwd, timeout = commandTimeoutMs } = {}) {
 			const scriptsDir = requestedScripts === realScriptsDir ? world.scriptsDir : requestedScripts;
 			const outPath = path.join(root, `run-${Math.random().toString(36).slice(2)}.out`);
 			const errPath = `${outPath}.err`;

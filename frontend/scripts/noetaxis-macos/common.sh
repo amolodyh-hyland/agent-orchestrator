@@ -498,6 +498,22 @@ noetaxis_daemon_running() {
 	noetaxis_pattern_running "$1/Contents/Resources/daemon/ao daemon"
 }
 
+noetaxis_assert_fast_idle() {
+	local app_path="$1" pid pids=""
+	if noetaxis_shipit_running; then
+		noetaxis_error 'ShipIt is running; wait for it to finish. It is never stopped.'
+		return 22
+	fi
+	for pid in $(pgrep -if "$(noetaxis_regex_escape "$app_path/Contents/")" 2>/dev/null || true); do
+		[[ "$pid" =~ ^[0-9]+$ && "$pid" -ne "$$" ]] || continue
+		if noetaxis_process_executable_is_in_bundle "$app_path" "$pid"; then pids="$pids${pids:+ }$pid"; fi
+	done
+	if [[ -n "$pids" ]]; then
+		noetaxis_error "Verified bundle processes still run (pid $pids); nothing was swapped."
+		return 56
+	fi
+}
+
 noetaxis_desktop_running() {
 	local app_path="$1"
 	noetaxis_pattern_running "$app_path/Contents/MacOS/" || noetaxis_pattern_running "$app_path/Contents/Frameworks/"

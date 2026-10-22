@@ -8,7 +8,7 @@ import os from "node:os";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { execute, fakesDir, makeWorld, mutatedScripts, newVersion, oldVersion, realScriptsDir } from "./noetaxis-macos-update-world.mjs";
+import { commandTimeoutMs, execute, fakesDir, makeWorld, mutatedScripts, newVersion, oldVersion, realScriptsDir } from "./noetaxis-macos-update-world.mjs";
 import { fixtureRoot, fixtureSpawn as spawn, fixtureSpawnSync as spawnSync } from "./noetaxis-macos-fixture-registry.mjs";
 
 const darwin = { skip: process.platform !== "darwin" };
@@ -501,7 +501,7 @@ test("only processes of this bundle are touched: lookalike paths and other apps 
 	assert.ok(remaining.some((c) => c.startsWith("/Users/someone/Other/")));
 });
 
-test("the update code can only send SIGTERM, and only from noetaxis_signal_own_pid", async () => {
+test("cautious updates signal only TERM; fast TERM/KILL is isolated in its guarded signal site", async () => {
 	const text = await readFile(path.join(realScriptsDir, "update-lib.sh"), "utf8");
 	// Comments and messages may talk about SIGTERM/SIGKILL; executable lines may not mention a stronger signal.
 	const executable = text.split("\n").filter((line) => !/^\s*(#|(printf|noetaxis_update_say|noetaxis_update_warn|noetaxis_error)\b)/.test(line)).join("\n");
@@ -516,8 +516,11 @@ test("the update code can only send SIGTERM, and only from noetaxis_signal_own_p
 		if (code.startsWith("#")) return;
 		if (/NOETAXIS_KILL|\/bin\/kill|(^|[\s;|&(`$])kill\s+-/.test(code) && !/^(noetaxis_update_say|noetaxis_update_log|noetaxis_error|printf)\b/.test(code)) signalLines.push(`${currentFunction}:${index + 1}: ${code}`);
 	});
-	assert.deepEqual(signalLines.map((l) => l.split(":")[0]), ["noetaxis_signal_own_pid"], signalLines.join("\n"));
+	assert.deepEqual(signalLines.map((l) => l.split(":")[0]), ["noetaxis_signal_own_pid", "noetaxis_fast_signal"], signalLines.join("\n"));
 	assert.match(signalLines[0], /-TERM/);
+	assert.match(signalLines[1], /NOETAXIS_CONFIRMED_BUNDLE=1.*"-\$signal"/);
+	const fastSignal = text.match(/noetaxis_fast_signal\(\) \{([\s\S]*?)\n\}/)[1];
+	assert.match(fastSignal, /update_fast.*-eq 1.*signal.*== TERM.*signal.*== KILL/);
 	// The other installer scripts still contain no signal, quit or stop command at all.
 	for (const file of ["common.sh", "install.sh", "rollback.sh", "update.sh", "pkg-scripts/preinstall", "pkg-scripts/postinstall"]) {
 		const source = (await readFile(path.join(realScriptsDir, file), "utf8")).split("\n").filter((line) => !line.trim().startsWith("#")).join("\n");
@@ -1884,7 +1887,7 @@ test("--detached needs --yes, prints the log path first, re-runs in a new sessio
 	assert.match(started.stdout, /that session ENDS when AO quits/);
 	const logPath = lines[0].replace("Update log: ", "");
 	let log = "";
-	for (let attempt = 0; attempt < 600; attempt += 1) {
+	for (let attempt = 0; attempt < Math.ceil(commandTimeoutMs / 100); attempt += 1) {
 		log = await readFile(logPath, "utf8").catch(() => "");
 		if (log.includes("Update summary")) break;
 		await new Promise((resolve) => setTimeout(resolve, 100));

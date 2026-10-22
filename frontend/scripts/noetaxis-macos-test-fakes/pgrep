@@ -3,6 +3,7 @@
 sim_tick
 args=("$@")
 pattern="${args[${#args[@]}-1]}"
+if [[ "$pattern" == *codex* ]]; then sim_log "agent-probe $(/bin/date '+%s')"; fi
 status=1
 grep_flags=-Eq
 [[ "$1" == -*i* ]] && grep_flags=-Eiq
@@ -11,7 +12,7 @@ while IFS='|' read -r pid command; do
 	if printf '%s' "$command" | /usr/bin/grep "$grep_flags" -- "$pattern"; then
 		status=0
 		case "$1" in
-			-fl|-lf) printf '%s %s\n' "$pid" "$command" ;;
+			-*l*) printf '%s %s\n' "$pid" "$command" ;;
 			*) printf '%s\n' "$pid" ;;
 		esac
 	fi

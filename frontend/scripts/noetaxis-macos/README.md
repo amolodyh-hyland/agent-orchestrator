@@ -30,6 +30,7 @@ The output contains:
 - `Agent-Orchestrator-<version>-arm64.pkg`
 - `Agent-Orchestrator-<version>-arm64.dmg`
 - `BUILD-INFO.txt`
+- `HUMAN-INSTALL.md`, the human install guide generated from `human-install.md`
 - `installer/`, including the matching update, install, rollback, survivor helpers and PKG scripts
 - `SHA256SUMS`, covering the installer, packages, manifest and build information (the app itself is covered by `MANIFEST.sha256`)
 
@@ -37,20 +38,36 @@ The app is signed with an ad-hoc signature (`codesign --sign -`). It has no Appl
 
 ## Update with one command
 
-`update.sh` (the same as `install.sh --update`) does the whole update from one command run in **your own Terminal**: it captures the current state, shows a plan and asks, stops AO in the safest supported order, backs up, installs, restarts, checks the result and rolls back by itself if the new app does not come up healthy. The manual steps of the earlier flow are kept in Appendix A, and the default `install.sh` (no `--update`) still never stops anything.
+**`update.sh --fast` is RECOMMENDED for routine updates**, run from **your own Terminal**. It verifies the build, shows a short plan, asks for `yes` once, quits AO completely, backs up, swaps the app, relaunches and checks health. Sessions will be restored by AO on launch. `update.sh` is equivalent to `install.sh --update`; omitting `--fast` retains the original cautious updater described below. The default `install.sh` (no `--update`) still never stops anything.
 
 ```bash
 ART="$HOME/ao-builds/noetaxis-<shortsha>"      # the build folder: it holds Applications/ and installer/
 AO="/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao"
 
-"$ART/installer/update.sh" --dry-run           # verify, capture and print the plan; changes nothing
-"$ART/installer/update.sh"                     # plan, then asks: type "yes"
-"$ART/installer/update.sh" --yes --end-sessions --restore-sessions   # no question; stop session agents and resume them afterwards
+"$ART/installer/update.sh" --fast --dry-run    # verify and print the short plan; changes nothing
+"$ART/installer/update.sh" --fast              # RECOMMENDED: plan, then type "yes" once
+"$ART/installer/update.sh" --fast --yes        # the same routine update without a question
 ```
 
 `ao` is usually **not on `PATH` in other terminals** (it is only the CLI bundled inside the app), so every command in this document and every command the scripts print uses the full path `"$AO"` above. The `.app` argument is optional: it defaults to `../Applications/Agent Orchestrator.app` next to `installer/`.
 
-### What it does, in this order
+### Fast mode
+
+Fast mode checks `SHA256SUMS` from the complete build folder, `MANIFEST.sha256`, app signature and version. It stages and verifies the app before stopping anything. It uses the same selected state backup (`ao.db` plus WAL/SHM, `app-state.json`, `update-settings.json`, `editor-settings.json`) and old-app backup as the cautious updater, with `BACKUP_COMPLETE` written before moving the old app. State is copied after shutdown so the backup includes AO's final writes. Capture scratch stays in a private directory under the human's home, outside `/tmp`.
+
+It tries the System Events tray click; if permissions are denied it tells you to click **Quit AO Completely** and waits in the same run for up to 120 seconds. `--manual-quit` skips scripting. It waits briefly for the daemon to stop, then uses `ao stop` if necessary, after the existing daemon identity check. A foreign daemon is never stopped. Helpers do not prolong the manual quit wait: after the main app quits, all remaining verified bundle executables get a separate wait of up to 60 seconds, then TERM, a five-second grace, an executable/start-time/command identity recheck, and KILL if still verified. Each signal is logged. Unverified executables, deleted executable identities, external agent CLIs and other apps are never signalled. External agent CLI candidates wait at most ten seconds and are then listed as informational; their continued existence does not block the swap. ShipIt still blocks an update.
+
+Fast mode performs **no session list, per-session exit/restore calls, or machine-wide ancestry scans** by default, regardless of session count. AO restores its own sessions from `~/.ao` on launch. `--restore-sessions` explicitly requests the existing best-effort restore pass, one attempt per captured live session, and can increase runtime. It never calls `exit-agent` in fast mode. The session/force/survivor and Multica restart options belong to the cautious mode and cannot be combined with `--fast`.
+
+The app swap, relaunch, daemon health verification and post-install checks reuse the existing flow. Failures after moving the old app restore it automatically; a healthy rollback returns 60. `--rollback-restore-db` retains its existing opt-in behavior if a schema migration prevents the previous app from becoming healthy. Rollback also uses bundle-only process checks in fast mode. Routine updates target roughly **1–3 minutes**; copying a large app, manual interaction, a failed health wait or rollback can take longer. Fast defaults are 120s for quit, 10s for daemon stop, 60s for health; explicit `--quit-timeout`, `--stop-timeout` and `--health-timeout` override them. A smaller stop timeout also shortens the bundle/agent waits for diagnostics; it cannot raise their 60s/10s caps.
+
+### Cautious mode: what it does, in this order
+
+Omit `--fast` to use the unchanged cautious workflow, including per-session identity checks, machine-wide ancestry analysis, ambiguity refusals and final survivor scans. For example:
+
+```bash
+"$ART/installer/update.sh" --yes --end-sessions --restore-sessions
+```
 
 1. **Verify** (read only): manifest, version stamp, signature, free space, and that the Applications folder is writable (it asks for your administrator password once here, before anything stops, if it is not).
 2. **Capture** (read only), into a temporary folder that later becomes `state-before/` of the backup: `"$AO" status --json`, `"$AO" session ls --all --include-terminated --json`, `"$AO" multica status --json` (is `AO_MULTICA_DAEMON` hosting on), `multica daemon status --output json` (a standalone daemon), the local Multica server's Docker containers (`docker ps`, information only), the processes of this app, the database schema version.
@@ -71,11 +88,11 @@ AO="/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao"
 12. **`--restore-sessions`**: one `"$AO" session restore <id>` per session that was live (for an exited agent this resumes it), then it re-reads the session list and reports each one as *came back*, *restore FAILED* or *reported success but is not live*. Restore has been unreliable; a partial result is exit 63, not a failure of the update. `--restore-sessions` also applies when the update ends on the previous app (a healthy automatic rollback, or the reopen after a failure before the swap); if no healthy app was reached, the summary says no restore ran and lists the session ids to resume by hand.
 13. **Summary** and exit code: what was stopped, where the backup is, versions old and new, health and check results, session restore results, and what is left for you.
 
-### Quitting the app completely
+### Cautious mode: quitting the app completely
 
 Upstream (`frontend/src/main/desktop-quit.ts`, from the macOS tray change) turns Cmd+Q, the Dock "Quit", an AppleScript `quit` and a plain SIGTERM into "close the window" on macOS. Only the tray item **Quit AO Completely** (and a system shutdown) exits the app, and there is no CLI command, daemon API or URL for it. The item's label is translated, so the script tries the label of every UI locale the app ships (a test keeps the list in step with `renderer/i18n/*.json`). So the script drives that tray item through the accessibility API (`osascript` with System Events), for the exact process id of this bundle's main process (never by bundle id, which another copy shares). macOS asks once to let your terminal control System Events and to grant it Accessibility. If AO asks about unsaved chat drafts while quitting, answer in the app; the wait is bounded, so rerun if it ran out. This path has been **compiled and tested against fakes only**, not against a real tray: if it cannot click, it says so and waits up to `--quit-timeout` seconds (default 60) for you to click **Quit AO Completely** yourself, which is always the fallback. `--manual-quit` skips the scripting and just waits. After the wait, `--force` sends SIGTERM to the app's own processes (a tray build may treat it as a window close); if the app is still there the run stops with exit 54. Without `--kill-survivors`, the updater never sends SIGKILL to AO processes.
 
-### What the signal guarantee covers
+### Cautious mode: what the signal guarantee covers
 
 Tray scripting requires **both** System Settings > Privacy & Security > **Automation > your terminal > System Events**, and **Accessibility > your terminal**. If scripting times out, choose **Quit AO Completely** by hand first, then rerun. Updating works with the desktop app already quit and does not require scripting permissions in that case.
 
@@ -226,13 +243,11 @@ The new signature may trigger a Keychain prompt for **Agent Orchestrator Safe St
 ```bash
 shellcheck -x frontend/scripts/noetaxis-macos/*.sh \
   frontend/scripts/noetaxis-macos/pkg-scripts/*
-node --test frontend/scripts/noetaxis-macos.node-test.mjs \
-  frontend/scripts/noetaxis-macos-update.node-test.mjs \
-  frontend/scripts/noetaxis-macos-update-ancestry.node-test.mjs \
-  frontend/scripts/noetaxis-macos-update-enoent.node-test.mjs \
-  frontend/scripts/noetaxis-macos-update-teardown.node-test.mjs
+node --test frontend/scripts/noetaxis-macos*.node-test.mjs
 ```
+
+The fake-world harness registers helper identities for safe cleanup. On a busy Mac, run suites with limited test concurrency; `NOETAXIS_TEST_COMMAND_TIMEOUT_MS=300000` raises the harness's outer command budget from its normal 150 seconds. The detached test uses the same budget. This does not change installer wait options or the fast-mode timing assertions.
 
 The end-to-end test uses a synthetic app in a temporary home and Applications directory. It expands the unsigned PKG with `pkgutil`, checks its payload and scripts, creates and mounts the DMG read-only, and detaches it. It does not run `installer`, launch Electron, connect to the live daemon, access the real Keychain, or register a URL handler. Set `NOETAXIS_TEST_ARTIFACTS=/private/tmp/noetaxis-macos-test-artifacts` to retain the generated test app, package, and disk image for inspection.
 
-The update tests (`noetaxis-macos-update*.node-test.mjs`, helper `noetaxis-macos-update-world.mjs`, fakes in `noetaxis-macos-test-fakes/`) cover the plan and confirmation, the refusal with live sessions, the stop order, SIGTERM-only --force handling, separately confirmed survivor teardown, backup before the swap, restart and health, automatic rollback (with and without the database), session restore reporting, the AO-session guard and `--detached`, state capture, executable and ancestry identity, deleted-executable descendants and orchestrators, bounded concurrent exits, fixture cleanup after failures/timeouts, automatic installer/checksum packaging, and mutation checks that break each safety rule (no confirmation, signalling other bundles, no backup, always SIGKILL, no rollback) and require the tests to notice. `buildPackages` copies the complete `installer/` directory and writes `SHA256SUMS`; `build.mjs` refreshes checksums after writing `BUILD-INFO.txt`.
+The update tests (`noetaxis-macos-update*.node-test.mjs`, helper `noetaxis-macos-update-world.mjs`, fakes in `noetaxis-macos-test-fakes/`) cover fast mode with 56 sessions and no session calls/ancestry scan, single confirmation/`--yes`, denied permission and manual quit, slow external CLIs, bundle-only TERM/KILL with identity rechecks, foreign/unverified processes, checksum failure and automatic rollback. They also retain the cautious plan and confirmation, refusal with live sessions, stop order, SIGTERM-only --force handling, separately confirmed survivor teardown, backup before the swap, restart and health, automatic rollback (with and without the database), session restore reporting, AO-session guard and `--detached`, state capture, executable and ancestry identity, deleted-executable descendants and orchestrators, bounded concurrent exits, fixture cleanup after failures/timeouts, automatic installer/checksum packaging, and mutation checks that break safety rules. `buildPackages` copies the complete `installer/` directory, produces `HUMAN-INSTALL.md` from its template, and writes `SHA256SUMS`; `build.mjs` refreshes checksums after writing `BUILD-INFO.txt`.

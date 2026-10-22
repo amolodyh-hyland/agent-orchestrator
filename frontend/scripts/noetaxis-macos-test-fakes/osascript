@@ -7,6 +7,11 @@ case "$script" in
 	*"to quit"*|*"quit app"*) sim_log "FORBIDDEN plain AppleScript quit"; : > "$SIM/FORBIDDEN"; exit 1 ;;
 esac
 if sim_has tray_fail; then
+	if sim_has manual_quit_ticks; then
+		command="$(sim_command_of "${@: -1}")"
+		app="${command%%/Contents/*}"
+		sim_timer "$(sim_value manual_quit_ticks)" "sim_quit_bundle '$app'"
+	fi
 	printf 'osascript: not allowed assistive access\n' >&2
 	exit 1
 fi
