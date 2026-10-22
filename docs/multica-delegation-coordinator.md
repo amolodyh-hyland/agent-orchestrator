@@ -287,3 +287,85 @@ policy denial/unknown results and safe reasons, token forgery/replay/hash mismat
 frame/focus checks, scripted-click rejection and absence of event-driven dispatch.
 The native dialog is injected in flow tests; the installed app and live daemon
 are not used.
+
+## Status, reconciliation and explicit cancellation (TK-MA67)
+
+`frontend/src/main/multica-delegation-status.ts` owns desktop status polling.
+Confirming a request starts monitoring even if the dialog closes. Opening the
+shared task/project delegation dialog restores the current request
+from the daemon journal by AO project/task identity, including after restart.
+Monitoring continues in main until terminal state, connection invalidation or
+shell disposal. A fresh dialog read returns the cached narrow projection;
+renderer refreshes cannot bypass main's backoff. No CLI or public daemon route
+was added.
+
+The coordinator's `reconcile` handle reads only: it looks up an attempted unknown
+submission with its original scoped idempotency key, then uses the accepted
+remote delegation ID. It never replays admission or issues cancellation. Empty,
+paginated and non-unique key lookups remain unknown, with increasing delay.
+Polling starts at two seconds and doubles on unsuccessful reads or unresolved
+lookups to a sixty-second ceiling. Rate limits respect the client's bounded
+Retry-After delay. Reads are serialized with processing/cancellation and use
+journal compare-and-set updates. Terminal records stop polling and never regress;
+opaque revisions are never numerically or lexically ordered. Active scheduler
+states may change in either direction, including deferred and unavailable.
+
+Credential/scope failures pause polling and show reauthentication, preserving the
+last authoritative status and request ID. Saving a replacement member credential
+for the same workspace resumes checks without creating a new request. Connection
+changes stop the old monitor; each poll checks the configured binding before
+resolving credentials. No credential, exception, provider problem detail, payload,
+result/error text, branch or work directory enters the renderer status DTO.
+Only local/remote identity, safe lifecycle state, coarse failure code and
+connection health are projected. The journal retains the allow-listed Public API
+DTO only. AO task/issue status is never changed by this projection.
+
+Cancellation is available only for an accepted remote delegation ID. The isolated
+preload's trusted click/user-activation check requests a focused shell main-frame
+IPC action. Main loads the confirmed journal record and displays a native dialog
+showing the configured destination and exact remote delegation/task IDs. Native
+approval mints and consumes a single-use main-only token bound to that target.
+The coordinator rechecks the remote ID and the live confirmation guard, including
+a final check after credential resolution and immediately before the HTTP write.
+Navigation, server or credential changes, expiry and disposal invalidate pending approval. No token or
+private human handle is exposed to the renderer, CLI, events or automation.
+
+The cancellation fact commits before sending. A timeout, revision conflict,
+unauthorized response or nonterminal success leaves `cancellation_requested`.
+Status checks remain read-only even with that fact present. Retrying cancellation
+requires another native user confirmation; orchestrator `process` calls cannot
+send a cancellation from the persisted fact alone. A completion race retains
+Multica's authoritative completed/failed/cancelled terminal outcome. Reassignment
+and AO status events do not request cancellation.
+
+```mermaid
+sequenceDiagram
+    participant UI as Shared delegation dialog
+    participant Main as Main status flow
+    participant Journal as Daemon journal
+    participant MU as Multica Public API
+    UI->>Main: Read status by AO project/task
+    Main->>Journal: Restore confirmed request
+    loop Until terminal / auth pause / invalidation
+        Main->>MU: GET by request key or accepted delegation ID
+        MU-->>Main: Safe status DTO or stable failure code
+        Main->>Journal: Compare-and-set authoritative observation
+    end
+    UI->>Main: Trusted cancel click with remote ID
+    Main->>Main: Native confirmation + single-use approval
+    Main->>Journal: Persist cancellation requested
+    Main->>MU: POST exact delegation ID /cancel with If-Match
+    MU-->>Main: Authoritative status
+```
+
+The inspected Multica `origin/main` already implements the three needed operations
+in `server/pkg/publicapi/v1/{routes.go,openapi.yaml}` and its public delegation
+handlers: `GET /api/v1/delegations?idempotency_key=...`,
+`GET /api/v1/delegations/{delegation_id}` and
+`POST /api/v1/delegations/{delegation_id}/cancel`. No Multica changes are required
+for this AO-side implementation. The server's independent default-off rollout
+gate remains in force; no live server or installed application is exercised.
+
+Coverage is in `multica-delegation-status.test.ts`, the coordinator, authority,
+confirmation IPC, Public API and real-journal integration suites, and
+`renderer/components/MulticaDelegationDialog.test.tsx`.

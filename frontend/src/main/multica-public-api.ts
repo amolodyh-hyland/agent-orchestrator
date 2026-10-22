@@ -140,7 +140,7 @@ export function createMulticaPublicApi(options: PublicApiOptions) {
 				if (!current()) return failure("connection_changed");
 				if (controller.signal.aborted) return failure("timeout");
 			}
-			if (body && confirmationCurrent) {
+			if (confirmationCurrent) {
 				try { if (confirmationCurrent() !== true) return failure("confirmation_required"); }
 				catch { return failure("confirmation_required"); }
 			}
@@ -244,7 +244,7 @@ export function createMulticaPublicApi(options: PublicApiOptions) {
 				return result;
 			});
 		}),
-		cancelDelegation: (id: string, confirmed: boolean, revision?: string) => run(async () => {
+		cancelDelegation: (id: string, confirmed: boolean, revision?: string, confirmationCurrent?: DelegationConfirmationGuard) => run(async () => {
 			if (confirmed !== true) return failure("confirmation_required");
 			const expected = uuid(id);
 			let ifMatch: string | undefined;
@@ -257,7 +257,7 @@ export function createMulticaPublicApi(options: PublicApiOptions) {
 				const result = delegation(v, binding.workspaceId);
 				if (result.delegation_id !== expected) throw new Error("identity mismatch");
 				return result;
-			}, undefined, undefined, ifMatch);
+			}, undefined, undefined, ifMatch, undefined, confirmationCurrent);
 		}),
 		delegate: (input: CreatePublicDelegation, idempotencyKey: string, confirmed: boolean, beforeSend: DelegationSendGuard, confirmationCurrent?: DelegationConfirmationGuard) => run(async () => {
 			if (options.delegationsEnabled !== true) return failure("delegations_disabled");

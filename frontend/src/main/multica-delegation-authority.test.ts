@@ -27,7 +27,7 @@ describe("private human confirmation capability", () => {
 		const services = createMulticaDelegationCoordinator({ journal, client: () => { throw new Error("must not connect"); }, confirmations: createMainProcessDelegationAuthority(Buffer.alloc(32, 7)) });
 		expect(services.taskOrchestrator).toBe(services.projectOrchestrator);
 		for (const handle of [services.taskOrchestrator, services.projectOrchestrator]) {
-			expect(Object.keys(handle).sort()).toEqual(["process", "processTask"]);
+			expect(Object.keys(handle).sort()).toEqual(["process", "processTask", "reconcile"]);
 			expect(() => Reflect.get(handle, "confirmFromUserAction")({ forged: true })).toThrow();
 		}
 	});

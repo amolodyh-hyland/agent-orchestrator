@@ -1,12 +1,13 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { DelegationConfirmationBridge, DelegationDraft } from "../../shared/multica-delegation-confirmation";
+import type { DelegationConfirmationBridge, DelegationDraft, DelegationStatus } from "../../shared/multica-delegation-confirmation";
 import { MulticaDelegationDialog } from "./MulticaDelegationDialog";
 import { installDelegationUserAction } from "../../shared/multica-delegation-user-action";
 
 function fixture() {
 	let listener: Parameters<DelegationConfirmationBridge["onResult"]>[0] = () => undefined;
 	const bridge: DelegationConfirmationBridge = {
+		status: vi.fn(async () => ({ ok: true as const, status: null })),
 		setCredential: vi.fn(async () => false),
 		preview: vi.fn(async (request: DelegationDraft) => ({ ok: true as const, preview: {
 			id: "preview", hash: "hash", expiresAt: Date.now() + 120_000, request: { ...request },
@@ -105,4 +106,39 @@ describe("shared task and project delegation dialog", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Forged approval" }));
 		expect(invoke).not.toHaveBeenCalled();
 	});
+	it.each(["submission_unknown", "cancellation_requested"])("shows %s without claiming completion", async (state) => {
+		const f = fixture();
+		const status: DelegationStatus = { requestId: "request", projectId: "project", taskId: "task", workspaceId: "workspace", serverOrigin: "https://multica.example", serverKey: "configured",
+			state, remoteId: state === "submission_unknown" ? null : "remote", remoteTaskId: "remote-task", remoteStatus: state === "submission_unknown" ? null : "running", terminal: false, failureCode: null, connection: "current" };
+		vi.mocked(f.bridge.status).mockResolvedValue({ ok: true, status });
+		render(<MulticaDelegationDialog orchestrator="task" projectId="project" taskId="task" bridge={f.bridge} />);
+		fireEvent.click(screen.getByRole("button", { name: "Delegate to Multica" }));
+		const panel = await screen.findByLabelText("Delegation status");
+		expect(panel).toHaveTextContent(state === "submission_unknown" ? "Submission outcome is unknown" : "Cancellation requested. Waiting for Multica");
+		expect(screen.queryByRole("button", { name: "Request cancellation" })).not.toBeInTheDocument();
+	});
+	it("offers cancellation by exact remote ID but synthetic clicks cannot invoke it", async () => {
+		const f = fixture();
+		vi.mocked(f.bridge.status).mockResolvedValue({ ok: true, status: { requestId: "request", projectId: "project", taskId: "task", workspaceId: "workspace", serverOrigin: "https://multica.example", serverKey: "configured",
+			state: "accepted", remoteId: "remote", remoteTaskId: "remote-task", remoteStatus: "queued", terminal: false, failureCode: null, connection: "current" } });
+		const invoke = vi.fn(async () => undefined); installDelegationUserAction(document, invoke);
+		render(<MulticaDelegationDialog orchestrator="project" projectId="project" taskId="task" bridge={f.bridge} />);
+		fireEvent.click(screen.getByRole("button", { name: "Delegate to Multica" }));
+		const cancel = await screen.findByRole("button", { name: "Request cancellation" });
+		expect(cancel).toHaveAttribute("data-delegation-cancel-request-id", "request");
+		expect(cancel).toHaveAttribute("data-delegation-cancel-remote-id", "remote");
+		fireEvent.click(cancel); expect(invoke).not.toHaveBeenCalled();
+		expect(screen.getByLabelText("Delegation status")).toHaveTextContent("Queued");
+	});
+	it("offers reauthentication for the status workspace rather than an edited draft workspace", async () => {
+		const f = fixture();
+		vi.mocked(f.bridge.status).mockResolvedValue({ ok: true, status: { requestId: "request", projectId: "project", taskId: "task", workspaceId: "accepted-workspace", serverOrigin: "https://multica.example", serverKey: "configured",
+			state: "accepted", remoteId: "remote", remoteTaskId: "remote-task", remoteStatus: "running", terminal: false, failureCode: null, connection: "reauthentication_required" } });
+		render(<MulticaDelegationDialog orchestrator="task" projectId="project" taskId="task" bridge={f.bridge} />);
+		fireEvent.click(screen.getByRole("button", { name: "Delegate to Multica" }));
+		fireEvent.change(await screen.findByLabelText("Member Public API token"), { target: { value: "mul_replacement" } });
+		fireEvent.click(screen.getByRole("button", { name: "Save credential" }));
+		await waitFor(() => expect(f.bridge.setCredential).toHaveBeenCalledWith("accepted-workspace", "mul_replacement"));
+	});
+
 });
