@@ -2,13 +2,172 @@ package store_test
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
+
+func TestReportCoordinatorMissingOrchestratorDoesNotBlockOtherProjects(t *testing.T) {
+	testReportCoordinatorBlockedDestination(t, false)
+}
+
+func TestReportCoordinatorRefusedDeliveryDoesNotBlockOtherProjects(t *testing.T) {
+	testReportCoordinatorBlockedDestination(t, true)
+}
+
+func testReportCoordinatorBlockedDestination(t *testing.T, refused bool) {
+	t.Helper()
+	ctx := context.Background()
+	dir := t.TempDir()
+	s, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	now := time.Date(2026, 9, 14, 11, 0, 0, 0, time.UTC)
+	createSession := func(project string, kind domain.SessionKind) domain.SessionRecord {
+		t.Helper()
+		rec := sampleRecord(project)
+		rec.Kind = kind
+		rec.Mode = domain.SessionModeChat
+		sess, err := s.CreateSession(ctx, rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sess
+	}
+	seedProject(t, s, "a")
+	seedProject(t, s, "b")
+	workerA := createSession("a", domain.KindWorker)
+	workerB := createSession("b", domain.KindWorker)
+	orchB := createSession("b", domain.KindOrchestrator)
+	outputs := []domain.ReportOutput{{Kind: domain.ReportOutputArtifact, Reference: "result", Label: "Evidence"}}
+	createReport := func(id string, worker domain.SessionRecord, available time.Time) domain.ReportRecord {
+		t.Helper()
+		rec := domain.ReportRecord{
+			ID: id, SessionID: worker.ID, ProjectID: worker.ProjectID,
+			State: domain.ReportNeedsInput, Note: "decision for " + id, Outputs: outputs,
+			CreatedAt: now.Add(-time.Minute), DeliveryState: domain.ReportPending,
+			AvailableAt: available, RepeatCount: 1,
+		}
+		if _, err := s.CreateReport(ctx, rec); err != nil {
+			t.Fatal(err)
+		}
+		return rec
+	}
+	originalA := createReport("report-a", workerA, now.Add(-time.Second))
+	createReport("report-b", workerB, now)
+	delivery := &reportCoordinatorDelivery{}
+	var orchA domain.SessionRecord
+	blockedReason := "project a has no active orchestrator"
+	if refused {
+		orchA = createSession("a", domain.KindOrchestrator)
+		delivery.refusedTarget = orchA.ID
+		blockedReason = reportsvc.ErrReportDeliveryModeUnsupported.Error()
+	}
+	newCoordinator := func() *reportsvc.Coordinator {
+		return reportsvc.NewCoordinator(reportsvc.CoordinatorDeps{
+			Store: s, Delivery: delivery, Now: func() time.Time { return now }, RetryDelay: time.Minute,
+		})
+	}
+	c := newCoordinator()
+	if delay, err := c.RunDue(ctx); err != nil || delay != time.Minute {
+		t.Fatalf("first run delay=%v err=%v", delay, err)
+	}
+	if len(delivery.targets) != 1 || delivery.targets[0] != orchB.ID {
+		t.Fatalf("delivered to %v, want project B orchestrator", delivery.targets)
+	}
+	blocked, ok, err := s.GetReport(ctx, originalA.ID)
+	if err != nil || !ok || blocked.DeliveryState != domain.ReportPending || blocked.ClaimToken != "" || !blocked.ClaimedAt.IsZero() || !blocked.AcknowledgedAt.IsZero() || blocked.DeliveryAttempts != 1 || !blocked.AvailableAt.Equal(now.Add(time.Minute)) || blocked.LastError != blockedReason {
+		t.Fatalf("blocked report=%+v ok=%v err=%v", blocked, ok, err)
+	}
+	if blocked.Note != originalA.Note || !blocked.CreatedAt.Equal(originalA.CreatedAt) || !reflect.DeepEqual(blocked.Outputs, outputs) || blocked.DeliveryBatchID == "" {
+		t.Fatalf("report evidence changed: %+v", blocked)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count, err := s.RequeueClaimedReports(ctx); err != nil || count != 0 {
+		t.Fatalf("restart recovery count=%d err=%v", count, err)
+	}
+	restored, ok, err := s.GetReport(ctx, originalA.ID)
+	if err != nil || !ok || !reflect.DeepEqual(restored, blocked) {
+		t.Fatalf("restored=%+v want=%+v ok=%v err=%v", restored, blocked, ok, err)
+	}
+	c = newCoordinator()
+	now = now.Add(30 * time.Second)
+	createReport("report-b-later", workerB, now)
+	if delay, err := c.RunDue(ctx); err != nil || delay != 30*time.Second {
+		t.Fatalf("before retry delay=%v err=%v", delay, err)
+	}
+	if len(delivery.targets) != 2 || delivery.targets[1] != orchB.ID {
+		t.Fatalf("deliveries before retry=%v", delivery.targets)
+	}
+	unchanged, _, err := s.GetReport(ctx, originalA.ID)
+	if err != nil || !reflect.DeepEqual(unchanged, blocked) {
+		t.Fatalf("retried before deadline: %+v err=%v", unchanged, err)
+	}
+	now = now.Add(30 * time.Second)
+	if delay, err := c.RunDue(ctx); err != nil || delay != time.Minute {
+		t.Fatalf("still blocked retry delay=%v err=%v", delay, err)
+	}
+	retried, _, err := s.GetReport(ctx, originalA.ID)
+	if err != nil || retried.DeliveryAttempts != 2 || !retried.AvailableAt.Equal(now.Add(time.Minute)) || retried.DeliveryBatchID != blocked.DeliveryBatchID || retried.LastError != blocked.LastError {
+		t.Fatalf("retried report=%+v err=%v", retried, err)
+	}
+	if refused {
+		if !reflect.DeepEqual(delivery.refusedKeys, []string{blocked.DeliveryBatchID, blocked.DeliveryBatchID}) {
+			t.Fatalf("refused batch identities=%v", delivery.refusedKeys)
+		}
+		delivery.refusedTarget = ""
+	} else {
+		orchA = createSession("a", domain.KindOrchestrator)
+	}
+	if delay, err := c.RunDue(ctx); err != nil || delay != time.Minute {
+		t.Fatalf("destination recovered before retry delay=%v err=%v", delay, err)
+	}
+	now = now.Add(time.Minute)
+	if delay, err := c.RunDue(ctx); err != nil || delay != -1 {
+		t.Fatalf("recovery delay=%v err=%v", delay, err)
+	}
+	if len(delivery.targets) != 3 || delivery.targets[2] != orchA.ID || !strings.Contains(delivery.messages[2], originalA.Note) || !strings.Contains(delivery.messages[2], "artifact: result") || delivery.keys[2] != blocked.DeliveryBatchID {
+		t.Fatalf("recovery delivery=%+v", delivery)
+	}
+	acked, _, err := s.GetReport(ctx, originalA.ID)
+	if err != nil || acked.DeliveryState != domain.ReportAcknowledged || !acked.AcknowledgedAt.Equal(now) || acked.LastError != "" || !reflect.DeepEqual(acked.Outputs, outputs) {
+		t.Fatalf("acknowledged report=%+v err=%v", acked, err)
+	}
+}
+
+type reportCoordinatorDelivery struct {
+	targets       []domain.SessionID
+	messages      []string
+	keys          []string
+	refusedTarget domain.SessionID
+	refusedKeys   []string
+}
+
+func (d *reportCoordinatorDelivery) Submit(_ context.Context, target domain.SessionID, message, key string) error {
+	if target == d.refusedTarget {
+		d.refusedKeys = append(d.refusedKeys, key)
+		return reportsvc.ErrReportDeliveryModeUnsupported
+	}
+	d.targets = append(d.targets, target)
+	d.messages = append(d.messages, message)
+	d.keys = append(d.keys, key)
+	return nil
+}
+
+func (*reportCoordinatorDelivery) Interrupt(context.Context, domain.SessionID) error { return nil }
 
 func TestReportStorePersistsOutputsAndDeadlinesAcrossRestart(t *testing.T) {
 	ctx := context.Background()
@@ -162,6 +321,70 @@ func TestReportStoreRequeuesInterruptedClaimOnRestartAndFencesOldToken(t *testin
 	}
 	if _, ok, err := s.AcknowledgeReport(ctx, rec.ID, "new-token", now.Add(4*time.Second)); err != nil || !ok {
 		t.Fatalf("new acknowledge ok=%v err=%v", ok, err)
+	}
+}
+
+func TestReportStoreRecoversBatchClaimBeforeDeferral(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if s != nil {
+			_ = s.Close()
+		}
+	})
+	seedProject(t, s, "ao")
+	sess, err := s.CreateSession(ctx, sampleRecord("ao"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	rec := domain.ReportRecord{
+		ID: "rpt_batch_restart", SessionID: sess.ID, ProjectID: sess.ProjectID,
+		State: domain.ReportNeedsInput, Note: "pending decision",
+		Outputs:   []domain.ReportOutput{{Kind: domain.ReportOutputArtifact, Reference: "evidence"}},
+		CreatedAt: now, AvailableAt: now, DeliveryState: domain.ReportPending, RepeatCount: 1,
+	}
+	if _, err := s.CreateReport(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	batch, err := s.ClaimPendingReportBatch(ctx, sess.ProjectID, "old-token", now)
+	if err != nil || len(batch) != 1 || batch[0].DeliveryBatchID == "" {
+		t.Fatalf("claim=%+v err=%v", batch, err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count, err := s.RequeueClaimedReports(ctx); err != nil || count != 1 {
+		t.Fatalf("recovery count=%d err=%v", count, err)
+	}
+	recovered, ok, err := s.GetReport(ctx, rec.ID)
+	if err != nil || !ok || recovered.DeliveryState != domain.ReportPending || !recovered.AcknowledgedAt.IsZero() || recovered.ClaimToken != "" || !recovered.AvailableAt.Equal(now) || recovered.DeliveryBatchID != batch[0].DeliveryBatchID || recovered.Note != rec.Note || !reflect.DeepEqual(recovered.Outputs, rec.Outputs) {
+		t.Fatalf("recovered=%+v ok=%v err=%v", recovered, ok, err)
+	}
+	retry, err := s.ClaimPendingReportBatch(ctx, sess.ProjectID, "new-token", now)
+	if err != nil || len(retry) != 1 || retry[0].DeliveryBatchID != batch[0].DeliveryBatchID {
+		t.Fatalf("retry=%+v err=%v", retry, err)
+	}
+	if count, err := s.DeferReportBatch(ctx, sess.ProjectID, "old-token", now.Add(time.Hour), "stale refusal"); err != nil || count != 0 {
+		t.Fatalf("stale deferral count=%d err=%v", count, err)
+	}
+	if count, err := s.AcknowledgeReportBatch(ctx, sess.ProjectID, "old-token", now); err != nil || count != 0 {
+		t.Fatalf("stale acknowledgement count=%d err=%v", count, err)
+	}
+	if count, err := s.DeferReportBatch(ctx, sess.ProjectID, "new-token", now.Add(time.Minute), "refused"); err != nil || count != 1 {
+		t.Fatalf("deferral count=%d err=%v", count, err)
+	}
+	deferred, _, err := s.GetReport(ctx, rec.ID)
+	if err != nil || deferred.DeliveryState != domain.ReportPending || !deferred.AcknowledgedAt.IsZero() || deferred.LastError != "refused" || !deferred.AvailableAt.Equal(now.Add(time.Minute)) || deferred.DeliveryBatchID != batch[0].DeliveryBatchID || !reflect.DeepEqual(deferred.Outputs, rec.Outputs) {
+		t.Fatalf("deferred=%+v err=%v", deferred, err)
 	}
 }
 

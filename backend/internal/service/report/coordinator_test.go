@@ -50,16 +50,17 @@ func TestCoordinatorRoutesAtAttemptAndLeavesPendingWithoutOrchestrator(t *testin
 	store.add(reportAt("need", "worker", now, now, "decision"))
 	delivery := &coordinatorDelivery{}
 	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }, RetryDelay: time.Second})
-	if delay, err := c.RunDue(context.Background()); err == nil || delay != time.Second {
+	if delay, err := c.RunDue(context.Background()); err != nil || delay != time.Second {
 		t.Fatalf("no orchestrator delay = %v, err = %v", delay, err)
 	}
-	if store.reports[0].DeliveryState != domain.ReportPending {
-		t.Fatalf("state = %s, want pending", store.reports[0].DeliveryState)
+	if rec := store.reports[0]; rec.DeliveryState != domain.ReportPending || !rec.AvailableAt.Equal(now.Add(time.Second)) || rec.LastError != "project p has no active orchestrator" {
+		t.Fatalf("pending report = %+v", rec)
 	}
 	store.sessions = []domain.SessionRecord{
 		{ID: "old", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat, IsTerminated: true, CreatedAt: now},
 		{ID: "replacement", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat, CreatedAt: now.Add(time.Second)},
 	}
+	now = now.Add(time.Second)
 	if _, err := c.RunDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -242,16 +243,18 @@ func (s *coordinatorStore) ReleaseReportBatch(_ context.Context, project domain.
 	}
 	return count, nil
 }
-func (s *coordinatorStore) DeferReportBatch(ctx context.Context, project domain.ProjectID, token string, at time.Time, reason string) (int, error) {
-	count, err := s.ReleaseReportBatch(ctx, project, token, at, reason)
-	if err != nil {
-		return count, err
-	}
+func (s *coordinatorStore) DeferReportBatch(_ context.Context, project domain.ProjectID, token string, at time.Time, reason string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	count := 0
 	for i := range s.reports {
-		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportPending && s.reports[i].DeliveryBatchID != "" && s.reports[i].AvailableAt.Before(at) {
-			s.reports[i].AvailableAt = at
+		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportClaimed && s.reports[i].ClaimToken == token {
+			s.reports[i].DeliveryState, s.reports[i].ClaimToken, s.reports[i].ClaimedAt = domain.ReportPending, "", time.Time{}
+			s.reports[i].LastError = reason
+			if s.reports[i].AvailableAt.Before(at) {
+				s.reports[i].AvailableAt = at
+			}
+			count++
 		}
 	}
 	return count, nil

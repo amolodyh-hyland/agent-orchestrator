@@ -149,11 +149,12 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 	if err != nil {
 		return err
 	}
-	if !ok {
-		return fmt.Errorf("project %s has no active orchestrator", projectID)
-	}
 	batch, err := c.claim(ctx, projectID)
 	if err != nil || len(batch.Reports) == 0 {
+		return err
+	}
+	if !ok {
+		_, err := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(c.retryDelay), fmt.Sprintf("project %s has no active orchestrator", projectID))
 		return err
 	}
 	if batch.hasState(domain.ReportStuck) {
@@ -179,7 +180,8 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 		}
 	}
 	if err := c.delivery.Submit(ctx, target.ID, batch.Render(), batch.IdempotencyKey()); err != nil {
-		return c.release(ctx, batch, err)
+		_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(c.retryDelay), err.Error())
+		return deferErr
 	}
 	_, err = c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
 	return err

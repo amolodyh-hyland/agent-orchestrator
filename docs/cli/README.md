@@ -152,8 +152,13 @@ report opens a fixed five-minute settlement window. `--needs-input` delivers
 immediately without interrupting current orchestrator work. `--stuck` requests
 an interrupt at most once per worker every three minutes and coalesces equal
 repeats. Reports route to the active project orchestrator at each attempt and
-remain pending when none is active. AO never spawns an orchestrator to deliver
-a report.
+remain pending when none is active. A missing destination defers its batch for
+five seconds by default, allowing other projects' due reports to proceed. A
+refused delivery uses the same retry delay and preserves its batch identity
+until acceptance; it also leaves other projects free to deliver. The
+persisted report's `last_error` records the blocking reason and `available_at`
+records its next retry; both survive restart. Delivery resumes at a retry once
+an orchestrator is active. AO never spawns an orchestrator to deliver a report.
 
 Scheduled delivery and exact same-turn user-message piggyback use Chat's
 durable semantic message boundary. Supported TUIs acknowledge delivery only
