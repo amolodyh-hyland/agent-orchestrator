@@ -19,7 +19,7 @@ function fixture() {
 		human: { confirmFromUserAction: vi.fn(async () => record), cancelFromUserAction: vi.fn(async () => record) },
 		taskOrchestrator: { process: vi.fn(async (_id: string, _confirmationCurrent?: DelegationConfirmationGuard) => record), processTask: vi.fn(async () => record) },
 		projectOrchestrator: { process: vi.fn(async (_id: string, _confirmationCurrent?: DelegationConfirmationGuard) => record), processTask: vi.fn(async () => record) },
-		confirm: vi.fn(async () => true), now: () => time };
+		onConfirmed: vi.fn(), confirm: vi.fn(async () => true), now: () => time };
 	return { options, client, flow: createDelegationConfirmationFlow(options) };
 }
 async function preview(input = draft): Promise<DelegationPreview> {
@@ -40,6 +40,7 @@ describe("shared delegation confirmation", () => {
 		const p = await preview({ ...draft, orchestrator });
 		expect(p).toMatchObject({ serverOrigin: binding.origin, profileName: "Reviewer", scope: "task_brief", policy: "policy_absent" });
 		expect(setup.options.human.confirmFromUserAction).not.toHaveBeenCalled();
+		expect(setup.options.onConfirmed).not.toHaveBeenCalled();
 		expect(setup.options.taskOrchestrator.process).not.toHaveBeenCalled();
 		expect(setup.options.projectOrchestrator.process).not.toHaveBeenCalled();
 		setup.options.confirm.mockImplementationOnce(async () => {
@@ -48,6 +49,7 @@ describe("shared delegation confirmation", () => {
 		expect(await setup.flow.confirmFromRendererAction(p.id, p.hash)).toMatchObject({ ok: true, state: "accepted" });
 		expect(setup.options[orchestrator === "task" ? "taskOrchestrator" : "projectOrchestrator"].process).toHaveBeenCalledExactlyOnceWith("request", expect.any(Function));
 		expect(setup.options.confirm.mock.calls[0]).toBeDefined();
+		expect(setup.options.onConfirmed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ requestId: "request" }));
 		const approval = setup.options.human.confirmFromUserAction.mock.calls;
 		expect(JSON.stringify(approval)).not.toContain("token");
 	});

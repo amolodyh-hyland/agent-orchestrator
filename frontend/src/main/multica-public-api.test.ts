@@ -299,6 +299,17 @@ describe("confirmed delegation and rate limits", () => {
 		expect(await client.cancelDelegation(D, true, accepted.revision)).toEqual({ ok: false, code: "revision_conflict", status: 409 });
 	});
 
+	it("rechecks native cancellation approval after asynchronous credential resolution", async () => {
+		const client = await connected();
+		let current = true;
+		const resolve = options.credentials.resolve.bind(options.credentials);
+		vi.spyOn(options.credentials, "resolve").mockImplementationOnce(async (...args) => {
+			const credential = await resolve(...args); current = false; return credential;
+		});
+		expect(await client.cancelDelegation(D, true, accepted.revision, () => current)).toEqual({ ok: false, code: "confirmation_required" });
+		expect(calls).toEqual([]);
+	});
+
 	it("rejects unsafe cancellation revisions and foreign or malformed status responses", async () => {
 		const client = await connected();
 		for (const value of ["", "bad\r\nAuthorization: token", '"injected"']) expect(await client.cancelDelegation(D, true, value)).toEqual({ ok: false, code: "invalid_request" });

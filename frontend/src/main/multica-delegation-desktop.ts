@@ -1,6 +1,8 @@
+import { isDeepStrictEqual } from "node:util";
+import { createDelegationStatusFlow } from "./multica-delegation-status";
 import type { IpcMain, WebContents } from "electron";
 import { resolveMulticaServer, type MulticaSettings } from "../shared/multica";
-import type { DelegationPreview } from "../shared/multica-delegation-confirmation";
+import type { DelegationPreview, DelegationStatus } from "../shared/multica-delegation-confirmation";
 import type { MainProcessDelegationAuthority } from "./multica-delegation-authority";
 import type { MulticaCredentials } from "./multica-credentials";
 import { createDaemonDelegationJournal } from "./multica-delegation-journal";
@@ -13,6 +15,7 @@ export function registerDesktopDelegation(options: {
 	ipcMain: IpcMain; shellWebContents: WebContents;
 	authority: MainProcessDelegationAuthority; credentials: MulticaCredentials;
 	readSettings: () => Promise<MulticaSettings>; daemonOrigin: () => string | null;
+	confirmCancellation: (status: DelegationStatus) => Promise<boolean>;
 	fetch: typeof fetch; confirm: (preview: DelegationPreview, detail: string) => Promise<boolean>;
 }) {
 	let server: ReturnType<typeof resolveMulticaServer> = null;
@@ -36,8 +39,12 @@ export function registerDesktopDelegation(options: {
 			if (!connection) throw new Error("connection_changed");
 			return connection;
 		} });
-	const flow = createDelegationConfirmationFlow({ ...coordinator, client, policy: journal.evaluatePolicy, confirm: options.confirm });
-	const ipc = registerDelegationConfirmationIpc({ ipcMain: options.ipcMain, shellWebContents: options.shellWebContents, flow,
+	const status = createDelegationStatusFlow({ journal, coordinator: coordinator.taskOrchestrator, human: coordinator.human,
+		prepare: async (binding) => { if (!isDeepStrictEqual((await client(binding.workspaceId)).binding, binding)) throw new Error("connection_changed"); },
+		confirmCancellation: options.confirmCancellation });
+	const flow = createDelegationConfirmationFlow({ ...coordinator, client, policy: journal.evaluatePolicy, confirm: options.confirm,
+		onConfirmed: (record) => { void status.status(record.projectId, record.taskId); } });
+	const ipc = registerDelegationConfirmationIpc({ ipcMain: options.ipcMain, shellWebContents: options.shellWebContents, flow, status,
 		setCredential: async (workspaceId, token) => (await (await client(workspaceId)).setToken(token)).ok });
-	return { dispose: ipc.dispose, invalidate() { server = null; flow.invalidate(); } };
+	return { dispose: ipc.dispose, invalidate() { server = null; flow.invalidate(); status.invalidate(); } };
 }

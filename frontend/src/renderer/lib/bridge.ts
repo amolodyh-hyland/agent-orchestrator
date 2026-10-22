@@ -314,6 +314,7 @@ export const aoBridge: AoBridge =
 			set: async (settings) => coerceUiSettings({ ...DEFAULT_UI_SETTINGS, ...settings }),
 		},
 		multicaDelegation: {
+			status: async () => ({ ok: true, status: null }),
 			preview: async () => ({ ok: false, code: "delegations_disabled" }),
 			cancelPreview: async () => undefined,
 			setCredential: async () => false,

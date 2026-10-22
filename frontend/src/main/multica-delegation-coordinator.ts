@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { MainProcessDelegationAuthority } from "./multica-delegation-authority";
-import type { createMulticaPublicApi, PublicApiBinding, PublicApiFailureCode } from "./multica-public-api";
+import type { createMulticaPublicApi, PublicApiBinding, PublicApiFailureCode, PublicApiResult } from "./multica-public-api";
 import { createDelegation, delegation, type CreatePublicDelegation, type PublicDelegation } from "./multica-public-api-model";
 
 import { policyBlock, resolveDelegationRuntime, type DelegationConfirmationGuard, type DelegationPolicyBlockCode, type DelegationSendGuard, type DelegationPolicyRequest, type DelegationPolicyResolver, type DelegationRuntimeResolver } from "./multica-delegation-policy";
@@ -22,13 +22,15 @@ export interface DelegationJournal {
 	reserve(record: DelegationRecord, confirmationProof: string): Promise<DelegationRecord>;
 	save(record: DelegationRecord): Promise<DelegationRecord>;
 }
+export type DelegationReconciliation = { record: DelegationRecord; failure?: Extract<PublicApiResult<never>, { ok: false }>; found: boolean };
 export interface MulticaDelegationCoordinator {
+	reconcile(requestId: string): Promise<DelegationReconciliation>;
 	process(requestId: string, confirmationCurrent?: DelegationConfirmationGuard): Promise<DelegationRecord>;
 	processTask(projectId: string, taskId: string): Promise<DelegationRecord>;
 }
 export interface MainProcessDelegationActions {
 	confirmFromUserAction(intent: DelegationIntent, approved: UserConfirmation, rerunOf?: string): Promise<DelegationRecord>;
-	cancelFromUserAction(requestId: string, approved: UserConfirmation): Promise<DelegationRecord>;
+	cancelFromUserAction(requestId: string, approved: UserConfirmation, confirmationCurrent?: DelegationConfirmationGuard, remoteId?: string): Promise<DelegationRecord>;
 }
 type Client = Pick<ReturnType<typeof createMulticaPublicApi>, "binding" | "delegate" | "getDelegation" | "listDelegations" | "cancelDelegation">;
 type Options = { journal: DelegationJournal; client: (binding: PublicApiBinding) => Client; enabled?: boolean; confirmations: MainProcessDelegationAuthority; policy?: DelegationPolicyResolver; resolveRuntimeClass?: DelegationRuntimeResolver };
@@ -91,7 +93,7 @@ export function createMulticaDelegationCoordinator(options: Options): { human: M
 		if (record.remote?.terminal || equal(record.remote, remote)) return record;
 		return journal.save({ ...record, remote, failureCode: null, state: remote.terminal ? "terminal" : record.cancellation ? "cancellation_requested" : "accepted" });
 	}
-	async function process(id: string, confirmationCurrent?: DelegationConfirmationGuard): Promise<DelegationRecord> {
+	async function process(id: string, confirmationCurrent?: DelegationConfirmationGuard, cancelCurrent?: DelegationConfirmationGuard): Promise<DelegationRecord> {
 		let record = await load(id);
 		if (record.state === "terminal" || record.state === "rejected") return record;
 		const client = clientFor(record);
@@ -113,7 +115,8 @@ export function createMulticaDelegationCoordinator(options: Options): { human: M
 				if (record.attempted) return record;
 				return journal.save({ ...record, state: "rejected" });
 			}
-			const result = await client.cancelDelegation(record.remote.delegation_id, true, record.remote.revision);
+			if (!cancelCurrent || !cancelCurrent()) return record;
+			const result = await client.cancelDelegation(record.remote.delegation_id, true, record.remote.revision, cancelCurrent);
 			return result.ok ? observe(record, result.data) : record;
 		}
 		if (record.remote || options.enabled !== true) return record;
@@ -151,15 +154,29 @@ export function createMulticaDelegationCoordinator(options: Options): { human: M
 			if (blocked) throw new Error(blocked);
 			return journal.reserve(record, options.confirmations.confirmationProof(record));
 		},
-		cancelFromUserAction: (requestId: string, approved: UserConfirmation) => serial(requestId, async () => {
+		cancelFromUserAction: (requestId: string, approved: UserConfirmation, confirmationCurrent?: DelegationConfirmationGuard, remoteId?: string) => serial(requestId, async () => {
 			const by = confirmation(approved);
 			const record = await load(requestId);
+			if ((confirmationCurrent && !confirmationCurrent()) || (remoteId && record.remote?.delegation_id !== remoteId)) throw new Error("confirmation_required");
 			if (record.remote?.terminal || record.state === "rejected") return record;
 			await journal.save({ ...record, cancellation: record.cancellation ?? by, state: "cancellation_requested" });
-			return process(requestId);
+			return process(requestId, undefined, confirmationCurrent ?? (() => true));
 		}),
 	};
 	const coordinator: MulticaDelegationCoordinator = {
+		reconcile: (requestId) => serial(requestId, async () => {
+			const record = await load(requestId);
+			if (record.state === "terminal" || record.state === "rejected" || !record.attempted) return { record, found: !!record.remote };
+			const client = clientFor(record);
+			if (record.remote) {
+				const result = await client.getDelegation(record.remote.delegation_id);
+				return result.ok ? { record: await observe(record, result.data), found: true } : { record, failure: result, found: false };
+			}
+			const result = await client.listDelegations({ idempotencyKey: record.requestId });
+			if (!result.ok) return { record, failure: result, found: false };
+			if (result.data.next_cursor || result.data.delegations.length !== 1) return { record, found: false };
+			return { record: await observe(record, result.data.delegations[0]), found: true };
+		}),
 		process: (requestId: string, confirmationCurrent?: DelegationConfirmationGuard) => serial(requestId, () => process(requestId, confirmationCurrent)),
 		async processTask(projectId: string, taskId: string) {
 			const record = await journal.find(projectId, taskId);

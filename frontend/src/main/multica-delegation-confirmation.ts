@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { delegationFailureLabels, delegationPolicyLabels, type DelegationDraft, type DelegationPreview, type DelegationConfirmationResult } from "../shared/multica-delegation-confirmation";
-import type { DelegationIntent, MainProcessDelegationActions, MulticaDelegationCoordinator } from "./multica-delegation-coordinator";
+import type { DelegationIntent, DelegationRecord, MainProcessDelegationActions, MulticaDelegationCoordinator } from "./multica-delegation-coordinator";
 import { delegationPolicyDecision, resolveDelegationRuntime, type DelegationPolicyResolver, type DelegationRuntimeResolver } from "./multica-delegation-policy";
 import { createDelegation, uuid } from "./multica-public-api-model";
 import type { createMulticaPublicApi } from "./multica-public-api";
@@ -14,8 +14,9 @@ type Options = {
 	policy: DelegationPolicyResolver;
 	resolveRuntimeClass?: DelegationRuntimeResolver;
 	human: MainProcessDelegationActions;
-	taskOrchestrator: MulticaDelegationCoordinator;
-	projectOrchestrator: MulticaDelegationCoordinator;
+	taskOrchestrator: Pick<MulticaDelegationCoordinator, "process">;
+	projectOrchestrator: Pick<MulticaDelegationCoordinator, "process">;
+	onConfirmed?: (record: DelegationRecord) => void;
 	confirm: (preview: DelegationPreview, detail: string) => Promise<boolean>;
 	now?: () => number;
 };
@@ -121,6 +122,7 @@ export function createDelegationConfirmationFlow(options: Options) {
 				const record = await options.human.confirmFromUserAction(structuredClone(entry.intent), {
 					id: randomUUID(), userId: "desktop-user", at: new Date(now()).toISOString(),
 				});
+				options.onConfirmed?.(record);
 				current(entry);
 				const coordinator = entry.preview.request.orchestrator === "task" ? options.taskOrchestrator : options.projectOrchestrator;
 				const result = await coordinator.process(record.requestId, () => isCurrent(entry));

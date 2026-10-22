@@ -255,7 +255,47 @@ describe("shared confirmed delegation coordinator", () => {
 		expect((await service.cancel(r.requestId, { ...approved, id: "cancel-1" })).state).toBe("cancellation_requested");
 		accepted = { ...remote, status: "running", revision: "new-opaque-revision" };
 		await service.process(r.requestId);
-		expect(client.cancelDelegation).toHaveBeenLastCalledWith(remote.delegation_id, true, "new-opaque-revision");
+		expect(client.cancelDelegation).toHaveBeenCalledTimes(1);
+		await service.cancel(r.requestId, { ...approved, id: "retry-cancel" });
+		expect(client.cancelDelegation).toHaveBeenLastCalledWith(remote.delegation_id, true, "new-opaque-revision", expect.any(Function));
+	});
+
+	it("polling never submits or cancels, including empty and paginated unknown lookups", async () => {
+		const service = coordinator().taskOrchestrator;
+		const record = await service.confirm(intent, approved);
+		await service.reconcile(record.requestId);
+		expect(calls).toEqual([]);
+		client.delegate.mockResolvedValueOnce({ ok: false, code: "timeout" } as never);
+		await service.process(record.requestId);
+		for (const data of [{ delegations: [] }, { delegations: [], next_cursor: "more" }, { delegations: [remote, remote] }]) {
+			client.listDelegations.mockResolvedValueOnce({ ok: true, data });
+			expect(await service.reconcile(record.requestId)).toMatchObject({ found: false, record: { state: "submission_unknown", remote: null } });
+		}
+		accepted = remote;
+		expect(await service.reconcile(record.requestId)).toMatchObject({ found: true, record: { state: "accepted", remote } });
+		expect(client.delegate).toHaveBeenCalledTimes(1);
+		expect(client.cancelDelegation).not.toHaveBeenCalled();
+	});
+	it("retains terminal observations across late cancellation and stale status races", async () => {
+		const service = coordinator().taskOrchestrator;
+		const record = await service.confirm(intent, approved);
+		await service.process(record.requestId);
+		accepted = { ...remote, status: "completed", terminal: true };
+		const results = await Promise.all([service.reconcile(record.requestId), service.cancel(record.requestId, { ...approved, id: "late-cancel" })]);
+		expect(results[0]).toMatchObject({ record: { state: "terminal", remote: { status: "completed" } } });
+		expect(results[1]).toMatchObject({ state: "terminal", remote: { status: "completed" } });
+		accepted = remote;
+		expect(await service.reconcile(record.requestId)).toMatchObject({ record: { state: "terminal", remote: { status: "completed" } } });
+		expect(client.cancelDelegation).not.toHaveBeenCalled();
+	});
+	it("does not import execution fields into the journal during reconciliation", async () => {
+		const service = coordinator().taskOrchestrator;
+		const record = await service.confirm(intent, approved);
+		await service.process(record.requestId);
+		accepted = { ...remote, status: "running", result: "secret-result", error: "secret-error", work_directory: "/secret/work", credentials: "mul_secret" } as PublicDelegation;
+		await service.reconcile(record.requestId);
+		const contents = await readFile(file, "utf8");
+		for (const privateValue of ["secret-result", "secret-error", "/secret/work", "mul_secret"]) expect(contents).not.toContain(privateValue);
 	});
 
 });

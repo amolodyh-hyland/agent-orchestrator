@@ -15,7 +15,7 @@ import { createMulticaDelegationCoordinator, type DelegationRecord } from "./mul
 import { createDaemonDelegationJournal } from "./multica-delegation-journal";
 import { registerDesktopDelegation } from "./multica-delegation-desktop";
 import { createMulticaCredentials } from "./multica-credentials";
-import { DELEGATION_CANCEL_PREVIEW, DELEGATION_CONFIRM_CLICK, DELEGATION_CREDENTIAL, DELEGATION_PREVIEW, DELEGATION_RESULT, type DelegationConfirmationResult } from "../shared/multica-delegation-confirmation";
+import { DELEGATION_STATUS, DELEGATION_CANCEL_CLICK, DELEGATION_CANCEL_PREVIEW, DELEGATION_CONFIRM_CLICK, DELEGATION_CREDENTIAL, DELEGATION_PREVIEW, DELEGATION_RESULT, type DelegationConfirmationResult } from "../shared/multica-delegation-confirmation";
 import type { DelegationSendGuard } from "./multica-delegation-policy";
 import type { PublicDelegation } from "./multica-public-api-model";
 
@@ -74,17 +74,21 @@ describe("coordinators against the real daemon SQLite journal", () => {
 	] as const)("desktop %s confirmation at %s wait with %s uses the production dispatch path", async (orchestrator, waitAt, revoke) => {
 		const payload = fixture.intent.payload;
 		const posts: string[] = [];
+		const delegationId = randomUUID(), remoteTaskId = randomUUID();
+		let cancelled = false;
 		const provider = createServer((req, res) => {
 			const profile = { agent_id: payload.agent_id, workspace_id: fixture.intent.binding.workspaceId, name: "Reviewer",
 				runtime_id: payload.expected_runtime_id, runtime_bound: true, permission_mode: "private", can_invoke: true,
 				invocation_targets: [], archived: false, availability: "online" };
 			if (req.method === "POST") posts.push(req.url!);
+			if (req.url?.endsWith("/cancel")) cancelled = true;
 			const data = req.url?.startsWith("/api/v1/agents/") ? profile : req.url?.startsWith("/api/v1/runtimes/") ? {
 				runtime_id: payload.expected_runtime_id, workspace_id: fixture.intent.binding.workspaceId, availability: "online",
-			} : { delegation_id: randomUUID(), task_id: randomUUID(), workspace_id: fixture.intent.binding.workspaceId,
-				agent_id: payload.agent_id, runtime_id: payload.expected_runtime_id, status: "queued", terminal: false,
+			} : { delegation_id: delegationId, task_id: remoteTaskId, workspace_id: fixture.intent.binding.workspaceId,
+				agent_id: payload.agent_id, runtime_id: payload.expected_runtime_id, status: cancelled ? "cancelled" : "queued", terminal: cancelled,
+				result: "private-result", error: "private-error", work_directory: "/private/work",
 				revision: "first", created_at: new Date().toISOString() };
-			res.writeHead(req.method === "POST" ? 202 : 200, { "content-type": "application/json" });
+			res.writeHead(req.method === "POST" && !req.url?.endsWith("/cancel") ? 202 : 200, { "content-type": "application/json" });
 			res.end(JSON.stringify(data));
 		});
 		await new Promise<void>((resolve) => provider.listen(0, "127.0.0.1", resolve));
@@ -111,10 +115,11 @@ describe("coordinators against the real daemon SQLite journal", () => {
 			return resolveCredential(...args);
 		};
 		const confirm = vi.fn(async () => true);
+		const confirmCancellation = vi.fn(async () => false);
 		const desktop = registerDesktopDelegation({
 			ipcMain: { handle: (channel: string, handler: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown) => handlers.set(channel, handler), removeHandler: () => undefined } as unknown as IpcMain,
 			shellWebContents: shell as unknown as WebContents, authority, credentials, daemonOrigin: () => origin,
-			readSettings: async () => ({ mode: "local", customUrl: providerOrigin, apiUrl: providerOrigin }), confirm,
+			readSettings: async () => ({ mode: "local", customUrl: providerOrigin, apiUrl: providerOrigin }), confirm, confirmCancellation,
 			fetch: async (input, init) => {
 				if (String(input).startsWith(origin) && init?.body) {
 					const request = JSON.parse(String(init.body)) as { operation: string; record?: DelegationRecord };
@@ -148,6 +153,16 @@ describe("coordinators against the real daemon SQLite journal", () => {
 			if (revoke === "none") {
 				expect(posts).toEqual(["/api/v1/delegations"]);
 				expect(results).toEqual([expect.objectContaining({ ok: true, state: "accepted" })]);
+				const observed = await handlers.get(DELEGATION_STATUS)!(event, draft.projectId, draft.taskId) as { status: { requestId: string; remoteId: string } };
+				expect(observed.status).toMatchObject({ state: "accepted", remoteId: delegationId, remoteStatus: "queued" });
+				for (const privateValue of ["private-result", "private-error", "/private/work", draft.brief]) expect(JSON.stringify(observed)).not.toContain(privateValue);
+				const cancellation = { requestId: observed.status.requestId, remoteId: delegationId };
+				await handlers.get(DELEGATION_CANCEL_CLICK)!(event, cancellation);
+				expect(posts).toEqual(["/api/v1/delegations"]);
+				confirmCancellation.mockResolvedValueOnce(true);
+				await handlers.get(DELEGATION_CANCEL_CLICK)!(event, cancellation);
+				expect(posts).toEqual(["/api/v1/delegations", `/api/v1/delegations/${delegationId}/cancel`]);
+				expect(await handlers.get(DELEGATION_STATUS)!(event, draft.projectId, draft.taskId)).toMatchObject({ status: { state: "terminal", remoteStatus: "cancelled" } });
 			} else {
 				expect(posts).toEqual([]);
 				expect(results).toEqual([{ ok: false, code: "confirmation_required" }]);

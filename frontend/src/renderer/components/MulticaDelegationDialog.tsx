@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { delegationFailureLabels, delegationPolicyLabels, delegationStateLabels, type DelegationConfirmationBridge, type DelegationDraft, type DelegationPreview } from "../../shared/multica-delegation-confirmation";
+import { delegationFailureLabels, delegationPolicyLabels, delegationStateLabels, delegationRemoteStatusLabels, type DelegationStatus, type DelegationConfirmationBridge, type DelegationDraft, type DelegationPreview } from "../../shared/multica-delegation-confirmation";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
 import { Input } from "./ui/input";
@@ -17,6 +17,8 @@ export function MulticaDelegationDialog({ orchestrator, projectId, taskId = "", 
 	const [preview, setPreview] = useState<DelegationPreview | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [message, setMessage] = useState("");
+	const [status, setStatus] = useState<DelegationStatus | null>(null);
+	const [statusError, setStatusError] = useState("");
 	const [credential, setCredential] = useState("");
 	const active = useRef<DelegationPreview | null>(null);
 	const generation = useRef(0);
@@ -48,6 +50,23 @@ export function MulticaDelegationDialog({ orchestrator, projectId, taskId = "", 
 		const timer = setTimeout(() => { invalidate(); setMessage(failure("confirmation_required")); }, Math.max(0, preview.expiresAt - Date.now()));
 		return () => clearTimeout(timer);
 	}, [preview]);
+	useEffect(() => {
+		setStatus(null); setStatusError("");
+		if (!open || !bridge || !draft.taskId.trim()) return;
+		let cancelled = false;
+		let timer: ReturnType<typeof setTimeout>;
+		async function refresh() {
+			try {
+				const result = await bridge!.status(projectId, draft.taskId);
+				if (cancelled) return;
+				if (result.ok) { setStatus(result.status); setStatusError(""); }
+				else setStatusError(result.code);
+			} catch { if (!cancelled) setStatusError("journal_unavailable"); }
+			if (!cancelled) timer = setTimeout(() => void refresh(), 2000);
+		}
+		void refresh();
+		return () => { cancelled = true; clearTimeout(timer); };
+	}, [open, bridge, projectId, draft.taskId]);
 	function change(field: keyof DelegationDraft, value: string) {
 		invalidate(); setMessage(""); setDraft((d) => ({ ...d, [field]: value }));
 	}
@@ -70,6 +89,16 @@ export function MulticaDelegationDialog({ orchestrator, projectId, taskId = "", 
 			<DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
 				<DialogHeader><DialogTitle>{orchestrator === "task" ? copy("taskTitle", "Delegate task to Multica") : copy("projectTitle", "Delegate from project orchestrator")}</DialogTitle></DialogHeader>
 				<div className="grid gap-3">
+					{status ? <div className="grid gap-2 text-sm" aria-label={copy("status", "Delegation status")}>
+						<p>{copy(`state.${status.state}`, delegationStateLabels[status.state] ?? "Review delegation status.")}</p>
+						{status.remoteStatus ? <p>{copy(`remote.${status.remoteStatus}`, delegationRemoteStatusLabels[status.remoteStatus] ?? "Status unavailable")}</p> : null}
+						{status.remoteId ? <p className="break-all">{copy("remoteId", "Multica delegation ID")}: {status.remoteId}</p> : null}
+						{status.failureCode ? <p>{copy("failureCode", "Failure code")}: {status.failureCode}</p> : null}
+						{status.connection === "reauthentication_required" ? <p>{failure("reauthentication_required")}</p> : status.connection === "retrying" ? <p>{copy("retrying", "Status checks are delayed. Retrying automatically.")}</p> : status.connection === "connection_changed" ? <p>{failure("connection_changed")}</p> : null}
+						{status.remoteId && !status.terminal ? <Button variant="outline"
+							data-delegation-cancel-request-id={status.requestId} data-delegation-cancel-remote-id={status.remoteId}>{status.state === "cancellation_requested" ? copy("retryCancellation", "Retry cancellation") : copy("requestCancellation", "Request cancellation")}</Button> : null}
+					</div> : null}
+					{statusError ? <p role="alert" className="text-sm text-muted-foreground">{failure(statusError)}</p> : null}
 					{([ ["workspaceId", copy("workspace", "Multica workspace ID")], ["profileId", copy("profileId", "Profile ID")], ["runtimeId", copy("runtimeId", "Bound runtime ID")],
 						["taskId", copy("taskId", "AO task ID")], ["title", copy("title", "Title")] ] as const).map(([field, label]) => <Label key={field} className="grid gap-1">
 						{label}<Input value={draft[field]} onChange={(event) => change(field, event.target.value)} disabled={busy} />
@@ -89,11 +118,11 @@ export function MulticaDelegationDialog({ orchestrator, projectId, taskId = "", 
 						<Button data-delegation-preview-id={preview.id} data-delegation-preview-hash={preview.hash}>{copy("confirm", "Confirm delegation")}</Button>
 					</div> : <Button disabled={busy} onClick={() => void buildPreview()}>{busy ? copy("preparing", "Preparing preview…") : copy("previewAction", "Preview delegation")}</Button>}
 					{message ? <p role="status" className="text-sm text-muted-foreground">{message}</p> : null}
-					{message === failure("no_token") ? <div className="grid gap-2">
+					{(message === failure("no_token") || status?.connection === "reauthentication_required") ? <div className="grid gap-2">
 						<Label className="grid gap-1">{copy("credential", "Member Public API token")}<Input type="password" autoComplete="off" value={credential} onChange={(event) => setCredential(event.target.value)} /></Label>
 						<Button variant="outline" disabled={!credential || busy} onClick={async () => {
 							const token = credential; setCredential(""); setBusy(true);
-							try { setMessage(await bridge.setCredential(draft.workspaceId, token) ? copy("credentialSaved", "Credential saved for this server and workspace. Preview again.") : copy("credentialFailed", "Credential could not be saved.")); }
+							try { setMessage(await bridge.setCredential(status?.connection === "reauthentication_required" ? status.workspaceId : draft.workspaceId, token) ? status?.connection === "reauthentication_required" ? copy("statusCredentialSaved", "Credential saved. Status checks resumed.") : copy("credentialSaved", "Credential saved for this server and workspace. Preview again.") : copy("credentialFailed", "Credential could not be saved.")); }
 							catch { setMessage(copy("credentialFailed", "Credential could not be saved.")); } finally { setBusy(false); }
 						}}>{copy("saveCredential", "Save credential")}</Button>
 					</div> : null}

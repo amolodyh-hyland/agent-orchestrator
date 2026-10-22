@@ -1151,6 +1151,14 @@ async function createWindowInternal(): Promise<void> {
 		readSettings: () => readMulticaSettings(browserProfileStateDir()),
 		daemonOrigin: () => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null,
 		fetch: (url, init) => net.fetch(url instanceof URL ? url.href : url, init),
+		confirmCancellation: async (status) => {
+			if (!mainWindow || mainWindow.isDestroyed()) return false;
+			const result = await dialog.showMessageBox(mainWindow, { type: "question", title: "Confirm Multica cancellation",
+				message: "Request cancellation of this Multica delegation?",
+				detail: `Server: ${status.serverOrigin} (${status.serverKey})\nWorkspace: ${status.workspaceId}\nDelegation: ${status.remoteId}\nTask: ${status.remoteTaskId}`,
+				buttons: ["Keep running", "Request cancellation"], defaultId: 0, cancelId: 0, noLink: true });
+			return result.response === 1;
+		},
 		confirm: async (_preview, detail) => {
 			if (!mainWindow || mainWindow.isDestroyed()) return false;
 			const result = await dialog.showMessageBox(mainWindow, { type: "question", title: "Confirm Multica delegation",
