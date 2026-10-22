@@ -4,7 +4,7 @@ import type { MainProcessDelegationAuthority } from "./multica-delegation-author
 import type { createMulticaPublicApi, PublicApiBinding, PublicApiFailureCode } from "./multica-public-api";
 import { createDelegation, delegation, type CreatePublicDelegation, type PublicDelegation } from "./multica-public-api-model";
 
-import { policyBlock, resolveDelegationRuntime, type DelegationPolicyBlockCode, type DelegationSendGuard, type DelegationPolicyRequest, type DelegationPolicyResolver, type DelegationRuntimeResolver } from "./multica-delegation-policy";
+import { policyBlock, resolveDelegationRuntime, type DelegationConfirmationGuard, type DelegationPolicyBlockCode, type DelegationSendGuard, type DelegationPolicyRequest, type DelegationPolicyResolver, type DelegationRuntimeResolver } from "./multica-delegation-policy";
 
 export type DelegationIntent = { binding: PublicApiBinding; payload: CreatePublicDelegation };
 export type UserConfirmation = { id: string; userId: string; at: string };
@@ -23,7 +23,7 @@ export interface DelegationJournal {
 	save(record: DelegationRecord): Promise<DelegationRecord>;
 }
 export interface MulticaDelegationCoordinator {
-	process(requestId: string): Promise<DelegationRecord>;
+	process(requestId: string, confirmationCurrent?: DelegationConfirmationGuard): Promise<DelegationRecord>;
 	processTask(projectId: string, taskId: string): Promise<DelegationRecord>;
 }
 export interface MainProcessDelegationActions {
@@ -91,7 +91,7 @@ export function createMulticaDelegationCoordinator(options: Options): { human: M
 		if (record.remote?.terminal || equal(record.remote, remote)) return record;
 		return journal.save({ ...record, remote, failureCode: null, state: remote.terminal ? "terminal" : record.cancellation ? "cancellation_requested" : "accepted" });
 	}
-	async function process(id: string): Promise<DelegationRecord> {
+	async function process(id: string, confirmationCurrent?: DelegationConfirmationGuard): Promise<DelegationRecord> {
 		let record = await load(id);
 		if (record.state === "terminal" || record.state === "rejected") return record;
 		const client = clientFor(record);
@@ -122,8 +122,9 @@ export function createMulticaDelegationCoordinator(options: Options): { human: M
 		const firstAttempt = !record.attempted;
 		record = await journal.save({ ...record, failureCode: null, attempted: true, state: "submission_unknown" });
 		const beforeSend: DelegationSendGuard = () => checkPolicy(record, false);
-		const result = await client.delegate(record.intent.payload, record.requestId, true, beforeSend);
+		const result = await client.delegate(record.intent.payload, record.requestId, true, beforeSend, confirmationCurrent);
 		if (result.ok) return observe(record, result.data);
+		if (result.code === "confirmation_required") throw new Error("confirmation_required");
 		if (["policy_denied", "policy_unavailable", "policy_runtime_unknown", "policy_location_unsafe"].includes(result.code)) return journal.save({ ...record, failureCode: result.code });
 		// A failed replay never proves that an earlier ambiguous submission was rejected.
 		if (firstAttempt) {
@@ -159,7 +160,7 @@ export function createMulticaDelegationCoordinator(options: Options): { human: M
 		}),
 	};
 	const coordinator: MulticaDelegationCoordinator = {
-		process: (requestId: string) => serial(requestId, () => process(requestId)),
+		process: (requestId: string, confirmationCurrent?: DelegationConfirmationGuard) => serial(requestId, () => process(requestId, confirmationCurrent)),
 		async processTask(projectId: string, taskId: string) {
 			const record = await journal.find(projectId, taskId);
 			if (!record) throw new Error("confirmation_required");

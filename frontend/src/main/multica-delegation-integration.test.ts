@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import type { IpcMain, IpcMainInvokeEvent, WebContents } from "electron";
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { mkdtemp, readFile, rm, mkdir, writeFile } from "node:fs/promises";
@@ -7,8 +10,12 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createMainProcessDelegationAuthority } from "./multica-delegation-authority";
+import { createDelegationConfirmationFlow } from "./multica-delegation-confirmation";
 import { createMulticaDelegationCoordinator, type DelegationRecord } from "./multica-delegation-coordinator";
 import { createDaemonDelegationJournal } from "./multica-delegation-journal";
+import { registerDesktopDelegation } from "./multica-delegation-desktop";
+import { createMulticaCredentials } from "./multica-credentials";
+import { DELEGATION_CANCEL_PREVIEW, DELEGATION_CONFIRM_CLICK, DELEGATION_CREDENTIAL, DELEGATION_PREVIEW, DELEGATION_RESULT, type DelegationConfirmationResult } from "../shared/multica-delegation-confirmation";
 import type { DelegationSendGuard } from "./multica-delegation-policy";
 import type { PublicDelegation } from "./multica-public-api-model";
 
@@ -60,6 +67,137 @@ async function rawRequest(body: object, signed = false) {
 }
 
 describe("coordinators against the real daemon SQLite journal", () => {
+	it.each([
+		["task", "credentials", "cancel"], ["project", "policy", "brief"],
+		["task", "policy", "profile"], ["project", "credentials", "close"],
+		["task", "none", "none"], ["project", "none", "none"],
+	] as const)("desktop %s confirmation at %s wait with %s uses the production dispatch path", async (orchestrator, waitAt, revoke) => {
+		const payload = fixture.intent.payload;
+		const posts: string[] = [];
+		const provider = createServer((req, res) => {
+			const profile = { agent_id: payload.agent_id, workspace_id: fixture.intent.binding.workspaceId, name: "Reviewer",
+				runtime_id: payload.expected_runtime_id, runtime_bound: true, permission_mode: "private", can_invoke: true,
+				invocation_targets: [], archived: false, availability: "online" };
+			if (req.method === "POST") posts.push(req.url!);
+			const data = req.url?.startsWith("/api/v1/agents/") ? profile : req.url?.startsWith("/api/v1/runtimes/") ? {
+				runtime_id: payload.expected_runtime_id, workspace_id: fixture.intent.binding.workspaceId, availability: "online",
+			} : { delegation_id: randomUUID(), task_id: randomUUID(), workspace_id: fixture.intent.binding.workspaceId,
+				agent_id: payload.agent_id, runtime_id: payload.expected_runtime_id, status: "queued", terminal: false,
+				revision: "first", created_at: new Date().toISOString() };
+			res.writeHead(req.method === "POST" ? 202 : 200, { "content-type": "application/json" });
+			res.end(JSON.stringify(data));
+		});
+		await new Promise<void>((resolve) => provider.listen(0, "127.0.0.1", resolve));
+		const providerOrigin = `http://127.0.0.1:${(provider.address() as AddressInfo).port}`;
+		const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>();
+		const frame = {};
+		const results: DelegationConfirmationResult[] = [];
+		const shell = { id: 7, mainFrame: frame, isDestroyed: () => false, isFocused: () => true,
+			on: () => undefined, removeListener: () => undefined,
+			send: (channel: string, value: { result: DelegationConfirmationResult }) => { if (channel === DELEGATION_RESULT) results.push(value.result); } };
+		const event = { sender: { id: shell.id }, senderFrame: frame } as unknown as IpcMainInvokeEvent;
+		const credentials = createMulticaCredentials({ stateDir: path.join(dir, randomUUID()),
+			vault: { isProtected: () => false, encrypt: () => { throw new Error("must not encrypt"); }, decrypt: () => { throw new Error("must not decrypt"); } },
+			readProfileConfig: async () => null });
+		let armed = false;
+		let held = false;
+		let release!: () => void;
+		const resumed = new Promise<void>((resolve) => { release = resolve; });
+		let entered!: () => void;
+		const paused = new Promise<void>((resolve) => { entered = resolve; });
+		const resolveCredential = credentials.resolve;
+		credentials.resolve = async (...args) => {
+			if (armed && waitAt === "credentials" && !held) { held = true; entered(); await resumed; }
+			return resolveCredential(...args);
+		};
+		const confirm = vi.fn(async () => true);
+		const desktop = registerDesktopDelegation({
+			ipcMain: { handle: (channel: string, handler: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown) => handlers.set(channel, handler), removeHandler: () => undefined } as unknown as IpcMain,
+			shellWebContents: shell as unknown as WebContents, authority, credentials, daemonOrigin: () => origin,
+			readSettings: async () => ({ mode: "local", customUrl: providerOrigin, apiUrl: providerOrigin }), confirm,
+			fetch: async (input, init) => {
+				if (String(input).startsWith(origin) && init?.body) {
+					const request = JSON.parse(String(init.body)) as { operation: string; record?: DelegationRecord };
+					if (request.operation === "save" && request.record?.attempted) armed = true;
+					const response = await fetch(input, init);
+					if (armed && request.operation === "evaluatePolicy" && waitAt === "policy" && !held) { held = true; entered(); await resumed; }
+					return response;
+				}
+				return fetch(input, init);
+			},
+		});
+		try {
+			expect(await handlers.get(DELEGATION_CREDENTIAL)!(event, fixture.intent.binding.workspaceId, "mul_FIXTUREdesktop0001")).toBe(true);
+			const draft = { orchestrator, workspaceId: fixture.intent.binding.workspaceId, profileId: payload.agent_id, runtimeId: payload.expected_runtime_id,
+				projectId: payload.source.project_id, taskId: randomUUID(), title: payload.task.title, brief: payload.task.instructions };
+			const value = await handlers.get(DELEGATION_PREVIEW)!(event, draft) as DelegationConfirmationResult;
+			if (!value.ok || !("preview" in value)) throw new Error(JSON.stringify(value));
+			const processing = handlers.get(DELEGATION_CONFIRM_CLICK)!(event, { id: value.preview.id, hash: value.preview.hash });
+			if (waitAt !== "none") {
+				await paused;
+				expect(confirm).toHaveBeenCalledOnce();
+				expect(await createDaemonDelegationJournal(() => origin, authority).find(draft.projectId, draft.taskId)).toMatchObject({ attempted: true, state: "submission_unknown" });
+				if (revoke === "brief" || revoke === "profile") {
+					const replacing = handlers.get(DELEGATION_PREVIEW)!(event, { ...draft, ...(revoke === "brief" ? { brief: "Changed brief" } : { profileId: randomUUID() }) });
+					release();
+					await replacing;
+				} else await handlers.get(DELEGATION_CANCEL_PREVIEW)!(event, value.preview.id);
+				release();
+			}
+			await processing;
+			if (revoke === "none") {
+				expect(posts).toEqual(["/api/v1/delegations"]);
+				expect(results).toEqual([expect.objectContaining({ ok: true, state: "accepted" })]);
+			} else {
+				expect(posts).toEqual([]);
+				expect(results).toEqual([{ ok: false, code: "confirmation_required" }]);
+			}
+		} finally {
+			release(); desktop.dispose(); provider.closeAllConnections();
+			await new Promise<void>((resolve) => provider.close(() => resolve()));
+		}
+	}, 30_000);
+	it.each(["task", "project"] as const)("persists and dispatches the %s preview only after user approval", async (orchestrator) => {
+		const binding = fixture.intent.binding;
+		const payload = fixture.intent.payload;
+		const taskId = `confirmation-flow-${orchestrator}`;
+		const journal = createDaemonDelegationJournal(() => origin, authority);
+		const remote: PublicDelegation = { delegation_id: randomUUID(), task_id: randomUUID(), workspace_id: binding.workspaceId,
+			agent_id: payload.agent_id, runtime_id: payload.expected_runtime_id, status: "queued", terminal: false,
+			revision: "first", created_at: new Date().toISOString() };
+		const client = {
+			binding,
+			getAgent: async () => ({ ok: true as const, data: { agent_id: payload.agent_id, workspace_id: binding.workspaceId, name: "Reviewer",
+				runtime_id: payload.expected_runtime_id, runtime_bound: true, permission_mode: "private", can_invoke: true, invocation_targets: [], archived: false, availability: "online" as const } }),
+			getRuntime: async () => ({ ok: true as const, data: { runtime_id: payload.expected_runtime_id, workspace_id: binding.workspaceId, availability: "online" as const } }),
+			delegate: vi.fn(async (_payload: unknown, _key: string, _confirmed: boolean, guard: DelegationSendGuard) => {
+				const code = await guard(); return code ? { ok: false as const, code } : { ok: true as const, data: remote };
+			}),
+			getDelegation: async () => ({ ok: true as const, data: remote }),
+			listDelegations: async () => ({ ok: true as const, data: { delegations: [] } }),
+			cancelDelegation: async () => ({ ok: true as const, data: remote }),
+		};
+		const coordinator = createMulticaDelegationCoordinator({ journal, client: () => client, enabled: true, confirmations: authority });
+		const confirm = vi.fn(async () => false);
+		const flow = createDelegationConfirmationFlow({ ...coordinator, client: async () => client, policy: journal.evaluatePolicy, confirm });
+		const draft = { orchestrator, workspaceId: binding.workspaceId, profileId: payload.agent_id, runtimeId: payload.expected_runtime_id,
+			projectId: payload.source.project_id, taskId, title: payload.task.title, brief: payload.task.instructions };
+		let result = await flow.preview(draft);
+		if (!result.ok || !("preview" in result)) throw new Error(JSON.stringify(result));
+		expect(await journal.find(draft.projectId, taskId)).toBeNull();
+		expect(await flow.confirmFromRendererAction(result.preview.id, result.preview.hash)).toEqual({ ok: false, code: "cancelled" });
+		expect(await journal.find(draft.projectId, taskId)).toBeNull();
+		expect(client.delegate).not.toHaveBeenCalled();
+		confirm.mockResolvedValue(true);
+		result = await flow.preview(draft);
+		if (!result.ok || !("preview" in result)) throw new Error(JSON.stringify(result));
+		const preview = result.preview;
+		expect(await flow.confirmFromRendererAction(preview.id, preview.hash)).toMatchObject({ ok: true, state: "accepted" });
+		expect(await journal.find(draft.projectId, taskId)).toMatchObject({ confirmedBy: "desktop-user", intent: { binding,
+			payload: { ...payload, source: { ...payload.source, task_id: taskId } } }, state: "accepted", remote });
+		expect(await flow.confirmFromRendererAction(preview.id, preview.hash)).toEqual({ ok: false, code: "confirmation_required" });
+		expect(client.delegate).toHaveBeenCalledOnce();
+	});
 	it("rejects forged HTTP confirmations and saves even with a matching payload hash", async () => {
 		expect((await rawRequest({ operation: "reserve", record: fixture })).status).toBe(403);
 		expect((await rawRequest({ operation: "save", record: fixture })).status).toBe(403);

@@ -1,4 +1,4 @@
-import type { DelegationSendGuard } from "./multica-delegation-policy";
+import type { DelegationConfirmationGuard, DelegationSendGuard } from "./multica-delegation-policy";
 import { createHash } from "node:crypto";
 import { validateMulticaServerUrl, type MulticaServer } from "../shared/multica";
 import { normalizeToken, type MulticaCredentials } from "./multica-credentials";
@@ -109,7 +109,7 @@ export function createMulticaPublicApi(options: PublicApiOptions) {
 		} catch { return false; }
 	};
 
-	async function request<T>(method: "GET" | "POST", path: string, parse: (value: unknown) => T, body?: CreatePublicDelegation, idempotencyKey?: string, ifMatch?: string, beforeSend?: DelegationSendGuard): Promise<PublicApiResult<T>> {
+	async function request<T>(method: "GET" | "POST", path: string, parse: (value: unknown) => T, body?: CreatePublicDelegation, idempotencyKey?: string, ifMatch?: string, beforeSend?: DelegationSendGuard, confirmationCurrent?: DelegationConfirmationGuard): Promise<PublicApiResult<T>> {
 		if (!current()) return failure("connection_changed");
 		if (blockedUntil > now()) return { ...failure("rate_limited"), retryAfterMs: blockedUntil - now() };
 		let token: string;
@@ -139,6 +139,10 @@ export function createMulticaPublicApi(options: PublicApiOptions) {
 				if (code !== null) return failure(code === "policy_denied" || code === "policy_runtime_unknown" || code === "policy_location_unsafe" ? code : "policy_unavailable");
 				if (!current()) return failure("connection_changed");
 				if (controller.signal.aborted) return failure("timeout");
+			}
+			if (body && confirmationCurrent) {
+				try { if (confirmationCurrent() !== true) return failure("confirmation_required"); }
+				catch { return failure("confirmation_required"); }
 			}
 			const response = await fetchRequest(url.href, { method, headers, redirect: "manual", credentials: "omit", signal: controller.signal, ...(serializedBody === undefined ? {} : { body: serializedBody }) });
 			received = true;
@@ -255,7 +259,7 @@ export function createMulticaPublicApi(options: PublicApiOptions) {
 				return result;
 			}, undefined, undefined, ifMatch);
 		}),
-		delegate: (input: CreatePublicDelegation, idempotencyKey: string, confirmed: boolean, beforeSend: DelegationSendGuard) => run(async () => {
+		delegate: (input: CreatePublicDelegation, idempotencyKey: string, confirmed: boolean, beforeSend: DelegationSendGuard, confirmationCurrent?: DelegationConfirmationGuard) => run(async () => {
 			if (options.delegationsEnabled !== true) return failure("delegations_disabled");
 			if (confirmed !== true) return failure("confirmation_required");
 			const body = createDelegation(input);
@@ -268,7 +272,7 @@ export function createMulticaPublicApi(options: PublicApiOptions) {
 				const result = delegation(v, binding.workspaceId);
 				if (result.agent_id !== body.agent_id || result.runtime_id !== body.expected_runtime_id) throw new Error("identity mismatch");
 				return result;
-			}, body, requestKey, undefined, beforeSend);
+			}, body, requestKey, undefined, beforeSend, confirmationCurrent);
 		}),
 	};
 }

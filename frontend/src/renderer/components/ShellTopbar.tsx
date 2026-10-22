@@ -49,6 +49,7 @@ import {
 } from "../lib/agent-switch-presentation";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { CueRunMenu } from "./chat/CueRunMenu";
+import { MulticaDelegationDialog } from "./MulticaDelegationDialog";
 
 const isMac = isMacPlatform();
 export const topbarDragStyle = isMac ? ({ WebkitAppRegion: "drag" } as React.CSSProperties) : undefined;
@@ -314,6 +315,12 @@ export function ShellTopbar({
 							/>
 						) : null}
 						{/* Cues run from the topbar into the selected session. */}
+						{session && !hostId && !session.cloud && supportsLocalCues ? (
+							<span className="inline-flex" style={noDragStyle}>
+								<MulticaDelegationDialog key={session.id} orchestrator={isOrchestrator ? "project" : "task"}
+									projectId={session.workspaceId} taskId={isOrchestrator ? undefined : session.id} title={isOrchestrator ? undefined : session.title} />
+							</span>
+						) : null}
 						{session && supportsLocalCues ? (
 							<span className="inline-flex" style={noDragStyle}>
 								<CueRunMenu

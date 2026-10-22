@@ -1,4 +1,5 @@
 import { createMainProcessDelegationAuthority } from "./main/multica-delegation-authority";
+import { registerDesktopDelegation } from "./main/multica-delegation-desktop";
 import { registerProjectContextIpc } from "./main/project-context-ipc";
 import { syncMacWindowButtons } from "./main/window-chrome";
 import { MAC_TITLEBAR_HEIGHT, MAC_WINDOW_BUTTON_X, MAC_WINDOW_BUTTON_RADIUS } from "./shared/window-chrome";
@@ -399,6 +400,7 @@ let multicaViewHost: MulticaViewHost | null = null;
 let multicaIssueLinkService: MulticaIssueLinkService | null = null;
 let multicaStatusSync: MulticaStatusSync | null = null;
 let multicaStatusSyncIpc: { dispose: () => void } | null = null;
+let multicaDelegation: ReturnType<typeof registerDesktopDelegation> | null = null;
 let multicaLocalServer: MulticaLocalServer | null = null;
 let multicaLocalServerIpc: { dispose: () => void } | null = null;
 let multicaAwareness: MulticaAwareness | null = null;
@@ -1139,6 +1141,23 @@ async function createWindowInternal(): Promise<void> {
 		record: createSyncAuditSink(getMulticaActionLog(browserProfileStateDir())),
 	});
 	multicaStatusSyncIpc = registerMulticaStatusSyncIpc({ ipcMain, shellWebContents, engine: multicaStatusSync });
+	const multicaCredentials = createMulticaCredentials({
+		stateDir: browserProfileStateDir(), vault: createSafeStorageVault(safeStorage, process.platform),
+		readProfileConfig: createProfileConfigReader(() => os.homedir()),
+	});
+	multicaDelegation = registerDesktopDelegation({
+		ipcMain, shellWebContents, authority: delegationConfirmation.authority,
+		credentials: multicaCredentials,
+		readSettings: () => readMulticaSettings(browserProfileStateDir()),
+		daemonOrigin: () => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null,
+		fetch: (url, init) => net.fetch(url instanceof URL ? url.href : url, init),
+		confirm: async (_preview, detail) => {
+			if (!mainWindow || mainWindow.isDestroyed()) return false;
+			const result = await dialog.showMessageBox(mainWindow, { type: "question", title: "Confirm Multica delegation",
+				message: "Send this exact task brief to Multica?", detail, buttons: ["Cancel", "Confirm delegation"], defaultId: 0, cancelId: 0, noLink: true });
+			return result.response === 1;
+		},
+	});
 	// Start, stop and restart the self-hosted Multica server (Docker Compose). Nothing runs until
 	// the Settings block is shown; the Multica view host is not involved.
 	multicaLocalServer = createMulticaLocalServer({
@@ -1171,11 +1190,7 @@ async function createWindowInternal(): Promise<void> {
 		ipcMain,
 		shellWebContents,
 		watchStore: createMulticaWatchConfigStore(browserProfileStateDir()),
-		credentials: createMulticaCredentials({
-			stateDir: browserProfileStateDir(),
-			vault: createSafeStorageVault(safeStorage, process.platform),
-			readProfileConfig: createProfileConfigReader(() => os.homedir()),
-		}),
+		credentials: multicaCredentials,
 		// One shared instance per state directory: other writers of the log must use getMulticaActionLog too.
 		actionLog: getMulticaActionLog(browserProfileStateDir()),
 		fetch: (url, init) => net.fetch(url, init),
@@ -1208,7 +1223,7 @@ async function createWindowInternal(): Promise<void> {
 		readSettings: () => readMulticaSettings(browserProfileStateDir()),
 		writeSettings: (settings) => writeMulticaSettings(browserProfileStateDir(), settings),
 		checkServer: (request) => checkMulticaServer(request, createMulticaCheckGet((url, init) => net.fetch(url, init))),
-		onServerChange: (serverKey) => multicaIssueLinkService?.handleServerChange(serverKey),
+		onServerChange: (serverKey) => { multicaDelegation?.invalidate(); return multicaIssueLinkService?.handleServerChange(serverKey); },
 		// Packaged builds only trust the bundle shipped in resources; the env
 		// override is for development runs against a local Multica checkout.
 		resolveBundle: () =>
@@ -1387,6 +1402,8 @@ async function createWindowInternal(): Promise<void> {
 		multicaIssueLinkService = null;
 		multicaStatusSyncIpc?.dispose();
 		multicaStatusSyncIpc = null;
+		multicaDelegation?.dispose();
+		multicaDelegation = null;
 		multicaLocalServerIpc?.dispose();
 		multicaLocalServerIpc = null;
 		multicaLocalServer?.dispose();
