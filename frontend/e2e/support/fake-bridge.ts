@@ -77,6 +77,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 			const ao = {
 					app: {
 						getVersion: async () => version,
+						chooseProjectContextLink: async () => null,
 						chooseDirectory: async () => null,
 						checkGitRepository: async () => true,
 						openExternal: async () => undefined,
@@ -131,6 +132,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 					save: async () => true,
 				},
+				chatAttachment: { chooseFolder: async () => null },
 				daemon: {
 					getStatus: async () => status,
 					start: async () => status,
@@ -314,6 +316,12 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				uiSettings: {
 					get: async () => ({ ...DEFAULT_UI_SETTINGS }),
 					set: async (settings) => coerceUiSettings({ ...DEFAULT_UI_SETTINGS, ...settings }),
+				},
+				multicaDelegation: {
+					setCredential: async () => false,
+					preview: async () => ({ ok: false, code: "delegations_disabled" }),
+					cancelPreview: async () => undefined,
+					onResult: () => () => undefined,
 				},
 				multica: {
 					getState: async () => ({ active: false, status: "unconfigured", url: "" }),
@@ -1004,6 +1012,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 			const ao = {
 					app: {
 						getVersion: async () => version,
+						chooseProjectContextLink: async () => null,
 						chooseDirectory: async () => null,
 						checkGitRepository: async () => true,
 						openExternal: async () => undefined,
@@ -1054,6 +1063,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 					save: async () => true,
 				},
+				chatAttachment: { chooseFolder: async () => null },
 				daemon: {
 					getStatus: async () => status,
 					start: async () => status,
@@ -1234,6 +1244,12 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				uiSettings: {
 					get: async () => ({ ...DEFAULT_UI_SETTINGS }),
 					set: async (settings) => coerceUiSettings({ ...DEFAULT_UI_SETTINGS, ...settings }),
+				},
+				multicaDelegation: {
+					setCredential: async () => false,
+					preview: async () => ({ ok: false, code: "delegations_disabled" }),
+					cancelPreview: async () => undefined,
+					onResult: () => () => undefined,
 				},
 				multica: {
 					getState: async () => ({ active: false, status: "unconfigured", url: "" }),

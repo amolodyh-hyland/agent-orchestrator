@@ -313,6 +313,12 @@ export const aoBridge: AoBridge =
 			get: async () => ({ ...DEFAULT_UI_SETTINGS }),
 			set: async (settings) => coerceUiSettings({ ...DEFAULT_UI_SETTINGS, ...settings }),
 		},
+		multicaDelegation: {
+			preview: async () => ({ ok: false, code: "delegations_disabled" }),
+			cancelPreview: async () => undefined,
+			setCredential: async () => false,
+			onResult: () => () => undefined,
+		},
 		multica: {
 			getState: async () => ({ active: false, status: "unconfigured", url: "" }),
 			setActive: async () => ({ active: false, status: "unconfigured", url: "" }),

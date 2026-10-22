@@ -1,4 +1,6 @@
 import { CHOOSE_PROJECT_CONTEXT_CHANNEL, type ProjectContextLinkRequest, type ProjectContextLinkSelection } from "./shared/project-context";
+import { installDelegationUserAction } from "./shared/multica-delegation-user-action";
+import { DELEGATION_PREVIEW, DELEGATION_CANCEL_PREVIEW, DELEGATION_RESULT, DELEGATION_CREDENTIAL, type DelegationConfirmationBridge } from "./shared/multica-delegation-confirmation";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, type AppShortcutEvent, type KeybindingOverrides } from "./shared/shortcuts";
 import {
@@ -773,6 +775,16 @@ const api = {
 		get: () => ipcRenderer.invoke("uiSettings:get") as Promise<UiSettings>,
 		set: (settings: Partial<UiSettings>) => ipcRenderer.invoke("uiSettings:set", settings) as Promise<UiSettings>,
 	},
+	multicaDelegation: {
+		preview: (draft) => ipcRenderer.invoke(DELEGATION_PREVIEW, draft),
+		cancelPreview: (id) => ipcRenderer.invoke(DELEGATION_CANCEL_PREVIEW, id),
+		setCredential: (workspaceId, token) => ipcRenderer.invoke(DELEGATION_CREDENTIAL, workspaceId, token),
+		onResult: (listener) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, value: Parameters<typeof listener>[0]) => listener(value);
+			ipcRenderer.on(DELEGATION_RESULT, wrapped);
+			return () => { ipcRenderer.off(DELEGATION_RESULT, wrapped); };
+		},
+	} satisfies DelegationConfirmationBridge,
 	multica: {
 		getState: () => ipcRenderer.invoke(MULTICA_GET_STATE_CHANNEL) as Promise<MulticaViewState>,
 		setActive: (active: boolean) => ipcRenderer.invoke(MULTICA_SET_ACTIVE_CHANNEL, active) as Promise<MulticaViewState>,
@@ -1009,3 +1021,4 @@ const api = {
 contextBridge.exposeInMainWorld("ao", api);
 
 export type AoBridge = typeof api;
+installDelegationUserAction(document, (channel, input) => ipcRenderer.invoke(channel, input));

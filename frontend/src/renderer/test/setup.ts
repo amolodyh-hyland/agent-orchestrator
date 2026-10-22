@@ -383,6 +383,12 @@ if (typeof window !== "undefined") {
 			get: async () => ({ ...DEFAULT_UI_SETTINGS }),
 			set: async (settings) => coerceUiSettings({ ...DEFAULT_UI_SETTINGS, ...settings }),
 		},
+		multicaDelegation: {
+			setCredential: async () => false,
+			preview: async () => ({ ok: false, code: "delegations_disabled" }),
+			cancelPreview: async () => undefined,
+			onResult: () => () => undefined,
+		},
 		multica: {
 			getState: async () => ({ active: false, status: "unconfigured", url: "" }),
 			setActive: async () => ({ active: false, status: "unconfigured", url: "" }),

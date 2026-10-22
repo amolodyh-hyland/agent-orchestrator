@@ -7,6 +7,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createMainProcessDelegationAuthority } from "./multica-delegation-authority";
+import { createDelegationConfirmationFlow } from "./multica-delegation-confirmation";
 import { createMulticaDelegationCoordinator, type DelegationRecord } from "./multica-delegation-coordinator";
 import { createDaemonDelegationJournal } from "./multica-delegation-journal";
 import type { DelegationSendGuard } from "./multica-delegation-policy";
@@ -60,6 +61,47 @@ async function rawRequest(body: object, signed = false) {
 }
 
 describe("coordinators against the real daemon SQLite journal", () => {
+	it.each(["task", "project"] as const)("persists and dispatches the %s preview only after user approval", async (orchestrator) => {
+		const binding = fixture.intent.binding;
+		const payload = fixture.intent.payload;
+		const taskId = `confirmation-flow-${orchestrator}`;
+		const journal = createDaemonDelegationJournal(() => origin, authority);
+		const remote: PublicDelegation = { delegation_id: randomUUID(), task_id: randomUUID(), workspace_id: binding.workspaceId,
+			agent_id: payload.agent_id, runtime_id: payload.expected_runtime_id, status: "queued", terminal: false,
+			revision: "first", created_at: new Date().toISOString() };
+		const client = {
+			binding,
+			getAgent: async () => ({ ok: true as const, data: { agent_id: payload.agent_id, workspace_id: binding.workspaceId, name: "Reviewer",
+				runtime_id: payload.expected_runtime_id, runtime_bound: true, permission_mode: "private", can_invoke: true, invocation_targets: [], archived: false, availability: "online" as const } }),
+			getRuntime: async () => ({ ok: true as const, data: { runtime_id: payload.expected_runtime_id, workspace_id: binding.workspaceId, availability: "online" as const } }),
+			delegate: vi.fn(async (_payload: unknown, _key: string, _confirmed: boolean, guard: DelegationSendGuard) => {
+				const code = await guard(); return code ? { ok: false as const, code } : { ok: true as const, data: remote };
+			}),
+			getDelegation: async () => ({ ok: true as const, data: remote }),
+			listDelegations: async () => ({ ok: true as const, data: { delegations: [] } }),
+			cancelDelegation: async () => ({ ok: true as const, data: remote }),
+		};
+		const coordinator = createMulticaDelegationCoordinator({ journal, client: () => client, enabled: true, confirmations: authority });
+		const confirm = vi.fn(async () => false);
+		const flow = createDelegationConfirmationFlow({ ...coordinator, client: async () => client, policy: journal.evaluatePolicy, confirm });
+		const draft = { orchestrator, workspaceId: binding.workspaceId, profileId: payload.agent_id, runtimeId: payload.expected_runtime_id,
+			projectId: payload.source.project_id, taskId, title: payload.task.title, brief: payload.task.instructions };
+		let result = await flow.preview(draft);
+		if (!result.ok || !("preview" in result)) throw new Error(JSON.stringify(result));
+		expect(await journal.find(draft.projectId, taskId)).toBeNull();
+		expect(await flow.confirmFromRendererAction(result.preview.id, result.preview.hash)).toEqual({ ok: false, code: "cancelled" });
+		expect(await journal.find(draft.projectId, taskId)).toBeNull();
+		expect(client.delegate).not.toHaveBeenCalled();
+		confirm.mockResolvedValue(true);
+		result = await flow.preview(draft);
+		if (!result.ok || !("preview" in result)) throw new Error(JSON.stringify(result));
+		const preview = result.preview;
+		expect(await flow.confirmFromRendererAction(preview.id, preview.hash)).toMatchObject({ ok: true, state: "accepted" });
+		expect(await journal.find(draft.projectId, taskId)).toMatchObject({ confirmedBy: "desktop-user", intent: { binding,
+			payload: { ...payload, source: { ...payload.source, task_id: taskId } } }, state: "accepted", remote });
+		expect(await flow.confirmFromRendererAction(preview.id, preview.hash)).toEqual({ ok: false, code: "confirmation_required" });
+		expect(client.delegate).toHaveBeenCalledOnce();
+	});
 	it("rejects forged HTTP confirmations and saves even with a matching payload hash", async () => {
 		expect((await rawRequest({ operation: "reserve", record: fixture })).status).toBe(403);
 		expect((await rawRequest({ operation: "save", record: fixture })).status).toBe(403);

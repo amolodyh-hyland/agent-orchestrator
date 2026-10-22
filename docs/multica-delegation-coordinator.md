@@ -3,9 +3,11 @@
 `frontend/src/main/multica-delegation-coordinator.ts` provides one main-process
 coordinator to task and project orchestrators. Both handles refer to the same
 instance, share serialization, and use the same task identity and journal.
-There is no renderer/preload IPC, assignment/status trigger, background dispatch,
-or UI registration. TK-MA66/67 own the user-facing wiring. Admission defaults off
-at the coordinator and independently at the member Public API client and server.
+The desktop's shared preview/confirmation flow (TK-MA66) is the only dispatch
+entry point. Assignment/status events and automation have no dispatch or
+confirmation entry point. Standalone coordinator/client admission still defaults
+off; the desktop enables it only behind this flow. The server's rollout gate is
+independent.
 
 Construct it with `createDaemonDelegationJournal`, a trusted daemon-origin
 callback, the private main-process authority, and a resolver returning TK-MA63
@@ -54,7 +56,7 @@ launches have no authority and reject all journal calls. Attaching a new desktop
 to an already running daemon cannot enroll a replacement key through HTTP;
 this capability remains unavailable until a newly paired daemon is launched.
 No UI/IPC/MCP route exposes the authority or the `human` handle. Task and project
-handles expose only processing/reconciliation. TK-MA66 must invoke the private
+handles expose only processing/reconciliation. The desktop invokes the private
 human API only from its validated explicit user-action flow.
 
 Migration `0219_multica_confirmation_verification.sql` marks legacy records
@@ -224,3 +226,55 @@ marker, the conservative `submission_unknown` state remains even if this process
 has not sent; processing reconciles the original key before replay. A policy
 block never proves an earlier ambiguous admission was rejected. Reconciliation
 and explicitly confirmed cancellation remain available. No migration is needed.
+
+## Shared preview and confirmation (TK-MA66)
+
+`MulticaDelegationDialog` is mounted by the local session topbar for task and
+project orchestrators. Both use `multica-delegation-confirmation.ts` in main and
+the same coordinator instance. Remote/cloud session controls are not routed to
+the local coordinator. The user supplies stable workspace/profile/runtime IDs;
+the configured server supplies the destination and the Public API supplies the
+profile name, invocation/readiness facts and current runtime binding.
+
+Preview is read-only. It shows destination server/key/workspace, profile name/ID,
+bound runtime, AO project/task identifiers, title and full brief, the exact scope
+and a safe effective-policy source label. The supported scope is only the brief
+and source identifiers: no files, roots, attachments or history are read or
+uploaded. Member Public API credentials may be explicitly saved for this exact
+configured server/workspace through the existing credential store; they are never
+included in previews, confirmation results or tokens.
+
+Main stores a private immutable snapshot with a SHA-256 digest over destination,
+profile/runtime, source, brief, scope, policy decision and profile label. A
+preview expires after two minutes. Editing any field revokes the preview;
+changing source props, closing/unmounting the dialog, navigating, changing the
+configured connection or saving a credential also invalidates it. Replacing a
+preview for the same task invalidates its predecessor. A failed or cancelled
+confirmation consumes the preview, requiring another review.
+
+Preload exposes preview, revoke, credential-save and result subscription only.
+There is no renderer confirm/mint/process method. Its isolated-world listener
+forwards only a trusted click with current user activation on the confirmation
+button. Main accepts IPC only from the shell's current main frame and requires
+focus. Embedded Multica, browser tabs and child frames cannot invoke it. A native
+dialog then displays the same exact snapshot, with Cancel selected by default;
+only its explicit affirmative response can authorize the handoff. Repeated clicks
+while this dialog is open are ignored.
+
+After native approval, main revalidates connection, profile/runtime binding,
+permissions/readiness and policy. Policy source changes require another preview;
+denials and unknown decisions expose only fixed safe reasons. Only then does main
+mint a cryptographically random token, bound to the snapshot hash, valid for at
+most ten seconds and never beyond preview expiry. It consumes the token once
+before calling the private human coordinator API, which persists the proof-bound
+intent. Tokens never cross IPC, enter the journal or become available to CLI,
+orchestrator processes, task creation, assignments or status/automation events.
+The coordinator independently rechecks policy at reservation and actual send;
+Multica revalidates runtime binding at admission. A conflict cannot reroute or
+retry with a new target without another preview and confirmation.
+
+Tests cover both UI paths, cancelled/expired previews, edits, stale bindings,
+policy denial/unknown results and safe reasons, token forgery/replay/hash mismatch,
+frame/focus checks, scripted-click rejection and absence of event-driven dispatch.
+The native dialog is injected in flow tests; the installed app and live daemon
+are not used.
