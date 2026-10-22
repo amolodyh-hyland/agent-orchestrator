@@ -309,6 +309,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"DomainSessionStaleBinary":          "SessionStaleBinary",
 	"DomainSessionWait":                 "SessionWait",
 	"DomainProjectConfig":               "ProjectConfig",
+	"LibraryAdmission":                  "LibraryAdmission",
 	"LibraryOperation":                  "LibraryOperation",
 	"LibraryResult":                     "LibraryResult",
 	"DomainLibrarySource":               "LibrarySource",
@@ -2749,6 +2750,11 @@ func sessionOperations() []operation {
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/library/sessions/{sessionId}", id: "getSessionLibrary", tag: "sessions", summary: "Read retained library bytes and current input admission",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps:      []respUnit{{http.StatusOK, librarysvc.Result{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodGet, path: "/api/v1/library", id: "getLibrary", tag: "projects", summary: "List the inert library catalog",

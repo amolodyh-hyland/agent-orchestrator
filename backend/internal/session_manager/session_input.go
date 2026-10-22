@@ -35,9 +35,18 @@ var _ sessionguard.InputLease = (*Manager)(nil)
 // close admission and wait for every already-admitted write to finish.
 func (m *Manager) AcquireSessionInput(id domain.SessionID) (release func(), ok bool) {
 	id = domain.SessionID(strings.TrimSpace(string(id)))
+	libraryRelease := func() {}
+	if library := m.librarySelectionValue(); library != nil {
+		var allowed bool
+		libraryRelease, allowed = library.AcquireTaskInput(id)
+		if !allowed {
+			return nil, false
+		}
+	}
 	m.agentOpMu.Lock()
 	if m.agentOperationActiveLocked(id) && !m.agentSwitchDecisionInputAllowedLocked(id) {
 		m.agentOpMu.Unlock()
+		libraryRelease()
 		return nil, false
 	}
 	if m.inputLeases[id] == 0 {
@@ -48,7 +57,7 @@ func (m *Manager) AcquireSessionInput(id domain.SessionID) (release func(), ok b
 
 	var once sync.Once
 	return func() {
-		once.Do(func() { m.releaseSessionInput(id) })
+		once.Do(func() { m.releaseSessionInput(id); libraryRelease() })
 	}, true
 }
 

@@ -21,7 +21,7 @@ func TestLibraryCLIUsesHTTPAndPreservesEnvelope(t *testing.T) {
 					return
 				}
 				seen = true
-				if r.URL.Path != "/api/v1/library/operations" || r.Method != "POST" {
+				if r.URL.Path != "/api/v1/library/operations" || r.Method != http.MethodPost {
 					t.Errorf("request=%s %s", r.Method, r.URL.Path)
 				}
 				var request map[string]any

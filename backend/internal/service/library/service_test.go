@@ -21,16 +21,18 @@ func (f policyFunc) CheckLibrary(c context.Context, r PolicyRequest) (PolicyDeci
 }
 
 type fixture struct {
-	svc    *Service
-	store  *sqlitestore.Store
-	root   string
-	t      *testing.T
-	result Result
+	svc     *Service
+	store   *sqlitestore.Store
+	root    string
+	dataDir string
+	t       *testing.T
+	result  Result
 }
 
 func newFixture(t *testing.T, kind string) *fixture {
 	t.Helper()
-	store, err := sqlite.Open(t.TempDir())
+	dataDir := t.TempDir()
+	store, err := sqlite.Open(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +41,7 @@ func newFixture(t *testing.T, kind string) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &fixture{svc: New(store, "local_user", "authority", "resolver", nil), store: store, root: root, t: t}
+	f := &fixture{dataDir: dataDir, svc: New(store, "local_user", "authority", "resolver", nil), store: store, root: root, t: t}
 	f.apply(Operation{Operation: "register", SourceID: "source", Scope: "personal", RootKind: kind, LocalPath: root})
 	return f
 }
@@ -213,5 +215,41 @@ func TestLibraryUnsupportedFeaturesStayInventory(t *testing.T) {
 				t.Fatal("unsupported approval accepted")
 			}
 		})
+	}
+}
+
+func TestLibraryManagedMetadataRequiresAnExactIndependentRootGrant(t *testing.T) {
+	f := newFixture(t, "rules")
+	f.write("guide.md", "text")
+	info, err := os.Lstat(f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := targetIdentity(info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := ManagedSourceGrant{TargetIdentity: identity, RootKind: "rules", RootIdentity: domain.LibraryRootIdentity{ResolverID: "resolver", RootRef: "managed_root", RootGeneration: 7}}
+	f.svc.policy = policyFunc(func(context.Context, PolicyRequest) (PolicyDecision, error) {
+		return PolicyDecision{State: "verified", ManagedSources: map[string]ManagedSourceGrant{"managed": grant}}, nil
+	})
+	foreign, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation := Operation{Operation: "register", SourceID: "managed", Scope: "managed", RootKind: "rules", LocalPath: foreign, ExpectedRevision: f.result.Revision}
+	if _, err := f.svc.Operate(context.Background(), operation); reason(err) != "managed_lock" {
+		t.Fatalf("caller-selected root gained managed provenance: %v", err)
+	}
+	operation.LocalPath = f.root
+	f.apply(operation)
+	f.apply(Operation{Operation: "allow_inspection", SourceID: "managed", RootIdentity: &grant.RootIdentity})
+	f.apply(Operation{Operation: "inspect", SourceID: "managed"})
+	if len(f.result.Entries) != 1 || f.result.Entries[0].SourceID != "managed" {
+		t.Fatal("policy-owned root not inspected")
+	}
+	grant.TargetIdentity = "different_target"
+	if _, err := f.svc.Operate(context.Background(), Operation{Operation: "inspect", SourceID: "managed", ExpectedRevision: f.result.Revision}); reason(err) != "managed_lock" {
+		t.Fatalf("changed managed grant accepted: %v", err)
 	}
 }

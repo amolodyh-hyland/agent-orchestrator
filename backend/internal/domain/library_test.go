@@ -92,3 +92,23 @@ func TestLibraryPathsAndUnknownRecords(t *testing.T) {
 		t.Fatal("case folded duplicate accepted")
 	}
 }
+
+func TestLibraryCompleteSnapshotGoldenVector(t *testing.T) {
+	snapshot := LibrarySnapshot{SchemaVersion: 1, SnapshotID: "snap_1", SessionID: "sess_1", ProjectID: "", ProjectRevision: 0, ProjectContextDigest: strings.Repeat("a", 64), Role: ProjectContextRoleWorker, Channel: SessionModeTUI, RegistryRevision: 3, TrustEpoch: 2, OwnedSnapshotRef: "session-library://sess_1", ProviderID: "codex", AdapterID: "inert-library-v1", AdapterVersion: "1", CreatedAt: "2026-10-22T12:00:00.000Z", Entries: []LibrarySnapshotEntry{}, Warnings: []string{}}
+	hash, err := snapshot.ComputeDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "sha256:6176174b896ca1146d32212008077fd85ca1c8f716a8ec1af79b8df277abbbc3"
+	if hash != want {
+		t.Fatalf("hash=%s want=%s", hash, want)
+	}
+	snapshot.SnapshotDigest = hash
+	if err := snapshot.VerifyDigest(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.ProviderID = "other"
+	if snapshot.VerifyDigest() == nil {
+		t.Fatal("snapshot mutation accepted")
+	}
+}

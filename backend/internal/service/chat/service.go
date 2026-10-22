@@ -53,6 +53,7 @@ type SessionReader interface {
 
 // Service owns the live Chat controllers.
 type Service struct {
+	libraryAdmission       LibraryAdmission
 	store                  Store
 	reader                 SnapshotReader
 	pageReader             SnapshotPageReader
@@ -1034,6 +1035,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	// replaced can be told apart from the current one's.
 	controller := newController(
 		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
+	controller.libraryInput = s.acquireLibraryInput
 	controller.permissionFallbackOff = cfg.DisablePermissionFallback
 	controller.onPermissionsChanged = s.recordEffectivePermissions(owner)
 	// Seed deduplication only from the accepted launch result reported above,

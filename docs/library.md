@@ -42,10 +42,39 @@ no repository), or explicit standalone session ownership. Knowledge and library
 bindings share the 64-binding allowance. Managed policy is injected independently
 of selected folders; absent policy permits personal use, required unverifiable
 policy blocks the affected operation, and optional failure carries a warning.
-Managed locks cannot be detached or shadowed by personal bindings.
+Managed locks cannot be detached or shadowed by personal bindings. A managed
+registration requires an independently supplied grant for the exact resolver,
+root reference/generation, physical target identity, and declared root kind.
+A caller-selected folder or source ID cannot establish managed provenance.
 
 The local SQLite registry serializes mutations under the existing writer
 transaction. Portable records and staged bytes share one bounded aggregate;
 resolver-only paths never appear in API listings or audit records. Audit records
 contain identifiers, operation, outcome, reason, revision, and trust epoch.
 Migration 0220 adds the registry and ledger without modifying prior migrations.
+
+Migration 0221 adds immutable library child snapshots. Session preparation stores
+both the existing Project context and the child manifest in one transaction,
+checking the session's Project, role/channel, Project revision, registry revision,
+and approvals. A concurrent retry uses the existing winner. The child pins
+ordered bindings and revisions, approval references, provider/adapter identity,
+closed text bytes, and a canonical digest. It never changes the parent manifest.
+Optional unavailable selections carry an omission reason and no bytes. Required
+unproved provider bindings block launch; nothing is projected or executed.
+
+`GET /api/v1/library/sessions/{sessionId}` and `ao library session <session-id>`
+read retained selections and current admission. Resume verifies retained hashes
+and current policy/trust, without resolving live source files. Detach and Project
+archive preserve snapshots; existing session retention owns their lifetime.
+Knowledge payloads and library bytes share the 8 MiB/1,024-file allowance, and
+existing guidance plus rules share 64 KiB. Verified policy may lower these limits.
+
+Revocation advances trust epoch and closes input admission for every affected
+retained session. Task terminal input is raw bytes: admission receives only the
+session identity and blocks all subsequent writes, including ordinary text that
+might trigger implicit native selection. Controlled chat dispatch also validates
+known library markers; inert entries remain non-invocable. An already executing
+turn has no enforceable mid-turn boundary. Admission reports
+`input_closed_stop_or_replace_required`; stopped sessions report
+`stopped_replacement_required`. Personal reapproval cannot reopen an old revoked
+snapshot. A successor selection requires a new session.

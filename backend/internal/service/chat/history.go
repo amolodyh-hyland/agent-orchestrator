@@ -1223,6 +1223,7 @@ func (s *Service) newReplacementController(
 	replacement := newController(
 		id, source.owner(), conversation, generation, source.harness, provider,
 		s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
+	replacement.libraryInput = s.acquireLibraryInput
 	replacement.inheritPermissionFallback(source)
 	return replacement
 }

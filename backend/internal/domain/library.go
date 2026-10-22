@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// Library bounds are hard ceilings shared by every inspection and snapshot.
 const (
 	LibrarySchemaVersion   = 1
 	MaxLibrarySources      = 64
@@ -18,12 +19,14 @@ const (
 	MaxLibrarySessionFiles = 1024
 )
 
+// LibraryRootIdentity pins an opaque resolver target and its replacement generation.
 type LibraryRootIdentity struct {
 	ResolverID     string `json:"resolverId"`
 	RootRef        string `json:"rootRef"`
 	RootGeneration int64  `json:"rootGeneration"`
 }
 
+// LibrarySource describes inspection availability without exposing a machine locator.
 type LibrarySource struct {
 	SourceID   string `json:"sourceId"`
 	OwnerID    string `json:"ownerId"`
@@ -35,6 +38,7 @@ type LibrarySource struct {
 	Detached        bool   `json:"detached"`
 }
 
+// LibraryProvenance records observed origin metadata independently of trust.
 type LibraryProvenance struct {
 	OriginAuthorityID string `json:"originAuthorityId"`
 	OriginSourceID    string `json:"originSourceId"`
@@ -46,6 +50,7 @@ type LibraryProvenance struct {
 	Verification      string `json:"verification"`
 }
 
+// LibraryFile describes one exact text file in a closed entry payload.
 type LibraryFile struct {
 	Path      string `json:"path"`
 	SHA256    string `json:"sha256"`
@@ -53,6 +58,7 @@ type LibraryFile struct {
 	Mode      string `json:"mode"`
 }
 
+// LibraryEntry is the portable, content-addressed description of one library item.
 type LibraryEntry struct {
 	SchemaVersion int               `json:"schemaVersion"`
 	EntryID       string            `json:"entryId"`
@@ -69,11 +75,13 @@ type LibraryEntry struct {
 	ReasonCode    string            `json:"reasonCode"`
 }
 
+// LibrarySelectedEntry pins an opaque entry identity to exact content bytes.
 type LibrarySelectedEntry struct {
 	EntryID     string `json:"entryId"`
 	ContentHash string `json:"contentHash"`
 }
 
+// LibraryApproval records an exact selection, purpose, policy revision and trust epoch.
 type LibraryApproval struct {
 	ApprovalID      string                 `json:"approvalId"`
 	AuthorityID     string                 `json:"authorityId"`
@@ -90,6 +98,7 @@ type LibraryApproval struct {
 	SelectionDigest string                 `json:"selectionDigest"`
 }
 
+// LibraryBinding selects an approved revision for a Project or one standalone session.
 type LibraryBinding struct {
 	BindingID           string               `json:"bindingId"`
 	OwnerID             string               `json:"ownerId"`
@@ -105,6 +114,7 @@ type LibraryBinding struct {
 	Revision            int64                `json:"revision"`
 }
 
+// LibraryLocalSource holds resolver-only state that must never be returned as a manifest.
 type LibraryLocalSource struct {
 	Source         LibrarySource `json:"source"`
 	RootPath       string        `json:"rootPath"`
@@ -112,6 +122,7 @@ type LibraryLocalSource struct {
 	TargetIdentity string        `json:"targetIdentity"`
 }
 
+// LibraryStagedEntry owns inspected bytes pending exact-content approval.
 type LibraryStagedEntry struct {
 	Entry        LibraryEntry        `json:"entry"`
 	RootIdentity LibraryRootIdentity `json:"rootIdentity"`
@@ -119,6 +130,7 @@ type LibraryStagedEntry struct {
 	Present      bool                `json:"present"`
 }
 
+// LibraryRegistry is the transactionally updated local source and trust aggregate.
 type LibraryRegistry struct {
 	Revision   int64                         `json:"revision"`
 	TrustEpoch int64                         `json:"trustEpoch"`
@@ -128,22 +140,26 @@ type LibraryRegistry struct {
 	Bindings   map[string]LibraryBinding     `json:"bindings"`
 }
 
+// NewLibraryRegistry creates empty collections for a new local authority.
 func NewLibraryRegistry() LibraryRegistry {
 	return LibraryRegistry{Sources: map[string]LibraryLocalSource{}, Entries: map[string]LibraryStagedEntry{}, Approvals: map[string]LibraryApproval{}, Bindings: map[string]LibraryBinding{}}
 }
 
+// LibraryAudit contains only sanitized operation metadata.
 type LibraryAudit struct {
-	ActorID       string `json:"actorId"`
-	SourceID      string `json:"sourceId,omitempty"`
-	EntryID       string `json:"entryId,omitempty"`
-	Purpose       string `json:"purpose"`
-	Outcome       string `json:"outcome"`
-	ReasonCode    string `json:"reasonCode"`
-	CorrelationID string `json:"correlationId"`
-	Revision      int64  `json:"revision"`
-	TrustEpoch    int64  `json:"trustEpoch"`
+	PolicyRevision string `json:"policyRevision"`
+	ActorID        string `json:"actorId"`
+	SourceID       string `json:"sourceId,omitempty"`
+	EntryID        string `json:"entryId,omitempty"`
+	Purpose        string `json:"purpose"`
+	Outcome        string `json:"outcome"`
+	ReasonCode     string `json:"reasonCode"`
+	CorrelationID  string `json:"correlationId"`
+	Revision       int64  `json:"revision"`
+	TrustEpoch     int64  `json:"trustEpoch"`
 }
 
+// LibraryRuntimeBinding reports availability without granting invocation authority.
 type LibraryRuntimeBinding struct {
 	SessionID            SessionID `json:"sessionId"`
 	SnapshotID           string    `json:"snapshotId"`
@@ -161,7 +177,9 @@ type LibraryRuntimeBinding struct {
 	CanInvoke            bool      `json:"canInvoke"`
 }
 
+// LibrarySnapshotEntry retains one ordered selection and all contributing bindings.
 type LibrarySnapshotEntry struct {
+	Required         bool                `json:"required"`
 	Entry            LibraryEntry        `json:"entry"`
 	RootIdentity     LibraryRootIdentity `json:"rootIdentity"`
 	SourceRevision   int64               `json:"sourceRevision"`
@@ -173,6 +191,7 @@ type LibrarySnapshotEntry struct {
 	ReasonCode       string              `json:"reasonCode"`
 }
 
+// LibrarySnapshot is an immutable child of a session Project context manifest.
 type LibrarySnapshot struct {
 	SchemaVersion        int                    `json:"schemaVersion"`
 	SnapshotID           string                 `json:"snapshotId"`
@@ -194,11 +213,13 @@ type LibrarySnapshot struct {
 	SnapshotDigest       string                 `json:"snapshotDigest,omitempty"`
 }
 
+// ComputeDigest hashes the canonical selection while excluding its digest field.
 func (s LibrarySnapshot) ComputeDigest() (string, error) {
 	s.SnapshotDigest = ""
 	return LibraryRecordDigest("shared-library-session-v1", s)
 }
 
+// VerifyDigest rejects changes to an immutable selection.
 func (s LibrarySnapshot) VerifyDigest() error {
 	hash, err := s.ComputeDigest()
 	if err != nil {
@@ -210,14 +231,19 @@ func (s LibrarySnapshot) VerifyDigest() error {
 	return nil
 }
 
+// LibraryTimestamp formats portable UTC timestamps with fixed millisecond precision.
 func LibraryTimestamp(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05.000Z") }
-func ValidLibraryID(s string) bool        { return validContextToken(s, 128) }
+
+// ValidLibraryID checks the portable opaque identifier alphabet and length.
+func ValidLibraryID(s string) bool { return validContextToken(s, 128) }
+
+// ValidLibraryHash checks a lowercase SHA-256 content reference.
 func ValidLibraryHash(s string) bool {
 	if len(s) != 71 || !strings.HasPrefix(s, "sha256:") {
 		return false
 	}
 	for _, r := range s[7:] {
-		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
+		if !strings.ContainsRune("0123456789abcdef", r) {
 			return false
 		}
 	}

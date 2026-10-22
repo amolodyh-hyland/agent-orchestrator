@@ -27,10 +27,12 @@ func readLibraryRegistry(ctx context.Context, db gen.DBTX) (domain.LibraryRegist
 	return state, nil
 }
 
+// ReadLibraryRegistry reads local resolver state without traversing source folders.
 func (s *Store) ReadLibraryRegistry(ctx context.Context) (domain.LibraryRegistry, error) {
 	return readLibraryRegistry(ctx, s.readDB)
 }
 
+// UpdateLibraryRegistry serializes a registry mutation and its audit event in one transaction.
 func (s *Store) UpdateLibraryRegistry(ctx context.Context, change func(*domain.LibraryRegistry) (domain.LibraryAudit, error)) error {
 	if err := s.writeMu.LockContext(ctx); err != nil {
 		return err
@@ -64,6 +66,7 @@ func (s *Store) UpdateLibraryRegistry(ctx context.Context, change func(*domain.L
 	})
 }
 
+// RecordLibraryAudit persists a sanitized operation outcome.
 func (s *Store) RecordLibraryAudit(ctx context.Context, audit domain.LibraryAudit) error {
 	data, err := json.Marshal(audit)
 	if err != nil {

@@ -1366,9 +1366,16 @@ func (m *sideManager) runTurn(runtime *sideRuntime, side domain.SideConversation
 	if turn.DispatchAttempt > 0 {
 		providerRequestID = fmt.Sprintf("%s:retry:%d", turn.ClientMessageID, turn.DispatchAttempt)
 	}
+	libraryRelease, admissionErr := m.service.acquireLibraryInput(ctx, side.SessionID, text)
+	if admissionErr != nil {
+		_ = m.store.SettleSideTurn(ctx, side.ID, turn.ID, side.Generation, "failed", "", admissionErr.Error(), m.service.now())
+		m.failOpen(side, admissionErr)
+		return
+	}
 	ref, err := runtime.conv.SendTurn(ctx, ports.ChatUserMessage{Text: text, Content: content,
 		ClientMessageID: providerRequestID, Origin: domain.MessageOriginHuman,
 		Settings: ports.ChatTurnSettings{Model: side.Model, Effort: side.Effort}})
+	libraryRelease()
 	if err != nil {
 		if firstDelivery {
 			m.failOpen(side, ErrSidePolicyRecreate)

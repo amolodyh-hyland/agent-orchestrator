@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/url"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -18,6 +19,13 @@ func newLibraryCommand(ctx *commandContext) *cobra.Command {
 		}
 		return writeJSON(cmd.OutOrStdout(), result)
 	}})
+	cmd.AddCommand(&cobra.Command{Use: "session <session-id>", Short: "Read a retained library selection and input admission", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		var result json.RawMessage
+		if err := ctx.getJSON(cmd.Context(), "library/sessions/"+url.PathEscape(args[0]), &result); err != nil {
+			return err
+		}
+		return writeJSON(cmd.OutOrStdout(), result)
+	}})
 	for _, operation := range []string{"register", "rebind", "allow_inspection", "inspect", "approve", "revoke", "bind", "detach_binding", "detach_source"} {
 		var file string
 		child := &cobra.Command{Use: operation, Short: "Apply a library " + operation + " request", Args: noArgs, RunE: func(cmd *cobra.Command, _ []string) error {
@@ -28,7 +36,7 @@ func newLibraryCommand(ctx *commandContext) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer f.Close()
+			defer func() { _ = f.Close() }()
 			data, err := io.ReadAll(io.LimitReader(f, (128<<10)+1))
 			if err != nil {
 				return err

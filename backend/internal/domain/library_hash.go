@@ -17,12 +17,14 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
+// LibraryBytesHash hashes exact bytes without normalizing text.
 func LibraryBytesHash(data []byte) string {
 	sum := sha256.Sum256(data)
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 func libraryFrame(s string) string { return strconv.Itoa(len(s)) + ":" + s + "\n" }
 
+// ValidateLibraryPath rejects unsafe or noncanonical portable paths.
 func ValidateLibraryPath(path string) error {
 	if path == "" || len(path) > 1024 || !utf8.ValidString(path) || !norm.NFC.IsNormalString(path) || strings.ContainsAny(path, "\\:") {
 		return fmt.Errorf("invalid_path")
@@ -44,6 +46,7 @@ func ValidateLibraryPath(path string) error {
 	return nil
 }
 
+// ComputeContentHash hashes all declared semantic inputs using v1 framing.
 func (e LibraryEntry) ComputeContentHash() (string, error) {
 	if e.SchemaVersion != 1 {
 		return "", fmt.Errorf("unsupported_schema")
@@ -110,6 +113,7 @@ func (e LibraryEntry) ComputeContentHash() (string, error) {
 	return LibraryBytesHash([]byte(b.String())), nil
 }
 
+// Verify checks staged bytes against the complete entry manifest.
 func (s LibraryStagedEntry) Verify() error {
 	hash, err := s.Entry.ComputeContentHash()
 	if err != nil {
@@ -127,6 +131,7 @@ func (s LibraryStagedEntry) Verify() error {
 	return nil
 }
 
+// LibraryRecordDigest domain-separates a canonical JSON record digest.
 func LibraryRecordDigest(frame string, value any) (string, error) {
 	data, err := json.Marshal(value)
 	if err != nil {
@@ -139,6 +144,7 @@ func LibraryRecordDigest(frame string, value any) (string, error) {
 	return LibraryBytesHash([]byte(libraryFrame(frame) + libraryFrame(string(canonical)))), nil
 }
 
+// CanonicalLibraryJSON rejects duplicate keys, fractional numbers and invalid Unicode.
 func CanonicalLibraryJSON(data []byte) ([]byte, error) {
 	if !utf8.Valid(data) {
 		return nil, fmt.Errorf("invalid_utf8")
@@ -245,10 +251,11 @@ func readLibraryJSON(d *json.Decoder) (any, error) {
 		if strings.ContainsAny(string(t), ".eE") {
 			return nil, fmt.Errorf("integer_required")
 		}
-		if _, err := strconv.ParseInt(string(t), 10, 64); err != nil {
+		value, err := strconv.ParseInt(string(t), 10, 64)
+		if err != nil {
 			return nil, fmt.Errorf("integer_range")
 		}
-		return t, nil
+		return json.Number(strconv.FormatInt(value, 10)), nil
 	default:
 		return t, nil
 	}

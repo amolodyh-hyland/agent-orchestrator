@@ -4,24 +4,30 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"io"
 	"net/http"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	librarysvc "github.com/aoagents/agent-orchestrator/backend/internal/service/library"
-	"github.com/go-chi/chi/v5"
 )
 
+// LibraryService is the HTTP-facing library use-case boundary.
 type LibraryService interface {
 	Operate(context.Context, librarysvc.Operation) (librarysvc.Result, error)
 }
 
+// LibraryController exposes the inert local catalog and registry operations.
 type LibraryController struct{ Svc LibraryService }
 
+// Register mounts the library routes on the existing API router.
 func (c *LibraryController) Register(r chi.Router) {
 	r.Get("/library", c.list)
+	r.Get("/library/sessions/{sessionId}", c.session)
 	r.Post("/library/operations", c.operate)
 }
 func (c *LibraryController) list(w http.ResponseWriter, r *http.Request) {
@@ -43,6 +49,9 @@ func (c *LibraryController) operate(w http.ResponseWriter, r *http.Request) {
 func (c *LibraryController) perform(w http.ResponseWriter, r *http.Request, input librarysvc.Operation) {
 	if c.Svc == nil {
 		route := "/api/v1/library"
+		if input.Operation == "session" {
+			route += "/sessions/{sessionId}"
+		}
 		if r.Method == http.MethodPost {
 			route += "/operations"
 		}
@@ -55,4 +64,8 @@ func (c *LibraryController) perform(w http.ResponseWriter, r *http.Request, inpu
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, result)
+}
+
+func (c *LibraryController) session(w http.ResponseWriter, r *http.Request) {
+	c.perform(w, r, librarysvc.Operation{Operation: "session", SessionID: domain.SessionID(chi.URLParam(r, "sessionId"))})
 }

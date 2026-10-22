@@ -106,7 +106,7 @@ func (i *inspection) walk(root *os.Root, prefix string, depth int) error {
 			if pre.Size() > domain.MaxLibraryFileBytes {
 				return fail("file_limit")
 			}
-			if pre.Mode().Perm()&0111 != 0 {
+			if pre.Mode().Perm()&0o111 != 0 {
 				return fail("executable_file")
 			}
 			f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
@@ -161,7 +161,7 @@ func inspectRoot(ctx context.Context, local domain.LibraryLocalSource, existing 
 	if err != nil {
 		return nil, fail("missing_source")
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	opened, err := root.Stat(".")
 	if err != nil || !os.SameFile(pre, opened) {
 		return nil, fail("root_replaced")
@@ -250,7 +250,11 @@ func inspectRoot(ctx context.Context, local domain.LibraryLocalSource, existing 
 		entry := domain.LibraryEntry{SchemaVersion: 1, EntryID: id, SourceID: local.Source.SourceID, Kind: kind, DisplayName: strings.TrimSuffix(path.Base(p), path.Ext(p)), Format: format, EntryPoint: p, Files: []domain.LibraryFile{}, Requirements: []string{}, Status: "unsupported_provider", ReasonCode: "version_evidence_required"}
 		content := map[string]string{}
 		for _, f := range paths {
-			if f != p && (kind != "skill" || !(path.Dir(p) == "." || strings.HasPrefix(f, path.Dir(p)+"/"))) {
+			belongs := f == p
+			if kind == "skill" {
+				belongs = belongs || path.Dir(p) == "." || strings.HasPrefix(f, path.Dir(p)+"/")
+			}
+			if !belongs {
 				continue
 			}
 			data := scan.files[f]

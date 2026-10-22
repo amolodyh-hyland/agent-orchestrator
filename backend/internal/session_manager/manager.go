@@ -418,6 +418,8 @@ type Manager struct {
 	agents                    ports.AgentResolver
 	workspace                 ports.Workspace
 	store                     Store
+	libraryMu                 sync.RWMutex
+	librarySelection          LibrarySelection
 	projectContextPolicy      ProjectContextPolicy
 	projectContextMachineID   string
 	projectContextMachineIDMu sync.RWMutex

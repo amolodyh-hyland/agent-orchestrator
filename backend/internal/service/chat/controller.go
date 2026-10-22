@@ -195,6 +195,7 @@ func interfaceHandoff(policy domain.SessionInterfaceTransitionPolicy) controller
 
 // Controller drives one Chat session.
 type Controller struct {
+	libraryInput func(context.Context, domain.SessionID, string) (func(), error)
 	sessionID    domain.SessionID
 	reviewID     string
 	conversation domain.ConversationRecord
@@ -1831,7 +1832,12 @@ func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (p
 		attempt := msg
 		attempt.Settings.Approval = mode
 		var sendErr error
+		release, admissionErr := c.acquireLibraryInput(ctx, attempt.Text)
+		if admissionErr != nil {
+			return admissionErr
+		}
 		ref, sendErr = c.conv.SendTurn(ctx, attempt)
+		release()
 		if sendErr == nil {
 			// The sandbox the turn runs under is the mode that was accepted,
 			// which a step-down makes lower than the one requested.

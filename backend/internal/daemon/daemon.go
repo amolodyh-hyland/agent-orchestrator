@@ -935,6 +935,12 @@ func Run() error {
 	}
 
 	librarySvc := librarysvc.New(store, "local_user", hostIdentity.HostID, hostIdentity.HostID, nil)
+	chatSvc.SetLibraryAdmission(librarySvc)
+	if setter, ok := sessMgr.(interface {
+		SetLibrarySelection(sessionmanager.LibrarySelection)
+	}); ok {
+		setter.SetLibrarySelection(librarySvc)
+	}
 	bs.HostID = hostIdentity.HostID
 	projectSvc.SetProjectContextMachineID(hostIdentity.HostID)
 	if machineSetter, ok := sessMgr.(interface{ SetProjectContextMachineID(string) }); ok {

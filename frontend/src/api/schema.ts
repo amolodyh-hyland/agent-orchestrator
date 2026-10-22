@@ -1271,6 +1271,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/library/sessions/{sessionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read retained library bytes and current input admission */
+        get: operations["getSessionLibrary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/link-preview": {
         parameters: {
             query?: never;
@@ -5956,6 +5973,18 @@ export interface components {
             ok: boolean;
             sessionId: string;
         };
+        LibraryAdmission: {
+            inputAllowed: boolean;
+            midTurnBoundary: string;
+            reasonCode: string;
+            replacementRequired: boolean;
+            sessionId: string;
+            snapshotId?: string;
+            state: string;
+            stopRequired: boolean;
+            /** Format: int64 */
+            trustEpoch: number;
+        };
         LibraryApproval: {
             actorId: string;
             approvalId: string;
@@ -6039,6 +6068,7 @@ export interface components {
             verification: string;
         };
         LibraryResult: {
+            admission?: components["schemas"]["LibraryAdmission"];
             approvals: components["schemas"]["LibraryApproval"][];
             bindings: components["schemas"]["LibraryBinding"][];
             entries: components["schemas"]["LibraryEntry"][];
@@ -6115,6 +6145,7 @@ export interface components {
             } | null;
             entry: components["schemas"]["LibraryEntry"];
             reasonCode: string;
+            required: boolean;
             rootIdentity: components["schemas"]["LibraryRootIdentity"];
             /** Format: int64 */
             sourceRevision: number;
@@ -12100,6 +12131,56 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionLibrary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryResult"];
                 };
             };
             /** @description Conflict */

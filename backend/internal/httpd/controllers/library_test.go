@@ -6,10 +6,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	librarysvc "github.com/aoagents/agent-orchestrator/backend/internal/service/library"
-	"github.com/go-chi/chi/v5"
 )
 
 type libraryStub struct {

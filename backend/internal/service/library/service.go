@@ -1,3 +1,4 @@
+// Package library implements local inspection, approval and immutable selection.
 package library
 
 import (
@@ -16,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
+// Store is the durable local registry and ownership boundary.
 type Store interface {
 	RecordLibraryAudit(context.Context, domain.LibraryAudit) error
 	ReadLibraryRegistry(context.Context) (domain.LibraryRegistry, error)
@@ -24,6 +26,7 @@ type Store interface {
 	GetSession(context.Context, domain.SessionID) (domain.SessionRecord, bool, error)
 }
 
+// PolicyRequest provides opaque operation metadata to an independent policy authority.
 type PolicyRequest struct {
 	Operation string
 	SourceID  string
@@ -31,12 +34,25 @@ type PolicyRequest struct {
 	ProjectID domain.ProjectID
 }
 
+// ManagedSourceGrant pins a policy-authenticated root independently of caller input.
+type ManagedSourceGrant struct {
+	TargetIdentity string
+	RootKind       string
+	RootIdentity   domain.LibraryRootIdentity
+}
+
+func managedAllowed(p PolicyDecision, local domain.LibraryLocalSource) bool {
+	grant, ok := p.ManagedSources[local.Source.SourceID]
+	return p.State == "verified" && ok && grant.TargetIdentity != "" && grant.TargetIdentity == local.TargetIdentity && grant.RootKind == local.RootKind && grant.RootIdentity == local.Source.LibraryRootIdentity
+}
+
+// PolicyDecision can only restrict selection and budgets or supply verified managed locks.
 type PolicyDecision struct {
 	State            string
 	Mode             string
 	Revision         string
 	Denied           bool
-	ManagedSources   map[string]bool
+	ManagedSources   map[string]ManagedSourceGrant
 	Locks            []domain.LibraryBinding
 	MaxSessionBytes  int64
 	MaxSessionFiles  int
@@ -44,10 +60,12 @@ type PolicyDecision struct {
 	MaxBindings      int
 }
 
+// Policy resolves managed constraints independently of user-selected source folders.
 type Policy interface {
 	CheckLibrary(context.Context, PolicyRequest) (PolicyDecision, error)
 }
 
+// Service owns bounded inspection, exact approvals and immutable selections.
 type Service struct {
 	store     Store
 	owner     string
@@ -58,6 +76,7 @@ type Service struct {
 	admission sync.RWMutex
 }
 
+// New binds library operations to one local owner and resolver authority.
 func New(store Store, owner, authority, resolver string, policy Policy) *Service {
 	return &Service{store: store, owner: owner, authority: authority, resolver: resolver, policy: policy, clock: time.Now}
 }
@@ -73,6 +92,7 @@ func reason(err error) string {
 	return "storage_unavailable"
 }
 
+// Operation is the revision-checked request for one backend library action.
 type Operation struct {
 	Operation        string                        `json:"operation"`
 	SourceID         string                        `json:"sourceId,omitempty"`
@@ -91,7 +111,9 @@ type Operation struct {
 	SessionID        domain.SessionID              `json:"sessionId,omitempty"`
 }
 
+// Result returns portable inventory, trust state and explicit unsupported availability.
 type Result struct {
+	Admission       *Admission                     `json:"admission,omitempty"`
 	Preview         []domain.LibraryStagedEntry    `json:"preview,omitempty"`
 	Status          string                         `json:"status"`
 	ReasonCode      string                         `json:"reasonCode"`
@@ -107,6 +129,7 @@ type Result struct {
 	Snapshot *domain.LibrarySnapshot `json:"snapshot,omitempty"`
 }
 
+// Manager is the library controller-facing operation contract.
 type Manager interface {
 	Operate(context.Context, Operation) (Result, error)
 }
@@ -117,6 +140,8 @@ func (s *Service) check(ctx context.Context, request PolicyRequest) (PolicyDecis
 	}
 	p, err := s.policy.CheckLibrary(ctx, request)
 	if p.State == "unverifiable" && p.Mode == "optional" {
+		p.Locks = nil
+		p.ManagedSources = nil
 		return p, []string{"optional_policy_unavailable"}, nil
 	}
 	if err != nil || p.State == "unverifiable" || p.State == "" {
@@ -131,6 +156,7 @@ func (s *Service) check(ctx context.Context, request PolicyRequest) (PolicyDecis
 	return p, nil, nil
 }
 
+// Operate applies one action and audits denied operations without logging content.
 func (s *Service) Operate(ctx context.Context, in Operation) (result Result, err error) {
 	defer func() {
 		if err != nil {
@@ -160,6 +186,9 @@ func (s *Service) operate(ctx context.Context, in Operation) (Result, error) {
 		return s.view(state, warnings), nil
 	}
 
+	if in.Operation == "session" {
+		return s.sessionView(ctx, in.SessionID, warnings)
+	}
 	s.admission.Lock()
 	defer s.admission.Unlock()
 	var staged []domain.LibraryStagedEntry
@@ -178,7 +207,7 @@ func (s *Service) operate(ctx context.Context, in Operation) (Result, error) {
 		if local.Source.InspectionState != "inspection_allowed" {
 			return Result{}, fail("inspection_required")
 		}
-		if local.Source.Scope == "managed" && (p.State != "verified" || !p.ManagedSources[in.SourceID]) {
+		if local.Source.Scope == "managed" && !managedAllowed(p, local) {
 			return Result{}, fail("managed_lock")
 		}
 		scanCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -198,6 +227,7 @@ func (s *Service) operate(ctx context.Context, in Operation) (Result, error) {
 			return audit, err
 		}
 		p = current
+		audit.PolicyRevision = p.Revision
 		switch in.Operation {
 		case "register":
 			err = s.register(state, in, p)
@@ -211,7 +241,7 @@ func (s *Service) operate(ctx context.Context, in Operation) (Result, error) {
 			if in.RootIdentity == nil || *in.RootIdentity != local.Source.LibraryRootIdentity {
 				return audit, fail("root_identity_mismatch")
 			}
-			if local.Source.Scope == "managed" && (p.State != "verified" || !p.ManagedSources[in.SourceID]) {
+			if local.Source.Scope == "managed" && !managedAllowed(p, local) {
 				return audit, fail("managed_lock")
 			}
 			local.Source.InspectionState = "inspection_allowed"
@@ -251,6 +281,15 @@ func (s *Service) operate(ctx context.Context, in Operation) (Result, error) {
 			}
 			if local.Source.Scope == "managed" {
 				return audit, fail("managed_lock")
+			}
+			for _, lock := range p.Locks {
+				if lock.SourceID == approval.SourceID {
+					for _, selected := range approval.Entries {
+						if selected.EntryID == lock.EntryID {
+							return audit, fail("managed_lock")
+						}
+					}
+				}
 			}
 			state.TrustEpoch++
 			approval.State = "revoked"
@@ -327,9 +366,12 @@ func (s *Service) register(state *domain.LibraryRegistry, in Operation, p Policy
 	if in.Scope != "personal" && in.Scope != "project" && in.Scope != "managed" {
 		return fail("invalid_scope")
 	}
-	if in.Scope == "managed" && (p.State != "verified" || !p.ManagedSources[in.SourceID]) {
-		return fail("managed_lock")
+	if in.Scope == "managed" {
+		if _, ok := p.ManagedSources[in.SourceID]; p.State != "verified" || !ok {
+			return fail("managed_lock")
+		}
 	}
+
 	switch in.RootKind {
 	case "claude-skills", "codex-skills", "claude-commands", "rules", "claude-personas", "codex-personas", "hooks":
 	default:
@@ -341,6 +383,16 @@ func (s *Service) register(state *domain.LibraryRegistry, in Operation, p Policy
 	}
 	local.RootKind = in.RootKind
 	local.Source = domain.LibrarySource{SourceID: in.SourceID, OwnerID: s.owner, Scope: in.Scope, OriginKind: "machine_local", LibraryRootIdentity: domain.LibraryRootIdentity{ResolverID: s.resolver, RootRef: "root_" + strings.ReplaceAll(uuid.NewString(), "-", ""), RootGeneration: 1}, Revision: 1, InspectionState: "registered"}
+	if in.Scope == "managed" {
+		grant, ok := p.ManagedSources[in.SourceID]
+		if !ok || !domain.ValidLibraryID(grant.RootIdentity.RootRef) || grant.RootIdentity.ResolverID != s.resolver || grant.RootIdentity.RootGeneration < 1 {
+			return fail("managed_lock")
+		}
+		local.Source.LibraryRootIdentity = grant.RootIdentity
+		if !managedAllowed(p, local) {
+			return fail("managed_lock")
+		}
+	}
 	state.Sources[in.SourceID] = local
 	return nil
 }
@@ -369,6 +421,11 @@ func (s *Service) rebind(state *domain.LibraryRegistry, in Operation, p PolicyDe
 	if err != nil {
 		return err
 	}
+	for _, lock := range p.Locks {
+		if lock.SourceID == in.SourceID {
+			return fail("managed_lock")
+		}
+	}
 	if old.Source.Scope == "managed" {
 		return fail("managed_lock")
 	}
@@ -394,7 +451,7 @@ func (s *Service) approve(state *domain.LibraryRegistry, in Operation, p PolicyD
 	if local.Source.InspectionState != "inspection_allowed" || in.RootIdentity == nil || *in.RootIdentity != local.Source.LibraryRootIdentity {
 		return fail("inspection_required")
 	}
-	if local.Source.Scope == "managed" && (p.State != "verified" || !p.ManagedSources[in.SourceID]) {
+	if local.Source.Scope == "managed" && !managedAllowed(p, local) {
 		return fail("managed_lock")
 	}
 	if len(in.Entries) == 0 || len(in.Purposes) == 0 {

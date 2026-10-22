@@ -80,6 +80,19 @@ var legacyActorlessSystemCLICommands = map[string]struct{}{
 }
 
 var legacyActorlessUserCLICommands = map[string]struct{}{
+	"ao library":                  {},
+	"ao library ls":               {},
+	"ao library session":          {},
+	"ao library register":         {},
+	"ao library rebind":           {},
+	"ao library allow_inspection": {},
+	"ao library inspect":          {},
+	"ao library approve":          {},
+	"ao library revoke":           {},
+	"ao library bind":             {},
+	"ao library detach_binding":   {},
+	"ao library detach_source":    {},
+
 	"ao agent":                  {},
 	"ao agent ls":               {},
 	"ao automation":             {},
