@@ -1,3 +1,4 @@
+import type { DelegationSendGuard } from "./multica-delegation-policy";
 import { createHash } from "node:crypto";
 import { validateMulticaServerUrl, type MulticaServer } from "../shared/multica";
 import { normalizeToken, type MulticaCredentials } from "./multica-credentials";
@@ -5,7 +6,7 @@ import { agent, array, createDelegation, delegation, object, runtime, text, uuid
 
 export type PublicApiFailureCode =
 	| "invalid_request" | "connection_changed" | "no_token" | "credential_unavailable" | "storage_unavailable"
-	| "delegations_disabled" | "confirmation_required" | "policy_denied"
+	| "delegations_disabled" | "confirmation_required" | "policy_denied" | "policy_unavailable" | "policy_runtime_unknown" | "policy_location_unsafe"
 	| "credential_required" | "unsupported_credential" | "invalid_token" | "scoped_token_required" | "insufficient_scope"
 	| "workspace_binding_required" | "workspace_id_required" | "not_found" | "unauthorized" | "forbidden"
 	| "runtime_binding_changed" | "idempotency_conflict" | "revision_conflict" | "target_unavailable" | "runtime_unsupported" | "invocation_not_allowed" | "feature_disabled"
@@ -108,7 +109,7 @@ export function createMulticaPublicApi(options: PublicApiOptions) {
 		} catch { return false; }
 	};
 
-	async function request<T>(method: "GET" | "POST", path: string, parse: (value: unknown) => T, body?: CreatePublicDelegation, idempotencyKey?: string, ifMatch?: string): Promise<PublicApiResult<T>> {
+	async function request<T>(method: "GET" | "POST", path: string, parse: (value: unknown) => T, body?: CreatePublicDelegation, idempotencyKey?: string, ifMatch?: string, beforeSend?: DelegationSendGuard): Promise<PublicApiResult<T>> {
 		if (!current()) return failure("connection_changed");
 		if (blockedUntil > now()) return { ...failure("rate_limited"), retryAfterMs: blockedUntil - now() };
 		let token: string;
@@ -132,6 +133,13 @@ export function createMulticaPublicApi(options: PublicApiOptions) {
 			if (idempotencyKey !== undefined) headers["Idempotency-Key"] = idempotencyKey;
 			if (ifMatch !== undefined) headers["If-Match"] = ifMatch;
 			if (body) headers["Content-Type"] = "application/json";
+			if (body) {
+				let code: unknown;
+				try { code = await beforeSend?.(); } catch { code = "policy_unavailable"; }
+				if (code !== null) return failure(code === "policy_denied" || code === "policy_runtime_unknown" || code === "policy_location_unsafe" ? code : "policy_unavailable");
+				if (!current()) return failure("connection_changed");
+				if (controller.signal.aborted) return failure("timeout");
+			}
 			const response = await fetchRequest(url.href, { method, headers, redirect: "manual", credentials: "omit", signal: controller.signal, ...(serializedBody === undefined ? {} : { body: serializedBody }) });
 			received = true;
 			if (!current()) { await response.body?.cancel(); return failure("connection_changed"); }
@@ -247,7 +255,7 @@ export function createMulticaPublicApi(options: PublicApiOptions) {
 				return result;
 			}, undefined, undefined, ifMatch);
 		}),
-		delegate: (input: CreatePublicDelegation, idempotencyKey: string, confirmed: boolean) => run(async () => {
+		delegate: (input: CreatePublicDelegation, idempotencyKey: string, confirmed: boolean, beforeSend: DelegationSendGuard) => run(async () => {
 			if (options.delegationsEnabled !== true) return failure("delegations_disabled");
 			if (confirmed !== true) return failure("confirmation_required");
 			const body = createDelegation(input);
@@ -260,7 +268,7 @@ export function createMulticaPublicApi(options: PublicApiOptions) {
 				const result = delegation(v, binding.workspaceId);
 				if (result.agent_id !== body.agent_id || result.runtime_id !== body.expected_runtime_id) throw new Error("identity mismatch");
 				return result;
-			}, body, requestKey);
+			}, body, requestKey, undefined, beforeSend);
 		}),
 	};
 }

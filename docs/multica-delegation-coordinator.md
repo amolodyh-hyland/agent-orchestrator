@@ -111,3 +111,116 @@ loopback port and drives two independently constructed TypeScript coordinators
 against its SQLite store. It checks forged/unsigned HTTP writes, proof binding,
 concurrent confirmation/processing, strict schemas, escaped secrets, and the
 terminal-predecessor rerun gate. It never launches the actual daemon.
+
+## Optional managed policy (TK-MA65)
+
+The mandatory policy resolver runs before confirmation proofs are minted and at
+actual admission send time. The coordinator also checks before recording an
+attempt. Local hooks may narrow choices. If a local hook waits, the coordinator
+rechecks managed policy after it returns. Admission passes a required private
+send guard into the member Public API client; that client invokes it after its
+queue, its own local hook, and credential resolution, immediately before HTTP
+`fetch`. Missing guards, errors and unknown outcomes block with safe codes.
+There is no asynchronous work between the final guard and sending other than the
+HTTP request itself. This includes replays of an ambiguous submission.
+
+`createDaemonDelegationJournal` still evaluates policy over the existing signed,
+nonce-bound journal route (`evaluatePolicy`). No listener, renderer/preload IPC,
+or confirmation issuer is added. Documents stay in the daemon; only a fixed
+reason code crosses to main or the existing journal's `failureCode` field.
+
+### Protected enrollment and policy sources
+
+`backend/pkg/agentcreds/delegation_policy_sources.go` uses AO's existing managed
+settings locations and document parser, with a stricter trust boundary for
+external delegation. On Unix, every source and every ancestor must be root-owned,
+non-symlinked, and not group/other writable. On macOS, native extended ACL checks
+also reject mutation grants to anyone except root or wheel (gid 0); admin and
+staff are not authority. This includes write/append, deletion, child deletion,
+attribute/security changes and ownership changes, even for inherited grants.
+Denies cannot offset an unsafe allow. For present sources, native ACL lookup, decoding or principal
+resolution errors fail closed with `policy_unavailable`; no ACL details leave
+the resolver. ACL absence is verified with native security metadata, rather than
+treating a failed ACL lookup as absence. macOS builds require cgo to verify ACLs;
+without it, managed delegation fails closed with `policy_unavailable`. A macOS
+presence pass first checks the known policy files, drop-in directory, enrollment
+markers and managed preference plist inventory without reading ACLs or policy
+content. Before concluding absence, every standard source/enrollment location's
+directory and ancestors must also be root-owned, non-symlinked, and not writable
+or deletable by non-root principals. With cgo these checks include native ACLs;
+unsafe or unverifiable empty locations return only `policy_location_unsafe`.
+Deleting the sole policy from an unsafe directory therefore cannot make the
+machine unmanaged. Only protected, empty locations take the personal
+`policy_absent` path. Lookup/inventory errors still block, and present sources
+must pass all protection checks. Without cgo, empty locations still require root
+ownership, safe mode bits and no symlinks, but ACL grants cannot be detected.
+This residual ACL risk is limited to no-cgo builds; both shipped macOS desktop
+build paths explicitly enable and verify cgo. Legacy
+`packages/build-binaries.sh` cross-builds keep cgo disabled: their macOS binaries
+permit personal use under those mode checks but block managed-policy delegation.
+Linux and Windows retain their existing checks. Files must be regular, open with
+`O_NOFOLLOW`, and retain their identity, size and modification time across the
+bounded read. Once macOS enrollment is present, missing sources also require
+protected ancestors: an editable parent cannot erase enrollment. Unsupported or unsafe ownership, unreadable
+sources and uncertain enrollment fail closed. Credential stores are not read, and policy helpers are not executed.
+
+Authoritative policy comes from system `managed-settings.json`, its protected
+`managed-settings.d/*.json` drop-ins, or protected machine/current-user Claude
+managed preferences on macOS. macOS plist conversion uses the existing system
+`plutil` reader only after protection checks; a changed snapshot is rejected.
+Other protected machine/current-user managed preference plists and the native
+ConfigurationProfiles enrollment markers establish enrollment without reading
+their contents. Administrators may also register enrollment with a protected
+`ao-managed-enrollment` marker beside the system settings file. Windows uses
+machine-registry policy and system files only after owner/DACL validation; user
+write access to a source or ancestor makes it unavailable. HKCU is not authority.
+
+Enrollment and policy content are separate. Any protected enrollment with no
+valid protected `aoMulticaDelegation` policy returns `policy_unavailable`.
+User-writable `remote-settings.json` is restrict-only: allow, replacement, removal,
+and empty cache content cannot override protected enrollment or its restrictions.
+A cache cannot supply the policy required by enrollment. Only absence of protected
+enrollment permits the personal/unmanaged base case (`policy_absent`); explicit
+selection, confirmation, rollout, and provider checks remain required.
+
+Every configured policy is a ceiling, including distinct drop-ins and plists;
+their intersection applies. The optional `aoMulticaDelegation` object requires
+`version: 1`, non-empty `revision`, RFC3339 `validUntil`, and `effect: "allow"` or
+`"deny"`. Allow requires explicit `serverOrigins`, `workspaceIds`, `profileIds`,
+`runtimeClasses`, `dataScopes`, and `actions` arrays. Every array must match;
+empty arrays deny all. Deny needs no allowlists. Unknown/duplicate fields,
+unknown versions/effects, malformed content, dynamic helpers and expired policy
+are unavailable. Expiry uses the current clock after source loading, with a final
+check of the earliest expiry before returning. Local choices cannot widen any
+protected ceiling.
+
+### Scope and safe outcomes
+
+Requests contain only canonical origin, workspace/profile/runtime IDs, runtime
+class, data scope `task_brief`, and action `delegate`. They exclude task text,
+local paths, user identity and credentials. The payload currently supports only
+the user-approved task brief; this does not authorize file reads, root sharing
+or uploads. New payload scopes require extending approval and policy together.
+
+A trusted main-process `resolveRuntimeClass` must establish `local` or `remote`
+for the exact binding/runtime. Location is never inferred from a loopback server
+or profile name. Current Public API runtime metadata does not establish location;
+without a resolver it is `unknown`. Personal use with no enrollment can proceed;
+a managed allow with unknown location returns `policy_runtime_unknown`. Remote
+execution must explicitly match every ceiling. Location is resolved afresh for
+the final send guard.
+
+Additional main-process policy hooks may only narrow the managed decision. Their
+only result is `{code}`: `policy_absent`, `policy_allowed`, `policy_denied`,
+`policy_unavailable`, `policy_runtime_unknown`, or `policy_location_unsafe`.
+Extra fields, unknown outcomes,
+exceptions and five-second evaluation timeouts become `policy_unavailable`.
+Source-provided reasons, revisions, policy text and error messages are never
+logged, persisted or exposed.
+
+A block before confirmation creates no proof or reservation. A dispatch block
+persists its safe reason while leaving the intent pending. After a durable attempt
+marker, the conservative `submission_unknown` state remains even if this process
+has not sent; processing reconciles the original key before replay. A policy
+block never proves an earlier ambiguous admission was rejected. Reconciliation
+and explicitly confirmed cancellation remain available. No migration is needed.

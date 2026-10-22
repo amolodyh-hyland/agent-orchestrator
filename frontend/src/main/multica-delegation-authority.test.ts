@@ -23,7 +23,7 @@ describe("private human confirmation capability", () => {
 	});
 	it("exposes no confirmation or cancellation issuer to orchestrator handles", async () => {
 		const r = await fixture();
-		const journal: DelegationJournal = { get: async () => r, find: async () => r, reserve: async () => { throw new Error("must not mint"); }, save: async () => { throw new Error("must not mutate"); } };
+		const journal: DelegationJournal = { evaluatePolicy: async () => ({ code: "policy_absent" }), get: async () => r, find: async () => r, reserve: async () => { throw new Error("must not mint"); }, save: async () => { throw new Error("must not mutate"); } };
 		const services = createMulticaDelegationCoordinator({ journal, client: () => { throw new Error("must not connect"); }, confirmations: createMainProcessDelegationAuthority(Buffer.alloc(32, 7)) });
 		expect(services.taskOrchestrator).toBe(services.projectOrchestrator);
 		for (const handle of [services.taskOrchestrator, services.projectOrchestrator]) {
@@ -42,7 +42,7 @@ describe("private human confirmation capability", () => {
 	it("rejects unknown fields in the private human API before writing a proof", async () => {
 		const r = await fixture();
 		let writes = 0;
-		const journal: DelegationJournal = { get: async () => null, find: async () => null, reserve: async () => { writes++; return r; }, save: async () => r };
+		const journal: DelegationJournal = { evaluatePolicy: async () => ({ code: "policy_absent" }), get: async () => null, find: async () => null, reserve: async () => { writes++; return r; }, save: async () => r };
 		const human = createMulticaDelegationCoordinator({ journal, client: () => { throw new Error("must not connect"); }, confirmations: createMainProcessDelegationAuthority(Buffer.alloc(32, 7)) }).human;
 		const approved = { id: "human-action", userId: "user-1", at: "2026-10-21T12:00:00Z" };
 		const unknown = { ...r.intent, binding: { ...r.intent.binding, hidden: "unapproved" } };

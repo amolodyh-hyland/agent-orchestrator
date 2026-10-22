@@ -3,6 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { meetsMinimumVersion, parseGoVersion, parseMinimumGoVersion } from "./go-version.mjs";
+import { daemonBuildEnv } from "./go-build-env.mjs";
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const frontendRoot = resolve(scriptsDir, "..");
@@ -35,6 +36,14 @@ if (versionResult.status !== 0 || !actualGoVersion || !meetsMinimumVersion(actua
 	process.exit(1);
 }
 
+let buildEnv;
+try {
+	buildEnv = daemonBuildEnv({ cwd: backendRoot });
+} catch (error) {
+	console.error(error.message);
+	process.exit(1);
+}
+
 if (isWindowsDev) {
 	mkdirSync(windowsDevOutDir, { recursive: true });
 } else if (process.platform === "win32") {
@@ -53,6 +62,7 @@ if (isWindowsDev) {
 
 const result = spawnSync("go", ["build", "-o", buildOutPath, "./cmd/ao"], {
 	cwd: backendRoot,
+	env: buildEnv,
 	stdio: "inherit",
 	windowsHide: true,
 });

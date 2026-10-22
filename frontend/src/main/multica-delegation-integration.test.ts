@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createMainProcessDelegationAuthority } from "./multica-delegation-authority";
 import { createMulticaDelegationCoordinator, type DelegationRecord } from "./multica-delegation-coordinator";
 import { createDaemonDelegationJournal } from "./multica-delegation-journal";
+import type { DelegationSendGuard } from "./multica-delegation-policy";
 import type { PublicDelegation } from "./multica-public-api-model";
 
 const key = Buffer.alloc(32, 7);
@@ -77,7 +78,7 @@ describe("coordinators against the real daemon SQLite journal", () => {
 		const admitted = new Map<string, PublicDelegation>();
 		const client = {
 			binding,
-			delegate: vi.fn(async (_payload: unknown, requestId: string) => { admitted.set(requestId, remote); return { ok: true as const, data: remote }; }),
+			delegate: vi.fn(async (_payload: unknown, requestId: string, _confirmed: boolean, guard: DelegationSendGuard) => { const code = await guard(); if (code) return { ok: false as const, code }; admitted.set(requestId, remote); return { ok: true as const, data: remote }; }),
 			listDelegations: vi.fn(async (query: { idempotencyKey?: string } = {}) => ({ ok: true as const, data: { delegations: admitted.has(query.idempotencyKey ?? "") ? [remote] : [] } })),
 			getDelegation: vi.fn(async () => ({ ok: true as const, data: remote })),
 			cancelDelegation: vi.fn(async () => ({ ok: true as const, data: remote })),
@@ -113,4 +114,36 @@ describe("coordinators against the real daemon SQLite journal", () => {
 		const response = await fetch(`${origin}/internal/multica-delegation-journal`, { method: "POST", headers: { "content-type": "application/json", "X-AO-Delegation-MAC": authority.requestMAC(serialized) }, body: serialized });
 		expect(response.status).toBe(403);
 	});
+	it("enforces changing policy decisions through the authenticated existing journal channel", async () => {
+		const managed = path.join(dir, "policy-decision.json");
+		await mkdir(path.dirname(managed), { recursive: true });
+		const journal = createDaemonDelegationJournal(() => origin, authority);
+		const target = fixture.intent;
+		const policy = {
+			version: 1, revision: "private-company-policy", validUntil: new Date(Date.now() + 60000).toISOString(), effect: "deny",
+			serverOrigins: [target.binding.origin], workspaceIds: [target.binding.workspaceId], profileIds: [target.payload.agent_id],
+			runtimeClasses: ["local"], dataScopes: ["task_brief"], actions: ["delegate"],
+		};
+		const client = { binding: target.binding, delegate: vi.fn(), getDelegation: vi.fn(), listDelegations: vi.fn(), cancelDelegation: vi.fn() };
+		const services = createMulticaDelegationCoordinator({ journal, client: () => client, enabled: true, confirmations: authority, resolveRuntimeClass: async () => "local" });
+		const approval = { id: "policy-confirmation", userId: "human", at: "2026-10-21T12:00:00Z" };
+		const intent = { ...target, payload: { ...target.payload, source: { ...target.payload.source, task_id: "policy-task" } } };
+		try {
+			await writeFile(managed, JSON.stringify({ code: "policy_denied", privatePolicy: policy }));
+			await expect(services.human.confirmFromUserAction(intent, approval)).rejects.toThrow(/^policy_denied$/);
+			await writeFile(managed, JSON.stringify({ code: "policy_allowed", privatePolicy: policy }));
+			const confirmed = await services.human.confirmFromUserAction(intent, approval);
+			await writeFile(managed, JSON.stringify({ code: "policy_denied", privatePolicy: policy }));
+			expect(await services.taskOrchestrator.process(confirmed.requestId)).toMatchObject({ failureCode: "policy_denied", attempted: false });
+			expect(client.delegate).not.toHaveBeenCalled();
+			expect(JSON.stringify(await journal.get(confirmed.requestId))).not.toContain("private-company-policy");
+			const response = await rawRequest({ operation: "evaluatePolicy", policyRequest: {
+				serverOrigin: target.binding.origin, workspaceId: target.binding.workspaceId, profileId: target.payload.agent_id,
+				runtimeId: target.payload.expected_runtime_id, runtimeClass: "local", dataScopes: ["task_brief"], action: "delegate",
+			} }, true);
+			expect(await response.json()).toEqual({ record: { code: "policy_denied" } });
+			expect((await rawRequest({ operation: "evaluatePolicy" })).status).toBe(403);
+		} finally { await rm(managed, { force: true }); }
+	});
+
 });

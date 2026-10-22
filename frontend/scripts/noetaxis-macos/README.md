@@ -21,6 +21,8 @@ node frontend/scripts/noetaxis-macos/build.mjs \
 
 The default version is `0.13.4-noetaxis.<shortsha>`. `--base-version` selects another three-part base version. Multica's desktop source is checked out at the pseudo-version revision pinned by the selected `backend/go.mod`; the daemon uses the same Go module pin. The build runs in temporary worktrees and writes final artifacts outside the AO checkout and `/Applications`.
 
+This build and the macOS `build:daemon` script force `CGO_ENABLED=1` and verify it with `go env` before building. Native ACL checks require cgo for managed-policy delegation. The legacy `packages/build-binaries.sh` cross-builds remain without cgo; those macOS binaries allow personal unmanaged confirmation but block managed-policy delegation with `policy_unavailable`. Their empty-location checks enforce root ownership, safe mode bits and no symlinks, but cannot detect ACL write/delete grants: this is a residual risk of no-cgo builds. The shipped desktop builds require cgo and validate those ACLs.
+
 The output contains:
 
 - `Applications/Agent Orchestrator.app`

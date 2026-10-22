@@ -17,6 +17,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/delegationauth"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
 )
 
 type fakeDelegationJournal struct{ calls []string }
@@ -61,7 +62,7 @@ func TestMulticaJournalInternalBoundary(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			mountMulticaDelegationJournal(r, journal, authority)
+			mountMulticaDelegationJournal(r, journal, authority, nil)
 			requestBody := tc.body
 			if strings.HasPrefix(requestBody, "{") {
 				requestBody = `{"requestNonce":"test-nonce",` + requestBody[1:]
@@ -84,6 +85,66 @@ func TestMulticaJournalInternalBoundary(t *testing.T) {
 			}
 			if tc.status == 200 && body["record"] != nil {
 				t.Fatal("missing record should be null")
+			}
+		})
+	}
+}
+
+func TestMulticaPolicyUsesExistingPrivateBoundary(t *testing.T) {
+	key := bytes.Repeat([]byte{7}, 32)
+	authority, err := delegationauth.New(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, code, origin string
+		signed             bool
+		status             int
+		want               string
+	}{
+		{"absent", "policy_absent", "", true, 200, "policy_absent"},
+		{"allow", "policy_allowed", "", true, 200, "policy_allowed"},
+		{"deny", "policy_denied", "", true, 200, "policy_denied"},
+		{"unavailable", "policy_unavailable", "", true, 200, "policy_unavailable"},
+		{"unsafe location", "policy_location_unsafe", "", true, 200, "policy_location_unsafe"},
+		{"unknown redacted", "private-policy-content", "", true, 200, "policy_unavailable"},
+		{"unsigned", "policy_allowed", "", false, 403, ""},
+		{"renderer", "policy_allowed", "http://localhost:5173", true, 403, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			router := chi.NewRouter()
+			mountMulticaDelegationJournal(router, &fakeDelegationJournal{}, authority, func(_ context.Context, req agentcreds.DelegationPolicyRequest) agentcreds.DelegationPolicyDecision {
+				calls++
+				if req.Action != "delegate" || req.RuntimeClass != "remote" {
+					t.Fatal("missing policy metadata")
+				}
+				return agentcreds.DelegationPolicyDecision{Code: tc.code}
+			})
+			body := `{"operation":"evaluatePolicy","requestNonce":"test","policyRequest":{"action":"delegate","runtimeClass":"remote"}}`
+			req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:9999/internal/multica-delegation-journal", strings.NewReader(body))
+			if tc.signed {
+				mac := hmac.New(sha256.New, key)
+				_, _ = mac.Write([]byte("journal-v1:" + body))
+				req.Header.Set("X-AO-Delegation-MAC", hex.EncodeToString(mac.Sum(nil)))
+			}
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			if w.Code != tc.status {
+				t.Fatalf("status=%d", w.Code)
+			}
+			if tc.status == 200 {
+				if calls != 1 || w.Body.String() != `{"record":{"code":"`+tc.want+`"}}`+"\n" {
+					t.Fatalf("unsafe result: %s", w.Body.String())
+				}
+				if w.Header().Get("X-AO-Delegation-Response-MAC") != authority.ResponseMAC(w.Body.Bytes(), req.Header.Get("X-AO-Delegation-MAC")) {
+					t.Fatal("unauthenticated policy response")
+				}
+			} else if calls != 0 {
+				t.Fatal("unauthorized policy evaluation")
 			}
 		})
 	}

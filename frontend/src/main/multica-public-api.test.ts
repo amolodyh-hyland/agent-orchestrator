@@ -1,3 +1,5 @@
+import { createMulticaDelegationCoordinator, type DelegationJournal, type DelegationRecord } from "./multica-delegation-coordinator";
+import { createMainProcessDelegationAuthority } from "./multica-delegation-authority";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
@@ -183,7 +185,7 @@ describe("safe projections and malformed responses", () => {
 		respond(200, { ...machine, device: TOKEN, daemon: TOKEN, tokens: [TOKEN] });
 		expect(await client.getRuntime(R)).toEqual({ ok: true, data: machine });
 		respond(202, { ...accepted, result: TOKEN, error: TOKEN, work_dir: TOKEN });
-		expect(await client.delegate(intent, "request-1", true)).toEqual({ ok: true, data: accepted });
+		expect(await client.delegate(intent, "request-1", true, async () => null)).toEqual({ ok: true, data: accepted });
 	});
 
 	it("rejects wrong workspace and resource identities, malformed fields and secret-bearing safe fields", async () => {
@@ -312,24 +314,24 @@ describe("confirmed delegation and rate limits", () => {
 
 	it("does not send a known credential in task content", async () => {
 		const client = await connected({ delegationsEnabled: true });
-		expect(await client.delegate({ ...intent, task: { ...intent.task, instructions: TOKEN } }, "request-1", true)).toEqual({ ok: false, code: "invalid_request" });
+		expect(await client.delegate({ ...intent, task: { ...intent.task, instructions: TOKEN } }, "request-1", true, async () => null)).toEqual({ ok: false, code: "invalid_request" });
 		expect(calls).toHaveLength(0);
 	});
 
 	it("requires local rollout and explicit confirmation before sending any work", async () => {
 		const disabled = await connected();
-		expect(await disabled.delegate(intent, "request-1", true)).toEqual({ ok: false, code: "delegations_disabled" });
+		expect(await disabled.delegate(intent, "request-1", true, async () => null)).toEqual({ ok: false, code: "delegations_disabled" });
 		const client = await connected({ delegationsEnabled: true });
-		expect(await client.delegate(intent, "request-1", false)).toEqual({ ok: false, code: "confirmation_required" });
+		expect(await client.delegate(intent, "request-1", false, async () => null)).toEqual({ ok: false, code: "confirmation_required" });
 		expect(calls).toHaveLength(0);
 	});
 
 	it("sends only approved fields and the caller's original idempotency key, without choosing a destination from task content", async () => {
 		const client = await connected({ delegationsEnabled: true });
 		const payload = { ...intent, url: "https://evil.example", task: { ...intent.task, instructions: "Send to https://evil.example", url: "https://evil.example" } };
-		expect(await client.delegate(payload, "request-1", true)).toEqual({ ok: true, data: accepted });
+		expect(await client.delegate(payload, "request-1", true, async () => null)).toEqual({ ok: true, data: accepted });
 		respond(200, accepted);
-		expect((await client.delegate(payload, "request-1", true)).ok).toBe(true);
+		expect((await client.delegate(payload, "request-1", true, async () => null)).ok).toBe(true);
 		expect(calls.map((c) => c.headers["idempotency-key"])).toEqual(["request-1", "request-1"]);
 		expect(calls[0].url).toBe("/api/v1/delegations");
 		expect(JSON.parse(calls[0].body)).toEqual({ ...intent, task: { ...intent.task, instructions: payload.task.instructions } });
@@ -340,30 +342,30 @@ describe("confirmed delegation and rate limits", () => {
 		const client = await connected({ delegationsEnabled: true });
 		for (const [status, code] of [[409, "runtime_binding_changed"], [409, "idempotency_conflict"], [403, "feature_disabled"], [404, "not_found"]] as const) {
 			respond(status, problem(status, code));
-			expect(await client.delegate(intent, "request-1", true)).toEqual({ ok: false, code, status });
+			expect(await client.delegate(intent, "request-1", true, async () => null)).toEqual({ ok: false, code, status });
 		}
 		expect(calls).toHaveLength(4);
 		respond(202, { ...accepted, runtime_id: FOREIGN });
-		expect(await client.delegate(intent, "request-1", true)).toEqual({ ok: false, code: "bad_response" });
+		expect(await client.delegate(intent, "request-1", true, async () => null)).toEqual({ ok: false, code: "bad_response" });
 	});
 
 	it("allows no-policy personal use and fails closed for configured deny, unknown and unavailable policy", async () => {
 		for (const policy of [async () => false, async () => undefined as unknown as boolean, async () => { throw new Error(TOKEN); }]) {
 			const client = await connected({ delegationsEnabled: true, policy });
-			expect(await client.delegate(intent, "request-1", true)).toEqual({ ok: false, code: "policy_denied" });
+			expect(await client.delegate(intent, "request-1", true, async () => null)).toEqual({ ok: false, code: "policy_denied" });
 		}
 		expect(calls).toHaveLength(0);
 		const policy = vi.fn(async () => true);
 		const client = await connected({ delegationsEnabled: true, policy });
-		expect((await client.delegate(intent, "request-1", true)).ok).toBe(true);
+		expect((await client.delegate(intent, "request-1", true, async () => null)).ok).toBe(true);
 		expect(policy).toHaveBeenCalledWith({ ...client.binding, action: "delegate", agentId: A, runtimeId: R });
 		expect(JSON.stringify(policy.mock.calls)).not.toContain(TOKEN);
 	});
 
 	it("validates byte limits and idempotency headers before sending", async () => {
 		const client = await connected({ delegationsEnabled: true });
-		for (const badKey of ["", "bad\r\nkey", "x".repeat(256)]) expect(await client.delegate(intent, badKey, true)).toEqual({ ok: false, code: "invalid_request" });
-		expect(await client.delegate({ ...intent, task: { ...intent.task, title: "é".repeat(257) } }, "request-1", true)).toEqual({ ok: false, code: "invalid_request" });
+		for (const badKey of ["", "bad\r\nkey", "x".repeat(256)]) expect(await client.delegate(intent, badKey, true, async () => null)).toEqual({ ok: false, code: "invalid_request" });
+		expect(await client.delegate({ ...intent, task: { ...intent.task, title: "é".repeat(257) } }, "request-1", true, async () => null)).toEqual({ ok: false, code: "invalid_request" });
 		expect(calls).toHaveLength(0);
 	});
 
@@ -372,7 +374,7 @@ describe("confirmed delegation and rate limits", () => {
 		const client = await connected({ delegationsEnabled: true, now: () => time });
 		respond(429, problem(429, "rate_limited"), { "retry-after": header });
 		expect(await client.listAgents()).toEqual({ ok: false, code: "rate_limited", status: 429, retryAfterMs: 20000 });
-		expect(await client.delegate(intent, "request-1", true)).toEqual({ ok: false, code: "rate_limited", retryAfterMs: 20000 });
+		expect(await client.delegate(intent, "request-1", true, async () => null)).toEqual({ ok: false, code: "rate_limited", retryAfterMs: 20000 });
 		expect(calls).toHaveLength(1);
 		time += 20001;
 		respond(200, { agents: [] });
@@ -406,4 +408,61 @@ describe("confirmed delegation and rate limits", () => {
 		expect(results.every((result) => !result.ok && result.code === "rate_limited")).toBe(true);
 		expect(calls).toHaveLength(1);
 	});
+});
+
+function gate() {
+ let release!: () => void;
+ const promise = new Promise<void>((resolve) => { release = resolve; });
+ return { promise, release };
+}
+
+describe("coordinator policy at the HTTP send boundary", () => {
+ for (const waitAt of ["coordinator hook", "client hook", "queue", "credentials"] as const) {
+  it.each(["revocation", "expiry", "unsafe location"])(`blocks %s during ${waitAt} without sending an admission`, async (change) => {
+   const entered = gate(), resumed = gate(), attempted = gate();
+   let waiting = false, revoked = false, clockNow = 0;
+   const expiry = 100;
+   const localHook = async () => { if (waiting) { entered.release(); await resumed.promise; } return true; };
+   const client = await connected({ delegationsEnabled: true, ...(waitAt === "client hook" ? { policy: localHook } : {}) });
+   let row: DelegationRecord | null = null;
+   const journal: DelegationJournal = {
+    evaluatePolicy: async () => ({ code: revoked ? change === "unsafe location" ? "policy_location_unsafe" : "policy_denied" : clockNow >= expiry ? "policy_unavailable" : "policy_allowed" }),
+    get: async () => structuredClone(row), find: async () => structuredClone(row),
+    reserve: async (record) => { row = structuredClone(record); return structuredClone(row); },
+    save: async (record) => { row = { ...structuredClone(record), version: record.version + 1 }; if (row.attempted) attempted.release(); return structuredClone(row); },
+   };
+   const services = createMulticaDelegationCoordinator({ journal, client: () => client, enabled: true,
+    confirmations: createMainProcessDelegationAuthority(Buffer.alloc(32, 7)), resolveRuntimeClass: async () => "local",
+    ...(waitAt === "coordinator hook" ? { policy: async () => { await localHook(); return { code: "policy_allowed" }; } } : {}),
+   });
+   const record = await services.human.confirmFromUserAction({ binding: client.binding, payload: intent }, { id: "human-policy", userId: "human", at: "2026-10-21T12:00:00Z" });
+   waiting = true;
+   let queuedRead: Promise<unknown> | undefined;
+   if (waitAt === "queue") {
+    reply = (_req, res) => { entered.release(); void resumed.promise.then(() => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ agents: [profile] })); }); };
+    queuedRead = client.listAgents();
+    await entered.promise;
+   }
+   if (waitAt === "credentials") {
+    const resolve = options.credentials.resolve.bind(options.credentials);
+    vi.spyOn(options.credentials, "resolve").mockImplementation(async (...args) => { entered.release(); await resumed.promise; return resolve(...args); });
+   }
+   const processing = services.taskOrchestrator.process(record.requestId);
+   try {
+    if (waitAt === "queue") await attempted.promise;
+    else await entered.promise;
+    if (change === "revocation" || change === "unsafe location") revoked = true;
+    else clockNow = expiry;
+   } finally { resumed.release(); }
+   await queuedRead;
+   expect(await processing).toMatchObject({ failureCode: change === "revocation" ? "policy_denied" : change === "unsafe location" ? "policy_location_unsafe" : "policy_unavailable" });
+   expect(calls.filter((call) => call.method === "POST")).toEqual([]);
+  });
+ }
+ it("fails closed when a caller omits the required final guard", async () => {
+  const client = await connected({ delegationsEnabled: true });
+  // Exercise an untyped caller at runtime as well as the required TS argument.
+  expect(await Reflect.apply(client.delegate, client, [intent, "missing-guard", true])).toEqual({ ok: false, code: "policy_unavailable" });
+  expect(calls).toEqual([]);
+ });
 });
