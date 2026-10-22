@@ -980,6 +980,8 @@
 	"multica.settings.error.tls": "This computer doesn't trust the server's certificate.",
 	"multica.settings.error.unreachable": "Can't reach the server. Check the address and that it is running.",
 	"multica.settings.invalidUrl": "Enter a valid http:// or https:// address.",
+	"multica.delegation.settings.enabled": "Confirmed delegation",
+	"multica.delegation.settings.help": "Off by default. Enablement is saved; every handoff still needs confirmation.",
 	"multica.settings.mode": "Server",
 	"multica.settings.mode.cloud": "Multica Cloud (official)",
 	"multica.settings.mode.local": "Self-hosted (local or remote)",

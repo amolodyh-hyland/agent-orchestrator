@@ -384,6 +384,8 @@ if (typeof window !== "undefined") {
 			set: async (settings) => coerceUiSettings({ ...DEFAULT_UI_SETTINGS, ...settings }),
 		},
 		multicaDelegation: {
+			settings: async () => ({ enabled: false }),
+			onSettingsChanged: () => () => undefined,
 			status: async () => ({ ok: true, status: null }),
 			setCredential: async () => false,
 			preview: async () => ({ ok: false, code: "delegations_disabled" }),

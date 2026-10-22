@@ -5,9 +5,9 @@ coordinator to task and project orchestrators. Both handles refer to the same
 instance, share serialization, and use the same task identity and journal.
 The desktop's shared preview/confirmation flow (TK-MA66) is the only dispatch
 entry point. Assignment/status events and automation have no dispatch or
-confirmation entry point. Standalone coordinator/client admission still defaults
-off; the desktop enables it only behind this flow. The server's rollout gate is
-independent.
+confirmation entry point. Admission defaults off, including in the desktop. The
+user must first enable Confirmed delegation in Settings (saved across restarts); the preview and native approval are still required for each send. The
+server's rollout gate is independent.
 
 Construct it with `createDaemonDelegationJournal`, a trusted daemon-origin
 callback, the private main-process authority, and a resolver returning TK-MA63
@@ -21,7 +21,9 @@ and an approval ID, user identity and timestamp captured by the trusted user
 interaction. It persists these together with the canonical server origin/key,
 workspace/profile/runtime IDs, AO project/task IDs, payload digest and generated
 request ID. This records what the user approved. It performs no admission.
-`process` and `processTask` can act only on this persisted confirmation.
+`process` and `processTask` can read/reconcile only this persisted confirmation.
+Admission through `process` additionally requires the main-only live preview
+guard; `processTask` cannot send.
 
 The digest is SHA-256 over the seven ordered wire-payload string fields
 (profile, expected runtime, source system/project/task, title, instructions),
@@ -70,8 +72,8 @@ It is an internal transport, outside the public daemon OpenAPI contract.
 
 On recovery, an attempted request without remote IDs is looked up by its original
 idempotency key. Failed, incomplete or ambiguous lookups cannot trigger a retry.
-A successful empty lookup permits replay of the exact approved payload and key;
-it never permits a fresh key. A found record must match the approved workspace,
+A successful empty lookup permits replay of the exact approved payload and key
+only with another live preview and native approval; it never permits a fresh key. A found record must match the approved workspace,
 profile and runtime. Once accepted, status uses its exact delegation ID and task
 identity. Revisions are opaque; terminal observations cannot be overwritten.
 `unavailable` is nonterminal. Neither polling nor admission changes AO task or
@@ -369,3 +371,25 @@ gate remains in force; no live server or installed application is exercised.
 Coverage is in `multica-delegation-status.test.ts`, the coordinator, authority,
 confirmation IPC, Public API and real-journal integration suites, and
 `renderer/components/MulticaDelegationDialog.test.tsx`.
+
+## Default-off rollout and contract coverage (TK-MA68)
+
+Desktop delegation admission defaults to disabled. Settings → Multica → Confirmed
+delegation uses a trusted preload click, a focused main-frame IPC request and a
+native enablement dialog. Main serializes and atomically saves the preference
+in the existing `multica-settings.json` file. Missing, malformed, nonboolean or
+unreadable preferences default off. Connection-setting saves preserve this field
+and cannot set it, even if an untyped caller supplies it. The dedicated writer is
+used only after main validates the trusted enable action and native approval;
+disabling requires no dialog. CLI requests, project/task settings, environment
+variables and automation expose no enablement path. Enabling it
+does not approve a handoff: every admission, including a retry, needs a current
+preview and native approval. Saved confirmations support read-only recovery.
+The coordinator requires a live guard for admission, and the client rechecks the
+rollout gate immediately before the HTTP write, after credential/policy waits.
+Disabling invalidates pending previews and cancellation approvals. Status and
+explicitly confirmed cancellation of previously accepted work remain available.
+
+See the [operator checklist](multica-delegation-operator-checklist.md) and
+[shared contract verification](multica-delegation-contract.md) for offline and
+opt-in handler coverage. No unattended rollout or pilot is included.

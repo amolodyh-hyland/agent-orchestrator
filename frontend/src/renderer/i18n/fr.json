@@ -991,6 +991,8 @@
 	"multica.settings.error.tls": "Cet ordinateur ne fait pas confiance au certificat du serveur.",
 	"multica.settings.error.unreachable": "Impossible de joindre le serveur. Vérifiez l’adresse et que le serveur fonctionne.",
 	"multica.settings.invalidUrl": "Saisissez une adresse http:// ou https:// valide.",
+	"multica.delegation.settings.enabled": "Délégation confirmée",
+	"multica.delegation.settings.help": "Désactivée par défaut. Le réglage est enregistré ; chaque transfert nécessite une confirmation.",
 	"multica.settings.mode": "Serveur",
 	"multica.settings.mode.cloud": "Multica Cloud (officiel)",
 	"multica.settings.mode.local": "Auto-hébergé (local ou distant)",

@@ -5,6 +5,9 @@ export const DELEGATION_CANCEL_PREVIEW = "multicaDelegation:cancelPreview";
 export const DELEGATION_CONFIRM_CLICK = "multicaDelegation:confirmClick";
 export const DELEGATION_RESULT = "multicaDelegation:result";
 export const DELEGATION_CREDENTIAL = "multicaDelegation:credential";
+export const DELEGATION_SETTINGS = "multicaDelegation:settings";
+export const DELEGATION_ENABLE_CLICK = "multicaDelegation:enableClick";
+export const DELEGATION_SETTINGS_CHANGED = "multicaDelegation:settingsChanged";
 
 export type DelegationDraft = {
 	orchestrator: "task" | "project";
@@ -34,6 +37,8 @@ export type DelegationStatus = {
 export type DelegationStatusResult = { ok: true; status: DelegationStatus | null } | { ok: false; code: string };
 export type DelegationCancellation = { requestId: string; remoteId: string };
 export type DelegationConfirmationBridge = {
+	settings: () => Promise<{ enabled: boolean }>;
+	onSettingsChanged: (listener: (settings: { enabled: boolean }) => void) => () => void;
 	status: (projectId: string, taskId: string) => Promise<DelegationStatusResult>;
 	preview: (draft: DelegationDraft) => Promise<DelegationConfirmationResult>;
 	cancelPreview: (id: string) => Promise<void>;

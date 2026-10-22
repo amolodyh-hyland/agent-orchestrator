@@ -983,6 +983,8 @@
 	"multica.settings.error.tls": "Dieser Computer vertraut dem Zertifikat des Servers nicht.",
 	"multica.settings.error.unreachable": "Der Server ist nicht erreichbar. Prüfen Sie die Adresse und ob der Server läuft.",
 	"multica.settings.invalidUrl": "Geben Sie eine gültige http://- oder https://-Adresse ein.",
+	"multica.delegation.settings.enabled": "Bestätigte Delegierung",
+	"multica.delegation.settings.help": "Standardmäßig deaktiviert. Die Einstellung wird gespeichert; jede Übergabe muss weiterhin bestätigt werden.",
 	"multica.settings.mode": "Server",
 	"multica.settings.mode.cloud": "Multica Cloud (offiziell)",
 	"multica.settings.mode.local": "Selbst gehostet (lokal oder remote)",
