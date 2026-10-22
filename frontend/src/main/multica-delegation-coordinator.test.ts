@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMulticaDelegationCoordinator, delegationPayloadHash, type DelegationRecord, type DelegationJournal, type DelegationIntent } from "./multica-delegation-coordinator";
+import type { DelegationSendGuard } from "./multica-delegation-policy";
 import type { PublicDelegation } from "./multica-public-api-model";
 
 const binding = { serverKey: "local", origin: "http://127.0.0.1:4444", workspaceId: "10000000-0000-4000-8000-000000000001" };
@@ -28,7 +29,7 @@ let client: ReturnType<typeof fakeClient>;
 function fakeClient() {
 	return {
 		binding,
-		delegate: vi.fn(async (_payload: unknown, key: string) => { calls.push(`submit:${key}`); accepted = structuredClone(remote); return { ok: true as const, data: accepted }; }),
+		delegate: vi.fn(async (_payload: unknown, key: string, _confirmed: boolean, guard: DelegationSendGuard) => { const blocked = await guard(); if (blocked) return { ok: false as const, code: blocked }; calls.push(`submit:${key}`); accepted = structuredClone(remote); return { ok: true as const, data: accepted }; }),
 		listDelegations: vi.fn(async ({ idempotencyKey }: { idempotencyKey?: string } = {}) => { calls.push(`lookup:${idempotencyKey}`); return { ok: true as const, data: { delegations: accepted ? [accepted] : [] } }; }),
 		getDelegation: vi.fn(async (id: string) => { calls.push(`status:${id}`); return { ok: true as const, data: accepted! }; }),
 		cancelDelegation: vi.fn(async (id: string) => { calls.push(`cancel:${id}`); return { ok: true as const, data: accepted! }; }),
@@ -261,6 +262,25 @@ describe("shared confirmed delegation coordinator", () => {
 
 
 describe("optional managed delegation policy", () => {
+	it("does not mint a confirmation if managed policy is revoked during the local hook", async () => {
+		let enter!: () => void, resume!: () => void;
+		const entered = new Promise<void>((resolve) => { enter = resolve; });
+		const resumed = new Promise<void>((resolve) => { resume = resolve; });
+		journal.evaluatePolicy = async () => ({ code: "policy_allowed" });
+		const proof = vi.fn(confirmations.confirmationProof);
+		const services = createMulticaDelegationCoordinator({ journal, client: () => client, enabled: true,
+			confirmations: { ...confirmations, confirmationProof: proof },
+			policy: async () => { enter(); await resumed; return { code: "policy_allowed" }; },
+		});
+		const result = services.human.confirmFromUserAction(intent, approved);
+		const assertion = expect(result).rejects.toThrow(/^policy_denied$/);
+		await entered;
+		journal.evaluatePolicy = async () => ({ code: "policy_denied" });
+		resume();
+		await assertion;
+		expect(proof).not.toHaveBeenCalled();
+		expect(rows.size).toBe(0);
+	});
 	it("allows personal use without policy and sends only minimum decision metadata", async () => {
 		const policy = vi.fn(async () => ({ code: "policy_absent" }));
 		journal.evaluatePolicy = policy;
@@ -316,7 +336,7 @@ describe("optional managed delegation policy", () => {
 		let checks = 0;
 		journal.evaluatePolicy = async () => ({ code: ++checks === 1 ? "policy_allowed" : "policy_denied" });
 		expect(await service.process(record.requestId)).toMatchObject({ state: "submission_unknown", failureCode: "policy_denied" });
-		expect(client.delegate).not.toHaveBeenCalled();
+		expect(calls).toEqual([]);
 		accepted = remote;
 		expect(await service.process(record.requestId)).toMatchObject({ state: "accepted", failureCode: null });
 		expect(client.listDelegations).toHaveBeenCalled();

@@ -114,63 +114,88 @@ terminal-predecessor rerun gate. It never launches the actual daemon.
 
 ## Optional managed policy (TK-MA65)
 
-The coordinator always evaluates the journal's managed-policy resolver before
-minting a confirmation proof, before marking an admission attempt, and again
-immediately before `delegate`. `createDaemonDelegationJournal` evaluates policy
-through the existing signed, nonce-bound journal route (`evaluatePolicy`), with
-no new listener, renderer/preload IPC, or confirmation issuer. Policy documents
-stay in the daemon. Only a fixed code crosses back to the main process.
+The mandatory policy resolver runs before confirmation proofs are minted and at
+actual admission send time. The coordinator also checks before recording an
+attempt. Local hooks may narrow choices. If a local hook waits, the coordinator
+rechecks managed policy after it returns. Admission passes a required private
+send guard into the member Public API client; that client invokes it after its
+queue, its own local hook, and credential resolution, immediately before HTTP
+`fetch`. Missing guards, errors and unknown outcomes block with safe codes.
+There is no asynchronous work between the final guard and sending other than the
+HTTP request itself. This includes replays of an ambiguous submission.
 
-`backend/pkg/agentcreds/multica_delegation_policy.go` uses the same cached remote,
-OS-managed, system-file and drop-in reader as AO's Claude model-policy resolver.
-It never reads user/project settings as authority, reads credentials, fetches
-policy, or executes a policy helper. Managed sources can supply the optional
-`aoMulticaDelegation` object. With no object configured, `policy_absent` permits
-normal explicit confirmation; it does not enable rollout or override any other
-client/server check. Unreadable or malformed managed sources fail closed because
-the resolver cannot establish whether they contain a delegation restriction.
+`createDaemonDelegationJournal` still evaluates policy over the existing signed,
+nonce-bound journal route (`evaluatePolicy`). No listener, renderer/preload IPC,
+or confirmation issuer is added. Documents stay in the daemon; only a fixed
+reason code crosses to main or the existing journal's `failureCode` field.
 
-The object has `version: 1`, a non-empty `revision`, an RFC3339 `validUntil`, and
-`effect: "allow"` or `"deny"`. An allow requires explicit arrays named
-`serverOrigins`, `workspaceIds`, `profileIds`, `runtimeClasses`, `dataScopes`, and
-`actions`. Each request must match every array exactly; an empty array denies
-all choices in that dimension. A deny needs no allowlists. Null, unknown fields,
-unknown versions/effects, expired or malformed validity, and dynamic helpers are
-unavailable. Every configured delegation object is a ceiling, including separate
-drop-ins and OS-managed documents; their intersection applies even when the
-underlying model settings use replacement precedence. Local settings and higher
-managed sources cannot widen another delegation ceiling. The existing Windows
-user-policy fallback selection remains in effect.
+### Protected enrollment and policy sources
 
-The request contains only canonical server origin, workspace/profile/runtime IDs,
-runtime class, the fixed approved data scope `task_brief`, and action `delegate`.
-It excludes task title/instructions, local paths, user identity, and credentials.
-The current wire payload supports only that task brief; this does not authorize
-file reads, root sharing or upload. Adding such payloads requires extending the
-approval and policy contracts together.
+`backend/pkg/agentcreds/delegation_policy_sources.go` uses AO's existing managed
+settings locations and document parser, with a stricter trust boundary for
+external delegation. On Unix, every source and every ancestor must be root-owned,
+non-symlinked, and not group/other writable. Files must be regular, open with
+`O_NOFOLLOW`, and retain their identity, size and modification time across the
+bounded read. Missing sources also require protected ancestors: an editable
+parent cannot erase enrollment. Unsupported or unsafe ownership, unreadable
+sources and uncertain enrollment fail closed. Credential stores are not read, and policy helpers are not executed.
 
-A trusted main-process `resolveRuntimeClass` callback must establish `local` or
-`remote` for the exact configured binding/runtime ID and is called afresh at each
-check. Do not infer location from a loopback Multica server or profile name.
-TK-MA63's Public API runtime metadata does not establish execution location, so
-an omitted resolver supplies `unknown`. Personal use without managed policy still
-works; a managed allow with unknown location blocks with `policy_runtime_unknown`
-until trusted location metadata is available. Remote execution requires an
-explicit `remote` match in every configured ceiling.
+Authoritative policy comes from system `managed-settings.json`, its protected
+`managed-settings.d/*.json` drop-ins, or protected machine/current-user Claude
+managed preferences on macOS. macOS plist conversion uses the existing system
+`plutil` reader only after protection checks; a changed snapshot is rejected.
+Other protected machine/current-user managed preference plists and the native
+ConfigurationProfiles enrollment markers establish enrollment without reading
+their contents. Administrators may also register enrollment with a protected
+`ao-managed-enrollment` marker beside the system settings file. Windows uses
+machine-registry policy and system files only after owner/DACL validation; user
+write access to a source or ancestor makes it unavailable. HKCU is not authority.
 
-An additional main-process `policy` plug-in may narrow the managed decision; it
-cannot replace the mandatory journal resolver. It returns only `{code}` with
-`policy_absent`, `policy_allowed`, `policy_denied`, `policy_unavailable`, or
-`policy_runtime_unknown`. Unknown outcomes, extra fields, exceptions and a
-five-second evaluation timeout become `policy_unavailable`. No source-provided
-reason, revision, policy text or error message is logged, persisted, or exposed.
+Enrollment and policy content are separate. Any protected enrollment with no
+valid protected `aoMulticaDelegation` policy returns `policy_unavailable`.
+User-writable `remote-settings.json` is restrict-only: allow, replacement, removal,
+and empty cache content cannot override protected enrollment or its restrictions.
+A cache cannot supply the policy required by enrollment. Only absence of protected
+enrollment permits the personal/unmanaged base case (`policy_absent`); explicit
+selection, confirmation, rollout, and provider checks remain required.
 
-Before confirmation, a block throws only its safe reason code and creates no
-proof or journal reservation. At dispatch, the same code is persisted in the
-existing `failureCode` field, leaving the intent pending. A restored policy can
-permit that exact confirmed intent later. If policy changes after the durable
-attempt marker, the conservative `submission_unknown` marker remains, even if
-this process has not submitted; subsequent processing reconciles by the same key
-before any replay. Policy blocks do not turn an earlier ambiguous admission into
-a rejection. Status reconciliation and explicitly confirmed cancellation remain
-available. No database schema or migration changes are required.
+Every configured policy is a ceiling, including distinct drop-ins and plists;
+their intersection applies. The optional `aoMulticaDelegation` object requires
+`version: 1`, non-empty `revision`, RFC3339 `validUntil`, and `effect: "allow"` or
+`"deny"`. Allow requires explicit `serverOrigins`, `workspaceIds`, `profileIds`,
+`runtimeClasses`, `dataScopes`, and `actions` arrays. Every array must match;
+empty arrays deny all. Deny needs no allowlists. Unknown/duplicate fields,
+unknown versions/effects, malformed content, dynamic helpers and expired policy
+are unavailable. Expiry uses the current clock after source loading, with a final
+check of the earliest expiry before returning. Local choices cannot widen any
+protected ceiling.
+
+### Scope and safe outcomes
+
+Requests contain only canonical origin, workspace/profile/runtime IDs, runtime
+class, data scope `task_brief`, and action `delegate`. They exclude task text,
+local paths, user identity and credentials. The payload currently supports only
+the user-approved task brief; this does not authorize file reads, root sharing
+or uploads. New payload scopes require extending approval and policy together.
+
+A trusted main-process `resolveRuntimeClass` must establish `local` or `remote`
+for the exact binding/runtime. Location is never inferred from a loopback server
+or profile name. Current Public API runtime metadata does not establish location;
+without a resolver it is `unknown`. Personal use with no enrollment can proceed;
+a managed allow with unknown location returns `policy_runtime_unknown`. Remote
+execution must explicitly match every ceiling. Location is resolved afresh for
+the final send guard.
+
+Additional main-process policy hooks may only narrow the managed decision. Their
+only result is `{code}`: `policy_absent`, `policy_allowed`, `policy_denied`,
+`policy_unavailable`, or `policy_runtime_unknown`. Extra fields, unknown outcomes,
+exceptions and five-second evaluation timeouts become `policy_unavailable`.
+Source-provided reasons, revisions, policy text and error messages are never
+logged, persisted or exposed.
+
+A block before confirmation creates no proof or reservation. A dispatch block
+persists its safe reason while leaving the intent pending. After a durable attempt
+marker, the conservative `submission_unknown` state remains even if this process
+has not sent; processing reconciles the original key before replay. A policy
+block never proves an earlier ambiguous admission was rejected. Reconciliation
+and explicitly confirmed cancellation remain available. No migration is needed.

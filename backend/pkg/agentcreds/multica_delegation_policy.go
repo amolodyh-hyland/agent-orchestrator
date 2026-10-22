@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/url"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -44,14 +45,38 @@ type managedDelegationPolicy struct {
 // ResolveManagedDelegationPolicy reuses AO's managed-settings reader without
 // loading user/project settings, credentials, or executing policy helpers.
 // Every configured delegation ceiling applies; no source can widen another.
-func ResolveManagedDelegationPolicy(ctx context.Context, req DelegationPolicyRequest, opts ResolveOptions, now time.Time) DelegationPolicyDecision {
+func ResolveManagedDelegationPolicy(ctx context.Context, req DelegationPolicyRequest, opts ResolveOptions, now func() time.Time) DelegationPolicyDecision {
+	return resolveManagedDelegationPolicy(ctx, req, opts, now, nativeDelegationPolicyFiles())
+}
+
+func resolveManagedDelegationPolicy(ctx context.Context, req DelegationPolicyRequest, opts ResolveOptions, now func() time.Time, fs delegationPolicyFiles) DelegationPolicyDecision {
+	if now == nil {
+		now = time.Now
+	}
 	result := func(code string) DelegationPolicyDecision { return DelegationPolicyDecision{Code: code} }
 	dir, err := claudeConfigDir(opts)
 	if err != nil || ctx.Err() != nil {
 		return result("policy_unavailable")
 	}
-	_, sources := readClaudeManagedPolicySources(ctx, opts, dir)
+	sources, enrolled := delegationProtectedSources(ctx, opts, fs)
+	protectedPolicies := 0
+	for _, source := range sources {
+		protectedPolicies += len(source.delegationPolicies)
+	}
+	if enrolled && protectedPolicies == 0 {
+		return result("policy_unavailable")
+	}
+	// A cache can only intersect the protected decision; it never proves enrollment
+	// absent or supplies the policy required by a protected enrollment marker.
+	cached := readClaudePolicyDocument(ctx, filepath.Join(dir, "remote-settings.json"))
+	if !cached.empty {
+		sources = append(sources, cached)
+	}
+	var firstExpiry time.Time
 	code := "policy_absent"
+	if enrolled {
+		code = "policy_allowed"
+	}
 	for _, source := range sources {
 		if source.broken || source.empty || source.dynamic || ctx.Err() != nil {
 			return result("policy_unavailable")
@@ -62,8 +87,11 @@ func ResolveManagedDelegationPolicy(ctx context.Context, req DelegationPolicyReq
 				return result("policy_unavailable")
 			}
 			expires, err := time.Parse(time.RFC3339Nano, p.ValidUntil)
-			if err != nil || !now.Before(expires) {
+			if err != nil || !now().Before(expires) {
 				return result("policy_unavailable")
+			}
+			if firstExpiry.IsZero() || expires.Before(firstExpiry) {
+				firstExpiry = expires
 			}
 			if p.Effect == "deny" {
 				code = "policy_denied"
@@ -81,10 +109,11 @@ func ResolveManagedDelegationPolicy(ctx context.Context, req DelegationPolicyReq
 			}
 			if !slices.Contains(p.ServerOrigins, req.ServerOrigin) || !slices.Contains(p.WorkspaceIDs, req.WorkspaceID) || !slices.Contains(p.ProfileIDs, req.ProfileID) || !slices.Contains(p.RuntimeClasses, req.RuntimeClass) || !slices.Contains(p.Actions, req.Action) || !slices.Contains(p.DataScopes, "task_brief") {
 				code = "policy_denied"
-			} else if code == "policy_absent" {
-				code = "policy_allowed"
 			}
 		}
+	}
+	if !firstExpiry.IsZero() && !now().Before(firstExpiry) {
+		return result("policy_unavailable")
 	}
 	return result(code)
 }

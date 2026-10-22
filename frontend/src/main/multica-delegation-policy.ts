@@ -6,6 +6,7 @@ export type DelegationPolicyRequest = Readonly<{
 	serverOrigin: string; workspaceId: string; profileId: string; runtimeId: string;
 	runtimeClass: DelegationRuntimeClass; dataScopes: readonly ["task_brief"]; action: "delegate";
 }>;
+export type DelegationSendGuard = () => Promise<DelegationPolicyBlockCode | null>;
 export type DelegationPolicyResolver = (request: DelegationPolicyRequest) => Promise<unknown>;
 export type DelegationRuntimeResolver = (binding: PublicApiBinding, runtimeId: string) => Promise<DelegationRuntimeClass>;
 

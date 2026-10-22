@@ -34,7 +34,7 @@ func mountMulticaDelegationJournal(r chi.Router, journal MulticaDelegationJourna
 	}
 	if policy == nil {
 		policy = func(ctx context.Context, request agentcreds.DelegationPolicyRequest) agentcreds.DelegationPolicyDecision {
-			return agentcreds.ResolveManagedDelegationPolicy(ctx, request, agentcreds.ResolveOptions{}, time.Now())
+			return agentcreds.ResolveManagedDelegationPolicy(ctx, request, agentcreds.ResolveOptions{}, time.Now)
 		}
 	}
 	r.Post("/internal/multica-delegation-journal", func(w http.ResponseWriter, req *http.Request) {

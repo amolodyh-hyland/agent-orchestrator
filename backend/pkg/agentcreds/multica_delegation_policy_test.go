@@ -52,7 +52,7 @@ func TestManagedDelegationPolicy(t *testing.T) {
 				t.Fatal(err)
 			}
 			writeClaudeSettingsFixture(t, filepath.Join(opts.ManagedSettingsDir, "managed-settings.json"), string(data))
-			decision := ResolveManagedDelegationPolicy(context.Background(), r, opts, time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC))
+			decision := resolveFixtureDelegationPolicy(context.Background(), r, opts, time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC))
 			if decision.Code != tc.code {
 				t.Fatalf("got %s, want %s", decision.Code, tc.code)
 			}
@@ -70,7 +70,7 @@ func TestManagedDelegationSourcesAndLocalPrecedence(t *testing.T) {
 	now := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
 	check := func(want string) {
 		t.Helper()
-		if got := ResolveManagedDelegationPolicy(context.Background(), r, opts, now); got.Code != want {
+		if got := resolveFixtureDelegationPolicy(context.Background(), r, opts, now); got.Code != want {
 			t.Fatalf("got %s, want %s", got.Code, want)
 		}
 	}
@@ -114,7 +114,39 @@ func TestManagedDelegationSourcesAndLocalPrecedence(t *testing.T) {
 	check("policy_unavailable")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if got := ResolveManagedDelegationPolicy(ctx, r, opts, now); got.Code != "policy_unavailable" {
+	if got := resolveFixtureDelegationPolicy(ctx, r, opts, now); got.Code != "policy_unavailable" {
 		t.Fatal(got)
 	}
 }
+
+func resolveFixtureDelegationPolicy(ctx context.Context, req DelegationPolicyRequest, opts ResolveOptions, now time.Time) DelegationPolicyDecision {
+	opts.ConfigDir, _ = filepath.EvalSymlinks(opts.ConfigDir)
+	opts.ManagedSettingsDir, _ = filepath.EvalSymlinks(opts.ManagedSettingsDir)
+	fs := fixturePolicyFiles(opts.ConfigDir, opts.ManagedSettingsDir)
+	return resolveManagedDelegationPolicy(ctx, req, opts, func() time.Time { return now }, fs)
+}
+
+// Fixture roots simulate protected deployment paths; shared temp ancestors are
+// synthetic so these tests need neither root privileges nor real managed data.
+func fixturePolicyFiles(roots ...string) delegationPolicyFiles {
+	fs := nativeDelegationPolicyFiles()
+	fs.owner = func(string, os.FileInfo) bool { return true }
+	fs.lstat = func(path string) (os.FileInfo, error) {
+		info, err := os.Lstat(path)
+		if err != nil || !info.IsDir() {
+			return info, err
+		}
+		for _, root := range roots {
+			relative, err := filepath.Rel(root, path)
+			if err == nil && (relative == "." || relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))) {
+				return info, nil
+			}
+		}
+		return protectedFixtureDirectory{info}, nil
+	}
+	return fs
+}
+
+type protectedFixtureDirectory struct{ os.FileInfo }
+
+func (info protectedFixtureDirectory) Mode() os.FileMode { return info.FileInfo.Mode() &^ 0o022 }

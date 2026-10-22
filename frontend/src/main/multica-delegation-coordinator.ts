@@ -4,7 +4,7 @@ import type { MainProcessDelegationAuthority } from "./multica-delegation-author
 import type { createMulticaPublicApi, PublicApiBinding, PublicApiFailureCode } from "./multica-public-api";
 import { createDelegation, delegation, type CreatePublicDelegation, type PublicDelegation } from "./multica-public-api-model";
 
-import { policyBlock, resolveDelegationRuntime, type DelegationPolicyBlockCode, type DelegationPolicyRequest, type DelegationPolicyResolver, type DelegationRuntimeResolver } from "./multica-delegation-policy";
+import { policyBlock, resolveDelegationRuntime, type DelegationPolicyBlockCode, type DelegationSendGuard, type DelegationPolicyRequest, type DelegationPolicyResolver, type DelegationRuntimeResolver } from "./multica-delegation-policy";
 
 export type DelegationIntent = { binding: PublicApiBinding; payload: CreatePublicDelegation };
 export type UserConfirmation = { id: string; userId: string; at: string };
@@ -72,7 +72,7 @@ export function createMulticaDelegationCoordinator(options: Options): { human: M
 		if (!equal(client.binding, record.intent.binding)) throw new Error("connection_changed");
 		return client;
 	}
-	async function checkPolicy(record: DelegationRecord): Promise<DelegationPolicyBlockCode | null> {
+	async function checkPolicy(record: DelegationRecord, localHook = true): Promise<DelegationPolicyBlockCode | null> {
 		const runtimeClass = await resolveDelegationRuntime(options.resolveRuntimeClass, record.intent.binding, record.intent.payload.expected_runtime_id);
 		const request: DelegationPolicyRequest = Object.freeze({
 			serverOrigin: record.intent.binding.origin, workspaceId: record.intent.binding.workspaceId,
@@ -80,8 +80,9 @@ export function createMulticaDelegationCoordinator(options: Options): { human: M
 			runtimeClass, dataScopes: Object.freeze(["task_brief"] as const), action: "delegate",
 		});
 		const blocked = await policyBlock((request) => journal.evaluatePolicy(request), request);
-		if (blocked || !options.policy) return blocked;
-		return policyBlock(options.policy, request);
+		if (blocked || !options.policy || !localHook) return blocked;
+		const localBlock = await policyBlock(options.policy, request);
+		return localBlock ?? checkPolicy(record, false);
 	}
 
 	async function observe(record: DelegationRecord, value: PublicDelegation): Promise<DelegationRecord> {
@@ -120,10 +121,10 @@ export function createMulticaDelegationCoordinator(options: Options): { human: M
 		if (blocked) return journal.save({ ...record, failureCode: blocked });
 		const firstAttempt = !record.attempted;
 		record = await journal.save({ ...record, failureCode: null, attempted: true, state: "submission_unknown" });
-		const finalBlock = await checkPolicy(record);
-		if (finalBlock) return journal.save({ ...record, failureCode: finalBlock });
-		const result = await client.delegate(record.intent.payload, record.requestId, true);
+		const beforeSend: DelegationSendGuard = () => checkPolicy(record, false);
+		const result = await client.delegate(record.intent.payload, record.requestId, true, beforeSend);
 		if (result.ok) return observe(record, result.data);
+		if (["policy_denied", "policy_unavailable", "policy_runtime_unknown"].includes(result.code)) return journal.save({ ...record, failureCode: result.code });
 		// A failed replay never proves that an earlier ambiguous submission was rejected.
 		if (firstAttempt) {
 			if (rejected.includes(result.code)) return journal.save({ ...record, state: "rejected", failureCode: result.code });

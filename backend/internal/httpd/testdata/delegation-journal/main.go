@@ -3,6 +3,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -40,8 +42,17 @@ func run() error {
 		return err
 	}
 	handler := httpd.NewRouterWithControl(config.Config{DataDir: os.Args[1]}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, httpd.APIDeps{MulticaDelegations: store, DelegationAuth: authority,
-		MulticaDelegationPolicy: func(ctx context.Context, req agentcreds.DelegationPolicyRequest) agentcreds.DelegationPolicyDecision {
-			return agentcreds.ResolveManagedDelegationPolicy(ctx, req, agentcreds.ResolveOptions{ConfigDir: os.Args[1], ManagedSettingsDir: filepath.Join(os.Args[1], "managed"), GOOS: "linux", Env: func(string) string { return "" }}, time.Now())
+		MulticaDelegationPolicy: func(_ context.Context, _ agentcreds.DelegationPolicyRequest) agentcreds.DelegationPolicyDecision {
+			// This fixture injects decisions, not a user-writable policy authority.
+			raw, err := os.ReadFile(filepath.Join(os.Args[1], "policy-decision.json"))
+			if errors.Is(err, os.ErrNotExist) {
+				return agentcreds.DelegationPolicyDecision{Code: "policy_absent"}
+			}
+			var decision agentcreds.DelegationPolicyDecision
+			if err != nil || json.Unmarshal(raw, &decision) != nil {
+				return agentcreds.DelegationPolicyDecision{Code: "policy_unavailable"}
+			}
+			return decision
 		},
 	}, httpd.ControlDeps{})
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: time.Second}
