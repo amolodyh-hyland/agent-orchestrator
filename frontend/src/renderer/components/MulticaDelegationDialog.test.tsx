@@ -7,6 +7,8 @@ import { installDelegationUserAction } from "../../shared/multica-delegation-use
 function fixture() {
 	let listener: Parameters<DelegationConfirmationBridge["onResult"]>[0] = () => undefined;
 	const bridge: DelegationConfirmationBridge = {
+		settings: async () => ({ enabled: false }),
+		onSettingsChanged: () => () => undefined,
 		status: vi.fn(async () => ({ ok: true as const, status: null })),
 		setCredential: vi.fn(async () => false),
 		preview: vi.fn(async (request: DelegationDraft) => ({ ok: true as const, preview: {

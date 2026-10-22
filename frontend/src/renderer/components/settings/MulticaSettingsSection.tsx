@@ -40,9 +40,18 @@ export function MulticaSettingsSection() {
 	const [draft, setDraft] = useState<MulticaSettings | null>(null);
 	const [failure, setFailure] = useState<Failure | null>(null);
 	const [busy, setBusy] = useState(false);
+	const [delegationEnabled, setDelegationEnabled] = useState(false);
 	const syncSnapshot = useMulticaSyncStore((state) => state.snapshot);
 	const loadSync = useMulticaSyncStore((state) => state.load);
 	const setSyncSettings = useMulticaSyncStore((state) => state.setSettings);
+
+	useEffect(() => {
+		let live = true;
+		const update = (settings: { enabled: boolean }) => { if (live) setDelegationEnabled(settings.enabled); };
+		const off = aoBridge.multicaDelegation.onSettingsChanged(update);
+		void aoBridge.multicaDelegation.settings().then(update).catch(() => undefined);
+		return () => { live = false; off(); };
+	}, []);
 
 	useEffect(() => {
 		void loadSync();
@@ -191,6 +200,9 @@ export function MulticaSettingsSection() {
 			) : null}
 			{draft.mode === "local" ? <p className="px-3 pb-2 text-caption leading-4 text-muted-foreground">{t("multica.settings.selfHostNote")}</p> : null}
 			{saved.mode === "local" ? <MulticaLocalServerControls /> : null}
+			<SettingsRow label={t("multica.delegation.settings.enabled")} description={t("multica.delegation.settings.help")}>
+				<Switch aria-label={t("multica.delegation.settings.enabled")} checked={delegationEnabled} data-delegation-enabled={String(!delegationEnabled)} />
+			</SettingsRow>
 			<SettingsRow label={t("multica.sync.settings.enabled")} description={t("multica.sync.settings.enabled.help")}>
 				<Switch
 					aria-label={t("multica.sync.settings.enabled")}

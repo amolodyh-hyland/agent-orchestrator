@@ -83,6 +83,8 @@ describe("shared confirmed delegation coordinator", () => {
 		expect(r).toMatchObject({ confirmedBy: approved.userId, confirmedAt: approved.at, confirmationId: approved.id, intent, payloadHash: delegationPayloadHash(intent.payload), state: "submitting" });
 		const service = await restart();
 		await service.projectOrchestrator.processTask("project-1", "task-1");
+		expect(calls).toEqual([]);
+		await service.projectOrchestrator.process(r.requestId, () => true);
 		expect(calls).toEqual([`submit:${r.requestId}`]);
 		expect((await journal.get(r.requestId))?.state).toBe("accepted");
 	});
@@ -90,9 +92,9 @@ describe("shared confirmed delegation coordinator", () => {
 		const service = coordinator().taskOrchestrator;
 		const r = await service.confirm(intent, approved);
 		client.delegate.mockRejectedValueOnce(new Error("crash before socket write"));
-		await expect(service.process(r.requestId)).rejects.toThrow("crash");
+		await expect(service.process(r.requestId, () => true)).rejects.toThrow("crash");
 		expect((await journal.get(r.requestId))?.state).toBe("submission_unknown");
-		await (await restart()).projectOrchestrator.process(r.requestId);
+		await (await restart()).projectOrchestrator.process(r.requestId, () => true);
 		expect(calls).toEqual([`lookup:${r.requestId}`, `submit:${r.requestId}`]);
 	});
 	it.each(["remote accepted", "local acceptance recording"])("recovers a crash at %s without a duplicate admission", async (window) => {
@@ -103,10 +105,10 @@ describe("shared confirmed delegation coordinator", () => {
 			const save = journal.save;
 			journal.save = async (record) => { if (record.remote) throw new Error("disk unavailable"); return save(record); };
 		}
-		await expect(service.process(r.requestId)).rejects.toThrow();
+		await expect(service.process(r.requestId, () => true)).rejects.toThrow();
 		const realSave = async (record: DelegationRecord) => { const next = { ...record, version: record.version + 1 }; rows.set(record.requestId, next); await flush(); return next; };
 		journal.save = realSave;
-		const recovered = await (await restart()).taskOrchestrator.process(r.requestId);
+		const recovered = await (await restart()).taskOrchestrator.process(r.requestId, () => true);
 		expect(recovered).toMatchObject({ state: "accepted", remote });
 		expect(client.delegate).toHaveBeenCalledTimes(1);
 		expect(client.listDelegations).toHaveBeenCalledWith({ idempotencyKey: r.requestId });
@@ -115,9 +117,9 @@ describe("shared confirmed delegation coordinator", () => {
 		const service = coordinator().taskOrchestrator;
 		const r = await service.confirm(intent, approved);
 		client.delegate.mockResolvedValueOnce({ ok: false, code: "timeout" } as never);
-		await service.process(r.requestId);
+		await service.process(r.requestId, () => true);
 		client.listDelegations.mockResolvedValueOnce({ ok: false, code: "unreachable" } as never);
-		await (await restart()).taskOrchestrator.process(r.requestId);
+		await (await restart()).taskOrchestrator.process(r.requestId, () => true);
 		expect(client.delegate).toHaveBeenCalledTimes(1);
 	});
 	it("deduplicates task processing and requires a new confirmation for a new rerun key", async () => {
@@ -125,11 +127,11 @@ describe("shared confirmed delegation coordinator", () => {
 		const r = await service.confirm(intent, approved);
 		const repeated = await service.confirm(intent, { ...approved, id: "another-confirmation" });
 		expect(repeated.requestId).toBe(r.requestId);
-		await Promise.all([service.process(r.requestId), service.process(r.requestId)]);
+		await Promise.all([service.process(r.requestId, () => true), service.process(r.requestId, () => true)]);
 		expect(client.delegate).toHaveBeenCalledTimes(1);
 		await expect(service.confirm(intent, { ...approved, id: "running-rerun" }, r.requestId)).rejects.toThrow("journal_conflict");
  accepted = { ...remote, status: "completed", terminal: true };
- await service.process(r.requestId);
+ await service.process(r.requestId, () => true);
  const rerun = await service.confirm(intent, { ...approved, id: "rerun-confirmation" }, r.requestId);
 		expect(rerun.requestId).not.toBe(r.requestId);
 		expect(await journal.get(r.requestId)).not.toBeNull();
@@ -140,32 +142,33 @@ describe("shared confirmed delegation coordinator", () => {
 		const service = coordinator().taskOrchestrator;
 		const r = await service.confirm(intent, approved);
 		rows.get(r.requestId)!.intent.payload.task.instructions = "unapproved contents";
-		await expect(service.process(r.requestId)).rejects.toThrow("payload_hash_mismatch");
+		await expect(service.process(r.requestId, () => true)).rejects.toThrow("payload_hash_mismatch");
 		expect(calls).toEqual([]);
 		await expect(service.confirm({ ...intent, payload: { ...intent.payload, task: { ...intent.payload.task, title: "Changed" } } }, { ...approved, id: "changed" })).rejects.toThrow("journal_conflict");
 	});
 	it("refuses to use a client bound to a different origin", async () => {
 		const r = await coordinator().taskOrchestrator.confirm(intent, approved);
 		client.binding = { ...binding, origin: "https://other.example" };
-		await expect(coordinator().taskOrchestrator.process(r.requestId)).rejects.toThrow("connection_changed");
+		await expect(coordinator().taskOrchestrator.process(r.requestId, () => true)).rejects.toThrow("connection_changed");
 		expect(calls).toEqual([]);
 	});
 	it("keeps rollout off by default but still reconciles and cancels accepted work", async () => {
 		const disabled = coordinator(false).taskOrchestrator;
-		const r = await disabled.confirm(intent, approved);
-		await disabled.process(r.requestId); expect(calls).toEqual([]);
-		await coordinator().taskOrchestrator.process(r.requestId);
+		await expect(disabled.confirm(intent, approved)).rejects.toThrow("delegations_disabled");
+		const r = await coordinator().taskOrchestrator.confirm(intent, approved);
+		await disabled.process(r.requestId, () => true); expect(calls).toEqual([]);
+		await coordinator().taskOrchestrator.process(r.requestId, () => true);
 		const pending = await disabled.cancel(r.requestId, { ...approved, id: "cancel-1" });
 		expect(pending.state).toBe("cancellation_requested");
 		expect(pending.cancellation).toMatchObject({ id: "cancel-1", userId: "user-1" });
 		accepted = { ...remote, status: "cancelled", terminal: true, revision: "cancelled" };
-		expect((await (await restart()).taskOrchestrator.process(r.requestId)).state).toBe("terminal");
+		expect((await (await restart()).taskOrchestrator.process(r.requestId, () => true)).state).toBe("terminal");
 	});
 	it("reconciles unknown submissions before cancelling by exact remote ID", async () => {
 		const service = coordinator().taskOrchestrator;
 		const r = await service.confirm(intent, approved);
 		client.delegate.mockImplementationOnce(async () => { accepted = remote; return { ok: false, code: "timeout" } as never; });
-		await service.process(r.requestId);
+		await service.process(r.requestId, () => true);
 		await service.cancel(r.requestId, { ...approved, id: "cancel-1" });
 		expect(calls).toEqual([`lookup:${r.requestId}`, `cancel:${remote.delegation_id}`]);
 	});
@@ -176,7 +179,7 @@ describe("shared confirmed delegation coordinator", () => {
 		expect(calls).toEqual([]);
 		const next = await service.confirm(intent, { ...approved, id: "rerun" }, r.requestId);
 		client.delegate.mockResolvedValueOnce({ ok: false, code: "timeout" } as never);
-		await service.process(next.requestId);
+		await service.process(next.requestId, () => true);
 		await service.cancel(next.requestId, { ...approved, id: "cancel-2" });
 		expect(client.delegate).toHaveBeenCalledTimes(1);
 		expect((await journal.get(next.requestId))?.state).toBe("cancellation_requested");
@@ -185,19 +188,19 @@ describe("shared confirmed delegation coordinator", () => {
 		const service = coordinator().taskOrchestrator;
 		const r = await service.confirm(intent, approved);
 		client.delegate.mockResolvedValueOnce({ ok: false, code: "timeout" } as never);
-		await service.process(r.requestId);
+		await service.process(r.requestId, () => true);
 		client.delegate.mockResolvedValueOnce({ ok: false, code: "runtime_binding_changed" } as never);
-		expect((await service.process(r.requestId)).state).toBe("submission_unknown");
+		expect((await service.process(r.requestId, () => true)).state).toBe("submission_unknown");
 		accepted = { ...remote, status: "completed", terminal: true };
-		expect((await service.process(r.requestId)).state).toBe("terminal");
+		expect((await service.process(r.requestId, () => true)).state).toBe("terminal");
 		accepted = remote;
-		expect((await service.process(r.requestId)).remote?.status).toBe("completed");
+		expect((await service.process(r.requestId, () => true)).remote?.status).toBe("completed");
 	});
 	it("does not submit when durable intent or attempt writes fail", async () => {
 		const service = coordinator().taskOrchestrator;
 		const r = await service.confirm(intent, approved);
 		journal.save = async () => { throw new Error("disk failure"); };
-		await expect(service.process(r.requestId)).rejects.toThrow("disk failure");
+		await expect(service.process(r.requestId, () => true)).rejects.toThrow("disk failure");
 		expect(client.delegate).not.toHaveBeenCalled();
 		journal.reserve = async () => { throw new Error("disk failure"); };
 		await expect(service.confirm(intent, approved)).rejects.toThrow("disk failure");
@@ -206,12 +209,12 @@ describe("shared confirmed delegation coordinator", () => {
 	it("reconciles an ambiguous cancellation after restart and preserves the cancellation audit", async () => {
 		const service = coordinator().taskOrchestrator;
 		const r = await service.confirm(intent, approved);
-		await service.process(r.requestId);
+		await service.process(r.requestId, () => true);
 		client.cancelDelegation.mockImplementationOnce(async () => {
 			accepted = { ...remote, terminal: true, status: "cancelled" }; throw new Error("lost cancellation response");
 		});
 		await expect(service.cancel(r.requestId, { ...approved, id: "cancel-1" })).rejects.toThrow("lost cancellation");
-		const recovered = await (await restart()).projectOrchestrator.process(r.requestId);
+		const recovered = await (await restart()).projectOrchestrator.process(r.requestId, () => true);
 		expect(recovered.state).toBe("terminal");
 		expect(recovered.cancellation?.id).toBe("cancel-1");
 		expect(client.cancelDelegation).toHaveBeenCalledTimes(1);
@@ -220,9 +223,9 @@ describe("shared confirmed delegation coordinator", () => {
 		const service = coordinator().taskOrchestrator;
 		const r = await service.confirm(intent, approved);
 		client.delegate.mockResolvedValueOnce({ ok: false, code: "timeout" } as never);
-		await service.process(r.requestId);
+		await service.process(r.requestId, () => true);
 		accepted = { ...remote, runtime_id: "90000000-0000-4000-8000-000000000009" };
-		await expect(service.process(r.requestId)).rejects.toThrow("remote_identity_mismatch");
+		await expect(service.process(r.requestId, () => true)).rejects.toThrow("remote_identity_mismatch");
 		expect(client.delegate).toHaveBeenCalledTimes(1);
 	});
 
@@ -230,8 +233,8 @@ describe("shared confirmed delegation coordinator", () => {
 		const service = coordinator().taskOrchestrator;
 		const r = await service.confirm(intent, approved);
 		client.delegate.mockResolvedValueOnce({ ok: false, code: "runtime_binding_changed" } as never);
-		expect(await service.process(r.requestId)).toMatchObject({ state: "rejected", failureCode: "runtime_binding_changed" });
-		await service.process(r.requestId);
+		expect(await service.process(r.requestId, () => true)).toMatchObject({ state: "rejected", failureCode: "runtime_binding_changed" });
+		await service.process(r.requestId, () => true);
 		expect(client.delegate).toHaveBeenCalledTimes(1);
 		const rerun = await service.confirm(intent, { ...approved, id: "fresh-preview" }, r.requestId);
 		expect(rerun.requestId).not.toBe(r.requestId);
@@ -240,21 +243,21 @@ describe("shared confirmed delegation coordinator", () => {
 		const service = coordinator().taskOrchestrator;
 		const r = await service.confirm(intent, approved);
 		client.delegate.mockResolvedValueOnce({ ok: false, code: "timeout" } as never);
-		await service.process(r.requestId);
+		await service.process(r.requestId, () => true);
 		client.listDelegations.mockResolvedValueOnce({ ok: true, data: { delegations: [], next_cursor: "more" } } as never);
-		await service.process(r.requestId);
+		await service.process(r.requestId, () => true);
 		client.listDelegations.mockResolvedValueOnce({ ok: true, data: { delegations: [remote, remote] } });
-		await service.process(r.requestId);
+		await service.process(r.requestId, () => true);
 		expect(client.delegate).toHaveBeenCalledTimes(1);
 	});
 	it("reconciles cancellation conflicts and uses the latest opaque revision", async () => {
 		const service = coordinator().taskOrchestrator;
 		const r = await service.confirm(intent, approved);
-		await service.process(r.requestId);
+		await service.process(r.requestId, () => true);
 		client.cancelDelegation.mockResolvedValueOnce({ ok: false, code: "revision_conflict" } as never);
 		expect((await service.cancel(r.requestId, { ...approved, id: "cancel-1" })).state).toBe("cancellation_requested");
 		accepted = { ...remote, status: "running", revision: "new-opaque-revision" };
-		await service.process(r.requestId);
+		await service.process(r.requestId, () => true);
 		expect(client.cancelDelegation).toHaveBeenCalledTimes(1);
 		await service.cancel(r.requestId, { ...approved, id: "retry-cancel" });
 		expect(client.cancelDelegation).toHaveBeenLastCalledWith(remote.delegation_id, true, "new-opaque-revision", expect.any(Function));
@@ -266,7 +269,7 @@ describe("shared confirmed delegation coordinator", () => {
 		await service.reconcile(record.requestId);
 		expect(calls).toEqual([]);
 		client.delegate.mockResolvedValueOnce({ ok: false, code: "timeout" } as never);
-		await service.process(record.requestId);
+		await service.process(record.requestId, () => true);
 		for (const data of [{ delegations: [] }, { delegations: [], next_cursor: "more" }, { delegations: [remote, remote] }]) {
 			client.listDelegations.mockResolvedValueOnce({ ok: true, data });
 			expect(await service.reconcile(record.requestId)).toMatchObject({ found: false, record: { state: "submission_unknown", remote: null } });
@@ -279,7 +282,7 @@ describe("shared confirmed delegation coordinator", () => {
 	it("retains terminal observations across late cancellation and stale status races", async () => {
 		const service = coordinator().taskOrchestrator;
 		const record = await service.confirm(intent, approved);
-		await service.process(record.requestId);
+		await service.process(record.requestId, () => true);
 		accepted = { ...remote, status: "completed", terminal: true };
 		const results = await Promise.all([service.reconcile(record.requestId), service.cancel(record.requestId, { ...approved, id: "late-cancel" })]);
 		expect(results[0]).toMatchObject({ record: { state: "terminal", remote: { status: "completed" } } });
@@ -291,7 +294,7 @@ describe("shared confirmed delegation coordinator", () => {
 	it("does not import execution fields into the journal during reconciliation", async () => {
 		const service = coordinator().taskOrchestrator;
 		const record = await service.confirm(intent, approved);
-		await service.process(record.requestId);
+		await service.process(record.requestId, () => true);
 		accepted = { ...remote, status: "running", result: "secret-result", error: "secret-error", work_directory: "/secret/work", credentials: "mul_secret" } as PublicDelegation;
 		await service.reconcile(record.requestId);
 		const contents = await readFile(file, "utf8");
@@ -326,7 +329,7 @@ describe("optional managed delegation policy", () => {
 		journal.evaluatePolicy = policy;
 		const service = coordinator().taskOrchestrator;
 		const record = await service.confirm(intent, approved);
-		expect(await service.process(record.requestId)).toMatchObject({ state: "accepted" });
+		expect(await service.process(record.requestId, () => true)).toMatchObject({ state: "accepted" });
 		expect(policy).toHaveBeenCalledTimes(3);
 		expect(policy.mock.calls[0]).toEqual([{
 			serverOrigin: binding.origin, workspaceId: binding.workspaceId, profileId: intent.payload.agent_id,
@@ -339,7 +342,7 @@ describe("optional managed delegation policy", () => {
 		journal.evaluatePolicy = vi.fn(async (request) => ({ code: request.runtimeClass === "remote" ? "policy_allowed" : "policy_denied" }));
 		const service = coordinator(true, { resolveRuntimeClass }).taskOrchestrator;
 		const record = await service.confirm(intent, approved);
-		expect((await service.process(record.requestId)).state).toBe("accepted");
+		expect((await service.process(record.requestId, () => true)).state).toBe("accepted");
 		expect(resolveRuntimeClass).toHaveBeenCalledTimes(3);
 	});
 	it.each(["policy_denied", "policy_unavailable", "policy_runtime_unknown", "policy_location_unsafe"])("blocks proof minting and reservation on %s", async (code) => {
@@ -357,37 +360,36 @@ describe("optional managed delegation policy", () => {
 		journal.evaluatePolicy = async () => ({ code: "policy_allowed" });
 		await expect(coordinator(true, { policy: async () => ({ code: "policy_denied" }) }).taskOrchestrator.confirm(intent, approved)).rejects.toThrow("policy_denied");
 		const service = coordinator(false, { policy: async () => ({ code: "policy_allowed" }) }).taskOrchestrator;
-		const record = await service.confirm(intent, approved);
-		await service.process(record.requestId);
+		await expect(service.confirm(intent, approved)).rejects.toThrow("delegations_disabled");
 		expect(client.delegate).not.toHaveBeenCalled();
 	});
 	it.each(["policy_denied", "policy_unavailable", "policy_location_unsafe"])("rechecks policy at dispatch after confirmation: %s", async (code) => {
 		const service = coordinator().taskOrchestrator;
 		const record = await service.confirm(intent, approved);
 		journal.evaluatePolicy = async () => ({ code });
-		expect(await service.process(record.requestId)).toMatchObject({ state: "submitting", attempted: false, failureCode: code });
+		expect(await service.process(record.requestId, () => true)).toMatchObject({ state: "submitting", attempted: false, failureCode: code });
 		expect(client.delegate).not.toHaveBeenCalled();
 		journal.evaluatePolicy = async () => ({ code: "policy_allowed" });
-		expect(await service.process(record.requestId)).toMatchObject({ state: "accepted", failureCode: null });
+		expect(await service.process(record.requestId, () => true)).toMatchObject({ state: "accepted", failureCode: null });
 	});
 	it("rechecks after the durable attempt marker and does not lose ambiguous submissions", async () => {
 		const service = coordinator().taskOrchestrator;
 		const record = await service.confirm(intent, approved);
 		let checks = 0;
 		journal.evaluatePolicy = async () => ({ code: ++checks === 1 ? "policy_allowed" : "policy_denied" });
-		expect(await service.process(record.requestId)).toMatchObject({ state: "submission_unknown", failureCode: "policy_denied" });
+		expect(await service.process(record.requestId, () => true)).toMatchObject({ state: "submission_unknown", failureCode: "policy_denied" });
 		expect(calls).toEqual([]);
 		accepted = remote;
-		expect(await service.process(record.requestId)).toMatchObject({ state: "accepted", failureCode: null });
+		expect(await service.process(record.requestId, () => true)).toMatchObject({ state: "accepted", failureCode: null });
 		expect(client.listDelegations).toHaveBeenCalled();
 	});
 	it("never retries an ambiguous admission when policy is revoked, while retaining cancellation", async () => {
 		const service = coordinator().taskOrchestrator;
 		const record = await service.confirm(intent, approved);
 		client.delegate.mockResolvedValueOnce({ ok: false, code: "timeout" } as never);
-		await service.process(record.requestId);
+		await service.process(record.requestId, () => true);
 		journal.evaluatePolicy = async () => ({ code: "policy_denied" });
-		expect(await service.process(record.requestId)).toMatchObject({ state: "submission_unknown", failureCode: "policy_denied" });
+		expect(await service.process(record.requestId, () => true)).toMatchObject({ state: "submission_unknown", failureCode: "policy_denied" });
 		expect(client.delegate).toHaveBeenCalledTimes(1);
 		accepted = remote;
 		await service.cancel(record.requestId, { ...approved, id: "cancel" });
@@ -404,7 +406,7 @@ describe("optional managed delegation policy", () => {
 		const logs = vi.spyOn(console, "error").mockImplementation(() => undefined);
 		journal.evaluatePolicy = async () => { throw new Error("private-policy /secret/path mul_token"); };
 		await expect(service.confirm(intent, approved)).rejects.toThrow(/^policy_unavailable$/);
-		expect(await service.process(record.requestId)).toMatchObject({ failureCode: "policy_unavailable" });
+		expect(await service.process(record.requestId, () => true)).toMatchObject({ failureCode: "policy_unavailable" });
 		expect(await readFile(file, "utf8")).not.toContain("private-policy");
 		expect(logs).not.toHaveBeenCalled();
 		logs.mockRestore();
@@ -414,7 +416,7 @@ describe("optional managed delegation policy", () => {
 		const service = coordinator(true, { resolveRuntimeClass }).taskOrchestrator;
 		const record = await service.confirm(intent, approved);
 		journal.evaluatePolicy = async (request) => ({ code: request.runtimeClass === "unknown" ? "policy_runtime_unknown" : "policy_allowed" });
-		expect(await service.process(record.requestId)).toMatchObject({ failureCode: "policy_runtime_unknown", attempted: false });
+		expect(await service.process(record.requestId, () => true)).toMatchObject({ failureCode: "policy_runtime_unknown", attempted: false });
 		expect(client.delegate).not.toHaveBeenCalled();
 	});
 	it("bounds a hung plug-in and reports a safe unavailable reason", async () => {

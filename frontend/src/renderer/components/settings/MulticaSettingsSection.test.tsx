@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MulticaSetSettingsRequest, MulticaSetSettingsResult, MulticaSettings } from "../../../shared/multica";
 import { EMPTY_MULTICA_SYNC_SNAPSHOT, type MulticaSyncSnapshot } from "../../../shared/multica-status-sync";
 import { resetMulticaSyncStoreSubscription, useMulticaSyncStore } from "../../stores/multica-sync-store";
+import { installDelegationUserAction } from "../../../shared/multica-delegation-user-action";
 import { MulticaSettingsSection } from "./MulticaSettingsSection";
 
 type Bridge = NonNullable<typeof window.ao>;
@@ -47,6 +48,18 @@ describe("MulticaSettingsSection", () => {
 		await userEvent.clear(input);
 		await userEvent.type(input, `${value}{Enter}`);
 	}
+
+	it("renders default-off delegation and rejects scripted enable clicks", async () => {
+		const invoke = vi.fn(async () => undefined);
+		installDelegationUserAction(document, invoke);
+		await open();
+		const setting = screen.getByRole("switch", { name: "Confirmed delegation" });
+		expect(setting).toHaveAttribute("aria-checked", "false");
+		expect(setting).toHaveAttribute("data-delegation-enabled", "true");
+		await userEvent.click(setting);
+		expect(invoke).not.toHaveBeenCalled();
+		expect(setting).toHaveAttribute("aria-checked", "false");
+	});
 
 	it("shows the saved server under a Multica heading, local by default with its address", async () => {
 		await open();

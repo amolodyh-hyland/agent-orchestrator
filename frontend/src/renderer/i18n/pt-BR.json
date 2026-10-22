@@ -991,6 +991,8 @@
 	"multica.settings.error.tls": "Este computador não confia no certificado do servidor.",
 	"multica.settings.error.unreachable": "Não foi possível acessar o servidor. Verifique o endereço e se ele está em execução.",
 	"multica.settings.invalidUrl": "Informe um endereço http:// ou https:// válido.",
+	"multica.delegation.settings.enabled": "Delegação confirmada",
+	"multica.delegation.settings.help": "Desativada por padrão. Válida nesta sessão do desktop; cada envio ainda exige confirmação.",
 	"multica.settings.mode": "Servidor",
 	"multica.settings.mode.cloud": "Multica Cloud (oficial)",
 	"multica.settings.mode.local": "Auto-hospedado (local ou remoto)",

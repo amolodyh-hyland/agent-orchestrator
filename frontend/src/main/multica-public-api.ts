@@ -24,7 +24,7 @@ export type PublicApiOptions = {
 	fetch?: typeof globalThis.fetch;
 	timeoutMs?: number;
 	now?: () => number;
-	delegationsEnabled?: boolean;
+	delegationsEnabled?: boolean | (() => boolean);
 	policy?: (binding: PublicApiBinding & { action: "delegate"; agentId: string; runtimeId: string }) => Promise<boolean>;
 };
 
@@ -94,6 +94,7 @@ async function readBody(response: Response): Promise<string> {
 }
 
 export function createMulticaPublicApi(options: PublicApiOptions) {
+	const delegationsEnabled = () => (typeof options.delegationsEnabled === "function" ? options.delegationsEnabled() : options.delegationsEnabled) === true;
 	const binding: PublicApiBinding = Object.freeze({ serverKey: options.server.key, origin: origin(options.server), workspaceId: uuid(options.workspaceId) });
 	const credentialKey = `public-api-v1:${createHash("sha256").update(JSON.stringify([binding.origin, binding.workspaceId])).digest("hex")}`;
 	const credentialServer = { ...options.server, key: credentialKey };
@@ -139,6 +140,7 @@ export function createMulticaPublicApi(options: PublicApiOptions) {
 				if (code !== null) return failure(code === "policy_denied" || code === "policy_runtime_unknown" || code === "policy_location_unsafe" ? code : "policy_unavailable");
 				if (!current()) return failure("connection_changed");
 				if (controller.signal.aborted) return failure("timeout");
+				if (!delegationsEnabled()) return failure("delegations_disabled");
 			}
 			if (confirmationCurrent) {
 				try { if (confirmationCurrent() !== true) return failure("confirmation_required"); }
@@ -260,7 +262,7 @@ export function createMulticaPublicApi(options: PublicApiOptions) {
 			}, undefined, undefined, ifMatch, undefined, confirmationCurrent);
 		}),
 		delegate: (input: CreatePublicDelegation, idempotencyKey: string, confirmed: boolean, beforeSend: DelegationSendGuard, confirmationCurrent?: DelegationConfirmationGuard) => run(async () => {
-			if (options.delegationsEnabled !== true) return failure("delegations_disabled");
+			if (!delegationsEnabled()) return failure("delegations_disabled");
 			if (confirmed !== true) return failure("confirmation_required");
 			const body = createDelegation(input);
 			const requestKey = key(idempotencyKey);

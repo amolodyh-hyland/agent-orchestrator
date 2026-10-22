@@ -43,7 +43,7 @@ describe("private human confirmation capability", () => {
 		const r = await fixture();
 		let writes = 0;
 		const journal: DelegationJournal = { evaluatePolicy: async () => ({ code: "policy_absent" }), get: async () => null, find: async () => null, reserve: async () => { writes++; return r; }, save: async () => r };
-		const human = createMulticaDelegationCoordinator({ journal, client: () => { throw new Error("must not connect"); }, confirmations: createMainProcessDelegationAuthority(Buffer.alloc(32, 7)) }).human;
+		const human = createMulticaDelegationCoordinator({ enabled: true, journal, client: () => { throw new Error("must not connect"); }, confirmations: createMainProcessDelegationAuthority(Buffer.alloc(32, 7)) }).human;
 		const approved = { id: "human-action", userId: "user-1", at: "2026-10-21T12:00:00Z" };
 		const unknown = { ...r.intent, binding: { ...r.intent.binding, hidden: "unapproved" } };
 		await expect(human.confirmFromUserAction(unknown, approved)).rejects.toThrow("invalid_request");

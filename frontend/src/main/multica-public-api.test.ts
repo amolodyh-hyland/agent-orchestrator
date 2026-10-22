@@ -458,7 +458,7 @@ describe("coordinator policy at the HTTP send boundary", () => {
     const resolve = options.credentials.resolve.bind(options.credentials);
     vi.spyOn(options.credentials, "resolve").mockImplementation(async (...args) => { entered.release(); await resumed.promise; return resolve(...args); });
    }
-   const processing = services.taskOrchestrator.process(record.requestId);
+   const processing = services.taskOrchestrator.process(record.requestId, () => true);
    try {
     if (waitAt === "queue") await attempted.promise;
     else await entered.promise;

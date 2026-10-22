@@ -11,6 +11,10 @@ Start with [architecture.md](architecture.md) for the current backend model and
 See [project-context.md](project-context.md) for repository-free Projects, local
 context links, revision conflicts, and pinned session context.
 
+See [confirmed Multica delegation](multica-delegation-coordinator.md), its
+[operator checklist](multica-delegation-operator-checklist.md) and
+[contract verification](multica-delegation-contract.md).
+
 ## Reference docs
 
 [Claude Code authentication](claude-authentication.md) covers native login status, enterprise credentials, provider model listing and the labelled alias fallback.

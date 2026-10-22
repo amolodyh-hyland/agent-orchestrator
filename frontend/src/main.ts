@@ -1151,6 +1151,14 @@ async function createWindowInternal(): Promise<void> {
 		readSettings: () => readMulticaSettings(browserProfileStateDir()),
 		daemonOrigin: () => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null,
 		fetch: (url, init) => net.fetch(url instanceof URL ? url.href : url, init),
+		confirmEnable: async () => {
+			if (!mainWindow || mainWindow.isDestroyed()) return false;
+			const result = await dialog.showMessageBox(mainWindow, { type: "question", title: "Enable confirmed Multica delegation",
+				message: "Allow confirmed delegation for this desktop session?",
+				detail: "Each handoff still requires its own task preview and native confirmation. This setting resets when the desktop closes.",
+				buttons: ["Keep disabled", "Enable"], defaultId: 0, cancelId: 0, noLink: true });
+			return result.response === 1;
+		},
 		confirmCancellation: async (status) => {
 			if (!mainWindow || mainWindow.isDestroyed()) return false;
 			const result = await dialog.showMessageBox(mainWindow, { type: "question", title: "Confirm Multica cancellation",

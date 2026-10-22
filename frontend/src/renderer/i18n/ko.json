@@ -983,6 +983,8 @@
 	"multica.settings.error.tls": "이 컴퓨터가 서버의 인증서를 신뢰하지 않습니다.",
 	"multica.settings.error.unreachable": "서버에 연결할 수 없습니다. 주소와 서버 실행 여부를 확인하세요.",
 	"multica.settings.invalidUrl": "올바른 http:// 또는 https:// 주소를 입력하세요.",
+	"multica.delegation.settings.enabled": "확인 후 위임",
+	"multica.delegation.settings.help": "기본적으로 꺼져 있습니다. 현재 데스크톱 세션에만 적용되며 매번 확인이 필요합니다.",
 	"multica.settings.mode": "서버",
 	"multica.settings.mode.cloud": "Multica Cloud (공식)",
 	"multica.settings.mode.local": "셀프 호스팅(로컬 또는 원격)",
