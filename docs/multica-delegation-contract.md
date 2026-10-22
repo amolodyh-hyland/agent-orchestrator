@@ -21,11 +21,17 @@ The first suite uses the production Public API client and shared confirmation fl
 with an injected transport and journal. It verifies exact headers/payloads, no
 write before native approval, durable intent before send, lost-response recovery,
 identical retry keys, terminal monotonicity and policy denial before any POST.
+Retry uses another preview and native approval; the journal mock returns the
+existing durable request instead of inserting a second one.
 Both task and project processing remain read-only without live approval. The
 integration suite additionally builds a test-only Go journal with temporary SQLite
 data and ephemeral loopback HTTP fixtures; it never uses an installed daemon,
 Keychain or a running Multica instance. Its desktop cancellation cases invalidate
 approval during the final credential lookup and assert zero cancel POSTs.
+The task/project retry cases recreate the desktop, restore the saved rollout
+preference, reject replaying the consumed preview, and require fresh native
+approval. The real SQLite journal returns the original request ID and the retry
+sends the identical payload/key. Declining the new approval sends nothing.
 
 Run from Multica's `server/` (no database or network service):
 

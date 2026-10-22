@@ -19,7 +19,11 @@ function setup() {
 		evaluatePolicy: async () => ({ code: denied ? "policy_denied" : "policy_absent" }),
 		get: async (id) => structuredClone(rows.get(id) ?? null),
 		find: async (project, task) => structuredClone([...rows.values()].find((r) => r.projectId === project && r.taskId === task) ?? null),
-		reserve: async (record) => { rows.set(record.requestId, structuredClone(record)); return structuredClone(record); },
+		reserve: async (record) => {
+			const existing = await journal.find(record.projectId, record.taskId);
+			if (existing) { expect(existing.intent).toEqual(record.intent); return existing; }
+			rows.set(record.requestId, structuredClone(record)); return structuredClone(record);
+		},
 		save: async (record) => {
 			expect(rows.get(record.requestId)?.version).toBe(record.version);
 			const next = { ...record, version: record.version + 1 };
@@ -109,7 +113,8 @@ describe("Multica delegation v1 shared contract", () => {
 					const id = [...f.rows.keys()][0];
 					await f.projectOrchestrator.processTask(f.draft.projectId, f.draft.taskId);
 					expect(f.posts).toHaveLength(1);
-					expect(await f.taskOrchestrator.process(id, () => true)).toMatchObject({ state: "accepted" });
+					expect(await f.submit()).toMatchObject({ ok: true, requestId: id, state: "accepted" });
+					expect(f.confirm).toHaveBeenCalledTimes(2); expect(f.rows.size).toBe(1);
 					expect(f.posts).toHaveLength(2); expect(f.posts[0]).toEqual(f.posts[1]);
 					expect(f.admissions.size).toBe(1);
 					break;

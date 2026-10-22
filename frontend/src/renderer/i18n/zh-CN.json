@@ -984,7 +984,7 @@
 	"multica.settings.error.unreachable": "无法连接服务器。请检查地址以及服务器是否在运行。",
 	"multica.settings.invalidUrl": "请输入有效的 http:// 或 https:// 地址。",
 	"multica.delegation.settings.enabled": "确认后委派",
-	"multica.delegation.settings.help": "默认关闭。仅在当前桌面会话中生效，每次委派仍需确认。",
+	"multica.delegation.settings.help": "默认关闭。启用设置会保存，每次委派仍需确认。",
 	"multica.settings.mode": "服务器",
 	"multica.settings.mode.cloud": "Multica Cloud（官方）",
 	"multica.settings.mode.local": "自托管（本地或远程）",

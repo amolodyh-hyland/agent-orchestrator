@@ -6,8 +6,7 @@ instance, share serialization, and use the same task identity and journal.
 The desktop's shared preview/confirmation flow (TK-MA66) is the only dispatch
 entry point. Assignment/status events and automation have no dispatch or
 confirmation entry point. Admission defaults off, including in the desktop. The
-user must first enable Confirmed delegation in Settings for the current desktop
-session; the preview and native approval are still required for each send. The
+user must first enable Confirmed delegation in Settings (saved across restarts); the preview and native approval are still required for each send. The
 server's rollout gate is independent.
 
 Construct it with `createDaemonDelegationJournal`, a trusted daemon-origin
@@ -375,11 +374,15 @@ confirmation IPC, Public API and real-journal integration suites, and
 
 ## Default-off rollout and contract coverage (TK-MA68)
 
-Desktop delegation admission starts disabled. Settings → Multica → Confirmed
+Desktop delegation admission defaults to disabled. Settings → Multica → Confirmed
 delegation uses a trusted preload click, a focused main-frame IPC request and a
-native enablement dialog. The setting lives only in main for the current desktop
-session and resets on relaunch. Persisted connection/project/task settings,
-environment variables, CLI requests and automation cannot enable it. Enabling it
+native enablement dialog. Main serializes and atomically saves the preference
+in the existing `multica-settings.json` file. Missing, malformed, nonboolean or
+unreadable preferences default off. Connection-setting saves preserve this field
+and cannot set it, even if an untyped caller supplies it. The dedicated writer is
+used only after main validates the trusted enable action and native approval;
+disabling requires no dialog. CLI requests, project/task settings, environment
+variables and automation expose no enablement path. Enabling it
 does not approve a handoff: every admission, including a retry, needs a current
 preview and native approval. Saved confirmations support read-only recovery.
 The coordinator requires a live guard for admission, and the client rechecks the

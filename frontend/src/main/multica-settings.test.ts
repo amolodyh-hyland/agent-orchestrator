@@ -1,10 +1,10 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DEFAULT_MULTICA_SETTINGS } from "../shared/multica";
-import { MULTICA_SETTINGS_FILE_NAME, readMulticaSettings, writeMulticaSettings } from "./multica-settings";
+import { MULTICA_SETTINGS_FILE_NAME, readMulticaSettings, writeMulticaSettings, readMulticaDelegationEnabled, writeMulticaDelegationEnabled } from "./multica-settings";
 
 describe("multica settings", () => {
 	let stateDir: string;
@@ -33,6 +33,7 @@ describe("multica settings", () => {
 		});
 		expect(JSON.parse(await readFile(file(), "utf8"))).toEqual({
 			version: 2,
+			delegationEnabled: false,
 			mode: "local",
 			customUrl: "https://multica.example.com",
 			apiUrl: "https://multica.example.com",
@@ -82,4 +83,29 @@ describe("multica settings", () => {
 		]);
 		expect(await readMulticaSettings(stateDir)).toEqual({ mode: "cloud", customUrl: "http://b.local:3000", apiUrl: "" });
 	});
+	it("defaults delegation off for missing, invalid and unreadable preferences", async () => {
+		expect(await readMulticaDelegationEnabled(stateDir)).toBe(false);
+		for (const raw of ["{broken", "null", "[]", "true", JSON.stringify({ version: 1, delegationEnabled: true }), ...[undefined, null, false, "true", 1, {}, []].map((value) => JSON.stringify({ version: 2, delegationEnabled: value }))]) {
+			await writeFile(file(), raw);
+			expect(await readMulticaDelegationEnabled(stateDir), raw).toBe(false);
+		}
+		await rm(file()); await mkdir(file());
+		expect(await readMulticaDelegationEnabled(stateDir)).toBe(false);
+	});
+	it("persists delegation independently while generic connection writes cannot flip it", async () => {
+		const connection = { ...DEFAULT_MULTICA_SETTINGS };
+		await writeMulticaSettings(stateDir, { ...connection, delegationEnabled: true } as typeof connection);
+		expect(await readMulticaDelegationEnabled(stateDir)).toBe(false);
+		await Promise.all([
+			writeMulticaDelegationEnabled(stateDir, true),
+			writeMulticaSettings(stateDir, { ...connection, mode: "cloud", delegationEnabled: false } as typeof connection),
+		]);
+		expect(await readMulticaDelegationEnabled(stateDir)).toBe(true);
+		expect(await readMulticaSettings(stateDir)).toMatchObject({ mode: "cloud" });
+		expect(await readMulticaSettings(stateDir)).not.toHaveProperty("delegationEnabled");
+		await writeMulticaDelegationEnabled(stateDir, false);
+		await writeMulticaSettings(stateDir, { ...connection, delegationEnabled: true } as typeof connection);
+		expect(await readMulticaDelegationEnabled(stateDir)).toBe(false);
+	});
+
 });

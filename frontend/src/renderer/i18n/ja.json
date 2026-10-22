@@ -984,7 +984,7 @@
 	"multica.settings.error.unreachable": "サーバーに接続できません。アドレスとサーバーの起動状態を確認してください。",
 	"multica.settings.invalidUrl": "有効な http:// または https:// のアドレスを入力してください。",
 	"multica.delegation.settings.enabled": "確認付き委任",
-	"multica.delegation.settings.help": "初期状態は無効です。このデスクトップセッションにのみ適用され、委任ごとに確認が必要です。",
+	"multica.delegation.settings.help": "初期状態は無効です。設定は保存されますが、委任ごとに確認が必要です。",
 	"multica.settings.mode": "サーバー",
 	"multica.settings.mode.cloud": "Multica Cloud（公式）",
 	"multica.settings.mode.local": "セルフホスト（ローカルまたはリモート）",

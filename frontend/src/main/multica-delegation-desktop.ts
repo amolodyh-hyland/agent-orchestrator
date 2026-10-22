@@ -16,6 +16,7 @@ export function registerDesktopDelegation(options: {
 	ipcMain: IpcMain; shellWebContents: WebContents;
 	authority: MainProcessDelegationAuthority; credentials: MulticaCredentials;
 	readSettings: () => Promise<MulticaSettings>; daemonOrigin: () => string | null;
+	readEnabled: () => Promise<boolean>; writeEnabled: (enabled: boolean) => Promise<void>;
 	confirmCancellation: (status: DelegationStatus) => Promise<boolean>;
 	confirmEnable: () => Promise<boolean>;
 	fetch: typeof fetch; confirm: (preview: DelegationPreview, detail: string) => Promise<boolean>;
@@ -24,6 +25,10 @@ export function registerDesktopDelegation(options: {
 	let generation = 0;
 	let disposed = false;
 	let enabling = false;
+	let restoreEnabled = true;
+	const ready = Promise.resolve().then(options.readEnabled).then((value) => {
+		if (!disposed && restoreEnabled) enabled = value === true;
+	}).catch(() => undefined);
 	let server: ReturnType<typeof resolveMulticaServer> = null;
 	const clients = new Map<string, ReturnType<typeof createMulticaPublicApi>>();
 	const journal = createDaemonDelegationJournal(options.daemonOrigin, options.authority, options.fetch);
@@ -49,6 +54,7 @@ export function registerDesktopDelegation(options: {
 		prepare: async (binding) => { if (!isDeepStrictEqual((await client(binding.workspaceId)).binding, binding)) throw new Error("connection_changed"); },
 		confirmCancellation: options.confirmCancellation });
 	const flow = createDelegationConfirmationFlow({ ...coordinator, client: async (workspaceId) => {
+		await ready;
 		if (!enabled || disposed) throw new Error("delegations_disabled");
 		return client(workspaceId);
 	}, policy: journal.evaluatePolicy, confirm: options.confirm,
@@ -57,21 +63,29 @@ export function registerDesktopDelegation(options: {
 		setCredential: async (workspaceId, token) => (await (await client(workspaceId)).setToken(token)).ok });
 	const shell = options.shellWebContents;
 	const trusted = (event: IpcMainInvokeEvent) => !disposed && !shell.isDestroyed() && event.sender.id === shell.id && event.senderFrame === shell.mainFrame;
-	options.ipcMain.handle(DELEGATION_SETTINGS, (event) => trusted(event) ? { enabled } : { enabled: false });
+	options.ipcMain.handle(DELEGATION_SETTINGS, async (event) => { await ready; return { enabled: trusted(event) && enabled }; });
 	options.ipcMain.handle(DELEGATION_ENABLE_CLICK, async (event, value: unknown) => {
 		if (!trusted(event) || !shell.isFocused() || typeof value !== "boolean") return;
 		if (!value) {
-			generation++; enabled = false; flow.invalidate(); status.revokeConfirmation();
+			generation++; restoreEnabled = false; enabled = false; flow.invalidate(); status.revokeConfirmation();
 			shell.send(DELEGATION_SETTINGS_CHANGED, { enabled });
+			await options.writeEnabled(false);
 			return;
 		}
 		if (enabled || enabling) return;
 		enabling = true;
 		const version = generation;
 		try {
+			await ready;
+			if (!trusted(event) || !shell.isFocused() || version !== generation) return;
 			if (await options.confirmEnable() !== true || !trusted(event) || !shell.isFocused() || version !== generation) return;
+			await options.writeEnabled(true);
+			if (!trusted(event) || !shell.isFocused() || version !== generation) { await options.writeEnabled(false); return; }
 			enabled = true;
 			shell.send(DELEGATION_SETTINGS_CHANGED, { enabled });
+		} catch {
+			enabled = false;
+			if (trusted(event)) shell.send(DELEGATION_SETTINGS_CHANGED, { enabled });
 		} finally { enabling = false; }
 	});
 	const navigation = (_event: unknown, _url: string, _inPlace: boolean, main: boolean) => { if (main) generation++; };

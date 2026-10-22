@@ -1,8 +1,10 @@
 # Confirmed Multica delegation: operator checklist
 
-Delegation starts disabled on every desktop launch. In Settings → Multica, enable
-**Confirmed delegation** and approve the native dialog for the current desktop
-session. Each task/project handoff still needs its own preview and native approval.
+Delegation is off by default. In Settings → Multica, enable **Confirmed delegation**
+and approve the native dialog. AO saves the preference in `multica-settings.json`
+and restores it on desktop restart. Missing, invalid or unreadable values mean
+off. Turning it off needs no confirmation. Each task/project handoff still needs
+its own preview and native approval.
 There is no unattended mode, CLI enablement, factory enablement or pilot.
 Disabling the setting revokes pending handoffs and cancellation approvals; it does
 not cancel accepted work. Status reads and explicitly confirmed cancellation remain

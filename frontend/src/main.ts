@@ -206,7 +206,7 @@ import {
 	toastSilent,
 } from "./main/notification-signals";
 import { buildLinuxAppMenuTemplate, buildMacAppMenuTemplate, buildWindowsAppMenuTemplate } from "./main/menu";
-import { readMulticaSettings, writeMulticaSettings } from "./main/multica-settings";
+import { readMulticaDelegationEnabled, writeMulticaDelegationEnabled, readMulticaSettings, writeMulticaSettings } from "./main/multica-settings";
 import { checkMulticaServer, createMulticaCheckGet } from "./main/multica-server-check";
 import { createMulticaDaemonService, findMulticaBinary } from "./main/multica-daemon-cli";
 import {
@@ -1148,14 +1148,16 @@ async function createWindowInternal(): Promise<void> {
 	multicaDelegation = registerDesktopDelegation({
 		ipcMain, shellWebContents, authority: delegationConfirmation.authority,
 		credentials: multicaCredentials,
+		readEnabled: () => readMulticaDelegationEnabled(browserProfileStateDir()),
+		writeEnabled: (enabled) => writeMulticaDelegationEnabled(browserProfileStateDir(), enabled),
 		readSettings: () => readMulticaSettings(browserProfileStateDir()),
 		daemonOrigin: () => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null,
 		fetch: (url, init) => net.fetch(url instanceof URL ? url.href : url, init),
 		confirmEnable: async () => {
 			if (!mainWindow || mainWindow.isDestroyed()) return false;
 			const result = await dialog.showMessageBox(mainWindow, { type: "question", title: "Enable confirmed Multica delegation",
-				message: "Allow confirmed delegation for this desktop session?",
-				detail: "Each handoff still requires its own task preview and native confirmation. This setting resets when the desktop closes.",
+				message: "Allow confirmed delegation?",
+				detail: "This setting is saved across desktop restarts. Each handoff still requires its own task preview and native confirmation.",
 				buttons: ["Keep disabled", "Enable"], defaultId: 0, cancelId: 0, noLink: true });
 			return result.response === 1;
 		},
