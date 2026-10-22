@@ -37,3 +37,7 @@ lifecycle events also refresh missing snapshots; populated manifests stay cached
 The read-only `GET /api/v1/sessions/{sessionId}/project-context` endpoint returns
 `{ "manifest": null }` for a visible session without a snapshot. It reads stored
 session context and does not resolve the current project or source files.
+
+The [local library registry](library.md) keeps optional skills and rules separate
+from knowledge attachments. Inspection, exact-hash approval, and Project binding
+are explicit backend operations; catalog availability does not grant execution.

@@ -21,6 +21,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/githubpat"
 	importsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/importer"
+	librarysvc "github.com/aoagents/agent-orchestrator/backend/internal/service/library"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 )
@@ -308,6 +309,20 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"DomainSessionStaleBinary":          "SessionStaleBinary",
 	"DomainSessionWait":                 "SessionWait",
 	"DomainProjectConfig":               "ProjectConfig",
+	"LibraryOperation":                  "LibraryOperation",
+	"LibraryResult":                     "LibraryResult",
+	"DomainLibrarySource":               "LibrarySource",
+	"DomainLibraryRootIdentity":         "LibraryRootIdentity",
+	"DomainLibraryStagedEntry":          "LibraryStagedEntry",
+	"DomainLibraryEntry":                "LibraryEntry",
+	"DomainLibraryFile":                 "LibraryFile",
+	"DomainLibraryProvenance":           "LibraryProvenance",
+	"DomainLibrarySelectedEntry":        "LibrarySelectedEntry",
+	"DomainLibraryApproval":             "LibraryApproval",
+	"DomainLibraryBinding":              "LibraryBinding",
+	"DomainLibraryRuntimeBinding":       "LibraryRuntimeBinding",
+	"DomainLibrarySnapshot":             "LibrarySnapshot",
+	"DomainLibrarySnapshotEntry":        "LibrarySnapshotEntry",
 	"DomainProjectContextManifest":      "ProjectContextManifest",
 	"DomainProjectContextManifestEntry": "ProjectContextManifestEntry",
 	"ControllersProjectContextResponse": "ProjectContextResponse",
@@ -2734,6 +2749,15 @@ func sessionOperations() []operation {
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/library", id: "getLibrary", tag: "projects", summary: "List the inert library catalog",
+			resps: []respUnit{{http.StatusOK, librarysvc.Result{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/library/operations", id: "operateLibrary", tag: "projects", summary: "Register, inspect, approve, revoke or bind local library content",
+			reqBody: librarysvc.Operation{},
+			resps:   []respUnit{{http.StatusOK, librarysvc.Result{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/project-context", id: "getSessionProjectContext", tag: "sessions",

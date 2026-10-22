@@ -3065,6 +3065,80 @@ paths:
       summary: Validate a selected folder for project import onboarding
       tags:
       - import
+  /api/v1/library:
+    get:
+      operationId: getLibrary
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryResult'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the inert library catalog
+      tags:
+      - projects
+  /api/v1/library/operations:
+    post:
+      operationId: operateLibrary
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LibraryOperation'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryResult'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Register, inspect, approve, revoke or bind local library content
+      tags:
+      - projects
   /api/v1/link-preview:
     get:
       operationId: getLinkPreview
@@ -16849,6 +16923,516 @@ components:
       required:
       - ok
       - sessionId
+      type: object
+    LibraryApproval:
+      properties:
+        actorId:
+          type: string
+        approvalId:
+          type: string
+        approvedAt:
+          type: string
+        authorityId:
+          type: string
+        entries:
+          items:
+            $ref: '#/components/schemas/LibrarySelectedEntry'
+          type: array
+        expiresAt:
+          type: string
+        policyRevision:
+          type: string
+        purposes:
+          items:
+            type: string
+          type: array
+        rootIdentity:
+          $ref: '#/components/schemas/LibraryRootIdentity'
+        selectionDigest:
+          type: string
+        sourceId:
+          type: string
+        state:
+          type: string
+        trustEpoch:
+          format: int64
+          type: integer
+      required:
+      - approvalId
+      - authorityId
+      - actorId
+      - sourceId
+      - rootIdentity
+      - entries
+      - purposes
+      - policyRevision
+      - approvedAt
+      - state
+      - trustEpoch
+      - selectionDigest
+      type: object
+    LibraryBinding:
+      properties:
+        approvedContentHash:
+          type: string
+        bindingId:
+          type: string
+        enabled:
+          type: boolean
+        entryId:
+          type: string
+        ownerId:
+          type: string
+        position:
+          type: integer
+        projectId:
+          type: string
+        required:
+          type: boolean
+        revision:
+          format: int64
+          type: integer
+        roles:
+          items:
+            $ref: '#/components/schemas/ProjectContextRole'
+          type: array
+        sessionId:
+          type: string
+        sourceId:
+          type: string
+      required:
+      - bindingId
+      - ownerId
+      - projectId
+      - sourceId
+      - entryId
+      - approvedContentHash
+      - roles
+      - position
+      - required
+      - enabled
+      - revision
+      type: object
+    LibraryEntry:
+      properties:
+        contentHash:
+          type: string
+        displayName:
+          type: string
+        entryId:
+          type: string
+        entryPoint:
+          type: string
+        files:
+          items:
+            $ref: '#/components/schemas/LibraryFile'
+          type: array
+        format:
+          type: string
+        kind:
+          type: string
+        provenance:
+          $ref: '#/components/schemas/LibraryProvenance'
+        reasonCode:
+          type: string
+        requirements:
+          items:
+            type: string
+          type: array
+        schemaVersion:
+          type: integer
+        sourceId:
+          type: string
+        status:
+          type: string
+      required:
+      - schemaVersion
+      - entryId
+      - sourceId
+      - kind
+      - displayName
+      - format
+      - entryPoint
+      - files
+      - requirements
+      - contentHash
+      - provenance
+      - status
+      - reasonCode
+      type: object
+    LibraryFile:
+      properties:
+        mode:
+          type: string
+        path:
+          type: string
+        sha256:
+          type: string
+        sizeBytes:
+          format: int64
+          type: integer
+      required:
+      - path
+      - sha256
+      - sizeBytes
+      - mode
+      type: object
+    LibraryOperation:
+      properties:
+        approvalId:
+          type: string
+        binding:
+          $ref: '#/components/schemas/LibraryBinding'
+        bindingId:
+          type: string
+        entries:
+          items:
+            $ref: '#/components/schemas/LibrarySelectedEntry'
+          type: array
+        expectedRevision:
+          format: int64
+          type: integer
+        expiresAt:
+          type: string
+        localPath:
+          type: string
+        operation:
+          type: string
+        projectId:
+          type: string
+        purposes:
+          items:
+            type: string
+          type: array
+        rootIdentity:
+          $ref: '#/components/schemas/LibraryRootIdentity'
+        rootKind:
+          type: string
+        scope:
+          type: string
+        sessionId:
+          type: string
+        sourceId:
+          type: string
+      required:
+      - operation
+      - expectedRevision
+      type: object
+    LibraryProvenance:
+      properties:
+        adapterVersion:
+          type: string
+        originAuthorityId:
+          type: string
+        originEntryId:
+          type: string
+        originKind:
+          type: string
+        originSourceId:
+          type: string
+        resolverId:
+          type: string
+        sourceRevision:
+          format: int64
+          type: integer
+        verification:
+          type: string
+      required:
+      - originAuthorityId
+      - originSourceId
+      - originEntryId
+      - originKind
+      - resolverId
+      - sourceRevision
+      - adapterVersion
+      - verification
+      type: object
+    LibraryResult:
+      properties:
+        approvals:
+          items:
+            $ref: '#/components/schemas/LibraryApproval'
+          type: array
+        bindings:
+          items:
+            $ref: '#/components/schemas/LibraryBinding'
+          type: array
+        entries:
+          items:
+            $ref: '#/components/schemas/LibraryEntry'
+          type: array
+        preview:
+          items:
+            $ref: '#/components/schemas/LibraryStagedEntry'
+          type: array
+        reasonCode:
+          type: string
+        revision:
+          format: int64
+          type: integer
+        runtimeBindings:
+          items:
+            $ref: '#/components/schemas/LibraryRuntimeBinding'
+          type: array
+        snapshot:
+          $ref: '#/components/schemas/LibrarySnapshot'
+        sources:
+          items:
+            $ref: '#/components/schemas/LibrarySource'
+          type: array
+        status:
+          type: string
+        trustEpoch:
+          format: int64
+          type: integer
+        warnings:
+          items:
+            type: string
+          type: array
+      required:
+      - status
+      - reasonCode
+      - revision
+      - trustEpoch
+      - sources
+      - entries
+      - approvals
+      - bindings
+      - warnings
+      - runtimeBindings
+      type: object
+    LibraryRootIdentity:
+      properties:
+        resolverId:
+          type: string
+        rootGeneration:
+          format: int64
+          type: integer
+        rootRef:
+          type: string
+      required:
+      - resolverId
+      - rootRef
+      - rootGeneration
+      type: object
+    LibraryRuntimeBinding:
+      properties:
+        adapterId:
+          type: string
+        adapterVersion:
+          type: string
+        canInvoke:
+          type: boolean
+        catalogRevision:
+          format: int64
+          type: integer
+        contentHash:
+          type: string
+        controllerGeneration:
+          format: int64
+          type: integer
+        entryId:
+          type: string
+        providerId:
+          type: string
+        providerVersion:
+          type: string
+        reasonCode:
+          type: string
+        sessionId:
+          type: string
+        snapshotId:
+          type: string
+        status:
+          type: string
+        trustEpoch:
+          format: int64
+          type: integer
+      required:
+      - sessionId
+      - snapshotId
+      - entryId
+      - contentHash
+      - providerId
+      - adapterId
+      - adapterVersion
+      - providerVersion
+      - controllerGeneration
+      - catalogRevision
+      - trustEpoch
+      - status
+      - reasonCode
+      - canInvoke
+      type: object
+    LibrarySelectedEntry:
+      properties:
+        contentHash:
+          type: string
+        entryId:
+          type: string
+      required:
+      - entryId
+      - contentHash
+      type: object
+    LibrarySnapshot:
+      properties:
+        adapterId:
+          type: string
+        adapterVersion:
+          type: string
+        channel:
+          type: string
+        createdAt:
+          type: string
+        entries:
+          items:
+            $ref: '#/components/schemas/LibrarySnapshotEntry'
+          type: array
+        ownedSnapshotRef:
+          type: string
+        projectContextDigest:
+          type: string
+        projectId:
+          type: string
+        projectRevision:
+          format: int64
+          type: integer
+        providerId:
+          type: string
+        registryRevision:
+          format: int64
+          type: integer
+        role:
+          $ref: '#/components/schemas/ProjectContextRole'
+        schemaVersion:
+          type: integer
+        sessionId:
+          type: string
+        snapshotDigest:
+          type: string
+        snapshotId:
+          type: string
+        trustEpoch:
+          format: int64
+          type: integer
+        warnings:
+          items:
+            type: string
+          type: array
+      required:
+      - schemaVersion
+      - snapshotId
+      - sessionId
+      - projectId
+      - projectRevision
+      - projectContextDigest
+      - role
+      - channel
+      - registryRevision
+      - trustEpoch
+      - ownedSnapshotRef
+      - providerId
+      - adapterId
+      - adapterVersion
+      - createdAt
+      - entries
+      - warnings
+      type: object
+    LibrarySnapshotEntry:
+      properties:
+        approvalId:
+          type: string
+        bindingIds:
+          items:
+            type: string
+          type: array
+        bindingRevisions:
+          items:
+            format: int64
+            type: integer
+          type: array
+        content:
+          additionalProperties:
+            type: string
+          type:
+          - object
+          - "null"
+        entry:
+          $ref: '#/components/schemas/LibraryEntry'
+        reasonCode:
+          type: string
+        rootIdentity:
+          $ref: '#/components/schemas/LibraryRootIdentity'
+        sourceRevision:
+          format: int64
+          type: integer
+        status:
+          type: string
+      required:
+      - entry
+      - rootIdentity
+      - sourceRevision
+      - bindingIds
+      - bindingRevisions
+      - content
+      - status
+      - reasonCode
+      type: object
+    LibrarySource:
+      properties:
+        detached:
+          type: boolean
+        inspectionState:
+          type: string
+        originKind:
+          type: string
+        ownerId:
+          type: string
+        resolverId:
+          type: string
+        revision:
+          format: int64
+          type: integer
+        rootGeneration:
+          format: int64
+          type: integer
+        rootRef:
+          type: string
+        scope:
+          type: string
+        sourceId:
+          type: string
+      required:
+      - sourceId
+      - ownerId
+      - scope
+      - originKind
+      - resolverId
+      - rootRef
+      - rootGeneration
+      - revision
+      - inspectionState
+      - detached
+      type: object
+    LibraryStagedEntry:
+      properties:
+        content:
+          additionalProperties:
+            type: string
+          type:
+          - object
+          - "null"
+        entry:
+          $ref: '#/components/schemas/LibraryEntry'
+        present:
+          type: boolean
+        rootIdentity:
+          $ref: '#/components/schemas/LibraryRootIdentity'
+      required:
+      - entry
+      - rootIdentity
+      - content
+      - present
       type: object
     LinkPreviewResponse:
       properties:

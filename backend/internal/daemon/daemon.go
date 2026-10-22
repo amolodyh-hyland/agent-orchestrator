@@ -64,6 +64,7 @@ import (
 	fsbrowsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/fsbrowser"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/githubpat"
 	importsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/importer"
+	librarysvc "github.com/aoagents/agent-orchestrator/backend/internal/service/library"
 	linkpreviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/linkpreview"
 	notificationsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/notification"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
@@ -933,6 +934,7 @@ func Run() error {
 		log.Warn("could not establish host identity; /api/v1/identity will report unimplemented", "error", identityErr)
 	}
 
+	librarySvc := librarysvc.New(store, "local_user", hostIdentity.HostID, hostIdentity.HostID, nil)
 	bs.HostID = hostIdentity.HostID
 	projectSvc.SetProjectContextMachineID(hostIdentity.HostID)
 	if machineSetter, ok := sessMgr.(interface{ SetProjectContextMachineID(string) }); ok {
@@ -968,6 +970,7 @@ func Run() error {
 
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
 		Awake:              awakeSvc,
+		Library:            librarySvc,
 		Projects:           projectSvc,
 		ArtifactVersions:   lcStack.ArtifactVersions,
 		HostID:             hostIdentity.HostID,

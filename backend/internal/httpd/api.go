@@ -33,6 +33,7 @@ type APIDeps struct {
 	Agents             controllers.AgentCatalog
 	CodexAccounts      controllers.CodexAccountService
 	AgentAccounts      controllers.AgentAccountService
+	Library            controllers.LibraryService
 	Projects           projectsvc.Manager
 	Sessions           controllers.SessionService
 	ArtifactVersions   controllers.ArtifactVersionService
@@ -132,6 +133,7 @@ type API struct {
 	agents        *controllers.AgentsController
 	codexAccounts *controllers.CodexAccountsController
 	agentAccounts *controllers.AgentAccountsController
+	library       *controllers.LibraryController
 	projects      *controllers.ProjectsController
 	sessions      *controllers.SessionsController
 	automations   *controllers.AutomationsController
@@ -179,6 +181,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		},
 		codexAccounts: &controllers.CodexAccountsController{Svc: deps.CodexAccounts},
 		agentAccounts: newAgentAccountsController(deps),
+		library:       &controllers.LibraryController{Svc: deps.Library},
 		projects: &controllers.ProjectsController{
 			Mgr: deps.Projects,
 		},
@@ -265,6 +268,7 @@ func (a *API) Register(root chi.Router) {
 			a.agents.Register(r)
 			a.codexAccounts.Register(r)
 			a.agentAccounts.Register(r)
+			a.library.Register(r)
 			a.projects.Register(r)
 			a.sessions.Register(r)
 			a.automations.Register(r)
