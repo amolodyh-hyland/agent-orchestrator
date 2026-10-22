@@ -58,6 +58,16 @@ describe("shared task and project delegation dialog", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 		expect(f.bridge.cancelPreview).toHaveBeenCalledTimes(2);
 	});
+	it.each(["Profile ID", "Bound runtime ID", "Multica workspace ID", "Task brief", "Title"])("revokes an in-flight confirmation when %s is edited", async (label) => {
+		const f = fixture(); render(<MulticaDelegationDialog orchestrator="task" projectId="project" bridge={f.bridge} />);
+		await openAndPreview();
+		fireEvent.click(screen.getByRole("button", { name: "Confirm delegation" }));
+		fireEvent.change(screen.getByLabelText(label), { target: { value: "changed" } });
+		expect(f.bridge.cancelPreview).toHaveBeenCalledExactlyOnceWith("preview");
+		expect(screen.queryByRole("button", { name: "Confirm delegation" })).not.toBeInTheDocument();
+		act(() => f.result({ previewId: "preview", result: { ok: true, requestId: "stale", state: "accepted" } }));
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+	});
 	it.each([ ["accepted", "Multica accepted this delegation."], ["submission_unknown", "Submission outcome is unknown."] ])("reports %s truthfully", async (state, message) => {
 		const f = fixture(); render(<MulticaDelegationDialog orchestrator="task" projectId="project" bridge={f.bridge} />);
 		await openAndPreview();

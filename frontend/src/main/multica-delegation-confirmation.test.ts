@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDelegationConfirmationFlow } from "./multica-delegation-confirmation";
 import { createDelegationConfirmationTokens } from "./multica-delegation-confirmation-tokens";
 import type { DelegationRecord } from "./multica-delegation-coordinator";
+import type { DelegationConfirmationGuard } from "./multica-delegation-policy";
 import type { DelegationDraft, DelegationPreview } from "../shared/multica-delegation-confirmation";
 
 const draft: DelegationDraft = { orchestrator: "task", projectId: "project", taskId: "task", title: "Review", brief: "Review only these instructions.",
@@ -16,8 +17,8 @@ function fixture() {
 		getRuntime: vi.fn(async () => ({ ok: true as const, data: { runtime_id: draft.runtimeId, workspace_id: draft.workspaceId, availability: "online" as const } })) };
 	const options = { client: vi.fn(async () => client), policy: vi.fn(async (): Promise<unknown> => ({ code: "policy_absent" })),
 		human: { confirmFromUserAction: vi.fn(async () => record), cancelFromUserAction: vi.fn(async () => record) },
-		taskOrchestrator: { process: vi.fn(async () => record), processTask: vi.fn(async () => record) },
-		projectOrchestrator: { process: vi.fn(async () => record), processTask: vi.fn(async () => record) },
+		taskOrchestrator: { process: vi.fn(async (_id: string, _confirmationCurrent?: DelegationConfirmationGuard) => record), processTask: vi.fn(async () => record) },
+		projectOrchestrator: { process: vi.fn(async (_id: string, _confirmationCurrent?: DelegationConfirmationGuard) => record), processTask: vi.fn(async () => record) },
 		confirm: vi.fn(async () => true), now: () => time };
 	return { options, client, flow: createDelegationConfirmationFlow(options) };
 }
@@ -45,7 +46,7 @@ describe("shared delegation confirmation", () => {
 			expect(setup.options.human.confirmFromUserAction).not.toHaveBeenCalled(); return true;
 		});
 		expect(await setup.flow.confirmFromRendererAction(p.id, p.hash)).toMatchObject({ ok: true, state: "accepted" });
-		expect(setup.options[orchestrator === "task" ? "taskOrchestrator" : "projectOrchestrator"].process).toHaveBeenCalledExactlyOnceWith("request");
+		expect(setup.options[orchestrator === "task" ? "taskOrchestrator" : "projectOrchestrator"].process).toHaveBeenCalledExactlyOnceWith("request", expect.any(Function));
 		expect(setup.options.confirm.mock.calls[0]).toBeDefined();
 		const approval = setup.options.human.confirmFromUserAction.mock.calls;
 		expect(JSON.stringify(approval)).not.toContain("token");
@@ -65,7 +66,7 @@ describe("shared delegation confirmation", () => {
 		const replacement = { ...draft, [field]: field.endsWith("Id") && !["projectId", "taskId"].includes(field) ? "90000000-0000-4000-8000-000000000009" : "changed" };
 		const changed = await setup.flow.preview(replacement);
 		if (changed.ok && "preview" in changed) expect(changed.preview.hash).not.toBe(p.hash);
-		expect(await setup.flow.confirmFromRendererAction(p.id, "forged-hash")).toEqual({ ok: false, code: "confirmation_required" });
+		expect(await setup.flow.confirmFromRendererAction(p.id, p.hash)).toEqual({ ok: false, code: "confirmation_required" });
 		expect(setup.options.human.confirmFromUserAction).not.toHaveBeenCalled();
 	});
 	it("blocks runtime rebindings and profile changes after preview and during native approval", async () => {

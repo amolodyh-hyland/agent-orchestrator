@@ -52,8 +52,11 @@ export function createDelegationConfirmationFlow(options: Options) {
 	const previews = new Map<string, Entry>();
 	const tokens = createDelegationConfirmationTokens(now);
 	let disposed = false;
+	let previewGeneration = 0;
+	function invalidate() { previewGeneration++; previews.clear(); tokens.clear(); }
+	const isCurrent = (entry: Entry) => !disposed && previews.get(entry.preview.id) === entry && entry.preview.expiresAt > now();
 	function current(entry: Entry) {
-		if (disposed || previews.get(entry.preview.id) !== entry || entry.preview.expiresAt <= now()) throw new Error("confirmation_required");
+		if (!isCurrent(entry)) throw new Error("confirmation_required");
 	}
 	async function validate(entry: Entry) {
 		current(entry);
@@ -81,15 +84,14 @@ export function createDelegationConfirmationFlow(options: Options) {
 		async preview(input: unknown): Promise<DelegationConfirmationResult> {
 			try {
 				if (disposed) throw new Error("confirmation_required");
+				invalidate();
+				const generation = previewGeneration;
 				const request = draftOf(input);
 				const client = await options.client(request.workspaceId);
 				if (client.binding.workspaceId !== request.workspaceId) throw new Error("connection_changed");
 				const profile = await client.getAgent(request.profileId);
 				if (!profile.ok) throw new Error(profile.code);
-				for (const [id, e] of previews) {
-					if (e.preview.expiresAt <= now() || (e.preview.request.projectId === request.projectId && e.preview.request.taskId === request.taskId)) previews.delete(id);
-				}
-				if (previews.size >= 64) throw new Error("confirmation_required");
+				if (generation !== previewGeneration) throw new Error("confirmation_required");
 				const intent: DelegationIntent = { binding: { ...client.binding }, payload: createDelegation({
 					agent_id: request.profileId, expected_runtime_id: request.runtimeId,
 					source: { system: "ao", project_id: request.projectId, task_id: request.taskId }, task: { title: request.title, instructions: request.brief },
@@ -121,13 +123,13 @@ export function createDelegationConfirmationFlow(options: Options) {
 				});
 				current(entry);
 				const coordinator = entry.preview.request.orchestrator === "task" ? options.taskOrchestrator : options.projectOrchestrator;
-				const result = await coordinator.process(record.requestId);
+				const result = await coordinator.process(record.requestId, () => isCurrent(entry));
 				if (result.failureCode) throw new Error(result.failureCode);
 				return { ok: true, requestId: result.requestId, state: result.state };
 			} catch (error) { return safeFailure(error); }
 			finally { previews.delete(id); }
 		},
-		invalidate() { previews.clear(); tokens.clear(); },
-		dispose() { disposed = true; previews.clear(); tokens.clear(); },
+		invalidate,
+		dispose() { disposed = true; invalidate(); },
 	};
 }

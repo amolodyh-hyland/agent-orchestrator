@@ -248,8 +248,9 @@ Main stores a private immutable snapshot with a SHA-256 digest over destination,
 profile/runtime, source, brief, scope, policy decision and profile label. A
 preview expires after two minutes. Editing any field revokes the preview;
 changing source props, closing/unmounting the dialog, navigating, changing the
-configured connection or saving a credential also invalidates it. Replacing a
-preview for the same task invalidates its predecessor. A failed or cancelled
+configured connection or saving a credential also invalidates it. Starting any
+replacement preview invalidates its predecessor, even if the new preview fails;
+overlapping preview reads cannot revive an older generation. A failed or cancelled
 confirmation consumes the preview, requiring another review.
 
 Preload exposes preview, revoke, credential-save and result subscription only.
@@ -269,6 +270,14 @@ most ten seconds and never beyond preview expiry. It consumes the token once
 before calling the private human coordinator API, which persists the proof-bound
 intent. Tokens never cross IPC, enter the journal or become available to CLI,
 orchestrator processes, task creation, assignments or status/automation events.
+The coordinator carries a synchronous preview-liveness check through its queue,
+journal work, client queue and credential resolution. The Public API client runs
+that check immediately before calling `fetch`, after the final asynchronous policy
+guard, with no intervening await. Edits and closing/cancelling the dialog revoke
+cleanly even after native approval while processing is pending. Expiry and main
+disposal also block that send. A revoked request returns `confirmation_required`;
+its durable attempt marker remains conservative rather than inventing a remote
+outcome. Another attempt requires a fresh preview and approval.
 The coordinator independently rechecks policy at reservation and actual send;
 Multica revalidates runtime binding at admission. A conflict cannot reroute or
 retry with a new target without another preview and confirmation.

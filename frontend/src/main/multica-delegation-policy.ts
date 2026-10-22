@@ -7,6 +7,7 @@ export type DelegationPolicyRequest = Readonly<{
 	runtimeClass: DelegationRuntimeClass; dataScopes: readonly ["task_brief"]; action: "delegate";
 }>;
 export type DelegationSendGuard = () => Promise<DelegationPolicyBlockCode | null>;
+export type DelegationConfirmationGuard = () => boolean;
 export type DelegationPolicyResolver = (request: DelegationPolicyRequest) => Promise<unknown>;
 export type DelegationRuntimeResolver = (binding: PublicApiBinding, runtimeId: string) => Promise<DelegationRuntimeClass>;
 
