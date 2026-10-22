@@ -142,12 +142,18 @@ Denies cannot offset an unsafe allow. Native ACL lookup, decoding or principal
 resolution errors fail closed with `policy_unavailable`; no ACL details leave
 the resolver. ACL absence is verified with native security metadata, rather than
 treating a failed ACL lookup as absence. macOS builds require cgo to verify ACLs;
-without it, source protection cannot be established and delegation fails closed
-with `policy_unavailable`, including personal use. Linux and Windows retain
-their existing checks. Files must be regular, open with
+without it, managed delegation fails closed with `policy_unavailable`. A macOS
+presence pass first checks the known policy files, drop-in directory, enrollment
+markers and managed preference plist inventory without reading ACLs or policy
+content. Confirmed absence takes the personal `policy_absent` path even without
+cgo; lookup/inventory errors still block. Present sources must then pass all
+protection checks. Both macOS desktop build paths explicitly enable and verify
+cgo. Legacy `packages/build-binaries.sh` cross-builds keep cgo disabled: their
+macOS binaries permit personal use but block managed-policy delegation.
+Linux and Windows retain their existing checks. Files must be regular, open with
 `O_NOFOLLOW`, and retain their identity, size and modification time across the
-bounded read. Missing sources also require protected ancestors: an editable
-parent cannot erase enrollment. Unsupported or unsafe ownership, unreadable
+bounded read. Once macOS enrollment is present, missing sources also require
+protected ancestors: an editable parent cannot erase enrollment. Unsupported or unsafe ownership, unreadable
 sources and uncertain enrollment fail closed. Credential stores are not read, and policy helpers are not executed.
 
 Authoritative policy comes from system `managed-settings.json`, its protected

@@ -127,6 +127,40 @@ func (fs delegationPolicyFiles) managedPreferencesEnrolled(directory string) (bo
 	return enrolled, nil
 }
 
+// Presence is not trust. On macOS, establish whether there is anything to
+// protect before requiring native ACL support, including on personal machines.
+func (fs delegationPolicyFiles) managedSourcesPresent(paths, preferences []string) (bool, error) {
+	for _, path := range paths {
+		if _, err := fs.lstat(path); err == nil {
+			return true, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+	}
+	for _, directory := range preferences {
+		info, err := fs.lstat(directory)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return true, nil
+		}
+		entries, err := fs.readDir(directory)
+		if err != nil {
+			return false, err
+		}
+		for _, entry := range entries {
+			if strings.HasSuffix(entry.Name(), ".plist") {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 func delegationProtectedSources(ctx context.Context, opts ResolveOptions, fs delegationPolicyFiles) ([]claudePolicyDocument, bool) {
 	systemDir := opts.ManagedSettingsDir
 	if systemDir == "" {
@@ -140,9 +174,33 @@ func delegationProtectedSources(ctx context.Context, opts ResolveOptions, fs del
 		}
 	}
 	paths := []string{filepath.Join(systemDir, "managed-settings.json"), filepath.Join(systemDir, "ao-managed-enrollment")}
+	var preferences, markers []string
+	if opts.ManagedSettingsDir == "" && opts.goos() == "darwin" {
+		current, err := user.Current()
+		if err != nil || filepath.Base(current.Username) != current.Username {
+			return []claudePolicyDocument{{broken: true}}, true
+		}
+		machine := filepath.Join(string(filepath.Separator), "Library", "Managed Preferences")
+		preferences = []string{machine, filepath.Join(machine, current.Username)}
+		for _, directory := range preferences {
+			paths = append(paths, filepath.Join(directory, "com.anthropic.claudecode.plist"))
+		}
+		markers = []string{"/private/var/db/ConfigurationProfiles/Settings/.cloudConfigHasActivationRecord", "/private/var/db/ConfigurationProfiles/Settings/.cloudConfigProfileInstalled"}
+	}
 	documents := []claudePolicyDocument{}
 	enrolled := false
 	dropDir := filepath.Join(systemDir, "managed-settings.d")
+	if opts.goos() == "darwin" {
+		candidates := append([]string{dropDir}, paths...)
+		candidates = append(candidates, markers...)
+		present, err := fs.managedSourcesPresent(candidates, preferences)
+		if err != nil || ctx.Err() != nil {
+			return []claudePolicyDocument{{broken: true}}, true
+		}
+		if !present {
+			return nil, false
+		}
+	}
 	if err := fs.ancestors(dropDir); err != nil {
 		return []claudePolicyDocument{{broken: true}}, true
 	}
@@ -163,22 +221,15 @@ func delegationProtectedSources(ctx context.Context, opts ResolveOptions, fs del
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return []claudePolicyDocument{{broken: true}}, true
 	}
-	if opts.ManagedSettingsDir == "" && opts.goos() == "darwin" {
-		current, err := user.Current()
-		if err != nil || filepath.Base(current.Username) != current.Username {
-			return []claudePolicyDocument{{broken: true}}, true
-		}
-		preferences := filepath.Join(string(filepath.Separator), "Library", "Managed Preferences")
-		userPreferences := filepath.Join(preferences, current.Username)
-		paths = append(paths, filepath.Join(preferences, "com.anthropic.claudecode.plist"), filepath.Join(userPreferences, "com.anthropic.claudecode.plist"))
-		for _, directory := range []string{preferences, userPreferences} {
+	if len(preferences) > 0 {
+		for _, directory := range preferences {
 			exists, err := fs.managedPreferencesEnrolled(directory)
 			if err != nil {
 				return []claudePolicyDocument{{broken: true}}, true
 			}
 			enrolled = enrolled || exists
 		}
-		for _, marker := range []string{"/private/var/db/ConfigurationProfiles/Settings/.cloudConfigHasActivationRecord", "/private/var/db/ConfigurationProfiles/Settings/.cloudConfigProfileInstalled"} {
+		for _, marker := range markers {
 			exists, err := fs.enrollmentMarker(marker)
 			if err != nil {
 				return []claudePolicyDocument{{broken: true}}, true

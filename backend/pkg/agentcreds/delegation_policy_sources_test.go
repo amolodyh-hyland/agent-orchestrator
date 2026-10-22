@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -210,3 +211,80 @@ type policyDirectoryEntry struct {
 }
 
 func (e policyDirectoryEntry) Name() string { return e.name }
+
+func TestDelegationDarwinPresenceBeforeACLChecks(t *testing.T) {
+	current, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	preferences := "/Library/Managed Preferences"
+	userPreferences := filepath.Join(preferences, current.Username)
+	for _, source := range []string{
+		"personal", "empty preferences", "unreadable source", "unreadable preferences",
+		"/Library/Application Support/ClaudeCode/managed-settings.json",
+		"/Library/Application Support/ClaudeCode/ao-managed-enrollment",
+		"/Library/Application Support/ClaudeCode/managed-settings.d",
+		"/private/var/db/ConfigurationProfiles/Settings/.cloudConfigHasActivationRecord",
+		"/private/var/db/ConfigurationProfiles/Settings/.cloudConfigProfileInstalled",
+		filepath.Join(preferences, "com.anthropic.claudecode.plist"),
+		filepath.Join(userPreferences, "com.anthropic.claudecode.plist"),
+		filepath.Join(preferences, "other.plist"), filepath.Join(userPreferences, "other.plist"),
+	} {
+		t.Run(source, func(t *testing.T) {
+			directory := t.TempDir()
+			file := filepath.Join(directory, "snapshot")
+			writeClaudeSettingsFixture(t, file, "{}")
+			info, err := os.Lstat(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dirInfo, err := os.Lstat(directory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			checks := 0
+			fs := nativeDelegationPolicyFiles()
+			fs.owner = func(string, os.FileInfo) bool { checks++; return false }
+			fs.open = func(string) (*os.File, error) {
+				t.Fatal("opened without ACL verification")
+				return nil, os.ErrPermission
+			}
+			fs.lstat = func(path string) (os.FileInfo, error) {
+				if source == "unreadable source" && strings.HasSuffix(path, "managed-settings.json") {
+					return nil, os.ErrPermission
+				}
+				if path == source {
+					if strings.HasSuffix(path, "managed-settings.d") {
+						return dirInfo, nil
+					}
+					return info, nil
+				}
+				if source != "personal" && (path == preferences || path == userPreferences) {
+					return dirInfo, nil
+				}
+				return nil, os.ErrNotExist
+			}
+			fs.readDir = func(path string) ([]os.DirEntry, error) {
+				if source == "unreadable preferences" {
+					return nil, os.ErrPermission
+				}
+				if strings.HasSuffix(source, "other.plist") && filepath.Dir(source) == path {
+					return []os.DirEntry{policyDirectoryEntry{name: "other.plist"}}, nil
+				}
+				return nil, nil
+			}
+			req, _ := delegationPolicyFixture()
+			got := resolveManagedDelegationPolicy(context.Background(), req, ResolveOptions{ConfigDir: directory, GOOS: "darwin", Env: envFrom(nil)}, time.Now, fs)
+			want := "policy_unavailable"
+			if source == "personal" || source == "empty preferences" {
+				want = "policy_absent"
+				if checks != 0 {
+					t.Fatal("personal use required an ACL reader")
+				}
+			}
+			if got.Code != want {
+				t.Fatalf("code=%s, want %s", got.Code, want)
+			}
+		})
+	}
+}

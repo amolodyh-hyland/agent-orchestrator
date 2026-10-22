@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildPackages, writeArtifactChecksums } from "./package-artifacts.mjs";
+import { daemonBuildEnv } from "../go-build-env.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../../..");
@@ -220,6 +221,7 @@ async function findAppBundle(directory) {
 export async function buildNoetaxis(options) {
 	const registry = validateRegistry(options.registry);
 	supportedHost();
+	const goEnv = daemonBuildEnv({ cwd: path.join(repoRoot, "backend") });
 	const commit = capture("git", ["rev-parse", "--verify", `${options.ref}^{commit}`], { cwd: repoRoot });
 	const version = stampVersion(options.baseVersion, commit);
 	const outputDir = path.resolve(options.output || path.join(defaultOutputRoot, `noetaxis-${version}`));
@@ -260,6 +262,7 @@ export async function buildNoetaxis(options) {
 		const multicaOut = path.join(multicaDir, "apps/desktop/out");
 		const buildEnv = {
 			...npmEnv,
+			CGO_ENABLED: goEnv.CGO_ENABLED,
 			AO_MULTICA_DESKTOP_OUT: multicaOut,
 			AO_RELEASE_REPO: "amolodyh-hyland/agent-orchestrator",
 			AO_SCRATCH_SWIFT_CACHE: path.join(workDir, "swift-cache"),
