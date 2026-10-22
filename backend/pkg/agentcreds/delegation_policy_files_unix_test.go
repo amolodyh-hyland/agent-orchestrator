@@ -28,8 +28,8 @@ func TestDelegationProtectedFileRequiresRootOwner(t *testing.T) {
 	if protectedPolicyOwner(file, policyFileOwnerFixture{FileInfo: info, uid: 501}) {
 		t.Fatal("user-owned source trusted")
 	}
-	if !protectedPolicyOwner(file, policyFileOwnerFixture{FileInfo: info, uid: 0}) {
-		t.Fatal("root source not recognized")
+	if protectedPolicyOwner(file, policyFileOwnerFixture{FileInfo: info, uid: 0}) != protectedPolicyACL(file) {
+		t.Fatal("root source did not require platform ACL verification")
 	}
 	fs := nativeDelegationPolicyFiles()
 	fs.owner = func(string, os.FileInfo) bool { return false }

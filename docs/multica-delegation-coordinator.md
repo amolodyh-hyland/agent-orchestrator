@@ -134,7 +134,17 @@ reason code crosses to main or the existing journal's `failureCode` field.
 `backend/pkg/agentcreds/delegation_policy_sources.go` uses AO's existing managed
 settings locations and document parser, with a stricter trust boundary for
 external delegation. On Unix, every source and every ancestor must be root-owned,
-non-symlinked, and not group/other writable. Files must be regular, open with
+non-symlinked, and not group/other writable. On macOS, native extended ACL checks
+also reject mutation grants to anyone except root or wheel (gid 0); admin and
+staff are not authority. This includes write/append, deletion, child deletion,
+attribute/security changes and ownership changes, even for inherited grants.
+Denies cannot offset an unsafe allow. Native ACL lookup, decoding or principal
+resolution errors fail closed with `policy_unavailable`; no ACL details leave
+the resolver. ACL absence is verified with native security metadata, rather than
+treating a failed ACL lookup as absence. macOS builds require cgo to verify ACLs;
+without it, source protection cannot be established and delegation fails closed
+with `policy_unavailable`, including personal use. Linux and Windows retain
+their existing checks. Files must be regular, open with
 `O_NOFOLLOW`, and retain their identity, size and modification time across the
 bounded read. Missing sources also require protected ancestors: an editable
 parent cannot erase enrollment. Unsupported or unsafe ownership, unreadable

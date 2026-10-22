@@ -10,9 +10,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func protectedPolicyOwner(_ string, info os.FileInfo) bool {
+func protectedPolicyOwner(path string, info os.FileInfo) bool {
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	return ok && stat.Uid == 0
+	return ok && stat.Uid == 0 && protectedPolicyACL(path)
 }
 
 func openProtectedPolicyFile(path string) (*os.File, error) {
