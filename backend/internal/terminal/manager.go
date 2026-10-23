@@ -77,6 +77,7 @@ type Manager struct {
 	// refused until the matching release runs.
 	inputMu             sync.Mutex
 	inputBlocked        map[string]int
+	libraryInputMu      sync.Mutex
 	libraryInputBlocked map[string]int
 	lastInputAt         map[string]time.Time
 }
@@ -191,7 +192,10 @@ func (m *Manager) TerminalOnScreen(terminalID string) bool {
 func (m *Manager) writeInput(terminalID string, a *attachment, raw []byte, release func()) {
 	m.inputMu.Lock()
 	defer m.inputMu.Unlock()
-	if m.inputBlocked[terminalID] > 0 || m.libraryInputBlocked[terminalID] > 0 {
+	m.libraryInputMu.Lock()
+	libraryBlocked := m.libraryInputBlocked[terminalID] > 0
+	m.libraryInputMu.Unlock()
+	if m.inputBlocked[terminalID] > 0 || libraryBlocked {
 		release()
 		return
 	}
@@ -737,16 +741,18 @@ func (c *connState) cleanup() {
 	_ = c.conn.Close("server: connection closed")
 }
 
-func (m *Manager) FenceLibraryInput(terminalID string) func() {
+func (m *Manager) FenceLibraryInput(ctx context.Context, terminalID string) (func(), error) {
 	if terminalID == "" {
-		return func() {}
+		return func() {}, nil
 	}
-	m.inputMu.Lock()
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	m.libraryInputMu.Lock()
 	if m.libraryInputBlocked == nil {
 		m.libraryInputBlocked = map[string]int{}
 	}
 	m.libraryInputBlocked[terminalID]++
-	m.inputMu.Unlock()
+	m.libraryInputMu.Unlock()
 	m.mu.Lock()
 	var attachments []*attachment
 	for a := range m.attachments {
@@ -755,19 +761,38 @@ func (m *Manager) FenceLibraryInput(terminalID string) func() {
 		}
 	}
 	m.mu.Unlock()
-	for _, a := range attachments {
-		a.close()
-	}
+	drained := make(chan struct{})
+	go func() {
+		// Closing the stream interrupts a backpressured write before waiting for its barrier.
+		var closing sync.WaitGroup
+		for _, a := range attachments {
+			closing.Add(1)
+			go func() {
+				defer closing.Done()
+				a.close()
+			}()
+		}
+		closing.Wait()
+		m.inputMu.Lock()
+		m.inputMu.Unlock()
+		close(drained)
+	}()
 	var once sync.Once
-	return func() {
+	release := func() {
 		once.Do(func() {
-			m.inputMu.Lock()
-			defer m.inputMu.Unlock()
+			m.libraryInputMu.Lock()
+			defer m.libraryInputMu.Unlock()
 			if m.libraryInputBlocked[terminalID] <= 1 {
 				delete(m.libraryInputBlocked, terminalID)
 			} else {
 				m.libraryInputBlocked[terminalID]--
 			}
 		})
+	}
+	select {
+	case <-drained:
+		return release, nil
+	case <-ctx.Done():
+		return release, ctx.Err()
 	}
 }

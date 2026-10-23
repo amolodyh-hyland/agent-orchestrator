@@ -1,7 +1,12 @@
 package terminal
 
 import (
+	"context"
+	"errors"
+	"io"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -24,7 +29,9 @@ func TestTaskLibraryFenceDiscardsBufferedInputAndRejectsAttachedWrites(t *testin
 			t.Fatal("buffered lease released early")
 		}
 		_, releaseDrain := mgr.BeginInputDrain("runtime")
-		mgr.FenceLibraryInput("runtime")
+		if _, err := mgr.FenceLibraryInput(context.Background(), "runtime"); err != nil {
+			t.Fatal(err)
+		}
 		releaseDrain()
 		if released != 1 {
 			t.Fatal("buffered lease not released on fence")
@@ -50,5 +57,80 @@ func TestTaskLibraryFenceDiscardsBufferedInputAndRejectsAttachedWrites(t *testin
 		if got := string(pty.writtenBytes()); got != want {
 			t.Fatal("new attachment bypassed fence")
 		}
+	}
+}
+
+type blockedLibraryStream struct {
+	*fakePTY
+	started   chan struct{}
+	unblock   chan struct{}
+	once      sync.Once
+	interrupt bool
+}
+
+func (p *blockedLibraryStream) Write([]byte) (int, error) {
+	close(p.started)
+	<-p.unblock
+	return 0, io.ErrClosedPipe
+}
+
+func (p *blockedLibraryStream) Close() error {
+	if p.interrupt {
+		p.once.Do(func() { close(p.unblock) })
+	}
+	return p.fakePTY.Close()
+}
+
+func TestTaskLibraryFenceInterruptsBlockedWriteAndBoundsDrain(t *testing.T) {
+	for _, interrupt := range []bool{true, false} {
+		t.Run(map[bool]string{true: "interruptible", false: "uninterruptible"}[interrupt], func(t *testing.T) {
+			p := &blockedLibraryStream{fakePTY: newFakePTY(), started: make(chan struct{}), unblock: make(chan struct{}), interrupt: interrupt}
+			defer p.once.Do(func() { close(p.unblock) })
+			src := &fakeSource{alive: true}
+			mgr := NewManager(src, nil, testLogger())
+			defer mgr.Close()
+			a := newAttachment("runtime", ports.RuntimeHandle{ID: "runtime"}, src, nil, nil, nil, testLogger())
+			a.pty, a.inputReady = p, true
+			if err := mgr.track(a); err != nil {
+				t.Fatal(err)
+			}
+			released := make(chan struct{})
+			go mgr.writeInput("runtime", a, []byte("blocked"), func() { close(released) })
+			select {
+			case <-p.started:
+			case <-time.After(time.Second):
+				t.Fatal("write did not start")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				release, err := mgr.FenceLibraryInput(ctx, "runtime")
+				if release != nil {
+					defer release()
+				}
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if interrupt && err != nil {
+					t.Fatal(err)
+				}
+				if !interrupt && !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("unbounded drain: %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("fence stuck behind PTY write")
+			}
+			if !a.isClosed() {
+				t.Fatal("attachment remained open")
+			}
+			p.once.Do(func() { close(p.unblock) })
+			select {
+			case <-released:
+			case <-time.After(time.Second):
+				t.Fatal("input lease not released")
+			}
+		})
 	}
 }

@@ -73,10 +73,10 @@ func (s *Service) revokeRuntimes(ctx context.Context, in Operation) (Result, err
 	if s.lifecycle != nil {
 		for _, id := range ids {
 			release, err := s.lifecycle.FenceLibraryInput(ctx, id)
+			releases = append(releases, release)
 			if err != nil {
 				return Result{}, fail("runtime_input_fence_failed")
 			}
-			releases = append(releases, release)
 			fenced[id] = true
 		}
 	}

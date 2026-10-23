@@ -63,8 +63,10 @@ func (m *Manager) FenceLibraryInput(ctx context.Context, id domain.SessionID) (f
 	m.terminalInputGateMu.Lock()
 	gate := m.terminalInputGate
 	m.terminalInputGateMu.Unlock()
-	if fencer, ok := gate.(interface{ FenceLibraryInput(string) func() }); ok {
-		return fencer.FenceLibraryInput(rec.Metadata.RuntimeHandleID), nil
+	if fencer, ok := gate.(interface {
+		FenceLibraryInput(context.Context, string) (func(), error)
+	}); ok {
+		return fencer.FenceLibraryInput(ctx, rec.Metadata.RuntimeHandleID)
 	}
 	if rec.Metadata.RuntimeHandleID != "" {
 		return nil, fmt.Errorf("library: runtime_input_fence_unsupported")
