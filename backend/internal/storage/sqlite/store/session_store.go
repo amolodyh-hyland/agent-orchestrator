@@ -268,34 +268,42 @@ func (s *Store) SetSessionBranchState(ctx context.Context, id domain.SessionID, 
 func (s *Store) PromoteTaskPreparation(ctx context.Context, id domain.SessionID, rec domain.SessionRecord) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	activity := normalActivity(rec.Activity, rec.UpdatedAt)
-	rows, err := s.qw.PromoteTaskPreparation(ctx, gen.PromoteTaskPreparationParams{
-		IssueID:            rec.IssueID,
-		Kind:               rec.Kind,
-		Harness:            rec.Harness,
-		AutoReviewEnabled:  rec.AutoReviewEnabled,
-		DisplayName:        rec.DisplayName,
-		ActivityState:      activity.State,
-		ActivityLastAt:     activity.LastActivityAt,
-		SessionMode:        domain.NormalizeSessionMode(rec.Mode),
-		Model:              rec.Metadata.Model,
-		Effort:             rec.Metadata.Effort,
-		SessionPermissions: string(rec.Metadata.Permissions),
-		PermissionCeiling:  string(sessionPermissionCeiling(rec)),
-		RequestedOutput:    string(rec.RequestedOutput),
-		CreatedAt:          rec.CreatedAt,
-		UpdatedAt:          rec.UpdatedAt,
-		AutoInjectReview:   rec.AutoInjectReview,
-		AutoInjectCI:       rec.AutoInjectCI,
-		ProvisionState:     rec.ProvisionState.WithDefault(),
-		ClientRequestID:    rec.ClientRequestID,
-		ClientRequestHash:  rec.ClientRequestHash,
-		ID:                 id,
+	promoted := false
+	err := s.inTxDB(ctx, "promote task preparation", func(q *gen.Queries, db gen.DBTX) error {
+		if err := validatePreparedLibrarySelection(ctx, q, db, id, rec); err != nil {
+			return err
+		}
+		activity := normalActivity(rec.Activity, rec.UpdatedAt)
+		rows, err := q.PromoteTaskPreparation(ctx, gen.PromoteTaskPreparationParams{
+			IssueID:            rec.IssueID,
+			Kind:               rec.Kind,
+			Harness:            rec.Harness,
+			AutoReviewEnabled:  rec.AutoReviewEnabled,
+			DisplayName:        rec.DisplayName,
+			ActivityState:      activity.State,
+			ActivityLastAt:     activity.LastActivityAt,
+			SessionMode:        domain.NormalizeSessionMode(rec.Mode),
+			Model:              rec.Metadata.Model,
+			Effort:             rec.Metadata.Effort,
+			SessionPermissions: string(rec.Metadata.Permissions),
+			PermissionCeiling:  string(sessionPermissionCeiling(rec)),
+			RequestedOutput:    string(rec.RequestedOutput),
+			CreatedAt:          rec.CreatedAt,
+			UpdatedAt:          rec.UpdatedAt,
+			AutoInjectReview:   rec.AutoInjectReview,
+			AutoInjectCI:       rec.AutoInjectCI,
+			ProvisionState:     rec.ProvisionState.WithDefault(),
+			ClientRequestID:    rec.ClientRequestID,
+			ClientRequestHash:  rec.ClientRequestHash,
+			ID:                 id,
+		})
+		if err != nil {
+			return fmt.Errorf("promote task preparation %s: %w", id, err)
+		}
+		promoted = rows > 0
+		return nil
 	})
-	if err != nil {
-		return false, fmt.Errorf("promote task preparation %s: %w", id, err)
-	}
-	return rows > 0, nil
+	return promoted, err
 }
 
 // DeleteTaskPreparation removes only a row that has not been claimed.

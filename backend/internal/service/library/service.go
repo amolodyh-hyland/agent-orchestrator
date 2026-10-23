@@ -174,11 +174,14 @@ func (s *Service) operate(ctx context.Context, in Operation) (Result, error) {
 	if !domain.ValidLibraryID(s.owner) || !domain.ValidLibraryID(s.authority) || !domain.ValidLibraryID(s.resolver) {
 		return Result{}, fail("resolver_unavailable")
 	}
-	p, warnings, err := s.check(ctx, PolicyRequest{Operation: in.Operation, SourceID: in.SourceID, ProjectID: in.ProjectID})
-	if err != nil {
-		return Result{}, err
-	}
-	if in.Operation == "catalog" || in.Operation == "list" {
+	if in.Operation == "catalog" || in.Operation == "list" || in.Operation == "session" {
+		_, warnings, err := s.check(ctx, PolicyRequest{Operation: in.Operation, SourceID: in.SourceID, ProjectID: in.ProjectID})
+		if err != nil {
+			return Result{}, err
+		}
+		if in.Operation == "session" {
+			return s.sessionView(ctx, in.SessionID, warnings)
+		}
 		state, err := s.store.ReadLibraryRegistry(ctx)
 		if err != nil {
 			return Result{}, err
@@ -186,17 +189,18 @@ func (s *Service) operate(ctx context.Context, in Operation) (Result, error) {
 		return s.view(state, warnings), nil
 	}
 
-	if in.Operation == "session" {
-		return s.sessionView(ctx, in.SessionID, warnings)
-	}
 	s.admission.Lock()
 	defer s.admission.Unlock()
+	state, err := s.store.ReadLibraryRegistry(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	p, warnings, err := s.operationPolicy(ctx, state, in)
+	if err != nil {
+		return Result{}, err
+	}
 	var staged []domain.LibraryStagedEntry
 	if in.Operation == "inspect" {
-		state, err := s.store.ReadLibraryRegistry(ctx)
-		if err != nil {
-			return Result{}, err
-		}
 		local, err := s.source(state, in.SourceID)
 		if err != nil {
 			return Result{}, err
@@ -222,7 +226,7 @@ func (s *Service) operate(ctx context.Context, in Operation) (Result, error) {
 		if state.Revision != in.ExpectedRevision {
 			return audit, fail("revision_conflict")
 		}
-		current, _, err := s.check(ctx, PolicyRequest{Operation: in.Operation, SourceID: in.SourceID, ProjectID: in.ProjectID})
+		current, _, err := s.operationPolicy(ctx, *state, in)
 		if err != nil {
 			return audit, err
 		}
@@ -255,8 +259,11 @@ func (s *Service) operate(ctx context.Context, in Operation) (Result, error) {
 			state.Sources[in.SourceID] = local
 			for id, old := range state.Entries {
 				if old.Entry.SourceID == in.SourceID {
-					old.Present = false
-					state.Entries[id] = old
+					// Preserve path identity without retaining obsolete staging bytes.
+					state.Entries[id] = domain.LibraryStagedEntry{Entry: domain.LibraryEntry{
+						SchemaVersion: old.Entry.SchemaVersion, SourceID: old.Entry.SourceID, EntryID: old.Entry.EntryID,
+						EntryPoint: old.Entry.EntryPoint, ContentHash: old.Entry.ContentHash, Kind: old.Entry.Kind, Format: old.Entry.Format,
+					}, RootIdentity: old.RootIdentity}
 				}
 			}
 			for _, entry := range staged {
@@ -331,7 +338,7 @@ func (s *Service) operate(ctx context.Context, in Operation) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	state, err := s.store.ReadLibraryRegistry(ctx)
+	state, err = s.store.ReadLibraryRegistry(ctx)
 	if err != nil {
 		return Result{}, err
 	}

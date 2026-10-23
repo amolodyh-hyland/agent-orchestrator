@@ -152,7 +152,10 @@ func (s *Service) CheckLaunch(ctx context.Context, id domain.SessionID) error {
 		}
 	}
 	if len(snapshot.Entries) > 0 {
-		p, _, _ := s.check(ctx, PolicyRequest{Operation: "launch", ProjectID: snapshot.ProjectID})
+		p, _, policyErr := s.check(ctx, PolicyRequest{Operation: "launch", ProjectID: snapshot.ProjectID})
+		if policyErr != nil {
+			outcome, why = "denied", reason(policyErr)
+		}
 		if auditErr := s.store.RecordLibraryAudit(ctx, domain.LibraryAudit{ActorID: s.owner, Purpose: "launch_or_resume", Outcome: outcome, ReasonCode: why, PolicyRevision: p.Revision, TrustEpoch: admission.TrustEpoch}); auditErr != nil {
 			return auditErr
 		}

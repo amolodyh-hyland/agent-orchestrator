@@ -69,11 +69,10 @@ func (s *Store) CreateLibrarySessionSelection(ctx context.Context, parent domain
 			return err
 		}
 		session := getSessionRowToRecord(sessionRow)
-		expectedRole := domain.ProjectContextRoleWorker
-		if session.Kind == domain.KindOrchestrator {
-			expectedRole = domain.ProjectContextRoleCoordinator
-		}
-		if session.ProjectID != parent.ProjectID || parent.Role != expectedRole || parent.Channel != domain.NormalizeSessionMode(session.Mode) || parent.IssueTask != (strings.TrimSpace(string(session.IssueID)) != "") {
+		// Preparations own the project and session already, but their effective
+		// mode/kind/issue are published only at promotion. Promotion validates the
+		// pinned identity in its own transaction before making the row visible.
+		if session.ProjectID != parent.ProjectID || (!session.IsTaskPreparation && !librarySelectionMatchesSession(parent, session)) {
 			return fmt.Errorf("library selection session ownership mismatch")
 		}
 
@@ -153,4 +152,46 @@ func (s *Store) GetLibrarySnapshot(ctx context.Context, id domain.SessionID) (do
 		}
 	}
 	return snapshot, true, nil
+}
+
+func librarySelectionMatchesSession(parent domain.ProjectContextManifest, session domain.SessionRecord) bool {
+	role := domain.ProjectContextRoleWorker
+	if session.Kind == domain.KindOrchestrator {
+		role = domain.ProjectContextRoleCoordinator
+	}
+	return session.ProjectID == parent.ProjectID && parent.Role == role && parent.Channel == domain.NormalizeSessionMode(session.Mode) && parent.IssueTask == (strings.TrimSpace(string(session.IssueID)) != "")
+}
+
+// validatePreparedLibrarySelection runs in the promotion transaction so a hidden
+// preparation cannot become visible with an effective identity unlike its pin.
+func validatePreparedLibrarySelection(ctx context.Context, q *gen.Queries, db gen.DBTX, id domain.SessionID, rec domain.SessionRecord) error {
+	var selected bool
+	if err := db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM library_session_snapshots WHERE session_id=?)", id).Scan(&selected); err != nil {
+		return err
+	}
+	if !selected {
+		return nil
+	}
+	row, err := q.GetSession(ctx, id)
+	if err != nil {
+		return err
+	}
+	if getSessionRowToRecord(row).ProjectID != rec.ProjectID {
+		return fmt.Errorf("library selection session ownership mismatch")
+	}
+	stored, err := q.GetProjectContextSnapshot(ctx, string(id))
+	if err != nil {
+		return err
+	}
+	var parent domain.ProjectContextManifest
+	if err := json.Unmarshal([]byte(stored.ManifestJson), &parent); err != nil {
+		return err
+	}
+	if err := parent.VerifyDigest(); err != nil {
+		return err
+	}
+	if parent.SessionID != id || !librarySelectionMatchesSession(parent, rec) {
+		return fmt.Errorf("library selection promotion identity mismatch")
+	}
+	return nil
 }
