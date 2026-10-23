@@ -21,12 +21,12 @@ const TIMEOUT_MS = {
 	logs: 15_000,
 	stop: 60_000,
 	restart: 120_000,
-	// The first start pulls the images.
+	// Images must already exist in the selected engine.
 	up: 10 * 60_000,
 	open: 15_000,
 } as const;
 
-export type CommandName = "dockerVersion" | "composeVersion" | "composeList" | "ps" | "up" | "stop" | "restart" | "logs" | "openDocker";
+export type CommandName = "dockerVersion" | "composeVersion" | "composeList" | "ps" | "up" | "stop" | "restart" | "logs" | "openDocker" | "projectContainers" | "projectInspect" | "projectVolumes" | "projectNetworks" | "projectEngine" | "projectNamedContainers" | "projectAllVolumes" | "projectAllNetworks" | "projectResourceInspect" | "composeConfig" | "imageInspect" | "stopContainers";
 
 export type CommandSpec = {
 	readonly name: CommandName;
@@ -53,6 +53,7 @@ export type StackPaths = {
 const issued = new WeakSet<CommandSpec>();
 
 function issue(name: CommandName, file: string, args: string[], timeoutMs: number, engine = true): CommandSpec {
+	assertAbsolute(file, "command binary");
 	const spec: CommandSpec = Object.freeze({ name, file, args: Object.freeze(args), timeoutMs, engine, docker: file !== OPEN_BINARY, compose: file !== OPEN_BINARY && args[0] === "compose" });
 	issued.add(spec);
 	return spec;
@@ -91,11 +92,50 @@ export const composeListCommand = (docker: string): CommandSpec => {
 	return issue("composeList", docker, ["compose", "ls", "--all", "--format", "json"], TIMEOUT_MS.list);
 };
 
+export const projectEngineCommand = (docker: string): CommandSpec =>
+	issue("projectEngine", docker, ["info", "--format", "{{.ID}}"], TIMEOUT_MS.list);
+
+export const projectContainersCommand = (docker: string): CommandSpec =>
+	issue("projectContainers", docker, ["container", "ls", "--all", "--no-trunc", "--filter", "label=com.docker.compose.project=multica", "--format", "{{.ID}}"], TIMEOUT_MS.list);
+
+export function projectNamedContainersCommand(docker: string, services: readonly string[]): CommandSpec {
+	if (services.length === 0 || services.length > 100 || !services.every((service) => /^[a-z][a-z0-9_-]{0,62}$/.test(service))) throw new Error("invalid target services");
+	return issue("projectNamedContainers", docker, ["container", "ls", "--all", "--no-trunc", ...services.flatMap((service) => ["--filter", `name=^/multica[-_]${service}[-_][0-9]+$`]), "--format", "{{.ID}}"], TIMEOUT_MS.list);
+}
+
+export function projectInspectCommand(docker: string, ids: readonly string[]): CommandSpec {
+	if (ids.length === 0 || ids.length > 100 || !ids.every((id) => /^[a-f0-9]{64}$/.test(id))) throw new Error("invalid container inventory");
+	return issue("projectInspect", docker, ["container", "inspect", "--format", "[{{json .Id}},{{json .Name}},{{json .Image}},{{json .Config.Image}},{{json .State.Status}},{{json .Config.Labels}},{{json .Mounts}}]", ...ids], TIMEOUT_MS.ps);
+}
+
+export function projectResourcesCommand(docker: string, resource: "volume" | "network", all = false): CommandSpec {
+	if (resource !== "volume" && resource !== "network") throw new Error("invalid project resource");
+	return issue(all ? resource === "volume" ? "projectAllVolumes" : "projectAllNetworks" : resource === "volume" ? "projectVolumes" : "projectNetworks", docker, [resource, "ls", ...(all ? [] : ["--filter", "label=com.docker.compose.project=multica"]), "--format", "{{json .Name}}"], TIMEOUT_MS.list);
+}
+
+export function projectResourceInspectCommand(docker: string, resource: "volume" | "network", names: readonly string[]): CommandSpec {
+	if ((resource !== "volume" && resource !== "network") || names.length === 0 || names.length > 100 || !names.every((name) => /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(name))) throw new Error("invalid resource inventory");
+	return issue("projectResourceInspect", docker, [resource, "inspect", "--format", "{{json .}}", ...names], TIMEOUT_MS.ps);
+}
+
+export const composeConfigCommand = (docker: string, stack: StackPaths): CommandSpec =>
+	issue("composeConfig", docker, [...composeBase(docker, stack), "config", "--format", "json"], TIMEOUT_MS.ps);
+
+export function imageInspectCommand(docker: string, image: string): CommandSpec {
+	if (!/^[a-zA-Z0-9][a-zA-Z0-9/:_.@-]{0,511}$/.test(image)) throw new Error("invalid image reference");
+	return issue("imageInspect", docker, ["image", "inspect", "--format", "{{.Id}}", image], TIMEOUT_MS.ps);
+}
+
+export function stopContainersCommand(docker: string, ids: readonly string[]): CommandSpec {
+	if (ids.length === 0 || ids.length > 100 || !ids.every((id) => /^[a-f0-9]{64}$/.test(id))) throw new Error("invalid stop inventory");
+	return issue("stopContainers", docker, ["container", "stop", "--time", "10", ...ids], TIMEOUT_MS.stop);
+}
+
 export const psCommand = (docker: string, stack: StackPaths): CommandSpec =>
 	issue("ps", docker, [...composeBase(docker, stack), "ps", "--all", "--format", "json"], TIMEOUT_MS.ps);
 
 export const upCommand = (docker: string, stack: StackPaths): CommandSpec =>
-	issue("up", docker, [...composeBase(docker, stack), "up", "-d"], TIMEOUT_MS.up);
+	issue("up", docker, [...composeBase(docker, stack), "up", "-d", "--no-build", "--pull", "never"], TIMEOUT_MS.up);
 
 export const stopCommand = (docker: string, stack: StackPaths): CommandSpec =>
 	issue("stop", docker, [...composeBase(docker, stack), "stop"], TIMEOUT_MS.stop);

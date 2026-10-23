@@ -1,4 +1,5 @@
 import { registerFactoryRunConfirmation } from "./main/factory-run-confirmation";
+import { approveLocalServerLogs, approveLocalServerMutation } from "./main/multica-local-server-approval";
 import { createMainProcessDelegationAuthority } from "./main/multica-delegation-authority";
 import { registerDesktopDelegation } from "./main/multica-delegation-desktop";
 import { registerProjectContextIpc } from "./main/project-context-ipc";
@@ -1192,6 +1193,17 @@ async function createWindowInternal(): Promise<void> {
 	// Start, stop and restart the self-hosted Multica server (Docker Compose). Nothing runs until
 	// the Settings block is shown; the Multica view host is not involved.
 	multicaLocalServer = createMulticaLocalServer({
+		approveProjectLogs: (request) => approveLocalServerLogs(request, {
+			show: (options) => mainWindow && !mainWindow.isDestroyed() ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options),
+		}),
+		approveProjectMutation: (request) => approveLocalServerMutation(request, {
+			show: (options) => mainWindow && !mainWindow.isDestroyed() ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options),
+			chooseReceipt: async () => {
+				const options: OpenDialogOptions = { properties: ["openFile"], filters: [{ name: "Recovery receipt", extensions: ["json"] }] };
+				const result = mainWindow && !mainWindow.isDestroyed() ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
+				return result.canceled ? null : (result.filePaths[0] ?? null);
+			},
+		}),
 		readServerSettings: () => readMulticaSettings(browserProfileStateDir()),
 		readStackSettings: () => readLocalServerSettings(browserProfileStateDir()),
 		writeStackSettings: (settings) => writeLocalServerSettings(browserProfileStateDir(), settings),

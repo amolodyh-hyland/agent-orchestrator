@@ -60,3 +60,4 @@ Persist durable facts, derive display status:
 - derived read model: `service.Session` computes display status from session + PR facts
 
 - [Selected-project cockpit](project-cockpit.md): desktop read-only project selection, fact timestamps and source navigation.
+- [Local Multica server takeover and restore](multica-local-server-takeover.md): fixed-project preflight, native approval and protected recovery evidence.

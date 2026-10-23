@@ -653,3 +653,17 @@ describe("first-time setup", () => {
 		});
 	});
 });
+
+describe("fork image-only deployment contract", () => {
+	it("accepts the full fork recipe, source-tag interpolation and default-off flag", async () => {
+		const recipe = await readFile(path.join(process.cwd(), "src/main/testdata/multica-fork-compose.yml"), "utf8");
+		expect(unsafeComposeReason(recipe)).toBeNull();
+		expect(recipe).toContain("${MULTICA_BACKEND_IMAGE:-local/multica-backend}:${MULTICA_IMAGE_TAG:-fork-24da23749ef7369dcbafa175d57c3154b5bba323}");
+		expect(recipe).toContain("${MULTICA_WEB_IMAGE:-local/multica-web}:${MULTICA_IMAGE_TAG:-fork-24da23749ef7369dcbafa175d57c3154b5bba323}");
+		expect(recipe).toContain("FF_PUBLIC_DELEGATIONS_V1: ${FF_PUBLIC_DELEGATIONS_V1:-false}");
+		expect(unsafeComposeReason(recipe.replace("  backend:\n", "  backend:\n    build: .\n"))).toBe("service_key_build");
+		expect(unsafeComposeReason(recipe.replace("backend_uploads:/app/data/uploads", "./uploads:/app/data/uploads"))).toBe("service_volume_item");
+		expect(unsafeComposeReason(recipe.replace('"127.0.0.1:${FRONTEND_PORT:-3000}:3000"', '"0.0.0.0:3000:3000"'))).toBe("port_item");
+		expect(unsafeComposeReason(recipe.replace("  pgdata:\n", "  pgdata:\n    name: another-volume\n"))).toBe("volume_definition");
+	});
+});

@@ -32,6 +32,9 @@ import {
 	nodeExec,
 	openDockerCommand,
 	psCommand,
+	projectNamedContainersCommand,
+	projectResourcesCommand,
+	projectResourceInspectCommand,
 	restartCommand,
 	runLocalServerCommand,
 	stopCommand,
@@ -62,7 +65,7 @@ describe("local server commands", () => {
 		expect(composeVersionCommand(DOCKER).args).toEqual(["compose", "version", "--short"]);
 		expect(composeListCommand(DOCKER).args).toEqual(["compose", "ls", "--all", "--format", "json"]);
 		expect(psCommand(DOCKER, STACK).args).toEqual([...BASE, "ps", "--all", "--format", "json"]);
-		expect(upCommand(DOCKER, STACK).args).toEqual([...BASE, "up", "-d"]);
+		expect(upCommand(DOCKER, STACK).args).toEqual([...BASE, "up", "-d", "--no-build", "--pull", "never"]);
 		expect(stopCommand(DOCKER, STACK).args).toEqual([...BASE, "stop"]);
 		expect(restartCommand(DOCKER, STACK).args).toEqual([...BASE, "restart"]);
 		expect(logsCommand(DOCKER, STACK, "backend", 200).args).toEqual([...BASE, "logs", "--no-color", "--tail", "200", "backend"]);
@@ -103,8 +106,8 @@ describe("local server commands", () => {
 			const dir = `/Users/me/${name}`;
 			const stack = { dir, file: `${dir}/docker-compose.selfhost.yml` };
 			const spec = upCommand(DOCKER, stack);
-			expect(spec.args).toEqual(["compose", "-f", stack.file, "--project-directory", dir, "-p", "multica", "up", "-d"]);
-			expect(spec.args.every((arg) => arg === "up" || arg === "-d" || arg === "compose" || arg === "-f" || arg === "--project-directory" || arg === "-p" || arg === "multica" || arg.startsWith("/"))).toBe(true);
+			expect(spec.args).toEqual(["compose", "-f", stack.file, "--project-directory", dir, "-p", "multica", "up", "-d", "--no-build", "--pull", "never"]);
+			expect(spec.args.every((arg) => arg === "up" || arg === "-d" || arg === "--no-build" || arg === "--pull" || arg === "never" || arg === "compose" || arg === "-f" || arg === "--project-directory" || arg === "-p" || arg === "multica" || arg.startsWith("/"))).toBe(true);
 		}
 	});
 
@@ -176,7 +179,7 @@ describe("runLocalServerCommand", () => {
 		expect(exec.mock.calls[0]?.[2].signal).toBe(live.signal);
 	});
 
-	it("allows up to ten minutes for a start (the first one pulls images) and bounds every other command", () => {
+	it("bounds start while requiring prebuilt local images and bounds every other command", () => {
 		expect(upCommand(DOCKER, STACK).timeoutMs).toBe(600_000);
 		for (const spec of [dockerVersionCommand(DOCKER), composeVersionCommand(DOCKER), composeListCommand(DOCKER), psCommand(DOCKER, STACK), stopCommand(DOCKER, STACK), restartCommand(DOCKER, STACK), logsCommand(DOCKER, STACK, "backend", 5), openDockerCommand()]) {
 			expect(spec.timeoutMs).toBeGreaterThan(0);
@@ -805,7 +808,7 @@ describe("the production adapter (nodeExec) with a mocked child_process", () => 
 		expect(childProcess.execFile).toHaveBeenCalledOnce();
 		const [file, args, options, callback] = childProcess.execFile.mock.calls[0] as [string, string[], Record<string, unknown>, unknown];
 		expect(file).toBe(DOCKER);
-		expect(args).toEqual([...BASE, "up", "-d"]);
+		expect(args).toEqual([...BASE, "up", "-d", "--no-build", "--pull", "never"]);
 		expect(Array.isArray(args)).toBe(true);
 		expect(options).toEqual({ timeout: 600_000, maxBuffer: 512 * 1024, windowsHide: true, env: ENV });
 		expect(options).not.toHaveProperty("shell");
@@ -817,7 +820,7 @@ describe("the production adapter (nodeExec) with a mocked child_process", () => 
 			const stack = stackIn(name);
 			for (const [spec, tail] of [
 				[psCommand(DOCKER, stack), ["ps", "--all", "--format", "json"]],
-				[upCommand(DOCKER, stack), ["up", "-d"]],
+				[upCommand(DOCKER, stack), ["up", "-d", "--no-build", "--pull", "never"]],
 				[stopCommand(DOCKER, stack), ["stop"]],
 				[restartCommand(DOCKER, stack), ["restart"]],
 				[logsCommand(DOCKER, stack, "backend", 50), ["logs", "--no-color", "--tail", "50", "backend"]],
@@ -876,5 +879,19 @@ describe("the production adapter (nodeExec) with a mocked child_process", () => 
 		await expect(runLocalServerCommand(nodeExec, forged, ENV, GATE)).rejects.toThrow();
 		await expect(runLocalServerCommand(nodeExec, upCommand(DOCKER, STACK), pinnedEnv(null), GATE)).rejects.toThrow();
 		expect(childProcess.execFile).not.toHaveBeenCalled();
+	});
+});
+
+
+describe("resolved project resource inspection commands", () => {
+	it("queries generated container names independently of project labels", () => {
+		expect(projectNamedContainersCommand(DOCKER, ["backend", "custom-service"]).args).toEqual(["container", "ls", "--all", "--no-trunc", "--filter", "name=^/multica[-_]backend[-_][0-9]+$", "--filter", "name=^/multica[-_]custom-service[-_][0-9]+$", "--format", "{{.ID}}"]);
+		expect(() => projectNamedContainersCommand(DOCKER, [".*"])).toThrow();
+	});
+	it("lists names without labels before inspecting resolved target resources", () => {
+		expect(projectResourcesCommand(DOCKER, "volume", true).args).toEqual(["volume", "ls", "--format", "{{json .Name}}"]);
+		expect(projectResourcesCommand(DOCKER, "network", true).args).toEqual(["network", "ls", "--format", "{{json .Name}}"]);
+		expect(projectResourceInspectCommand(DOCKER, "volume", ["multica_pgdata"]).args).toEqual(["volume", "inspect", "--format", "{{json .}}", "multica_pgdata"]);
+		expect(() => projectResourceInspectCommand(DOCKER, "volume", ["--help"])).toThrow();
 	});
 });
