@@ -15619,6 +15619,8 @@ components:
         sequence:
           format: int64
           type: integer
+        skillSelectionToken:
+          type: string
         streaming:
           type: boolean
         text:

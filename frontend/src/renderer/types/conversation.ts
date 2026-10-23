@@ -170,6 +170,7 @@ export interface QueuedMessageEditOptions {
 }
 
 export interface ConversationMessage {
+	skillSelectionToken?: string;
 	kind: "message";
 	id: string;
 	turnId?: string;

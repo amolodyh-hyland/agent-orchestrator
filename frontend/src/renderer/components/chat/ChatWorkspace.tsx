@@ -1013,10 +1013,10 @@ function ChatWorkspaceContent({
 	// uncertain edit and its original daemon revision until a save is acknowledged.
 	const changeQueuedDraft = useCallback((text: string, skillSelection?: ComposerSkillSelection | null) => {
 		const current = queueEditRef.current;
-		if (!current || current.clientMessageId || current.turnId !== queueEdit?.turnId || current.ownerId !== queueEdit.ownerId || (current.text === text && JSON.stringify(current.skillSelection ?? null) === JSON.stringify(skillSelection ?? null))) return;
-		const result = updateQueueDraft({ ...current, text, skillSelection: skillSelection ?? null, saving: undefined, clientMessageId: undefined }, current.revision);
+		if (!current || current.clientMessageId || current.turnId !== queueEdit?.turnId || current.ownerId !== queueEdit.ownerId || (current.text === text && JSON.stringify(current.skillSelection) === JSON.stringify(skillSelection))) return;
+		const result = updateQueueDraft({ ...current, text, skillSelection, saving: undefined, clientMessageId: undefined }, current.revision);
 		if (!result.ok) {
-			queueEditRef.current = { ...current, text, skillSelection: skillSelection ?? null };
+			queueEditRef.current = { ...current, text, skillSelection };
 			setQueueEdit(queueEditRef.current);
 		}
 	}, [queueEdit?.turnId, queueEdit?.ownerId, updateQueueDraft]);
@@ -1121,7 +1121,7 @@ function ChatWorkspaceContent({
 				attachments.push({ id: `content-${index}`, contentIndex: index, contentType: item.type,
 					name: item.name || (item.type === "image" ? `Image ${index + 1}` : item.uri || "Attachment") });
 			});
-			updateQueueDraft({ turnId, ownerId: crypto.randomUUID(), text: parts.body, expectedRevision: message.revision, attachments, stagedAttachments: [] });
+			updateQueueDraft({ turnId, ownerId: crypto.randomUUID(), text: parts.body, preservedSkillToken: message.skillSelectionToken, expectedRevision: message.revision, attachments, stagedAttachments: [] });
 		},
 		[newWorkDisabled, queuedMessages, updateQueueDraft],
 	);
@@ -1475,7 +1475,7 @@ function ChatWorkspaceContent({
 		],
 	);
 	const composerDraftSeed = useMemo(
-		() => (queueEdit ? { id: `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}`, text: queueEdit.text, attachments: queueEdit.attachments, stagedAttachments: queueEdit.stagedAttachments, skillSelection: queueEdit.skillSelection } : undefined),
+		() => (queueEdit ? { id: `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}`, text: queueEdit.text, attachments: queueEdit.attachments, stagedAttachments: queueEdit.stagedAttachments, skillSelection: queueEdit.skillSelection, preservedSkillToken: queueEdit.preservedSkillToken } : undefined),
 		[queueEdit],
 	);
 	const sentMessageList = useMemo(

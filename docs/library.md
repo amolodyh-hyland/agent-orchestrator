@@ -184,13 +184,16 @@ Interaction coverage lives in `ChatComposer.library.test.tsx`,
 
 Queued-edit requests accept `skillSelection` to replace the stored opaque binding
 or `clearSkillSelection: true` to remove it even when the visible token is
-unchanged. Supplying both is invalid. Legacy requests omitting both retain the
+unchanged. Supplying both is invalid. Requests omitting both retain the
 old binding only while its exact token remains present. The edit receipt hashes
 replacement and clearing intent, so a retry cannot change identity under the
 same receipt. The renderer retains this intent across queued-editor remounts and
-uncertain-save recovery; a fresh edit without a picker selection explicitly clears
-old hidden state. Recovery of a legacy receipt preserves omitted intent fields. Queue dispatch still revalidates the selected controller,
-catalog, snapshot and trust before producing native input.
+uncertain-save recovery. Argument-only edits omit selection intent and retain the
+server-owned binding. Conversation messages expose only `skillSelectionToken` so
+removing the original token records explicit clearing, including after retyping
+and queued-editor remounts. A new picker choice records explicit replacement.
+Recovery preserves the exact saved intent fields. Queue dispatch still revalidates
+the selected controller, catalog, snapshot and trust before producing native input.
 
 An explicit selection submitted during background catalog refresh waits for that
 refresh. An unchanged verified identity resumes the original submission; changed,
@@ -198,3 +201,8 @@ failed or superseded catalog responses refuse it while preserving the draft.
 Project rebinding updates the existing Project/source/entry binding, preserving
 its ID and other role settings when adopting a new revision. The current binding's
 enabled state and pinned hash are displayed before reviewing the update.
+
+Run `npm --prefix frontend run test:queued-selection-integration` for the component
+to HTTP controller and queue-drain regression. It queues one of two native rows
+with the same token, edits only the arguments in the actual composer, and verifies
+that the original row dispatches. It uses temporary storage and a test process.

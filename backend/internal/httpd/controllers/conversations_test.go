@@ -309,7 +309,7 @@ func TestConversationSnapshotExposesSafeEditContentAndBranchMetadata(t *testing.
 			{
 				ID: "valid", Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman,
 				Sequence: 1, Text: "inspect", CreatedAt: now,
-				DeliveryContentJSON: `[{"type":"text","text":"inspect"},{"type":"resource","uri":"ao://conversation/edit-replay","name":"approximate conversation context","text":"internal replay","internal":true},{"type":"resource","uri":"ao://conversation/edit-replay","name":"visible user resource","text":"user supplied"},{"type":"image","data":"secret-bytes","mimeType":"image/png","name":"diagram.png"},{"type":"resource","uri":"file:///notes.md","name":"notes.md","text":"secret resource text"},{"type":"skill_binding"}]`,
+				DeliveryContentJSON: `[{"type":"text","text":"inspect"},{"type":"resource","uri":"ao://conversation/edit-replay","name":"approximate conversation context","text":"internal replay","internal":true},{"type":"resource","uri":"ao://conversation/edit-replay","name":"visible user resource","text":"user supplied"},{"type":"image","data":"secret-bytes","mimeType":"image/png","name":"diagram.png"},{"type":"resource","uri":"file:///notes.md","name":"notes.md","text":"secret resource text"},{"type":"skill_binding"},{"type":"skill_selection","internal":true,"skillSelection":{"token":"$review","bindingRef":"opaque-binding","controllerGeneration":"controller","catalogRevision":"catalog"}}]`,
 			},
 			{ID: "legacy", Sequence: 2, Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman, Text: "legacy", CreatedAt: now},
 			{ID: "malformed", Sequence: 3, Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman, Text: "broken", DeliveryContentJSON: `{broken`, CreatedAt: now},
@@ -342,6 +342,12 @@ func TestConversationSnapshotExposesSafeEditContentAndBranchMetadata(t *testing.
 	}
 	messages := body["messages"].([]any)
 	valid := messages[0].(map[string]any)
+	if valid["skillSelectionToken"] != "$review" {
+		t.Fatalf("selected token lost: %#v", valid)
+	}
+	if _, leaked := valid["skillSelection"]; leaked {
+		t.Fatalf("selection identity leaked: %#v", valid)
+	}
 	if valid["editAvailable"] != true {
 		t.Fatalf("valid editAvailable = %#v", valid["editAvailable"])
 	}

@@ -5472,6 +5472,7 @@ export interface components {
             senderSessionId?: string;
             /** Format: int64 */
             sequence: number;
+            skillSelectionToken?: string;
             streaming: boolean;
             text: string;
             turnId?: string;

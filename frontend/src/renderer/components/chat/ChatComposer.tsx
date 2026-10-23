@@ -341,7 +341,7 @@ export const ChatComposer = memo(function ChatComposer({
 	/** Why the last steer was refused. */
 	steerRefusal?: string;
 	/** A selected history message to load into the composer as a new draft. */
-	draftSeed?: { id: string; text: string; attachments?: StoredComposerAttachment[]; stagedAttachments?: ChatDraftAttachment[]; skillSelection?: ComposerSkillSelection | null };
+	draftSeed?: { id: string; text: string; attachments?: StoredComposerAttachment[]; stagedAttachments?: ChatDraftAttachment[]; skillSelection?: ComposerSkillSelection | null; preservedSkillToken?: string };
 	/** A queued turn being edited in the composer instead of the dock. */
 	editingQueuedTurnId?: string;
 	onCancelQueuedEdit?: () => void;
@@ -449,6 +449,8 @@ export const ChatComposer = memo(function ChatComposer({
 	// The DOM event is the source of truth while React catches up with the draft
 	// transition. This keeps Enter-after-fast-typing from observing stale state.
 	const textRef = useRef("");
+	const queuedSelectionCleared = useRef(false);
+	const preservedSkillToken = useRef<string | undefined>(undefined);
 	const selectedSkill = useRef<ComposerSkillSelection | undefined>(draftScope ? readChatSessionDraft(draftScope).composer.skillSelection : undefined);
 	/**
 	 * What Enter does while the agent is working.
@@ -1034,7 +1036,11 @@ export const ChatComposer = memo(function ChatComposer({
 		const seedKey = editingQueuedTurnId ? draftSeedId : JSON.stringify([draftSeedId, committedSeedText]);
 		if (restoredSeedKey.current === seedKey) return;
 		restoredSeedKey.current = seedKey;
-		if (draftSeed) selectedSkill.current = draftSeed.skillSelection ?? undefined;
+		if (draftSeed) {
+			selectedSkill.current = draftSeed.skillSelection ?? undefined;
+			queuedSelectionCleared.current = draftSeed.skillSelection === null;
+			preservedSkillToken.current = draftSeed.preservedSkillToken;
+		}
 		textRef.current = committedSeedText;
 		hasTextRef.current = committedSeedText.trim().length > 0;
 		setHasText(hasTextRef.current);
@@ -1142,8 +1148,12 @@ export const ChatComposer = memo(function ChatComposer({
 		if (historyBrowse.current && snapshot.text !== historyBrowse.current.shown) historyBrowse.current = null;
 		const previousText = textRef.current;
 		textRef.current = snapshot.text;
-		if (selectedSkill.current && !selectedTokenPresent(snapshot.text, selectedSkill.current.selection.token)) selectedSkill.current = undefined;
-		onQueuedDraftChange?.(snapshot.text, selectedSkill.current ?? null);
+		if (selectedSkill.current && !selectedTokenPresent(snapshot.text, selectedSkill.current.selection.token)) {
+			selectedSkill.current = undefined;
+			queuedSelectionCleared.current = true;
+		}
+		if (preservedSkillToken.current && !selectedTokenPresent(snapshot.text, preservedSkillToken.current)) queuedSelectionCleared.current = true;
+		onQueuedDraftChange?.(snapshot.text, selectedSkill.current ?? (queuedSelectionCleared.current ? null : undefined));
 		if (snapshot.text !== previousText && !historyBrowse.current) persistComposerText(snapshot.text);
 		if (hasTextRef.current !== snapshot.hasText) {
 			hasTextRef.current = snapshot.hasText;
@@ -1189,6 +1199,7 @@ export const ChatComposer = memo(function ChatComposer({
 			focus: focusEditor,
 			isEmpty: () => !hasDraft,
 			setDraft: (text: string) => {
+				if (selectedSkill.current) queuedSelectionCleared.current = true;
 				selectedSkill.current = undefined;
 				editor.current?.setText(text);
 				const snapshot = editor.current?.getSnapshot();
@@ -1204,7 +1215,10 @@ export const ChatComposer = memo(function ChatComposer({
 		if (!currentTrigger) return;
 		const chosen = suggestionsFor(currentTrigger).find((item) => item.value === value);
 		if (!chosen || chosen.disabled) return;
-		if (chosen.skill) selectedSkill.current = selectSkill(chosen.skill);
+		if (chosen.skill) {
+			selectedSkill.current = selectSkill(chosen.skill);
+			queuedSelectionCleared.current = !selectedSkill.current;
+		}
 		editor.current?.insertToken(currentTrigger, chosen.token ?? value);
 		triggerRef.current = undefined;
 		previousTrigger.current = undefined;
@@ -1257,7 +1271,10 @@ export const ChatComposer = memo(function ChatComposer({
 			const matches = suggestionsFor(currentTrigger);
 			const chosen = matches[Math.min(highlightedRef.current, matches.length - 1)];
 			if (!chosen || chosen.disabled) return undefined;
-			if (chosen.skill) selectedSkill.current = selectSkill(chosen.skill);
+			if (chosen.skill) {
+				selectedSkill.current = selectSkill(chosen.skill);
+				queuedSelectionCleared.current = !selectedSkill.current;
+			}
 			triggerRef.current = currentTrigger;
 			highlightedRef.current = 0;
 			dismissedKeyRef.current = null;
@@ -1467,7 +1484,7 @@ export const ChatComposer = memo(function ChatComposer({
 					}
 				} else if (savingQueuedEdit) {
 					await onSend(message, nativePayloads.length ? nativePayloads : undefined, undefined,
-						visibleRetainedAttachments.flatMap((item) => item.contentIndex === undefined ? [] : [item.contentIndex]), undefined, skillSelection ?? null);
+						visibleRetainedAttachments.flatMap((item) => item.contentIndex === undefined ? [] : [item.contentIndex]), undefined, skillSelection ?? (queuedSelectionCleared.current ? null : undefined));
 					// The parent leaves this editor only after proving durable cleanup.
 					return;
 				} else if (skillSelection) {

@@ -1268,7 +1268,7 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 			CreatedAt:         msg.CreatedAt.UTC().Format(time.RFC3339),
 			Continuation:      msg.Continuation,
 		}
-		message.Content, message.EditAvailable = conversationContentSummary(msg)
+		message.Content, message.EditAvailable, message.SkillSelectionToken = conversationContentSummary(msg)
 		message.EditAvailable = message.EditAvailable && msg.Sequence > s.EditFloorSequence
 		out.Messages = append(out.Messages, message)
 	}
@@ -1308,19 +1308,23 @@ func branchMaterializationPayload(branch domain.ConversationBranch) *Conversatio
 	}
 }
 
-func conversationContentSummary(msg domain.ConversationMessage) ([]ConversationContentSummaryResponse, bool) {
+func conversationContentSummary(msg domain.ConversationMessage) ([]ConversationContentSummaryResponse, bool, string) {
 	if msg.Role != domain.MessageRoleUser || msg.Origin != domain.MessageOriginHuman {
-		return nil, false
+		return nil, false, ""
 	}
 	if msg.DeliveryContentJSON == "" {
-		return nil, true
+		return nil, true, ""
 	}
 	var content []ports.ChatContent
 	if err := json.Unmarshal([]byte(msg.DeliveryContentJSON), &content); err != nil {
-		return nil, false
+		return nil, false, ""
 	}
+	selectionToken := ""
 	summaries := make([]ConversationContentSummaryResponse, 0, len(content))
 	for _, block := range content {
+		if block.Type == "skill_selection" && block.SkillSelection != nil {
+			selectionToken = block.SkillSelection.Token
+		}
 		// AO's reconstructed-history seed is provider context, not content the
 		// person attached. Keeping it out of this public summary prevents it from
 		// appearing as a user resource when the edited message is rendered again.
@@ -1354,7 +1358,7 @@ func conversationContentSummary(msg domain.ConversationMessage) ([]ConversationC
 		}
 		summaries = append(summaries, summary)
 	}
-	return summaries, true
+	return summaries, true, selectionToken
 }
 
 // usagePayload maps the conversation's token position onto the wire shape. A nil

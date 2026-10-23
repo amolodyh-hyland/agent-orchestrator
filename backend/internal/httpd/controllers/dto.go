@@ -2978,6 +2978,8 @@ type ConversationMessageResponse struct {
 	// shown as a marker instead of a message bubble.
 	Continuation bool   `json:"continuation,omitempty"`
 	CreatedAt    string `json:"createdAt"`
+
+	SkillSelectionToken string `json:"skillSelectionToken,omitempty"`
 }
 
 // ConversationActivityResponse is one non-message timeline entry.

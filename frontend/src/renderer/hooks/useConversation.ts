@@ -1774,6 +1774,7 @@ function toMessage(wire: WireMessage): ConversationMessage {
 		role: wire.role as MessageRole,
 		origin: wire.origin as MessageOrigin,
 		text: wire.text,
+		skillSelectionToken: wire.skillSelectionToken || undefined,
 		content: (wire.content ?? []).map((item) => ({
 			type: item.type,
 			mimeType: item.mimeType || undefined,
