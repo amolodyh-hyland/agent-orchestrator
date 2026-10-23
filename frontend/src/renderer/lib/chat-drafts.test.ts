@@ -1269,3 +1269,21 @@ describe("Chat draft storage", () => {
 		expect(equivalent.draft.composer.revision).toBe(first.draft.composer.revision);
 	});
 });
+
+it("preserves selected identity in the delivery journal, clears edited tokens and keeps a newer selection", () => {
+	const storage = new MemoryStorage();
+	const selection = { catalogIdentity: "host:provider:snapshot:epoch", selection: { token: "$review", entryId: "entry", snapshotId: "snapshot", bindingRef: "binding", catalogRevision: "catalog", controllerGeneration: "controller" } };
+	writeChatComposerText("selected-draft", "$review file.ts", storage, undefined, selection);
+	const prepared = prepareChatComposerDelivery("selected-draft", { kind: "send", optimistic: true, composerText: "$review file.ts", attachments: [], requestText: "$review file.ts", clientMessageId: "receipt", skillSelection: selection }, storage);
+	if (!prepared.ok) throw new Error("Expected prepared delivery");
+	expect(readChatSessionDraft("selected-draft", storage).composer.delivery?.skillSelection).toEqual(selection);
+	const nextSelection = { ...selection, selection: { ...selection.selection, bindingRef: "different-binding" } };
+	writeChatComposerText("selected-draft", "$review next", storage, undefined, nextSelection);
+	markChatComposerDeliveryAccepted("selected-draft", "receipt", prepared.mutation.revision, storage);
+	clearAcceptedChatComposer("selected-draft", prepared.mutation.revision, storage);
+	expect(readChatSessionDraft("selected-draft", storage).composer.skillSelection).toEqual(nextSelection);
+	writeChatComposerText("selected-draft", "$changed next", storage);
+	expect(readChatSessionDraft("selected-draft", storage).composer.skillSelection).toBeUndefined();
+	writeChatComposerText("selected-draft", "$review again", storage);
+	expect(readChatSessionDraft("selected-draft", storage).composer.skillSelection).toBeUndefined();
+});

@@ -12,6 +12,7 @@
  * rather than a focus move).
  */
 
+import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowDownUp, CornerDownLeft } from "lucide-react";
 import { cn } from "../../lib/utils";
@@ -35,6 +36,7 @@ export function ComposerSuggestMenu({
 	/** The candidate list was capped by the daemon, so it is not exhaustive. */
 	truncated?: boolean;
 }) {
+	const { t } = useTranslation();
 	const list = useRef<HTMLUListElement>(null);
 	const lastScrollTop = useRef(0);
 	const scrollDirection = useRef<"up" | "down" | null>(null);
@@ -125,9 +127,11 @@ export function ComposerSuggestMenu({
 								role="option"
 								id={`${id}-option-${index}`}
 								aria-selected={index === highlighted}
-								onClick={() => onPick(item.value)}
+								aria-disabled={item.disabled || undefined}
+								disabled={item.disabled}
+								onClick={() => { if (!item.disabled) onPick(item.value); }}
 								className={cn(
-									"flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-sm text-muted-foreground outline-none !transition-none",
+									"flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-sm text-muted-foreground outline-none !transition-none disabled:cursor-not-allowed disabled:opacity-60",
 									index === highlighted
 										? "bg-interactive-active text-foreground"
 										: "bg-transparent hover:bg-interactive-hover hover:text-foreground",
@@ -153,8 +157,10 @@ export function ComposerSuggestMenu({
 											index === highlighted ? "text-foreground" : "text-muted-foreground",
 										)}
 									>
-										{kind === "skill" ? `/${item.label}` : item.label}
+										{kind === "skill" ? (item.token ? `${item.token} ${item.label !== item.skill?.name ? item.label : ""}`.trim() : item.label) : item.label}
 									</span>
+									{item.skill?.trustState ? <span className="block text-micro text-muted-foreground">{t(item.skill.trustState === "approved" ? "library.approved" : item.skill.trustState === "native_unverified" ? "library.nativeUnverified" : item.skill.trustState === "revoked" ? "library.revoked" : "library.unapproved")} · {item.skill.sourceId ?? item.skill.observationId}</span> : null}
+									{item.disabled ? <span className="block text-micro text-muted-foreground">{t("library.unavailable", { reason: item.skill?.reasonCode || item.skill?.status })}</span> : null}
 									{item.detail ? (
 										<span className="block truncate text-caption leading-snug text-muted-foreground">
 											{item.detail}
@@ -166,7 +172,7 @@ export function ComposerSuggestMenu({
 										{displayBadge(item.badge)}
 									</span>
 								) : null}
-								{index === highlighted ? (
+								{index === highlighted && !item.disabled ? (
 									<span
 										aria-label="Press Tab or Enter to insert"
 										className="flex shrink-0 items-center gap-1 text-micro text-muted-foreground"

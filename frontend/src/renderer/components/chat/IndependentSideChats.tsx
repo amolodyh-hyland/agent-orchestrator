@@ -1,3 +1,4 @@
+import { skillToken } from "../../lib/chat-skill-selection";
 import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { ArrowUp, Loader2, MessageSquare, Pencil, Plus, Square, X } from "lucide-react";
@@ -102,7 +103,7 @@ export function SideComposer({
 				description: "Compacts this side chat",
 				source: "AO",
 			},
-			...skills.filter((skill) => skill.name !== "compact" && (!onFocusSide || (skill.name !== "btw" && skill.name !== "side"))),
+			...skills.filter((skill) => skillToken(skill) !== "/compact" && (!onFocusSide || !["/btw", "/side"].includes(skillToken(skill)))),
 		],
 		[skills, onFocusSide],
 	);
@@ -114,7 +115,8 @@ export function SideComposer({
 			setDismissed(trigger?.key);
 			return;
 		}
-		if (trigger) editor.current?.insertToken(trigger, value);
+		const chosen = suggestions.find((item) => item.value === value);
+		if (trigger && chosen && !chosen.disabled) editor.current?.insertToken(trigger, chosen.token ?? chosen.value);
 	};
 	useEffect(() => {
 		if (editor.current?.getSnapshot().text !== draft.text) editor.current?.setText(draft.text);
@@ -242,10 +244,11 @@ export function SideComposer({
 								onCompact();
 								return undefined;
 							}
-							return chosen?.value;
+							return chosen?.disabled ? undefined : chosen?.token ?? chosen?.value;
 						}}
 						onEnter={(next, event) => {
 							if (event.shiftKey) return false;
+							if (next.trigger && suggestions.length > 0 && suggestions[Math.min(highlighted, suggestions.length - 1)]?.disabled) return true;
 							if (btwHandled.current) {
 								btwHandled.current = false;
 								return true;

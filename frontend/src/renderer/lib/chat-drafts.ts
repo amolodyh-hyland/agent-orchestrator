@@ -1,3 +1,4 @@
+import { isComposerSkillSelection, selectedTokenPresent, type ComposerSkillSelection } from "./chat-skill-selection";
 import type { ConversationContentSummary } from "../types/conversation";
 
 /**
@@ -89,6 +90,7 @@ export interface ChatDraftRetainedAttachment {
 export type ChatDraftDeliveryState = "dispatching" | "accepted";
 
 export interface ChatComposerDelivery {
+	skillSelection?: ComposerSkillSelection;
 	/** Original request mode, kept across capability changes during recovery. */
 	nativeImages?: boolean;
 	kind: "send" | "steer";
@@ -134,6 +136,7 @@ export interface ChatSessionDraft {
 		/** Changes whenever text or attachments change. Used for accepted-send CAS. */
 		revision: number;
 		text: string;
+		skillSelection?: ComposerSkillSelection;
 		attachments: ChatDraftAttachment[];
 		excerpts?: ChatDraftExcerptReference[];
 		/** Durable delivery journal. Present until acceptance is durably cleared. */
@@ -158,6 +161,7 @@ export type DraftDeliveryResult<Mutation> =
 	| { ok: false; recovered: boolean; draft: ChatSessionDraft; mutation?: Mutation };
 
 export interface PrepareChatComposerDeliveryInput {
+	skillSelection?: ComposerSkillSelection;
 	nativeImages?: boolean;
 	optimistic?: boolean;
 	kind: ChatComposerDelivery["kind"];
@@ -769,6 +773,7 @@ function isComposerDelivery(value: unknown): value is ChatComposerDelivery {
 		typeof delivery.clientMessageId === "string" &&
 		delivery.clientMessageId.length > 0 &&
 		typeof delivery.requestText === "string" &&
+		(delivery.skillSelection === undefined || isComposerSkillSelection(delivery.skillSelection)) &&
 		(delivery.excerpts === undefined ||
 			(Array.isArray(delivery.excerpts) && delivery.excerpts.every(isExcerptReference))) &&
 		(!("nativeImages" in delivery) || typeof delivery.nativeImages === "boolean") &&
@@ -814,6 +819,7 @@ function isChatSessionDraft(value: unknown, scope: ChatDraftScope): value is Cha
 		Number.isInteger(composer.revision) &&
 		composer.revision >= 0 &&
 		typeof composer.text === "string" &&
+		(composer.skillSelection === undefined || isComposerSkillSelection(composer.skillSelection)) &&
 		Array.isArray(composer.attachments) &&
 		composer.attachments.every(isAttachment) &&
 		(composer.excerpts === undefined ||
@@ -1031,6 +1037,7 @@ export function prepareChatComposerDelivery(
 		revision,
 		clientMessageId: input.clientMessageId,
 		requestText: input.requestText,
+		...(input.skillSelection ? { skillSelection: input.skillSelection } : {}),
 		...(optimistic ? { draft: { text: input.composerText, attachments: input.attachments } } : {}),
 		excerpts,
 	};
@@ -1039,6 +1046,7 @@ export function prepareChatComposerDelivery(
 		composer: {
 			revision: optimistic ? revision + 1 : revision,
 			text: optimistic ? "" : input.composerText,
+			skillSelection: optimistic ? undefined : input.skillSelection,
 			attachments: optimistic ? [] : input.attachments,
 			excerpts,
 			delivery: mutation,
@@ -1110,6 +1118,7 @@ export function clearRejectedChatComposerDelivery(
 		composer: {
 			revision: loaded.draft.composer.revision + (delivery.draft ? 1 : 0),
 			text: delivery.draft?.text ?? loaded.draft.composer.text,
+			skillSelection: delivery.skillSelection,
 			attachments: delivery.draft?.attachments ?? loaded.draft.composer.attachments,
 			excerpts: loaded.draft.composer.excerpts,
 		},
@@ -1293,13 +1302,16 @@ export function writeChatComposerText(
 	text: string,
 	storage: DraftStorage | undefined = rendererStorage(),
 	expectedRevision?: number,
+	skillSelection?: ComposerSkillSelection | null,
 ): DraftWriteResult {
 	const loaded = loadChatSessionDraft(scope, storage);
 	// A delayed retry of a failed save must not overwrite a newer surface's draft.
 	if (loaded.ok && expectedRevision !== undefined && loaded.draft.composer.revision !== expectedRevision) {
 		return { ok: true, draft: loaded.draft };
 	}
-	if (loaded.ok && loaded.draft.composer.text === text) {
+	const selection = skillSelection === null ? undefined : skillSelection ?? loaded.draft.composer.skillSelection;
+	const retainedSelection = selection && selectedTokenPresent(text, selection.selection.token) ? selection : undefined;
+	if (loaded.ok && loaded.draft.composer.text === text && JSON.stringify(loaded.draft.composer.skillSelection) === JSON.stringify(retainedSelection)) {
 		return { ok: true, draft: loaded.draft };
 	}
 	const result = mutateDraft(
@@ -1310,6 +1322,7 @@ export function writeChatComposerText(
 				...draft.composer,
 				revision: draft.composer.revision + 1,
 				text,
+				skillSelection: retainedSelection,
 			},
 		}),
 		storage,
@@ -1477,6 +1490,7 @@ export function clearAcceptedChatComposer(
 			composer: {
 				revision: current.composer.revision,
 				text: current.composer.text,
+				skillSelection: current.composer.skillSelection,
 				attachments: current.composer.delivery.draft
 					? current.composer.attachments
 					: current.composer.attachments.filter((attachment) => !acceptedAttachmentIds.includes(attachment.id)),

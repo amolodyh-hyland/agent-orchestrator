@@ -153,3 +153,31 @@ Requesting a different snapshot or observing a pending selection returns
 `restart_required`, `snapshot_change_requires_successor`, and
 `nextAction: start_successor_session`. It does not create a successor automatically
 or change the active snapshot, transcript, or trust permissions.
+
+## Composer selection and library review
+
+The composer consumes the live catalog without resolving files or deriving trust.
+It shows the backend source/scope, approval status and unavailable reason, retains
+rows with matching names as distinct opaque identities, and inserts the exact
+returned native marker. Selection never submits a message. Editing away the token
+clears its binding; arguments remain ordinary text. Drafts and the delivery journal
+retain the selection envelope, including its catalog identity. Fresh sends refuse
+an outdated selection; journal recovery keeps its original receipt and envelope
+for backend revalidation. Structured selections are queued instead of steered.
+Catalog availability is isolated by host and provider, hidden during readiness
+loss/refetch/errors, and fingerprinted by the full backend snapshot, controller,
+revision and trust identity. Pending content is shown as requiring a successor;
+refresh never changes the active snapshot.
+
+Project settings provide explicit source inspection, exact staged-byte review,
+approval, revocation and optional chat binding through the existing library API.
+Each mutation requires reviewing the host, Project and exact revision-sensitive
+request before confirmation. Approval uses backend entry hashes, root identity
+and purposes; the renderer does not hash or inspect the filesystem. Personal
+sources need no managed-policy setup. Backend policy refusals and optional-policy
+warnings remain visible. Bindings affect future sessions, including Projects
+without repositories, while existing snapshots remain pinned.
+
+Interaction coverage lives in `ChatComposer.library.test.tsx`,
+`LibrarySettings.test.tsx` and the catalog isolation cases in
+`useConversation.test.tsx`, alongside existing composer/editor/draft suites.

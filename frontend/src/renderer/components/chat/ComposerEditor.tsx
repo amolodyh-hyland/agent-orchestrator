@@ -61,6 +61,7 @@ import { splitInlineImagePaths } from "./messageAttachments";
 
 export type ComposerTrigger = {
 	kind: TriggerKind;
+	sigil?: "$";
 	key: string;
 	nodeKey: string;
 	start: number;
@@ -261,7 +262,7 @@ class ComposerTokenNode extends DecoratorNode<JSX.Element> {
 
 function $createComposerTokenNode(kind: TokenKind, value: string): ComposerTokenNode {
 	if (kind === "image") return new ComposerTokenNode(kind, value, value, value);
-	const wire = kind === "skill" ? `/${value}` : /\s/.test(value) ? `"${value}"` : value;
+	const wire = kind === "skill" ? (/^[/$]/.test(value) ? value : `/${value}`) : /\s/.test(value) ? `"${value}"` : value;
 	const slash = value.lastIndexOf("/");
 	const display = kind === "skill" ? wire : slash >= 0 ? value.slice(slash + 1) : value;
 	return new ComposerTokenNode(kind, value, display, wire);
@@ -336,7 +337,7 @@ function $insertComposerToken(trigger: ComposerTrigger, value: string): boolean 
 	const node = $getNodeByKey<LexicalNode>(trigger.nodeKey);
 	if (!$isTextNode(node)) return false;
 	const text = node.getTextContent();
-	const expected = `${trigger.kind === "skill" ? "/" : "@"}${trigger.query}`;
+	const expected = `${trigger.kind === "skill" ? trigger.sigil ?? "/" : "@"}${trigger.query}`;
 	if (text.slice(trigger.start, trigger.end) !== expected) return false;
 
 	const before = text.slice(0, trigger.start);
