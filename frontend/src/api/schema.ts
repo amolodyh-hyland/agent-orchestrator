@@ -2181,6 +2181,76 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List manually created project runs */
+        get: operations["listFactoryRuns"];
+        put?: never;
+        /** Submit an unconfirmed run claim without starting execution */
+        post: operations["createFactoryRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/{runId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read run history and current evidence blockers */
+        get: operations["getFactoryRun"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/{runId}/advance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Submit an unconfirmed stage claim; desktop native confirmation is required */
+        post: operations["advanceFactoryRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/{runId}/evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a bounded exclusive-version history page */
+        get: operations["listFactoryRunEvidence"];
+        put?: never;
+        /** Append completion or review evidence without delivering feedback */
+        post: operations["recordFactoryRunEvidence"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions": {
         parameters: {
             query?: never;
@@ -4375,6 +4445,12 @@ export interface components {
             path: string;
             projectId?: null | string;
         };
+        AdvanceFactoryRunRequest: {
+            actor: string;
+            decision: string;
+            /** Format: int64 */
+            expectedVersion: number;
+        };
         AgentAccountActivity: {
             currentStreakDays?: null | number;
             latestDay?: null | string;
@@ -5686,6 +5762,19 @@ export interface components {
         CreateConversationSideChatResponse: {
             side: components["schemas"]["SideConversation"];
         };
+        CreateFactoryRunRequest: {
+            actor: string;
+            decision: string;
+            delegationId?: string;
+            designDigest: string;
+            id: string;
+            policyDecision: string;
+            projectId: string;
+            requiredChecks: string[];
+            sessionId: string;
+            source: components["schemas"]["RunSource"];
+            taskId: string;
+        };
         CreateProjectContainerInput: {
             displayName: string;
             instructions?: components["schemas"]["ProjectInstructions"];
@@ -5880,6 +5969,24 @@ export interface components {
             name: string;
             /** @description Absolute path of the directory on the daemon host. */
             path: string;
+        };
+        FactoryRun: {
+            /** Format: date-time */
+            createdAt: string;
+            delegationId?: string;
+            designDigest: string;
+            id: string;
+            policyDecision: string;
+            projectId: string;
+            repositories: components["schemas"]["RunRepoBinding"][];
+            requiredChecks: string[];
+            sessionId: string;
+            source: components["schemas"]["RunSource"];
+            /** @enum {string} */
+            stage: "design" | "implementation" | "review" | "handoff";
+            taskId: string;
+            /** Format: int64 */
+            version: number;
         };
         GitHubRepo: {
             clone_url: string;
@@ -6284,6 +6391,9 @@ export interface components {
             path: string;
             /** @description True when the listing hit the entry cap and more subdirectories exist. */
             truncated?: boolean;
+        };
+        ListFactoryRunsResponse: {
+            runs: components["schemas"]["FactoryRun"][];
         };
         ListNotificationsResponse: {
             nextCursor?: string;
@@ -6745,6 +6855,14 @@ export interface components {
             refreshToken?: string;
             refreshTokenExpiresIn?: number;
         };
+        RecordFactoryRunRequest: {
+            actor: string;
+            completion?: components["schemas"]["RunCompletion"];
+            decision: string;
+            /** Format: int64 */
+            expectedVersion: number;
+            review?: components["schemas"]["RunReviewReceipt"];
+        };
         RefreshConversationSkillsRequest: {
             snapshotId?: string;
         };
@@ -6936,6 +7054,104 @@ export interface components {
             killed?: boolean;
             ok: boolean;
             sessionId: string;
+        };
+        RunArtifact: {
+            digest: string;
+            path: string;
+            /** @enum {string} */
+            root: "worktree" | "artifacts";
+        };
+        RunCheckReceipt: {
+            environment: string;
+            exitCode: number;
+            name: string;
+            output: components["schemas"]["RunArtifact"];
+            sha: string;
+            verifiedBy: string;
+        };
+        RunCompletion: {
+            attempt: number;
+            checks: components["schemas"]["RunCheckReceipt"][];
+            facts: components["schemas"]["RunRepoFacts"];
+            inputs: components["schemas"]["RunArtifact"][];
+            outputs: components["schemas"]["RunArtifact"][];
+            repoName: string;
+            reportId: string;
+        };
+        RunDetail: {
+            blockers: string[];
+            evidence: components["schemas"]["RunEvidence"][];
+            nextAction: string;
+            observed: components["schemas"]["RunRepoFacts"][];
+            run: components["schemas"]["FactoryRun"];
+        };
+        RunEvidence: {
+            actor: string;
+            blockers: string[];
+            completion?: components["schemas"]["RunCompletion"];
+            confirmationDigest?: string;
+            confirmed: boolean;
+            decision: string;
+            id: string;
+            /** @enum {string} */
+            kind: "created" | "completion" | "review" | "advance" | "hold";
+            observed: components["schemas"]["RunRepoFacts"][];
+            /** Format: date-time */
+            recordedAt: string;
+            review?: components["schemas"]["RunReviewReceipt"];
+            runId: string;
+            stage: string;
+            /** Format: int64 */
+            version: number;
+        };
+        RunEvidencePage: {
+            evidence: components["schemas"]["RunEvidence"][];
+            /** Format: int64 */
+            nextAfterVersion: number;
+        };
+        RunFinding: {
+            id: string;
+            /** @enum {string} */
+            severity: "P0" | "P1" | "P2" | "P3" | "P4";
+        };
+        RunRepoBinding: {
+            baseSha: string;
+            branch: string;
+            repoName: string;
+            repoPath: string;
+            worktreePath: string;
+        };
+        RunRepoFacts: {
+            baseSha: string;
+            branch: string;
+            changedFiles: string[];
+            fingerprint: string;
+            headSha: string;
+            repoPath: string;
+            staged: string[];
+            unstaged: string[];
+            untracked: string[];
+            worktreePath: string;
+        };
+        RunReviewReceipt: {
+            afterFingerprint: string;
+            artifact: components["schemas"]["RunArtifact"];
+            beforeFingerprint: string;
+            findings: components["schemas"]["RunFinding"][];
+            independent: boolean;
+            repoName: string;
+            reviewRunId?: string;
+            reviewerId: string;
+            round: number;
+            sha: string;
+            /** @enum {string} */
+            verdict: "approved" | "changes_requested";
+        };
+        RunSource: {
+            issueId?: string;
+            revision?: string;
+            server?: string;
+            workspaceId?: string;
         };
         SaveRenderArtifactRequest: {
             /** @description Name for the file. Characters a file system refuses are replaced. */
@@ -15366,6 +15582,421 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listFactoryRuns: {
+        parameters: {
+            query?: {
+                projectId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListFactoryRunsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    createFactoryRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateFactoryRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunDetail"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getFactoryRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunDetail"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    advanceFactoryRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdvanceFactoryRunRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunDetail"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listFactoryRunEvidence: {
+        parameters: {
+            query?: {
+                afterVersion?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunEvidencePage"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    recordFactoryRunEvidence: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordFactoryRunRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunDetail"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

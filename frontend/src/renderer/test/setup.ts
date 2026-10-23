@@ -383,6 +383,7 @@ if (typeof window !== "undefined") {
 			get: async () => ({ ...DEFAULT_UI_SETTINGS }),
 			set: async (settings) => coerceUiSettings({ ...DEFAULT_UI_SETTINGS, ...settings }),
 		},
+		factoryRun: { preview: vi.fn(async () => null), cancel: vi.fn(async () => undefined), onResult: vi.fn(() => () => undefined) },
 		multicaDelegation: {
 			settings: async () => ({ enabled: false }),
 			onSettingsChanged: () => () => undefined,

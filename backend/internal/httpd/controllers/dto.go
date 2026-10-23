@@ -3709,3 +3709,30 @@ type CountUnseenNotificationsQuery struct {
 type NotificationCountResponse struct {
 	Count int64 `json:"count"`
 }
+
+// FactoryRunIDParam selects one stable run identity.
+type FactoryRunIDParam struct {
+	RunID string `path:"runId" json:"-"`
+}
+
+// ListFactoryRunsQuery scopes a run listing to one project.
+type ListFactoryRunsQuery struct {
+	ProjectID string `query:"projectId" json:"-"`
+}
+
+// ListFactoryRunsResponse contains persisted run records.
+type ListFactoryRunsResponse struct {
+	Runs []domain.FactoryRun `json:"runs"`
+}
+
+// RunEvidencePage is an exclusive version page of immutable receipts.
+type RunEvidencePage struct {
+	Evidence         []domain.RunEvidence `json:"evidence"`
+	NextAfterVersion int64                `json:"nextAfterVersion"`
+}
+
+// RunEvidencePageQuery bounds history reads independently of current readiness.
+type RunEvidencePageQuery struct {
+	AfterVersion int64 `query:"afterVersion" required:"false"`
+	Limit        int64 `query:"limit" required:"false"`
+}
