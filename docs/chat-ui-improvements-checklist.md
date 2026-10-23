@@ -16,5 +16,9 @@
 - [x] Keep chat composer text explicitly at 16px.
 - [x] Set all bottom composer controls to 14px.
 - [x] Keep chat composer dropdown triggers and menu labels at 12px.
+- [x] Hide recognized inline-code delimiters and fence lines while preserving exact Markdown in drafts and sent messages.
+- [x] Add a language selector and code-only copy action to composer code blocks, with localized labels and copied feedback.
+- [x] Limit code blocks to 160px initially and offer flat Show more / Show less controls only when the content overflows.
+- [x] Keep code-edge deletion undoable, move the caret by grapheme through code, and preserve the existing Enter / Shift+Enter behavior.
 - [x] Make the composer fade an overlay so it does not add layout padding.
 - [x] Run focused tests and review the final diff. Frontend typecheck was attempted but is blocked by missing workspace dependencies (`react`/`motion` in `packages/product-ui`).

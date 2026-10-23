@@ -1,10 +1,27 @@
 import { describe, expect, it } from "vitest";
 import {
+	composerCodeRegions,
 	createComposerMarkdownRangeCursor,
 	isComposerCodeFenceAt,
 	isComposerOpenCodeFenceAt,
 	parseComposerMarkdown,
 } from "./composerMarkdown";
+
+describe("composer code content boundaries", () => {
+	it.each([
+		["before ``a ` b`` after", "a ` b", undefined],
+		["```ts\nvalue\n```", "value", "ts"],
+		["  ````custom info\r\nfirst\r\n\r\n`````  ", "first\r\n", "custom info"],
+		["```\n\n```", "", ""],
+		["```\n", "", ""],
+		["```python\nvalue", "value", "python"],
+	])("separates hidden syntax from content without normalizing source: %s", (source, content, language) => {
+		const [region] = composerCodeRegions(source);
+		expect(source.slice(region.contentStart, region.contentEnd)).toBe(content);
+		expect(region.language).toBe(language);
+		expect(source.slice(0, region.contentStart) + content + source.slice(region.contentEnd)).toBe(source);
+	});
+});
 
 describe("parseComposerMarkdown", () => {
 	it("recognizes a closed inline span and leaves an incomplete span plain", () => {

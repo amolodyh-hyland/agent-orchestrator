@@ -218,3 +218,33 @@ export function isComposerOpenCodeFenceAt(text: string, offset: number): boolean
 		fence.closeStart === undefined && offset >= fence.start,
 	);
 }
+
+export type ComposerCodeRegion = ComposerMarkdownCodeRange & {
+	contentStart: number;
+	contentEnd: number;
+	language?: string;
+};
+
+export function composerCodeRegions(text: string): ComposerCodeRegion[] {
+	const analysis = parseComposerMarkdown(text);
+	const fences = new Map(analysis.fences.map((fence) => [fence.start, fence]));
+	return analysis.codeRanges.map((range) => {
+		if (range.kind === "inline") {
+			const size = backtickRunEnd(text, range.start) - range.start;
+			return { ...range, contentStart: range.start + size, contentEnd: range.end - size };
+		}
+		const fence = fences.get(range.start)!;
+		const openingEnd = text.indexOf("\n", range.start);
+		const opening = text.slice(range.start, openingEnd).match(/^ {0,3}`{3,}([^`]*)$/);
+		let contentEnd = fence.closeStart ?? range.end;
+		if (fence.closeStart !== undefined && contentEnd > openingEnd + 1) {
+			contentEnd -= text[contentEnd - 2] === "\r" ? 2 : 1;
+		}
+		return {
+			...range,
+			contentStart: openingEnd + 1,
+			contentEnd,
+			language: opening?.[1].trim() || "",
+		};
+	});
+}

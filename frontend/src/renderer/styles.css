@@ -3170,6 +3170,28 @@ html.sidebar-reordering * {
 	scrollbar-color: var(--color-scrollbar-board) transparent;
 }
 
+.chat-composer-code-block {
+	display: block;
+	margin-block: 0.25rem;
+	border-radius: var(--radius-sm);
+	background: var(--card);
+	color: var(--foreground);
+}
+
+.chat-composer-code-body {
+	display: block;
+	max-height: 160px;
+	overflow: auto;
+	padding: 0.25rem 0.5rem;
+	white-space: pre-wrap;
+	font-family: var(--font-mono);
+}
+
+.chat-composer-code-block .chat-composer-markdown-code {
+	padding: 0;
+	background: transparent;
+}
+
 .chat-composer-scrollbar::-webkit-scrollbar {
 	width: 8px;
 }
