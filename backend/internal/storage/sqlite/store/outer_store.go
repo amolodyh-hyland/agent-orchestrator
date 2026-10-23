@@ -48,6 +48,9 @@ func (s *Store) SaveOuterBinding(ctx context.Context, b domain.OuterBinding, exp
 }
 
 func appendOuterAudit(ctx context.Context, q *gen.Queries, e domain.OuterAudit) error {
+	if a, ok := domain.OuterNativeActionFrom(ctx); ok && e.RequestID == "" {
+		e.RequestID = a.ActionID
+	}
 	if e.ID == "" {
 		e.ID = uuid.NewString()
 	}
@@ -111,8 +114,10 @@ func (s *Store) CheckOuterOperation(ctx context.Context, operation string, proje
 		project = r.ProjectID
 	}
 	caller, scoped := domain.OuterCallerFrom(ctx)
-	if scoped && !caller.Outer && caller.ProjectID!=project {
-		if err:=s.AppendOuterAudit(ctx,domain.OuterAudit{Operation:operation,State:"held",Reason:"wrong_project_credential",SessionID:caller.SessionID,ProjectID:string(project)});err!=nil{return err}
+	if scoped && !caller.Outer && caller.ProjectID != project {
+		if err := s.AppendOuterAudit(ctx, domain.OuterAudit{Operation: operation, State: "held", Reason: "wrong_project_credential", SessionID: caller.SessionID, ProjectID: string(project)}); err != nil {
+			return err
+		}
 		return domain.ErrOuterHeld
 	}
 	if scoped && caller.Outer {
@@ -125,10 +130,25 @@ func (s *Store) CheckOuterOperation(ctx context.Context, operation string, proje
 	if !guarded {
 		return nil
 	}
+	if project != "" {
+		p, ok, err := s.GetProject(ctx, string(project))
+		if err != nil {
+			return err
+		}
+		if !ok || !p.ArchivedAt.IsZero() {
+			if err := s.AppendOuterAudit(ctx, domain.OuterAudit{Operation: operation, State: "held", Reason: "guarded_project_unavailable", ProjectID: string(project), SessionID: session}); err != nil {
+				return err
+			}
+			return domain.ErrOuterHeld
+		}
+	}
 	if a, ok := domain.OuterNativeActionFrom(ctx); ok && a.Operation == operation && a.ProjectID == project && (a.SessionID == session || a.SessionID == "") {
+		if operation != "terminal.write" {
+			return s.AppendOuterAudit(ctx, domain.OuterAudit{Operation: operation, State: "authorized", ProjectID: string(project), SessionID: session})
+		}
 		return nil
 	}
-	if scoped && !caller.Outer && caller.ProjectID == project && string(project) != b.AnchorProjectID && operation!="native_only" && operation!="unclassified" {
+	if scoped && !caller.Outer && caller.ProjectID == project && string(project) != b.AnchorProjectID && operation != "native_only" && operation != "unclassified" {
 		return nil
 	}
 	if err := s.AppendOuterAudit(ctx, domain.OuterAudit{Operation: operation, State: "held", Reason: "native_or_scoped_authority_required", ProjectID: string(project), SessionID: session}); err != nil {

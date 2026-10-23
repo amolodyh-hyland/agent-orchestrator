@@ -6022,6 +6022,18 @@ export interface components {
             openCodeMode?: string;
             reasoningEffort?: string;
         };
+        DomainOuterCapacityObservation: {
+            background: number;
+            foregroundReserve: boolean;
+            heavyReserved: number;
+            /** Format: date-time */
+            observedAt: string;
+            outsideActive: number;
+            overage: boolean;
+            reserved: number;
+            stations: number;
+            unknown: number;
+        };
         DomainReviewerConfig: {
             agentConfig?: components["schemas"]["AgentConfig"];
             harness: string;
@@ -6859,6 +6871,7 @@ export interface components {
             source: components["schemas"]["OuterSource"];
         };
         OuterFact: {
+            callerState?: string;
             receipt?: string;
             source: components["schemas"]["OuterSource"];
             state: string;
@@ -6912,6 +6925,7 @@ export interface components {
         };
         OuterView: {
             binding: null | components["schemas"]["OuterBinding"];
+            capacity: null | components["schemas"]["DomainOuterCapacityObservation"];
             incoming: components["schemas"]["OuterEvidence"][];
             limitations: string[];
             requests: components["schemas"]["OuterRequestView"][];

@@ -39,7 +39,8 @@ func (s *Store) GetOuterRequest(ctx context.Context, id string) (domain.OuterReq
 	if err != nil {
 		return domain.OuterRequestReceipt{}, err
 	}
-	return outerReceipt(r)
+	receipt, err := outerReceipt(r)
+	return s.decorateOuterReceipt(ctx, receipt), err
 }
 func (s *Store) ListOuterRequests(ctx context.Context, id domain.SessionID) ([]domain.OuterRequestReceipt, error) {
 	rows, err := s.qr.ListOuterRequests(ctx, string(id))
@@ -52,7 +53,7 @@ func (s *Store) ListOuterRequests(ctx context.Context, id domain.SessionID) ([]d
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, r)
+		out = append(out, s.decorateOuterReceipt(ctx, r))
 	}
 	return out, nil
 }
@@ -182,25 +183,37 @@ func (s *Store) AttemptOuterRequest(ctx context.Context, id, epoch string, now t
 }
 
 func (s *Store) reserveOuterCapacity(ctx context.Context, q *gen.Queries, r domain.OuterCapacity) error {
-	reservations, err := q.ListOuterCapacity(ctx)
+	counts, err := s.observeOuterCapacity(ctx, q, r.SessionID)
 	if err != nil {
 		return err
 	}
-	stations, heavy, background := len(reservations), 0, 0
-	owners := map[domain.SessionID]bool{r.SessionID: true}
+	if counts.Unknown != 0 || counts.Stations >= 2 || (r.Heavy && counts.HeavyReserved >= 1) || (!r.Foreground && counts.ForegroundReserve && counts.Background >= 1) {
+		return domain.ErrOuterHeld
+	}
+	return q.ReserveOuterCapacity(ctx, gen.ReserveOuterCapacityParams{RequestID: r.RequestID, SessionID: string(r.SessionID), Generation: r.Generation, Heavy: boolInt(r.Heavy), Foreground: boolInt(r.Foreground), ReservedAt: r.ReservedAt})
+}
+
+func (s *Store) observeOuterCapacity(ctx context.Context, q *gen.Queries, target domain.SessionID) (domain.OuterCapacityObservation, error) {
+	c := domain.OuterCapacityObservation{ObservedAt: time.Now()}
+	reservations, err := q.ListOuterCapacity(ctx)
+	if err != nil {
+		return c, err
+	}
+	c.Stations, c.Reserved = len(reservations), len(reservations)
+	owners := map[domain.SessionID]bool{target: true}
 	for _, v := range reservations {
 		owners[domain.SessionID(v.SessionID)] = true
 		if v.Heavy != 0 {
-			heavy++
+			c.HeavyReserved++
 		}
 		if v.Foreground == 0 {
-			background++
+			c.Background++
 		}
 	}
 	// Relevant outside work is observed, never stopped or silently ignored.
 	sessions, err := s.ListAllSessions(ctx)
 	if err != nil {
-		return err
+		return c, err
 	}
 	for _, v := range sessions {
 		if v.IsTerminated || owners[v.ID] {
@@ -208,15 +221,17 @@ func (s *Store) reserveOuterCapacity(ctx context.Context, q *gen.Queries, r doma
 		}
 		switch v.Activity.State {
 		case domain.ActivityActive, domain.ActivityWaitingInput, domain.ActivityBlocked:
-			stations++
+			c.Stations++
+			c.OutsideActive++
+			c.Background++
 		case domain.ActivityIdle, domain.ActivityExited:
 		default:
-			return domain.ErrOuterHeld
+			c.Unknown++
 		}
 	}
 	reviews, err := q.OuterObservedReviewActivity(ctx)
 	if err != nil {
-		return err
+		return c, err
 	}
 	for _, v := range reviews {
 		if v.IsArchived && v.ReviewerHandleID == "" {
@@ -224,29 +239,31 @@ func (s *Store) reserveOuterCapacity(ctx context.Context, q *gen.Queries, r doma
 		}
 		switch domain.ActivityState(v.ReviewerActivityState) {
 		case domain.ActivityActive, domain.ActivityWaitingInput, domain.ActivityBlocked:
-			stations++
+			c.Stations++
+			c.OutsideActive++
+			c.Background++
 		case domain.ActivityIdle, domain.ActivityExited:
 		default:
 			if v.ReviewerHandleID != "" || v.ProviderConversationID != "" {
-				return domain.ErrOuterHeld
+				c.Unknown++
 			}
 		}
 	}
-	if stations >= 2 || (r.Heavy && heavy >= 1) {
-		return domain.ErrOuterHeld
-	}
 	doc, err := q.GetOuterBinding(ctx)
 	if err != nil {
-		return err
+		return c, err
 	}
 	var b domain.OuterBinding
 	if err := json.Unmarshal([]byte(doc), &b); err != nil {
-		return err
+		return c, err
 	}
-	if !r.Foreground && b.ForegroundReserve && background >= 1 {
-		return domain.ErrOuterHeld
-	}
-	return q.ReserveOuterCapacity(ctx, gen.ReserveOuterCapacityParams{RequestID: r.RequestID, SessionID: string(r.SessionID), Generation: r.Generation, Heavy: boolInt(r.Heavy), Foreground: boolInt(r.Foreground), ReservedAt: r.ReservedAt})
+	c.ForegroundReserve = b.ForegroundReserve
+	c.Overage = c.Stations > 2 || c.HeavyReserved > 1 || (c.ForegroundReserve && c.Background > 1)
+	return c, nil
+}
+
+func (s *Store) ObserveOuterCapacity(ctx context.Context) (domain.OuterCapacityObservation, error) {
+	return s.observeOuterCapacity(ctx, s.qr, "")
 }
 
 func (s *Store) ReserveOuterCapacity(ctx context.Context, r domain.OuterCapacity) error {
@@ -317,6 +334,22 @@ func linkOuterRequest(ctx context.Context, q *gen.Queries, session domain.Sessio
 }
 
 func (s *Store) CheckOuterPendingReply(ctx context.Context, id domain.SessionID, conv, generation, turn, request string) error {
+	row, err := s.qr.OuterRequestForProvider(ctx, gen.OuterRequestForProviderParams{ConversationID: conv, ProviderTurnID: turn, Generation: generation})
+	if err != nil {
+		return domain.ErrOuterHeld
+	}
+	receipt, err := outerReceipt(row)
+	if err != nil {
+		return err
+	}
+	b, found, err := s.OuterBinding(ctx)
+	if err != nil || !found || b.SessionID != id || b.HistoryHeld || b.Paused || b.ScopeRevision != receipt.Request.ScopeRevision {
+		return domain.ErrOuterHeld
+	}
+	r, found, err := s.GetSession(ctx, id)
+	if err != nil || !found || r.IsTerminated || r.Metadata.ControllerGeneration != generation || r.Metadata.ProviderConversationID != receipt.Request.ProviderConversationID {
+		return domain.ErrOuterHeld
+	}
 	count, err := s.qr.OuterPendingInteraction(ctx, gen.OuterPendingInteractionParams{ConversationID: conv, RequestID: request, ProviderTurnID: turn, Generation: generation, SessionID: id})
 	if err != nil {
 		return err

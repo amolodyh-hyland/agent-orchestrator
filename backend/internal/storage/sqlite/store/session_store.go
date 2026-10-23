@@ -126,6 +126,10 @@ func (s *Store) createSessionLocked(ctx context.Context, rec domain.SessionRecor
 		num++
 	}
 	rec.Metadata.PermissionCeiling = sessionPermissionCeiling(rec)
+	if rec.Metadata.OuterGeneration > 0 {
+		err := s.inTx(ctx, "create outer session generation", func(q *gen.Queries) error { return outerSessionInsert(ctx, q, rec, num) })
+		return rec, err == nil, err
+	}
 	if err := s.qw.InsertSession(ctx, recordToInsert(rec, num)); err != nil {
 		if rec.ClientRequestID != "" {
 			existing, found, reloadErr := s.getSessionByClientRequestID(ctx, s.qw, rec.ClientRequestID)
@@ -866,7 +870,8 @@ func (s *Store) GetSession(ctx context.Context, id domain.SessionID) (domain.Ses
 	if err != nil {
 		return domain.SessionRecord{}, false, fmt.Errorf("get session %s: %w", id, err)
 	}
-	return getSessionRowToRecord(row), true, nil
+	rec, err := s.withOuterSessionGeneration(ctx, getSessionRowToRecord(row))
+	return rec, true, err
 }
 
 // GetSessionByAutomationRunID returns the unique session spawned for a durable
@@ -888,7 +893,7 @@ func (s *Store) ListSessions(ctx context.Context, project domain.ProjectID) ([]d
 	if err != nil {
 		return nil, fmt.Errorf("list sessions for %s: %w", project, err)
 	}
-	return mapListSessionsByProjectRows(rows), nil
+	return s.withOuterSessionGenerations(ctx, mapListSessionsByProjectRows(rows))
 }
 
 // ListAllSessions returns every session across all projects.
@@ -897,7 +902,18 @@ func (s *Store) ListAllSessions(ctx context.Context) ([]domain.SessionRecord, er
 	if err != nil {
 		return nil, fmt.Errorf("list all sessions: %w", err)
 	}
-	return mapListAllSessionsRows(rows), nil
+	return s.withOuterSessionGenerations(ctx, mapListAllSessionsRows(rows))
+}
+
+func (s *Store) withOuterSessionGenerations(ctx context.Context, records []domain.SessionRecord) ([]domain.SessionRecord, error) {
+	for i, record := range records {
+		updated, err := s.withOuterSessionGeneration(ctx, record)
+		if err != nil {
+			return nil, err
+		}
+		records[i] = updated
+	}
+	return records, nil
 }
 
 // ListChatHibernationCandidates avoids decoding inactive sessions and activity JSON.

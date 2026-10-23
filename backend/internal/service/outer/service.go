@@ -26,9 +26,12 @@ type Store interface {
 	CreateOuterRequest(context.Context, domain.OuterRequest) error
 	GetOuterRequest(context.Context, string) (domain.OuterRequestReceipt, error)
 	ListOuterRequests(context.Context, domain.SessionID) ([]domain.OuterRequestReceipt, error)
+	ListOuterHostRequests(context.Context) ([]domain.OuterRequestReceipt, error)
+	RecordOuterNativeAction(context.Context, string, []byte) error
 	AttemptOuterRequest(context.Context, string, string, time.Time) error
 	ValidateOuterRequest(context.Context, domain.OuterRequest, time.Time) error
 	OuterCapacity(context.Context) ([]domain.OuterCapacity, error)
+	ObserveOuterCapacity(context.Context) (domain.OuterCapacityObservation, error)
 	OuterFacts(context.Context, string, string, int) ([]domain.OuterFact, error)
 	LabelOuterFacts(context.Context, domain.OuterBinding, string, []domain.OuterFact) ([]domain.OuterFact, error)
 	OuterSources(context.Context, string) ([]domain.OuterSource, error)

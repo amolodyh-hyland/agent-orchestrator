@@ -106,12 +106,11 @@ func (s *Store) OuterCallerState(ctx context.Context, id domain.SessionID) (stri
 	if !found {
 		return "", domain.ErrOuterHeld
 	}
-	var count int
 	kind, generation := "runtime", r.Metadata.RuntimeLaunchID
 	if r.Mode == domain.SessionModeChat {
 		kind, generation = "chat", r.Metadata.ControllerGeneration
 	}
-	err = s.readDB.QueryRowContext(ctx, "SELECT count(*) FROM outer_callers WHERE session_id=? AND generation=?", string(id), s.callerGeneration(r, kind, generation)).Scan(&count)
+	count, err := s.qr.CountOuterLiveCallers(ctx, gen.CountOuterLiveCallersParams{SessionID: string(id), Generation: s.callerGeneration(r, kind, generation)})
 	if err != nil {
 		return "", err
 	}

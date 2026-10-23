@@ -419,6 +419,22 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		if !ok || (a.Operation != "spawn" && a.Operation != "resume" && a.Operation != "restore") {
 			return nil, domain.ErrOuterHeld
 		}
+		policy := s.store.(domain.OuterPolicy)
+		b, found, err := policy.OuterBinding(ctx)
+		if err != nil || !found || cfg.Harness != domain.HarnessCodex || conversationOwner(cfg).Kind != domain.ConversationOwnerSession {
+			return nil, domain.ErrOuterHeld
+		}
+		if a.Operation == "spawn" {
+			if s.sessions == nil {
+				return nil, domain.ErrOuterHeld
+			}
+			r, found, err := s.sessions.GetSession(ctx, cfg.SessionID)
+			if err != nil || !found || r.Metadata.OuterGeneration != b.Generation || a.ProjectID != r.ProjectID {
+				return nil, domain.ErrOuterHeld
+			}
+		} else if a.SessionID != cfg.SessionID || b.SessionID != cfg.SessionID || b.HistoryHeld {
+			return nil, domain.ErrOuterHeld
+		}
 	}
 	owner := conversationOwner(cfg)
 	if owner.Kind == domain.ConversationOwnerReview {

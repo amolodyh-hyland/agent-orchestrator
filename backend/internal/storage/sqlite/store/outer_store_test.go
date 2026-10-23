@@ -177,6 +177,43 @@ func TestOuterAuditFailureRollsBackAuthorityAndAppendOnlyJournal(t *testing.T) {
 	}
 }
 
+func TestOuterNativeActionJournalIsExactImmutableAndAtomicWithAudit(t *testing.T) {
+	f := newOuterJournal(t)
+	ctx := domain.WithOuterNativeAction(context.Background(), domain.OuterNativeAction{ActionID: "native-human-action-1"})
+	document := []byte(`{"operation":"settings","model":"chosen","nonce":"one"}`)
+	if err := f.st.RecordOuterNativeAction(ctx, "native-human-action-1", document); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.RecordOuterNativeAction(ctx, "native-human-action-1", []byte(`{"operation":"kill"}`)); err == nil {
+		t.Fatal("native action ID reused")
+	}
+	db, err := sql.Open("sqlite", filepath.Join(f.dir, "ao.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var got string
+	if err := db.QueryRow("SELECT document FROM outer_native_actions WHERE id=?", "native-human-action-1").Scan(&got); err != nil || got != string(document) {
+		t.Fatal("exact native action changed", got, err)
+	}
+	for _, query := range []string{"DELETE FROM outer_native_actions", "UPDATE outer_native_actions SET document='{}'"} {
+		if _, err := db.Exec(query); err == nil {
+			t.Fatal("native journal mutable", query)
+		}
+	}
+	if _, err := db.Exec("CREATE TRIGGER reject_outer_native_log BEFORE INSERT ON outer_audit BEGIN SELECT RAISE(ABORT,'audit unavailable'); END"); err != nil {
+		t.Fatal(err)
+	}
+	ctx = domain.WithOuterNativeAction(ctx, domain.OuterNativeAction{ActionID: "native-human-action-2"})
+	if err := f.st.RecordOuterNativeAction(ctx, "native-human-action-2", document); err == nil {
+		t.Fatal("action recorded without its audit")
+	}
+	var count int
+	if err := db.QueryRow("SELECT count(*) FROM outer_native_actions").Scan(&count); err != nil || count != 1 {
+		t.Fatal("failed audit left authority", count, err)
+	}
+}
+
 func TestOuterKnownSourcesSurviveReimportAndScopeRemoval(t *testing.T) {
 	f := newOuterJournal(t)
 	ctx := context.Background()
@@ -310,5 +347,27 @@ func TestOuterCapacityRacesForegroundUnknownAndOutsideReviewers(t *testing.T) {
 	}
 	if err := f.st.ReserveOuterCapacity(ctx, domain.OuterCapacity{RequestID: "third", SessionID: f.session.ID, Foreground: true, ReservedAt: f.now}); err == nil {
 		t.Fatal("outside reviewer ignored")
+	}
+	counts, err := f.st.ObserveOuterCapacity(ctx)
+	if err != nil || counts.Stations != 2 || counts.OutsideActive != 2 || !counts.Overage || !counts.ForegroundReserve {
+		t.Fatal("outside activity and foreground overage not visible", counts, err)
+	}
+	worker.Activity.State = domain.ActivityIdle
+	if err := f.st.UpdateSession(ctx, worker); err != nil {
+		t.Fatal(err)
+	}
+	unknown, err := f.st.CreateSession(ctx, worker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.UpsertReview(ctx, domain.Review{ID: "review-unknown", SessionID: unknown.ID, ProjectID: unknown.ProjectID, Harness: domain.ReviewerCodex, ReviewerHandleID: "unknown-runtime", CreatedAt: f.now, UpdatedAt: f.now}); err != nil {
+		t.Fatal(err)
+	}
+	counts, err = f.st.ObserveOuterCapacity(ctx)
+	if err != nil || counts.Unknown != 1 {
+		t.Fatal("unknown activity hidden", counts, err)
+	}
+	if err := f.st.ReserveOuterCapacity(ctx, domain.OuterCapacity{RequestID: "unknown", SessionID: f.session.ID, Foreground: true, ReservedAt: f.now}); err == nil {
+		t.Fatal("unknown activity admitted")
 	}
 }

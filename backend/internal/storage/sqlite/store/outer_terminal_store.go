@@ -31,6 +31,10 @@ func (s *Store) outerTerminalOwner(ctx context.Context, handle string) (domain.S
 	if err := domain.CheckFactoryFeedback(ctx, s, id); err != nil {
 		return r, b, err
 	}
+	p, found, err := s.GetProject(ctx, string(r.ProjectID))
+	if err != nil || !found || !p.ArchivedAt.IsZero() {
+		return r, b, domain.ErrOuterHeld
+	}
 	return r, b, nil
 }
 

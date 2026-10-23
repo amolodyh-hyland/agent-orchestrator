@@ -584,6 +584,12 @@ type OuterEvidence struct {
 	RecordedAt time.Time
 }
 
+type OuterNativeAction struct {
+	ID         string
+	Document   string
+	RecordedAt time.Time
+}
+
 type OuterRequest struct {
 	ID             string
 	Document       string
@@ -593,6 +599,12 @@ type OuterRequest struct {
 	AcceptedAt     sql.NullTime
 	SettledAt      sql.NullTime
 	ProviderTurnID string
+}
+
+type OuterSessionGeneration struct {
+	SessionID  string
+	ProjectID  string
+	Generation int64
 }
 
 type OuterSource struct {

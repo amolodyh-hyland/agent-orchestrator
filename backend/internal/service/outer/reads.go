@@ -10,12 +10,13 @@ import (
 )
 
 type View struct {
-	Session      *SessionView           `json:"session"`
-	Binding      *domain.OuterBinding   `json:"binding"`
-	Requests     []RequestView          `json:"requests"`
-	Reservations []domain.OuterCapacity `json:"reservations"`
-	Incoming     []domain.OuterEvidence `json:"incoming"`
-	Limitations  []string               `json:"limitations"`
+	Session      *SessionView                     `json:"session"`
+	Binding      *domain.OuterBinding             `json:"binding"`
+	Requests     []RequestView                    `json:"requests"`
+	Reservations []domain.OuterCapacity           `json:"reservations"`
+	Capacity     *domain.OuterCapacityObservation `json:"capacity"`
+	Incoming     []domain.OuterEvidence           `json:"incoming"`
+	Limitations  []string                         `json:"limitations"`
 }
 
 type SessionView struct {
@@ -57,17 +58,25 @@ func (s *Service) View(ctx context.Context) (View, error) {
 			v.Session.Settings = conv.Settings
 		}
 	}
-	receipts, err := s.store.ListOuterRequests(ctx, b.SessionID)
+	receipts, err := s.store.ListOuterHostRequests(ctx)
 	if err != nil {
 		return v, err
 	}
 	for _, r := range receipts {
+		if r.AttemptedAt.IsZero() && (b.Paused || b.HistoryHeld || b.SessionID != r.Request.SessionID || b.Revision != r.Request.BindingRevision || !s.now().Before(r.Request.ExpiresAt)) {
+			r.State = "held"
+		}
 		v.Requests = append(v.Requests, RequestView{ID: r.Request.ID, SessionID: r.Request.SessionID, Digest: r.Request.PayloadDigest, TurnID: r.TurnID, ProviderTurnID: r.ProviderTurnID, State: r.State, IssuedAt: r.Request.IssuedAt, ExpiresAt: r.Request.ExpiresAt, AttemptedAt: r.AttemptedAt, SubmittedAt: r.SubmittedAt, AcceptedAt: r.AcceptedAt, SettledAt: r.SettledAt, Sources: r.Request.Sources})
 	}
 	v.Reservations, err = s.store.OuterCapacity(ctx)
 	if err != nil {
 		return v, err
 	}
+	counts, err := s.store.ObserveOuterCapacity(ctx)
+	if err != nil {
+		return v, err
+	}
+	v.Capacity = &counts
 	v.Incoming, err = s.store.OuterEvidence(ctx, b.SessionID)
 	if err == nil {
 		err = s.store.AppendOuterAudit(ctx, domain.OuterAudit{Operation: "outer.view", State: "observed", SessionID: b.SessionID})
@@ -138,6 +147,10 @@ func (s *Service) RetainIncoming(ctx context.Context, id domain.SessionID, text 
 func (s *Service) AuthenticateCaller(ctx context.Context, token string) (domain.OuterCaller, error) {
 	return s.store.AuthenticateOuterCaller(ctx, token)
 }
+
+func (s *Service) RecordNativeAction(ctx context.Context, id string, document []byte) error {
+	return s.store.RecordOuterNativeAction(ctx, id, document)
+}
 func (s *Service) ResolveTarget(ctx context.Context, kind, id string) (domain.ProjectID, domain.SessionID, error) {
 	return s.store.ResolveOuterTarget(ctx, kind, id)
 }
@@ -163,8 +176,8 @@ func (s *Service) BindTerminal(ctx context.Context, handle string) (any, error) 
 	return map[string]string{"handleId": handle, "authority": token}, err
 }
 
-// Serialize settings and lifecycle effects with the outer's actual-write gate.
-// Recording the intent is required before forwarding any native mutation.
+// Serialize settings with the outer's actual-write gate and record each native
+// control's intent before forwarding it to the existing lifecycle/reply gates.
 func (s *Service) BeginNativeControl(ctx context.Context, a domain.OuterNativeAction, digest string) (func(bool) error, error) {
 	if _, ok := domain.OuterNativeActionFrom(ctx); !ok {
 		return nil, domain.ErrOuterHeld
@@ -179,8 +192,18 @@ func (s *Service) BeginNativeControl(ctx context.Context, a domain.OuterNativeAc
 		s.mu.Unlock()
 		return nil, err
 	}
+	// Replies and lifecycle controls can wait on a controller's send gate. Do
+	// not invert that gate with final submission, which acquires this mutex
+	// after the provider's serialized-write lock. Settings alone need to share
+	// the exact settings snapshot barrier through their local commit.
+	hold := a.Operation == "settings"
+	if !hold {
+		s.mu.Unlock()
+	}
 	return func(ok bool) error {
-		defer s.mu.Unlock()
+		if hold {
+			defer s.mu.Unlock()
+		}
 		state := "held_or_unknown"
 		if ok {
 			state = "recorded"

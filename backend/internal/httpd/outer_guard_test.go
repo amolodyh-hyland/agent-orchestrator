@@ -106,7 +106,7 @@ func TestOuterPublicRoutesRejectForgedAndOmittedAuthority(t *testing.T) {
 
 func TestOuterNativeScopeRequiresPrivateExactMACAndRejectsReplay(t *testing.T) {
 	r, _, svc, _, _, key := outerHTTPFixture(t)
-	body, _ := json.Marshal(nativeOuterInput{Operation: "scope", Revision: 1, ProjectIDs: []string{"selected"}, Paused: true, ForegroundReserve: true, Nonce: "unique-native-human-action", Expires: time.Now().Add(9 * time.Second).UnixMilli()})
+	body, _ := json.Marshal(nativeOuterInput{ID: "scope-native-human-action", Operation: "scope", Revision: 1, ProjectIDs: []string{"selected"}, Paused: true, ForegroundReserve: true, Nonce: "unique-native-human-action", Expires: time.Now().Add(9 * time.Second).UnixMilli()})
 	submit := func(proof string) int {
 		req := httptest.NewRequest("POST", "http://127.0.0.1/internal/outer/native", strings.NewReader(string(body)))
 		req.RemoteAddr = "127.0.0.1:54321"

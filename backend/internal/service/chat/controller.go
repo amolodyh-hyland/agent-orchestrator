@@ -1923,12 +1923,30 @@ func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (p
 		if _, deferred := c.conv.(ports.ChatDeferredTurnStarter); deferred {
 			action = "prepare"
 		}
+		guarded, eagerAdmission := c.conv.(ports.ChatTurnAdmissionSender)
+		if eagerAdmission {
+			action = "prepare"
+		}
+		if outerTarget && !eagerAdmission {
+			if _, safeDeferred := c.conv.(ports.ChatDeferredTurnAdmissionStarter); !safeDeferred {
+				release()
+				return domain.ErrOuterHeld
+			}
+		}
 		feedbackRelease, feedbackErr := c.acquireFeedbackInput(ctx, attempt, action)
 		if feedbackErr != nil {
 			release()
 			return feedbackErr
 		}
-		ref, sendErr = c.conv.SendTurn(ctx, attempt)
+		if eagerAdmission {
+			feedbackRelease()
+			ref, sendErr = guarded.SendTurnWithAdmission(ctx, attempt, func(writeCtx context.Context) (func(), error) {
+				return c.acquireFeedbackInput(writeCtx, attempt, "next_turn")
+			})
+			feedbackRelease = func() {}
+		} else {
+			ref, sendErr = c.conv.SendTurn(ctx, attempt)
+		}
 		feedbackRelease()
 		release()
 		if sendErr == nil {

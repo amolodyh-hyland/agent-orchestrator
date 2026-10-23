@@ -89,6 +89,17 @@ func mountOuterNative(r chi.Router, svc *outer.Service, authority *delegationaut
 			reject()
 			return
 		}
+		if len(in.ID) < 16 || len(in.ID) > 128 {
+			reject()
+			return
+		}
+		req = req.WithContext(domain.WithOuterNativeAction(req.Context(), domain.OuterNativeAction{Operation: "outer.native", ActionID: in.ID}))
+		if in.Operation != "send" {
+			if err := svc.RecordNativeAction(req.Context(), in.ID, raw); err != nil {
+				reject()
+				return
+			}
+		}
 		var value any
 		switch in.Operation {
 		case "setup":
@@ -171,6 +182,10 @@ func controlOuterNative(w http.ResponseWriter, req *http.Request, router chi.Rou
 		return
 	}
 	if bound && string(project) == b.AnchorProjectID {
+		if session != b.SessionID || b.HistoryHeld {
+			reject()
+			return
+		}
 		switch in.Action {
 		case "chat.settings", "chat.approval", "chat.input", "chat.cancel", "session.resume":
 		default:

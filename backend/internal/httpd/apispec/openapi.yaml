@@ -17250,6 +17250,38 @@ components:
         reasoningEffort:
           type: string
       type: object
+    DomainOuterCapacityObservation:
+      properties:
+        background:
+          type: integer
+        foregroundReserve:
+          type: boolean
+        heavyReserved:
+          type: integer
+        observedAt:
+          format: date-time
+          type: string
+        outsideActive:
+          type: integer
+        overage:
+          type: boolean
+        reserved:
+          type: integer
+        stations:
+          type: integer
+        unknown:
+          type: integer
+      required:
+      - stations
+      - reserved
+      - outsideActive
+      - unknown
+      - heavyReserved
+      - background
+      - foregroundReserve
+      - overage
+      - observedAt
+      type: object
     DomainReviewerConfig:
       properties:
         agentConfig:
@@ -19480,6 +19512,8 @@ components:
       type: object
     OuterFact:
       properties:
+        callerState:
+          type: string
         receipt:
           type: string
         source:
@@ -19618,6 +19652,11 @@ components:
           - type: "null"
           - $ref: '#/components/schemas/OuterBinding'
             type: object
+        capacity:
+          anyOf:
+          - type: "null"
+          - $ref: '#/components/schemas/DomainOuterCapacityObservation'
+            type: object
         incoming:
           items:
             $ref: '#/components/schemas/OuterEvidence'
@@ -19644,6 +19683,7 @@ components:
       - binding
       - requests
       - reservations
+      - capacity
       - incoming
       - limitations
       type: object

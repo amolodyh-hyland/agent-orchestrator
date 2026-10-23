@@ -62,6 +62,19 @@ type OuterCapacity struct {
 	ReleaseEvidence string    `json:"releaseEvidence"`
 }
 
+// Admission observations are counts, not a host-wide execution guarantee.
+type OuterCapacityObservation struct {
+	Stations          int       `json:"stations"`
+	Reserved          int       `json:"reserved"`
+	OutsideActive     int       `json:"outsideActive"`
+	Unknown           int       `json:"unknown"`
+	HeavyReserved     int       `json:"heavyReserved"`
+	Background        int       `json:"background"`
+	ForegroundReserve bool      `json:"foregroundReserve"`
+	Overage           bool      `json:"overage"`
+	ObservedAt        time.Time `json:"observedAt"`
+}
+
 type OuterCaller struct {
 	ProjectID  ProjectID
 	SessionID  SessionID
@@ -144,10 +157,11 @@ type OuterSource struct {
 }
 
 type OuterFact struct {
-	Source  OuterSource `json:"source"`
-	Summary string      `json:"summary"`
-	State   string      `json:"state"`
-	Receipt string      `json:"receipt,omitempty"`
+	CallerState string      `json:"callerState,omitempty"`
+	Source      OuterSource `json:"source"`
+	Summary     string      `json:"summary"`
+	State       string      `json:"state"`
+	Receipt     string      `json:"receipt,omitempty"`
 }
 
 type OuterEvidence struct {
@@ -218,6 +232,7 @@ func CheckOuterResource(ctx context.Context, store any, operation, kind, id stri
 
 type outerNativeKey struct{}
 type OuterNativeAction struct {
+	ActionID   string
 	Generation string
 	Operation  string
 	ProjectID  ProjectID
@@ -226,6 +241,9 @@ type OuterNativeAction struct {
 }
 
 func WithOuterNativeAction(ctx context.Context, action OuterNativeAction) context.Context {
+	if previous, ok := OuterNativeActionFrom(ctx); ok && action.ActionID == "" {
+		action.ActionID = previous.ActionID
+	}
 	return context.WithValue(ctx, outerNativeKey{}, action)
 }
 func OuterNativeActionFrom(ctx context.Context) (OuterNativeAction, bool) {

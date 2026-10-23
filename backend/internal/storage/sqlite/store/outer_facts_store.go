@@ -34,7 +34,11 @@ func (s *Store) OuterFacts(ctx context.Context, project, kind string, limit int)
 			return nil, err
 		}
 		for _, r := range rows {
-			out = append(out, domain.OuterFact{Source: source(string(r.ID), r.UpdatedAt, r.Revision), Summary: r.DisplayName, State: fmt.Sprintf("%s / %s / %s; terminated=%t", r.Harness, r.SessionMode, r.ActivityState, r.IsTerminated)})
+			migration, err := s.OuterCallerState(ctx, r.ID)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, domain.OuterFact{CallerState: migration, Source: source(string(r.ID), r.UpdatedAt, r.Revision), Summary: r.DisplayName, State: fmt.Sprintf("%s / %s / %s; terminated=%t", r.Harness, r.SessionMode, r.ActivityState, r.IsTerminated)})
 		}
 	case "runs":
 		rows, err := s.qr.OuterRunFacts(ctx, gen.OuterRunFactsParams{ProjectID: project, PageSize: int64(limit)})
@@ -105,6 +109,9 @@ func (s *Store) LabelOuterFacts(ctx context.Context, b domain.OuterBinding, conv
 				return domain.ErrOuterHeld
 			}
 			f.Source.Label = p.DisplayName
+			if f.Source.Label == "" {
+				f.Source.Label = string(p.ID)
+			}
 			key := f.Source.ProjectID + ":" + f.Source.Kind + ":" + f.Source.ID
 			lineage, err := q.OuterSourceLineage(ctx, key)
 			if err != nil {
@@ -126,7 +133,7 @@ func (s *Store) LabelOuterFacts(ctx context.Context, b domain.OuterBinding, conv
 					return domain.ErrOuterHeld
 				}
 			}
-			f.Source.Digest = domain.OuterDigest([]any{f.Summary, f.State, f.Receipt, f.Source.Revision})
+			f.Source.Digest = domain.OuterDigest([]any{f.Summary, f.State, f.Receipt, f.Source.Revision, f.CallerState})
 			data, err := json.Marshal(f.Source)
 			if err != nil {
 				return err

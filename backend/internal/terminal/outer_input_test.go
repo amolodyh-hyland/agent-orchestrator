@@ -69,3 +69,48 @@ func TestOuterFinalAttachmentWriteRechecksBufferedInput(t *testing.T) {
 		t.Fatal("buffered input crossed final ownership barrier")
 	}
 }
+
+func TestOuterScopedNativeTerminalWritesAndRevokesExistingAttachment(t *testing.T) {
+	ctx := context.Background()
+	st := sqlitetest.MustOpen(t)
+	now := time.Now()
+	for _, id := range []string{"anchor", "selected"} {
+		if err := st.UpsertProject(ctx, domain.ProjectRecord{ID: id, Kind: domain.ProjectKindScratch, RegisteredAt: now}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := st.CreateSession(ctx, domain.SessionRecord{ProjectID: "selected", Kind: domain.KindWorker, Mode: domain.SessionModeTUI, Harness: domain.HarnessCodex, Activity: domain.Activity{State: domain.ActivityIdle}, Metadata: domain.SessionMetadata{RuntimeHandleID: "owned-runtime", RuntimeLaunchID: "launch-1"}, CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := domain.OuterBinding{AnchorProjectID: "anchor", ProjectIDs: []string{"selected"}, Revision: 1, ScopeRevision: 1}
+	if err := st.SaveOuterBinding(ctx, b, 0, domain.OuterAudit{Operation: "setup"}); err != nil {
+		t.Fatal(err)
+	}
+	token, err := st.IssueOuterTerminal(domain.WithOuterNativeAction(ctx, domain.OuterNativeAction{Operation: "terminal.bind", ProjectID: r.ProjectID, SessionID: r.ID}), r.Metadata.RuntimeHandleID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pty := newFakePTY()
+	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{pty}}}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+	mgr.SetSessionInputLease(sessionmanager.New(sessionmanager.Deps{Store: st, DataDir: t.TempDir()}))
+	serveCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	conn := newFakeConn()
+	go mgr.Serve(serveCtx, conn)
+	conn.in <- clientMsg{Ch: chTerminal, ID: "owned-runtime", Type: msgOpen, Authority: token}
+	recv(t, conn, chTerminal, msgOpened, time.Second)
+	conn.in <- clientMsg{Ch: chTerminal, ID: "owned-runtime", Type: msgData, Authority: token, Data: base64.StdEncoding.EncodeToString([]byte("allowed\r"))}
+	eventually(t, time.Second, func() bool { return string(pty.writtenBytes()) == "allowed\r" })
+	b.Revision++
+	b.ScopeRevision++
+	if err := st.SaveOuterBinding(ctx, b, 1, domain.OuterAudit{Operation: "scope"}); err != nil {
+		t.Fatal(err)
+	}
+	conn.in <- clientMsg{Ch: chTerminal, ID: "owned-runtime", Type: msgData, Authority: token, Data: base64.StdEncoding.EncodeToString([]byte("revoked\r"))}
+	recv(t, conn, chTerminal, msgError, time.Second)
+	if got := string(pty.writtenBytes()); got != "allowed\r" {
+		t.Fatal("revoked terminal wrote bytes", got)
+	}
+}

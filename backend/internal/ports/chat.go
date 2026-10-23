@@ -885,6 +885,12 @@ type ChatDeferredTurnStarter interface {
 	DiscardDeferredTurn(providerTurnID string)
 }
 
+// ChatTurnAdmissionSender binds eager protocols to their final serialized
+// transport write, after provider-local waits and payload preparation.
+type ChatTurnAdmissionSender interface {
+	SendTurnWithAdmission(context.Context, ChatUserMessage, func(context.Context) (func(), error)) (ChatTurnRef, error)
+}
+
 // ChatDeferredTurnAdmissionStarter moves admission into an asynchronous driver's
 // actual transport submission. The driver must acquire immediately before the
 // prompt is written, release after that write (not after the turn's response),

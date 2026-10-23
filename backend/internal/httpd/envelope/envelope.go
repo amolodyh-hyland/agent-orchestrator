@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -115,6 +116,10 @@ func writeAPIError(w http.ResponseWriter, r *http.Request, status int, kind, cod
 func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	captureError(r, err)
 	reportingOwner := ownership.OwnerOf(err)
+	if errors.Is(err, domain.ErrOuterHeld) {
+		writeAPIError(w, r, http.StatusConflict, "conflict", "OUTER_HELD", "Action held; exact supported authority is required", nil, reportingOwner)
+		return
+	}
 	var e *apierr.Error
 	if errors.As(err, &e) {
 		status, kind := httpStatus(e.Kind)

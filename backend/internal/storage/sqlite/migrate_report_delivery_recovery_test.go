@@ -2,16 +2,33 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 	sqlitestore "github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
 type noUpgradeResend struct{ calls int }
+
+// Seed the pre-0222 format directly. Current AppendUserMessage intentionally
+// requires the outer authority tables, which do not exist in this old schema.
+func appendPreReceiptUpgradeMessage(ctx context.Context, db *sql.DB, conversation string, session domain.SessionID, generation string, message domain.ConversationMessage, turn string, now time.Time) (bool, error) {
+	q := gen.New(db)
+	sequence, err := q.NextConversationSequence(ctx, gen.NextConversationSequenceParams{ID: conversation, UpdatedAt: now})
+	if err != nil {
+		return false, err
+	}
+	if err := q.InsertConversationTurn(ctx, gen.InsertConversationTurnParams{ID: turn, ConversationID: conversation, HandledBySessionID: session, ControllerGeneration: generation, State: domain.TurnStateQueued, RequestedAt: now}); err != nil {
+		return false, err
+	}
+	err = q.InsertConversationMessage(ctx, gen.InsertConversationMessageParams{ID: message.ID, ConversationID: conversation, TurnID: sql.NullString{String: turn, Valid: true}, Sequence: sequence, Role: domain.MessageRoleUser, Origin: message.Origin, Text: message.Text, ClientMessageID: message.ClientMessageID, CreatedAt: now, UpdatedAt: now})
+	return err == nil, err
+}
 
 func (d *noUpgradeResend) Submit(context.Context, domain.SessionID, string, reportsvc.PreparedBatch) (domain.ReportDeliveryReceipt, error) {
 	d.calls++
@@ -52,7 +69,7 @@ func TestReportUpgradeRecoversPreMigrationChatDelivery(t *testing.T) {
 				t.Fatal(err)
 			}
 			if mode != "unidentified" {
-				if created, err := st.AppendUserMessage(ctx, conversation.ID, orch.ID, "old-generation", domain.ConversationMessage{ID: "legacy-message", ClientMessageID: "report-batch:legacy-report", Origin: domain.MessageOriginAutomation, Text: "retained report"}, "legacy-turn", now); err != nil || !created {
+				if created, err := appendPreReceiptUpgradeMessage(ctx, db, conversation.ID, orch.ID, "old-generation", domain.ConversationMessage{ID: "legacy-message", ClientMessageID: "report-batch:legacy-report", Origin: domain.MessageOriginAutomation, Text: "retained report"}, "legacy-turn", now); err != nil || !created {
 					t.Fatalf("legacy append=%v err=%v", created, err)
 				}
 				if mode == "accepted" {
@@ -172,7 +189,7 @@ func TestReportUpgradeHoldsReleasedPendingPiggyback(t *testing.T) {
 			}
 			now = now.Add(3 * time.Second)
 			piggyback := reportsvc.PreparedBatch{Reports: reports}
-			if created, err := st.AppendUserMessage(ctx, conversation.ID, orch.ID, "old-generation", domain.ConversationMessage{ID: "human-message", ClientMessageID: "human-client-id", Origin: domain.MessageOriginHuman, Text: piggyback.AppendToUserMessage("human prompt")}, "human-turn", now); err != nil || !created {
+			if created, err := appendPreReceiptUpgradeMessage(ctx, db, conversation.ID, orch.ID, "old-generation", domain.ConversationMessage{ID: "human-message", ClientMessageID: "human-client-id", Origin: domain.MessageOriginHuman, Text: piggyback.AppendToUserMessage("human prompt")}, "human-turn", now); err != nil || !created {
 				t.Fatalf("legacy piggyback append=%v err=%v", created, err)
 			}
 			if err := st.BindTurnToProvider(ctx, "human-turn", "possibly-started-native-turn", now); err != nil {
@@ -276,7 +293,7 @@ func TestReportUpgradeKeepsTUIAttemptEligibleWithOtherChatHistory(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			if created, err := st.AppendUserMessage(ctx, conversation.ID, orch.ID, "old-generation", domain.ConversationMessage{ID: "old-message", ClientMessageID: "old-human-client", Origin: domain.MessageOriginHuman, Text: "old prompt\n<ao-worker-reports>\nolder reports\n</ao-worker-reports>"}, "old-turn", now); err != nil || !created {
+			if created, err := appendPreReceiptUpgradeMessage(ctx, db, conversation.ID, orch.ID, "old-generation", domain.ConversationMessage{ID: "old-message", ClientMessageID: "old-human-client", Origin: domain.MessageOriginHuman, Text: "old prompt\n<ao-worker-reports>\nolder reports\n</ao-worker-reports>"}, "old-turn", now); err != nil || !created {
 				t.Fatalf("old Chat message=%v err=%v", created, err)
 			}
 			if changed, err := st.CommitSessionControllerEpoch(ctx, orch.ID, domain.SessionModeChat, domain.SessionModeTUI, "native-conversation", now); err != nil || !changed {

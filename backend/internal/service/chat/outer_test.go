@@ -13,7 +13,14 @@ import (
 
 func outerHarness(t *testing.T) (*harness, *outer.Service) {
 	t.Helper()
-	h := newHarness(t)
+	provider := &outerEagerConversation{fakeConversation: newFakeConversation()}
+	h := newHarnessWithConversation(t, provider)
+	h.conv = provider.fakeConversation
+	return h, bindOuterHarness(t, h)
+}
+
+func bindOuterHarness(t *testing.T, h *harness) *outer.Service {
+	t.Helper()
 	ctx := context.Background()
 	r, _, err := h.st.GetSession(ctx, testSession)
 	if err != nil {
@@ -31,7 +38,90 @@ func outerHarness(t *testing.T) (*harness, *outer.Service) {
 	s := outer.New(h.st, nil, nil, outer.WithClock(h.now))
 	s.SetTransport(h.svc)
 	h.svc.SetOuterAdmission(s)
-	return h, s
+	return s
+}
+
+type outerEagerConversation struct {
+	*fakeConversation
+	beforeWrite func()
+}
+
+func (c *outerEagerConversation) SendTurnWithAdmission(ctx context.Context, msg ports.ChatUserMessage, acquire func(context.Context) (func(), error)) (ports.ChatTurnRef, error) {
+	if c.beforeWrite != nil {
+		c.beforeWrite()
+	}
+	release, err := acquire(ctx)
+	if err != nil {
+		return ports.ChatTurnRef{}, err
+	}
+	defer release()
+	return c.SendTurn(ctx, msg)
+}
+
+type outerDeferredConversation struct {
+	*reportDeferredConversation
+	acquire func(context.Context) (func(), error)
+}
+
+func (c *outerDeferredConversation) StartDeferredTurnWithAdmission(_ string, acquire func(context.Context) (func(), error)) error {
+	c.acquire = acquire
+	return nil
+}
+
+func TestOuterDeferredActualWriteRechecksAuthority(t *testing.T) {
+	for _, mode := range []string{"expiry", "pause", "settings", "restart"} {
+		t.Run(mode, func(t *testing.T) {
+			provider := &outerDeferredConversation{reportDeferredConversation: &reportDeferredConversation{fakeConversation: newFakeConversation()}}
+			h := newHarnessWithConversation(t, provider)
+			h.conv = provider.fakeConversation
+			s := bindOuterHarness(t, h)
+			ctx := context.Background()
+			r, err := s.Send(outerSendContext("deferred"), "Exact delayed question")
+			if err != nil || provider.acquire == nil {
+				t.Fatal("deferred preparation", r, err)
+			}
+			if capacity, err := h.st.OuterCapacity(ctx); err != nil || len(capacity) != 0 {
+				t.Fatal("preparation consumed actual-write authority", capacity, err)
+			}
+			switch mode {
+			case "expiry":
+				h.advance(3 * time.Minute)
+			case "pause":
+				b, _, _ := s.Binding(ctx)
+				if _, err := s.SetScope(domain.WithOuterNativeAction(ctx, domain.OuterNativeAction{Operation: "outer.scope"}), b.Revision, b.ProjectIDs, true, true); err != nil {
+					t.Fatal(err)
+				}
+			case "settings":
+				if err := h.st.SetConversationSettings(ctx, h.ctrl.ConversationID(), domain.ConversationSettings{Model: "changed"}, h.now()); err != nil {
+					t.Fatal(err)
+				}
+			case "restart":
+				replacement := outer.New(h.st, nil, nil, outer.WithClock(h.now))
+				h.svc.SetOuterAdmission(replacement)
+			}
+			if release, err := provider.acquire(ctx); err == nil {
+				release()
+				t.Fatal("stale authority crossed deferred write")
+			}
+			if receipt, err := h.st.GetOuterRequest(ctx, r.Request.ID); err != nil || !receipt.AttemptedAt.IsZero() || provider.starts.Load() != 0 {
+				t.Fatal("deferred hold submitted or consumed request", receipt, err)
+			}
+		})
+	}
+}
+
+func TestOuterEagerActualWriteRechecksAfterProviderWait(t *testing.T) {
+	provider := &outerEagerConversation{fakeConversation: newFakeConversation()}
+	h := newHarnessWithConversation(t, provider)
+	h.conv = provider.fakeConversation
+	s := bindOuterHarness(t, h)
+	provider.beforeWrite = func() { h.advance(3 * time.Minute) }
+	if _, err := s.Send(outerSendContext("eager"), "Exact delayed question"); err == nil {
+		t.Fatal("expired eager submission admitted")
+	}
+	if h.conv.sendCallCount() != 0 {
+		t.Fatal("expired eager request reached provider")
+	}
 }
 
 func TestOuterQueuedAuthorityIsRecheckedAtDrain(t *testing.T) {
