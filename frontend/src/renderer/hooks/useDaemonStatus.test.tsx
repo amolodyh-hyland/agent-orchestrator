@@ -256,3 +256,16 @@ describe("useDaemonStatus", () => {
 		expect(removeStatusMock).toHaveBeenCalledTimes(1);
 	});
 });
+
+
+it("keeps focus and visibility refreshes observational until leaving observation mode", async () => {
+	getStatusMock.mockResolvedValue({ state: "ready", port: 4555 });
+	const queryClient = fakeQueryClient();
+	const { result, rerender } = renderHook(({ observation }) => useDaemonStatus(queryClient, observation), { initialProps: { observation: true } });
+	await waitFor(() => expect(result.current.state).toBe("ready"));
+	await act(async () => { window.dispatchEvent(new Event("focus")); });
+	expect(ensureAgentReadinessMock).not.toHaveBeenCalled();
+	rerender({ observation: false });
+	await act(async () => { window.dispatchEvent(new Event("focus")); });
+	await waitFor(() => expect(ensureAgentReadinessMock).toHaveBeenCalledWith([], "display"));
+});

@@ -22,7 +22,9 @@ export function sameDaemonStatus(a: DaemonStatus, b: DaemonStatus): boolean {
 	return aKeys.every((key) => Object.is(a[key], b[key]));
 }
 
-export function useDaemonStatus(queryClient: QueryClient = defaultQueryClient) {
+export function useDaemonStatus(queryClient: QueryClient = defaultQueryClient, observationOnly = false) {
+	const observationOnlyRef = useRef(observationOnly);
+	observationOnlyRef.current = observationOnly;
 	const [status, setStatus] = useState<DaemonStatus>({ state: "stopped" });
 	const statusRef = useRef(status);
 
@@ -102,7 +104,7 @@ export function useDaemonStatus(queryClient: QueryClient = defaultQueryClient) {
 		void refreshStatus();
 		const refreshOnFocus = () => {
 			void refreshStatus().then((nextStatus) => {
-				if (nextStatus?.state !== "ready") return;
+				if (nextStatus?.state !== "ready" || observationOnlyRef.current) return;
 				void ensureAgentReadiness([], "display")
 					.then((next) => cacheAgentReadiness(queryClient, next))
 					.catch(() => undefined);

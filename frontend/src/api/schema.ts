@@ -15396,6 +15396,8 @@ export interface operations {
     listSessions: {
         parameters: {
             query?: {
+                /** @description When true, project observed facts without repairing persisted artifact metadata or starting execution. */
+                readOnly?: null | boolean;
                 /** @description Project id filter. */
                 project?: string;
                 /** @description When true, return non-terminated sessions; when false, return terminated sessions. */

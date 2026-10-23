@@ -5539,6 +5539,16 @@ paths:
     get:
       operationId: listSessions
       parameters:
+      - description: When true, project observed facts without repairing persisted
+          artifact metadata or starting execution.
+        in: query
+        name: readOnly
+        schema:
+          description: When true, project observed facts without repairing persisted
+            artifact metadata or starting execution.
+          type:
+          - "null"
+          - boolean
       - description: Project id filter.
         in: query
         name: project

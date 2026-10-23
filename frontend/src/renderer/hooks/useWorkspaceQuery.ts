@@ -289,7 +289,7 @@ async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
 	}
 
 	const [{ data: projectsData, error: projectsError }, { data: sessionsData, error: sessionsError }] =
-		await Promise.all([apiClient.GET("/api/v1/projects"), apiClient.GET("/api/v1/sessions")]);
+		await Promise.all([apiClient.GET("/api/v1/projects"), apiClient.GET("/api/v1/sessions", { params: { query: { readOnly: true } } })]);
 
 	if (projectsError || sessionsError) {
 		agentSwitchVisibility.setQueryHealthy("active", false, "workspaces");
@@ -340,7 +340,7 @@ async function fetchRemoteProjects(hostId: string) {
 }
 
 async function fetchRemoteSessions(hostId: string) {
-	const { data, error, response } = await clientForHost(hostId).GET("/api/v1/sessions");
+	const { data, error, response } = await clientForHost(hostId).GET("/api/v1/sessions", { params: { query: { readOnly: true } } });
 	if (error) {
 		recheckRemoteHost(hostId, response.status);
 		throw error;

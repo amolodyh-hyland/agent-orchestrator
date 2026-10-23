@@ -67,6 +67,7 @@ type ListFilter struct {
 	Active           *bool
 	OrchestratorOnly bool
 	Fresh            bool
+	ReadOnly         bool
 }
 
 // commander is the command-side surface Service delegates to: the
@@ -1216,7 +1217,7 @@ func (s *Service) List(ctx context.Context, filter ListFilter) ([]domain.Session
 	out := make([]domain.Session, 0, len(filtered))
 	for _, rec := range filtered {
 		facts, found := cleanupBySession[rec.ID]
-		sess, err := s.toSessionWithFacts(ctx, rec, prsBySession[rec.ID], runsBySession[rec.ID], currentWorkspaceCleanup(rec, facts, found))
+		sess, err := s.sessionProjection(ctx, rec, prsBySession[rec.ID], runsBySession[rec.ID], currentWorkspaceCleanup(rec, facts, found), filter.ReadOnly)
 		if err != nil {
 			return nil, err
 		}
@@ -1335,6 +1336,10 @@ func (s *Service) Get(ctx context.Context, id domain.SessionID) (domain.Session,
 }
 
 func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun, cleanup domain.WorkspaceDisposition) (domain.Session, error) {
+	return s.sessionProjection(ctx, rec, prs, runs, cleanup, false)
+}
+
+func (s *Service) sessionProjection(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun, cleanup domain.WorkspaceDisposition, readOnly bool) (domain.Session, error) {
 	// A row created before artifact_dir existed carries it as '' (the
 	// migration's default) even though session_manager always prompts the
 	// agent to write into the deterministic dataDir/artifacts/<id> path.
@@ -1373,7 +1378,7 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 		// future ones: the persisted write below lands asynchronously
 		// relative to this read.
 		rec.OutputType = sessionartifacts.DeriveOutputType(len(prs), len(artifactFiles))
-		if s.outputTypeReconciler != nil {
+		if !readOnly && s.outputTypeReconciler != nil {
 			if err := s.outputTypeReconciler.ReconcileSessionOutputType(ctx, rec.ID); err != nil && s.logger != nil {
 				s.logger.Warn("reconcile output type on read", "session", rec.ID, "err", err)
 			}

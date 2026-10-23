@@ -19,6 +19,7 @@ import {
 	AlertTriangle,
 	Archive,
 	CalendarClock,
+	PanelsTopLeft,
 	ChevronRight,
 	Download,
 	File,
@@ -524,6 +525,7 @@ function useSelection() {
 	});
 	const goHome = useCallback(() => void navigate({ to: "/" }), [navigate]);
 	const goAutomations = useCallback(() => void navigate({ to: "/automations" }), [navigate]);
+	const goCockpit = useCallback(() => void navigate({ to: "/cockpit" }), [navigate]);
 	const goArtifacts = useCallback(() => void navigate({ to: "/artifacts" }), [navigate]);
 	const goStandaloneBoard = useCallback(() => void navigate({ to: "/sessions" }), [navigate]);
 	const goGlobalSettings = useCallback(() => openGlobalSettings(), [openGlobalSettings]);
@@ -550,6 +552,8 @@ function useSelection() {
 		isHome: pathname === "/",
 		isAutomations: pathname === "/automations",
 		isArtifacts: pathname === "/artifacts",
+		isCockpit: pathname === "/cockpit",
+		goCockpit,
 		activeRemoteHostId: params.hostId,
 		activeRemoteProjectId: params.hostId ? params.projectId : undefined,
 		activeRemoteSessionId: params.hostId ? params.sessionId : undefined,
@@ -566,7 +570,7 @@ function useSelection() {
 		goSettings,
 		goProject,
 		goSession,
-	}), [goArtifacts, goAutomations, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
+	}), [goCockpit, goArtifacts, goAutomations, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
 }
 
 // Colour tracks the session's board section, preserving SCM state while the
@@ -1021,6 +1025,15 @@ export function Sidebar({
 					</SidebarGroup>
 				) : null}
 				<SidebarMenu className="mb-3 gap-0.5 group-data-[collapsible=icon]:gap-1">
+					<SidebarMenuItem>
+						<SidebarTopNavRow
+							active={selection.isCockpit}
+							icon={<PanelsTopLeft aria-hidden="true" />}
+							label={t("cockpit.title")}
+							onClick={selection.goCockpit}
+							tooltip={isCollapsed ? t("cockpit.title") : undefined}
+						/>
+					</SidebarMenuItem>
 					<SidebarMenuItem>
 						<SidebarTopNavRow
 							active={selection.isAutomations}

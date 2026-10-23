@@ -120,6 +120,7 @@ export function ShellTopbar({
 	const session = startingOrchestrator ? undefined : workspaceScope?.session;
 	const isSessionRoute = startingOrchestrator || Boolean(params.sessionId);
 	const isAutomationsRoute = location.pathname === "/automations";
+	const isCockpitRoute = location.pathname === "/cockpit";
 	const isArtifactsRoute = location.pathname === "/artifacts";
 	const isStandaloneBoardRoute = location.pathname === "/sessions" || location.pathname === "/sessions/";
 	const isOrchestrator = startingOrchestrator || (session ? isOrchestratorSession(session) : false);
@@ -133,7 +134,7 @@ export function ShellTopbar({
 	// route slug. "Board" is the root-board crumb only.
 	const projectId = session?.workspaceId ?? params.projectId;
 	const isProjectBoardRoute = !isSessionRoute && Boolean(projectId);
-	const isRootBoardRoute = !isSessionRoute && !isProjectBoardRoute && !isAutomationsRoute && !isArtifactsRoute && !isStandaloneBoardRoute;
+	const isRootBoardRoute = !isSessionRoute && !isProjectBoardRoute && !isAutomationsRoute && !isArtifactsRoute && !isCockpitRoute && !isStandaloneBoardRoute;
 	const project = workspaceScope?.project;
 	const supportsLocalCues = Boolean(!hostId && project && toProjectKind(project.kind));
 	const projectLabel = project?.name ?? session?.workspaceName ?? (projectId ? "" : t("shell.board"));
@@ -196,6 +197,8 @@ export function ShellTopbar({
 							{t("automations.title")}
 						</span>
 					</div>
+				) : isCockpitRoute ? (
+					<span className={topbarProjectLabelClass}>{t("cockpit.title")}</span>
 				) : isArtifactsRoute ? (
 					<div className="inline-flex min-w-0 items-center gap-1.5" data-testid="artifacts-topbar-label">
 						<span className={cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5")}>
