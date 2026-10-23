@@ -2,6 +2,7 @@ package outer_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -15,16 +16,95 @@ import (
 )
 
 type launcher struct {
-	store  *store.Store
-	calls  int
-	config ports.SpawnConfig
+	store    *store.Store
+	calls    int
+	config   ports.SpawnConfig
+	returned *domain.Session
 }
 
 func (l *launcher) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
 	l.calls++
 	l.config = cfg
-	r, err := l.store.CreateSession(ctx, domain.SessionRecord{ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness, Mode: cfg.RequestedMode, CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	if l.returned != nil {
+		return *l.returned, 0, 0, nil
+	}
+	r, err := l.store.CreateSession(ctx, domain.SessionRecord{ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness, Mode: cfg.RequestedMode, Metadata: domain.SessionMetadata{OuterGeneration: cfg.OuterGeneration}, CreatedAt: time.Now(), UpdatedAt: time.Now()})
 	return domain.Session{SessionRecord: r}, 0, 0, err
+}
+
+func TestOuterReducedScopeRequiresVerifiedFreshConversation(t *testing.T) {
+	ctx := context.Background()
+	st, err := sqlite.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	l := &launcher{store: st}
+	svc := outer.New(st, projectsvc.New(st), l)
+	b, err := svc.Ensure(action("outer.setup"), domain.AgentConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, _, err := st.GetSession(ctx, b.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old.Metadata.ProviderConversationID = "original-native-history"
+	if err := st.UpdateSession(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertProject(ctx, domain.ProjectRecord{ID: "a", Kind: domain.ProjectKindScratch, RegisteredAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	b, err = svc.SetScope(action("outer.scope"), b.Revision, []string{"a"}, false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err = svc.SetScope(action("outer.scope"), b.Revision, []string{}, false, true)
+	if err != nil || !b.HistoryHeld {
+		t.Fatal("scope reduction did not hold history", b, err)
+	}
+	assertHeld := func(t *testing.T, returned domain.SessionRecord) {
+		t.Helper()
+		l.returned = &domain.Session{SessionRecord: returned}
+		if _, err := svc.Ensure(action("outer.setup"), domain.AgentConfig{}); !errors.Is(err, domain.ErrOuterHeld) {
+			t.Fatal("unverified conversation reopened", err)
+		}
+		current, found, err := svc.Binding(ctx)
+		if err != nil || !found || !current.HistoryHeld || current.SessionID != old.ID || current.Revision != b.Revision {
+			t.Fatal("rejected launch changed the binding", current, err)
+		}
+	}
+	t.Run("existing active session", func(t *testing.T) { assertHeld(t, old) })
+	t.Run("forged returned generation", func(t *testing.T) {
+		forged := old
+		forged.Metadata.OuterGeneration = b.Generation
+		assertHeld(t, forged)
+	})
+	t.Run("unrecorded replacement", func(t *testing.T) {
+		forged := old
+		forged.ID = "unrecorded-new-session"
+		forged.Metadata.OuterGeneration = b.Generation
+		assertHeld(t, forged)
+	})
+	native := domain.WithOuterNativeAction(ctx, domain.OuterNativeAction{Operation: "spawn", ProjectID: old.ProjectID})
+	fresh, err := st.CreateSession(native, domain.SessionRecord{ProjectID: old.ProjectID, Kind: old.Kind, Harness: old.Harness, Mode: old.Mode, Metadata: domain.SessionMetadata{OuterGeneration: b.Generation, ProviderConversationID: old.Metadata.ProviderConversationID}, CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("reused native history", func(t *testing.T) { assertHeld(t, fresh) })
+	fresh.Metadata.ProviderConversationID = "fresh-native-history"
+	if err := st.UpdateSession(ctx, fresh); err != nil {
+		t.Fatal(err)
+	}
+	l.returned = &domain.Session{SessionRecord: fresh}
+	current, err := svc.Ensure(action("outer.setup"), domain.AgentConfig{})
+	if err != nil || current.HistoryHeld || current.SessionID != fresh.ID {
+		t.Fatal("verified fresh conversation stayed held", current, err)
+	}
+	if receipt, found, err := st.GetSession(ctx, fresh.ID); err != nil || !found || receipt.Metadata.OuterGeneration != b.Generation {
+		t.Fatal("replacement generation was not durable", receipt, err)
+	}
 }
 func action(op string) context.Context {
 	return domain.WithOuterNativeAction(context.Background(), domain.OuterNativeAction{Operation: op})

@@ -142,6 +142,30 @@ func (s *Service) Ensure(ctx context.Context, config domain.AgentConfig) (domain
 	if err != nil {
 		return b, err
 	}
+	// A launcher may reconcile an already-running orchestrator. Only the
+	// immutable, durably recorded launch generation proves it belongs to the
+	// current scope; returned metadata alone cannot release a history fence.
+	recorded, found, err := s.store.GetSession(ctx, created.ID)
+	if err != nil {
+		return b, err
+	}
+	fresh := found && created.ID != "" && recorded.ProjectID == domain.ProjectID(b.AnchorProjectID) && recorded.Kind == domain.KindOrchestrator && recorded.Harness == domain.HarnessCodex && recorded.Mode == domain.SessionModeChat && recorded.Metadata.OuterGeneration == b.Generation
+	if b.HistoryHeld && b.SessionID != "" {
+		previous, exists, err := s.store.GetSession(ctx, b.SessionID)
+		if err != nil {
+			return b, err
+		}
+		fresh = fresh && exists && created.ID != b.SessionID && recorded.Metadata.OuterGeneration > previous.Metadata.OuterGeneration
+		if exists && ((recorded.Metadata.ProviderConversationID != "" && recorded.Metadata.ProviderConversationID == previous.Metadata.ProviderConversationID) || (recorded.Metadata.AgentSessionID != "" && recorded.Metadata.AgentSessionID == previous.Metadata.AgentSessionID)) {
+			fresh = false
+		}
+	}
+	if !fresh {
+		if err := s.store.AppendOuterAudit(ctx, domain.OuterAudit{Operation: "outer.bind", State: "held", SessionID: created.ID, Reason: "fresh_conversation_not_verified"}); err != nil {
+			return b, err
+		}
+		return b, domain.ErrOuterHeld
+	}
 	previous := b.Revision
 	b.Revision++
 	b.SessionID = created.ID
