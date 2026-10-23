@@ -1,7 +1,7 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { hasProjectConflict, inspectMulticaProject, snapshotDigest, verifyRecoveryReceipt, type ProjectApproval, type ProjectApprovalRequest } from "./multica-local-server-preflight";
+import { hasProjectConflict, inspectMulticaProject, resolveProjectTargets, snapshotDigest, verifyRecoveryReceipt, type ProjectApproval, type ProjectApprovalRequest, type ProjectSnapshot, type ProjectTargets } from "./multica-local-server-preflight";
 import {
 	EMPTY_LOCAL_SERVER_STATUS,
 	localServerAvailability,
@@ -29,7 +29,6 @@ import {
 	localServerChildEnv,
 	trustedPathDirs,
 	logsCommand,
-	openDockerCommand,
 	psCommand,
 	restartCommand,
 	runLocalServerCommand,
@@ -65,8 +64,6 @@ import {
 // or written anywhere by AO.
 
 const DEFAULT_POLL_MS = 5_000;
-const DOCKER_WAIT_MS = 120_000;
-const DOCKER_WAIT_POLL_MS = 2_000;
 const LOG_LINE_MAX = 2_000;
 
 // One stack operation per machine, across every service instance (as the daemon CLI service does).
@@ -87,7 +84,17 @@ export type MulticaLocalServer = {
 	dispose: () => void;
 };
 
+export type ExclusiveMutationRequest = { endpoint: string; snapshot: ProjectSnapshot; digest: string; stack: StackPaths; targetIdentity: string; command: CommandSpec };
+
+/** Requires a trusted provider that fences every engine writer through snapshot comparison and mutation. A cooperative lock is insufficient. */
+export type ExclusiveMutation = (request: ExclusiveMutationRequest, execute: () => Promise<CommandResult>) => Promise<CommandResult>;
+
+export type ProjectLogRequest = { stackDir: string; snapshot: ProjectSnapshot; digest: string; service: LocalServerService; tail: number };
+
 export type MulticaLocalServerOptions = {
+	executeExclusiveMutation?: ExclusiveMutation;
+	approveProjectLogs?: (request: ProjectLogRequest) => Promise<boolean>;
+	readProjectTargets?: (stack: StackPaths) => Promise<ProjectTargets>;
 	approveProjectMutation?: (request: ProjectApprovalRequest) => Promise<ProjectApproval | null>;
 	verifyRecovery?: (file: string, digest: string) => Promise<void>;
 	stackIdentity?: (stack: StackPaths) => Promise<string>;
@@ -123,33 +130,16 @@ export type MulticaLocalServerOptions = {
 	/** The local engine's address (`unix://…`); defaults to a search of the usual local sockets. */
 	findEndpoint?: () => string | null;
 	now?: () => number;
-	sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
 	pollMs?: number;
-	dockerWaitMs?: number;
-	dockerWaitPollMs?: number;
 };
 
 type Folder = { kind: "none" } | { kind: "invalid"; dir: string } | { kind: "ok"; stack: StackPaths };
 type Prepared = { ok: true; stack: StackPaths; docker: string } | { ok: false; code: LocalServerErrorCode; detail?: string };
 
-function defaultSleep(ms: number, signal: AbortSignal): Promise<void> {
-	return new Promise((resolve) => {
-		const timer = setTimeout(resolve, ms);
-		signal.addEventListener(
-			"abort",
-			() => {
-				clearTimeout(timer);
-				resolve();
-			},
-			{ once: true },
-		);
-	});
-}
-
 export function createMulticaLocalServer(options: MulticaLocalServerOptions): MulticaLocalServer {
 	const clock = options.now ?? Date.now;
-	const sleep = options.sleep ?? defaultSleep;
-	const canLaunchDocker = options.platform === "darwin";
+	const canLaunchDocker = false;
+	const readTargets = options.readProjectTargets ?? (async (stack: StackPaths) => resolveProjectTargets(await readFile(stack.file, "utf8")));
 	const findEndpoint =
 		options.findEndpoint ?? (() => findLocalDockerEndpoint({ home: options.home, platform: options.platform, uid: typeof process.getuid === "function" ? process.getuid() : undefined }));
 	const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
@@ -238,7 +228,6 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 		const state = classifyDockerError(result.error, result.stderr);
 		return state === "unknown" ? { state, detail: redactCommandText(result.stderr || result.error?.message || "") } : { state };
 	}
-	const engineState = async (docker: string | null, signal?: AbortSignal): Promise<DockerProbe> => (await inspectEngine(docker, signal)).state;
 
 	async function composeInstalled(docker: string): Promise<boolean> {
 		// No Compose plugin in a trusted location counts as no Compose: nothing else is ever loaded.
@@ -410,50 +399,29 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 		return { ok: false, code: "command_failed", detail: redactCommandText(text) };
 	}
 
-	async function waitForDocker(docker: string, signal: AbortSignal): Promise<"ok" | "timeout" | "cancelled"> {
-		const deadline = clock() + (options.dockerWaitMs ?? DOCKER_WAIT_MS);
-		for (;;) {
-			if (signal.aborted) return "cancelled";
-			if ((await engineState(docker, signal)) === "ok") return "ok";
-			if (signal.aborted) return "cancelled";
-			if (clock() >= deadline) return "timeout";
-			await sleep(options.dockerWaitPollMs ?? DOCKER_WAIT_POLL_MS, signal);
-		}
-	}
-
-	/** Makes sure Docker's engine answers; on macOS a stopped Docker Desktop is started and waited for. */
-	async function ensureEngine(docker: string, signal: AbortSignal, mayLaunch: boolean): Promise<LocalServerResult> {
+	async function ensureEngine(docker: string, signal: AbortSignal): Promise<LocalServerResult> {
 		const inspected = await inspectEngine(docker, signal);
-		// Cancelled while Docker was being asked: do not go on to launch Docker Desktop.
 		if (signal.aborted) return { ok: false, code: "cancelled" };
 		if (inspected.state === "ok") return { ok: true };
 		if (inspected.state === "unknown") return { ok: false, code: "inspect_failed", ...(inspected.detail ? { detail: inspected.detail } : {}) };
-		if (!mayLaunch || !canLaunchDocker) return { ok: false, code: "docker_not_running" };
-		setOp("docker_starting");
-		const opened = await run(openDockerCommand(), signal);
-		if (opened.error) return signal.aborted ? { ok: false, code: "cancelled" } : { ok: false, code: "command_failed", detail: redactCommandText(opened.stderr || opened.error.message) };
-		const waited = await waitForDocker(docker, signal);
-		if (waited === "cancelled") return { ok: false, code: "cancelled" };
-		if (waited === "timeout") return { ok: false, code: "docker_start_timeout" };
-		return { ok: true };
+		return { ok: false, code: "docker_not_running", detail: "Start Docker separately with explicit approval: engine startup can resume existing services. Then retry the project preflight." };
 	}
 
 	async function stackCommand(
 		state: LocalServerState,
 		build: (docker: string, stack: StackPaths) => CommandSpec,
-		mayLaunchDocker: boolean,
 		action: ProjectApprovalRequest["action"],
 	): Promise<LocalServerResult> {
 		return operate(state, async (signal) => {
 			const prepared = await prepare();
 			if (signal.aborted) return { ok: false, code: "cancelled" };
 			if (!prepared.ok) return prepared;
-			const engine = await ensureEngine(prepared.docker, signal, mayLaunchDocker);
+			const engine = await ensureEngine(prepared.docker, signal);
 			if (!engine.ok) return engine;
 			const installed = await composeInstalled(prepared.docker);
 			if (signal.aborted) return { ok: false, code: "cancelled" };
 			if (!installed) return { ok: false, code: composeUntrusted() ? "docker_untrusted" : "compose_missing" };
-			// The stack is validated again right before the command: the Docker wait above can be long, and the folder or its .env may have changed since.
+			// Revalidate after prerequisite checks before inspecting project ownership.
 			const fresh = await prepare();
 			if (signal.aborted) return { ok: false, code: "cancelled" };
 			if (!fresh.ok) return fresh;
@@ -461,10 +429,13 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 			if (!endpoint) return { ok: false, code: "inspect_failed" };
 			const identity = options.stackIdentity ?? (async (stack: StackPaths) => createHash("sha256").update(await readFile(stack.file)).update(await readFile(path.join(stack.dir, ENV_FILE_NAME))).digest("hex"));
 			const targetIdentity = await identity(fresh.stack);
+			let approvedSnapshot: ProjectSnapshot;
 			try {
-				const inspect = () => inspectMulticaProject(endpoint, fresh.docker, (command) => run(command, signal, endpoint));
+				const targets = await readTargets(fresh.stack);
+				const inspect = () => inspectMulticaProject(endpoint, fresh.docker, (command) => run(command, signal, endpoint), targets);
 				const snapshot = await inspect();
 				const digest = snapshotDigest(snapshot);
+				approvedSnapshot = snapshot;
 				if (hasProjectConflict(snapshot)) {
 					if (!options.approveProjectMutation) return { ok: false, code: "command_failed", detail: "Existing multica project requires explicit takeover and downtime approval with recovery evidence." };
 					const approvalStarted = clock();
@@ -483,8 +454,14 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 				return { ok: false, code: "inspect_failed", detail: "Project ownership or protected recovery evidence could not be verified." };
 			}
 			if (signal.aborted) return { ok: false, code: "cancelled" };
+			if (!options.executeExclusiveMutation) return { ok: false, code: "command_failed", detail: "Exclusive engine control is unavailable. Start, stop and restart are blocked: a lock file cannot exclude other clients with Docker-socket access." };
 			setOp(state);
-			const result = outcome(await run(build(fresh.docker, fresh.stack), signal, endpoint), signal);
+			const command = build(fresh.docker, fresh.stack);
+			const result = outcome(await options.executeExclusiveMutation({ endpoint, snapshot: approvedSnapshot, digest: snapshotDigest(approvedSnapshot), stack: fresh.stack, targetIdentity, command }, async () => {
+				const current = await inspectMulticaProject(endpoint, fresh.docker, (spec) => run(spec, signal, endpoint), await readTargets(fresh.stack));
+				if (snapshotDigest(current) !== snapshotDigest(approvedSnapshot) || await identity(fresh.stack) !== targetIdentity) return { error: new Error("Project or configuration changed before exclusive mutation"), stdout: "", stderr: "Concurrent project or configuration change; mutation refused." };
+				return run(command, signal, endpoint);
+			}), signal);
 			if (result.ok) portFailure = false;
 			return result;
 		});
@@ -518,9 +495,9 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 			timer = setInterval(() => void refreshAndPublish(), options.pollMs ?? DEFAULT_POLL_MS);
 			timer.unref?.();
 		},
-		start: () => stackCommand("starting_server", upCommand, true, "start"),
-		stop: () => stackCommand("stopping", stopCommand, false, "stop"),
-		restart: () => stackCommand("restarting", restartCommand, false, "restart"),
+		start: () => stackCommand("starting_server", upCommand, "start"),
+		stop: () => stackCommand("stopping", stopCommand, "stop"),
+		restart: () => stackCommand("restarting", restartCommand, "restart"),
 		cancel: () => {
 			// Creating .env is one quick write that cannot be taken back half-way: once it has started, cancel says so.
 			if (setupWriting) return { ok: false, code: "busy" };
@@ -576,13 +553,31 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 			if (engine.state !== "ok") return { ok: false, code: "docker_not_running" };
 			const problem = composeProblem();
 			if (problem) return { ok: false, code: problem };
-			const result = await run(logsCommand(prepared.docker, prepared.stack, service, tail));
+			const endpoint = findEndpoint();
+			if (!endpoint) return { ok: false, code: "inspect_failed" };
+			let digest: string;
+			const targets = await readTargets(prepared.stack).catch(() => null);
+			if (!targets) return { ok: false, code: "inspect_failed" };
+			const inspect = () => inspectMulticaProject(endpoint, prepared.docker, (command) => run(command, undefined, endpoint), targets);
+			try {
+				const snapshot = await inspect();
+				digest = snapshotDigest(snapshot);
+				if (!options.approveProjectLogs || !await options.approveProjectLogs({ stackDir: prepared.stack.dir, snapshot, digest, service, tail })) return { ok: false, code: "cancelled" };
+				if (snapshotDigest(await inspect()) !== digest) return { ok: false, code: "inspect_failed" };
+			} catch {
+				return { ok: false, code: "inspect_failed" };
+			}
+			const result = await run(logsCommand(prepared.docker, prepared.stack, service, tail), undefined, endpoint);
 			if (result.error) {
 				if (result.error.code === "NO_TRUSTED_COMPOSE") return { ok: false, code: composeProblem() ?? "compose_missing" };
 				if (result.error.killed) return { ok: false, code: "timeout" };
 				return { ok: false, code: "command_failed", detail: redactCommandText(result.stderr || result.error.message) };
 			}
-			// Shown to the user as they are (a sign-in code is how they log in without email), kept nowhere.
+			try {
+				if (snapshotDigest(await inspect()) !== digest) return { ok: false, code: "inspect_failed" };
+			} catch {
+				return { ok: false, code: "inspect_failed" };
+			}
 			const lines = result.stdout
 				.replace(/\r/g, "")
 				.split("\n")

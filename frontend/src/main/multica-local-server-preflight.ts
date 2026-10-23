@@ -2,24 +2,37 @@ import { createHash } from "node:crypto";
 import { lstat, open, realpath } from "node:fs/promises";
 import path from "node:path";
 import { constants } from "node:fs";
-import { projectEngineCommand, projectContainersCommand, projectInspectCommand, projectResourcesCommand, type CommandResult, type CommandSpec } from "./multica-local-server-commands";
+import { CORE_SCHEMA, load } from "js-yaml";
+import { projectEngineCommand, projectContainersCommand, projectNamedContainersCommand, projectInspectCommand, projectResourcesCommand, projectResourceInspectCommand, type CommandResult, type CommandSpec } from "./multica-local-server-commands";
 
 export type ProjectSnapshot = {
 	endpoint: string;
 	engineId: string;
-	containers: Array<{ id: string; name: string; imageId: string; image: string; state: string; service: string; configFiles: string; workingDir: string; mounts: unknown[] }>;
+	containers: Array<{ id: string; name: string; imageId: string; image: string; state: string; service: string; configFiles: string; workingDir: string; mounts: unknown[]; project: string | null }>;
 	volumes: string[];
 	networks: string[];
+	resources: Array<{ kind: "volume" | "network"; name: string; fingerprint: string; project: string | null }>;
 };
 export type ProjectApprovalRequest = { action: "start" | "stop" | "restart"; stackDir: string; snapshot: ProjectSnapshot; digest: string };
 export type ProjectApproval = { digest: string; action: ProjectApprovalRequest["action"]; recoveryReceipt: string };
 export const snapshotDigest = (snapshot: ProjectSnapshot): string => createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
 
+export type ProjectTargets = { services: string[]; volumes: string[]; networks: string[] };
+
+export function resolveProjectTargets(recipe: string): ProjectTargets {
+	const document = load(recipe, { schema: CORE_SCHEMA }) as { name?: unknown; services?: object; volumes?: object };
+	if (document?.name !== "multica" || !document.services || typeof document.services !== "object") throw new Error("invalid project recipe");
+	const services = Object.keys(document.services).sort();
+	const volumes = Object.keys(document.volumes ?? {}).sort();
+	if (!services.every((name) => /^[a-z][a-z0-9_-]{0,62}$/.test(name)) || !volumes.every((name) => /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(name))) throw new Error("invalid target names");
+	return { services, volumes: volumes.map((name) => `multica_${name}`), networks: ["multica_default"] };
+}
+
 function lines(text: string): string[] {
 	return text.trim() === "" ? [] : text.trim().split(/\r?\n/);
 }
 
-export async function inspectMulticaProject(endpoint: string, docker: string, run: (command: CommandSpec) => Promise<CommandResult>): Promise<ProjectSnapshot> {
+export async function inspectMulticaProject(endpoint: string, docker: string, run: (command: CommandSpec) => Promise<CommandResult>, targets: ProjectTargets): Promise<ProjectSnapshot> {
 	const checked = async (spec: CommandSpec): Promise<string> => {
 		const result = await run(spec);
 		if (result.error) throw new Error("project inventory failed");
@@ -27,8 +40,10 @@ export async function inspectMulticaProject(endpoint: string, docker: string, ru
 	};
 	const engineId = (await checked(projectEngineCommand(docker))).trim();
 	if (!/^[a-zA-Z0-9:_-]{8,128}$/.test(engineId)) throw new Error("missing engine identity");
-	const ids = lines(await checked(projectContainersCommand(docker))).sort();
-	if (new Set(ids).size !== ids.length) throw new Error("ambiguous project inventory");
+	const labeledIds = lines(await checked(projectContainersCommand(docker)));
+	const namedIds = lines(await checked(projectNamedContainersCommand(docker, targets.services)));
+	if (new Set(labeledIds).size !== labeledIds.length || new Set(namedIds).size !== namedIds.length) throw new Error("ambiguous project inventory");
+	const ids = [...new Set([...labeledIds, ...namedIds])].sort();
 	const containers: ProjectSnapshot["containers"] = [];
 	if (ids.length > 0) {
 		const rows = lines(await checked(projectInspectCommand(docker, ids)));
@@ -37,21 +52,34 @@ export async function inspectMulticaProject(endpoint: string, docker: string, ru
 			if (!Array.isArray(value) || value.length !== 7) throw new Error("invalid project inventory");
 			const [id, name, imageId, image, state, labels, mounts] = value;
 			if (![id, name, imageId, image, state].every((field) => typeof field === "string" && field.length > 0) ||
-				!/^sha256:[a-f0-9]{64}$/.test(imageId) || labels?.["com.docker.compose.project"] !== "multica" || !Array.isArray(mounts) ||
-				!/^[-a-zA-Z0-9_]+$/.test(labels["com.docker.compose.service"] ?? "") ||
-				typeof labels["com.docker.compose.project.config_files"] !== "string" || !labels["com.docker.compose.project.config_files"].split(",").every((file: string) => path.isAbsolute(file)) ||
-				typeof labels["com.docker.compose.project.working_dir"] !== "string" || !path.isAbsolute(labels["com.docker.compose.project.working_dir"])) throw new Error("invalid project identity");
-			containers.push({ id, name, imageId, image, state, service: labels["com.docker.compose.service"] ?? "unknown", configFiles: labels["com.docker.compose.project.config_files"] ?? "unknown", workingDir: labels["com.docker.compose.project.working_dir"] ?? "unknown", mounts });
+				!/^sha256:[a-f0-9]{64}$/.test(imageId) || !Array.isArray(mounts) || (labels !== null && (typeof labels !== "object" || Array.isArray(labels)))) throw new Error("invalid project identity");
+			const label = (key: string): string => typeof labels?.[key] === "string" ? labels[key] : "unknown";
+			containers.push({ id, name, imageId, image, state, service: label("com.docker.compose.service"), configFiles: label("com.docker.compose.project.config_files"), workingDir: label("com.docker.compose.project.working_dir"), mounts, project: typeof labels?.["com.docker.compose.project"] === "string" ? labels["com.docker.compose.project"] : null });
 		}
 		containers.sort((a, b) => a.id.localeCompare(b.id));
 		if (JSON.stringify(containers.map((c) => c.id)) !== JSON.stringify(ids)) throw new Error("incomplete project inventory");
 	}
-	const resources = async (kind: "volume" | "network"): Promise<string[]> => lines(await checked(projectResourcesCommand(docker, kind))).map((line) => {
-		const name: unknown = JSON.parse(line);
-		if (typeof name !== "string" || !/^[a-zA-Z0-9_.-]+$/.test(name)) throw new Error("invalid project resource");
-		return name;
-	}).sort();
-	return { endpoint, engineId, containers, volumes: await resources("volume"), networks: await resources("network") };
+	const resources: ProjectSnapshot["resources"] = [];
+	const resourceNames = async (kind: "volume" | "network", targetNames: string[]): Promise<string[]> => {
+		const parseNames = (text: string): string[] => lines(text).map((line) => {
+			const name: unknown = JSON.parse(line);
+			if (typeof name !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(name)) throw new Error("invalid project resource");
+			return name;
+		});
+		const labeled = parseNames(await checked(projectResourcesCommand(docker, kind)));
+		const named = parseNames(await checked(projectResourcesCommand(docker, kind, true))).filter((name) => targetNames.includes(name));
+		const names = [...new Set([...labeled, ...named])].sort();
+		if (names.length > 0) {
+			const values = lines(await checked(projectResourceInspectCommand(docker, kind, names))).map((line) => JSON.parse(line));
+			if (values.length !== names.length || JSON.stringify(values.map((v) => v?.Name).sort()) !== JSON.stringify(names)) throw new Error("incomplete resource identities");
+			for (const value of values) resources.push({ kind, name: value.Name, fingerprint: createHash("sha256").update(JSON.stringify(value)).digest("hex"), project: typeof value.Labels?.["com.docker.compose.project"] === "string" ? value.Labels["com.docker.compose.project"] : null });
+		}
+		return names;
+	};
+	const volumes = await resourceNames("volume", targets.volumes);
+	const networks = await resourceNames("network", targets.networks);
+	resources.sort((a, b) => `${a.kind}:${a.name}`.localeCompare(`${b.kind}:${b.name}`));
+	return { endpoint, engineId, containers, volumes, networks, resources };
 }
 
 export const hasProjectConflict = (snapshot: ProjectSnapshot): boolean => snapshot.containers.length + snapshot.volumes.length + snapshot.networks.length > 0;

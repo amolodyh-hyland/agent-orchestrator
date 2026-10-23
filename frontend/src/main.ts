@@ -1,5 +1,5 @@
 import { registerFactoryRunConfirmation } from "./main/factory-run-confirmation";
-import { approveLocalServerMutation } from "./main/multica-local-server-approval";
+import { approveLocalServerLogs, approveLocalServerMutation } from "./main/multica-local-server-approval";
 import { createMainProcessDelegationAuthority } from "./main/multica-delegation-authority";
 import { registerDesktopDelegation } from "./main/multica-delegation-desktop";
 import { registerProjectContextIpc } from "./main/project-context-ipc";
@@ -1193,6 +1193,9 @@ async function createWindowInternal(): Promise<void> {
 	// Start, stop and restart the self-hosted Multica server (Docker Compose). Nothing runs until
 	// the Settings block is shown; the Multica view host is not involved.
 	multicaLocalServer = createMulticaLocalServer({
+		approveProjectLogs: (request) => approveLocalServerLogs(request, {
+			show: (options) => mainWindow && !mainWindow.isDestroyed() ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options),
+		}),
 		approveProjectMutation: (request) => approveLocalServerMutation(request, {
 			show: (options) => mainWindow && !mainWindow.isDestroyed() ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options),
 			chooseReceipt: async () => {

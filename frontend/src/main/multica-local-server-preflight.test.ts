@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { verifyRecoveryReceipt } from "./multica-local-server-preflight";
+import { resolveProjectTargets, verifyRecoveryReceipt } from "./multica-local-server-preflight";
 
 const dirs: string[] = [];
 afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
@@ -57,5 +57,12 @@ describe("protected restore evidence", () => {
 		await writeFile(file, JSON.stringify(fixture.receipt), { mode: 0o600 });
 		await chmod(shared, 0o777);
 		await expect(verifyRecoveryReceipt(file, "snapshot")).rejects.toThrow();
+	});
+});
+
+
+describe("resolved target names", () => {
+	it("includes every declared service and volume plus the implicit default network", () => {
+		expect(resolveProjectTargets("name: multica\nservices:\n  backend: {image: b}\n  custom: {image: c}\nvolumes:\n  pgdata:\n  custom-data:\n")).toEqual({ services: ["backend", "custom"], volumes: ["multica_custom-data", "multica_pgdata"], networks: ["multica_default"] });
 	});
 });

@@ -32,6 +32,9 @@ import {
 	nodeExec,
 	openDockerCommand,
 	psCommand,
+	projectNamedContainersCommand,
+	projectResourcesCommand,
+	projectResourceInspectCommand,
 	restartCommand,
 	runLocalServerCommand,
 	stopCommand,
@@ -876,5 +879,19 @@ describe("the production adapter (nodeExec) with a mocked child_process", () => 
 		await expect(runLocalServerCommand(nodeExec, forged, ENV, GATE)).rejects.toThrow();
 		await expect(runLocalServerCommand(nodeExec, upCommand(DOCKER, STACK), pinnedEnv(null), GATE)).rejects.toThrow();
 		expect(childProcess.execFile).not.toHaveBeenCalled();
+	});
+});
+
+
+describe("resolved project resource inspection commands", () => {
+	it("queries generated container names independently of project labels", () => {
+		expect(projectNamedContainersCommand(DOCKER, ["backend", "custom-service"]).args).toEqual(["container", "ls", "--all", "--no-trunc", "--filter", "name=^/multica[-_]backend[-_][0-9]+$", "--filter", "name=^/multica[-_]custom-service[-_][0-9]+$", "--format", "{{.ID}}"]);
+		expect(() => projectNamedContainersCommand(DOCKER, [".*"])).toThrow();
+	});
+	it("lists names without labels before inspecting resolved target resources", () => {
+		expect(projectResourcesCommand(DOCKER, "volume", true).args).toEqual(["volume", "ls", "--format", "{{json .Name}}"]);
+		expect(projectResourcesCommand(DOCKER, "network", true).args).toEqual(["network", "ls", "--format", "{{json .Name}}"]);
+		expect(projectResourceInspectCommand(DOCKER, "volume", ["multica_pgdata"]).args).toEqual(["volume", "inspect", "--format", "{{json .}}", "multica_pgdata"]);
+		expect(() => projectResourceInspectCommand(DOCKER, "volume", ["--help"])).toThrow();
 	});
 });

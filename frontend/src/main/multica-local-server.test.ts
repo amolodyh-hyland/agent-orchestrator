@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
+import { chmod, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 // Records every file-system write the code under test attempts (and lets it through), so a
 // log line that is persisted anywhere shows up, whichever fs API or import style is used.
@@ -112,8 +116,8 @@ function harness(patch: Partial<Fake> = {}) {
 
 	const verbOf = (args: string[]): string => {
 		if (args[0] === "info") return "project-engine";
-		if (args[0] === "container") return args[1] === "ls" ? "project-containers" : "project-inspect";
-		if (args[0] === "volume" || args[0] === "network") return `project-${args[0]}`;
+		if (args[0] === "container") return args[1] === "ls" ? args.some((arg) => arg.startsWith("name=")) ? "project-named-containers" : "project-containers" : "project-inspect";
+		if (args[0] === "volume" || args[0] === "network") return args[1] === "inspect" ? "project-resource-inspect" : `project-${args[0]}${args.includes("--filter") ? "" : "-all"}`;
 		if (args[0] === "version") return "docker-version";
 		if (args[0] === "-a") return "open";
 		if (args[1] === "version") return "compose-version";
@@ -138,6 +142,7 @@ function harness(patch: Partial<Fake> = {}) {
 			});
 			return;
 		}
+		if (verb === "project-resource-inspect") return finish({ stdout: args.slice(4).map((name) => JSON.stringify({ Name: name, CreatedAt: "retained-volume-created-at", Labels: { "com.docker.compose.project": "multica" } })).join("\n") });
 		if (verb === "project-engine") return finish({ stdout: "engine-test-12345" });
 		if (verb === "docker-version") return finish(fake.engine === "up" ? { stdout: "27.0.0\n" } : { error: { code: 1 }, stderr: "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" });
 		if (verb === "compose-version") return finish(fake.composePlugin ? { stdout: "v2.29.0\n" } : { error: { code: 1 }, stderr: "docker: 'compose' is not a docker command." });
@@ -151,7 +156,10 @@ function harness(patch: Partial<Fake> = {}) {
 	};
 
 	const options: MulticaLocalServerOptions = {
+		executeExclusiveMutation: async (_request, execute) => execute(),
 		stackIdentity: async () => "target-compose-and-env-digest",
+		readProjectTargets: async () => ({ services: ["backend", "frontend", "postgres"], volumes: ["multica_backend_uploads", "multica_pgdata"], networks: ["multica_default"] }),
+		approveProjectLogs: async () => true,
 		readServerSettings: async () => fake.settings,
 		readStackSettings: async () => ({ stackDir: fake.stackDir }),
 		writeStackSettings: async (settings) => {
@@ -184,9 +192,6 @@ function harness(patch: Partial<Fake> = {}) {
 			return fake.dockerConfig === "ok" ? { ok: true, home: AO_DOCKER_HOME, config: `${AO_DOCKER_HOME}/.docker` } : { ok: false };
 		},
 		now: () => fake.now,
-		sleep: async (ms) => {
-			fake.now += ms;
-		},
 	};
 	const server: MulticaLocalServer = createMulticaLocalServer(options);
 	const verbs = () => calls.map((call) => verbOf(call.args));
@@ -382,37 +387,10 @@ describe("start, stop and restart", () => {
 		expect(h.emitted.at(-1)?.state).toBe("stopped");
 	});
 
-	it("starts Docker Desktop on macOS, waits for the engine, then starts the stack", async () => {
-		const h = harness({ engine: "down" });
-		let opened = false;
-		let polls = 0;
-		h.fake.handlers["open"] = () => {
-			opened = true;
-			return {};
-		};
-		// Docker takes a few polls to come up after it was launched.
-		h.fake.handlers["docker-version"] = () =>
-			opened && ++polls > 2 ? { stdout: "27.0.0\n" } : { error: { code: 1 }, stderr: "Cannot connect to the Docker daemon. Is the docker daemon running?" };
-		expect(await h.server.start()).toEqual({ ok: true });
-
-		expect(h.calls.find((call) => call.file === "/usr/bin/open")?.args).toEqual(["-a", "Docker"]);
-		expect(h.verbs().indexOf("open")).toBeLessThan(h.verbs().indexOf("up"));
-		expect(h.emitted.map((s) => s.state)).toContain("docker_starting");
-	});
-
-	it("validates the stack again right before the command, after a long Docker wait", async () => {
-		const h = harness({ engine: "down" });
-		let polls = 0;
-		h.fake.handlers["docker-version"] = () => (++polls > 2 ? { stdout: "27.0.0\n" } : { error: { code: 1 }, stderr: "Cannot connect to the Docker daemon. Is the docker daemon running?" });
-		h.fake.handlers["open"] = () => {
-			// The folder is swapped for something that no longer validates while Docker starts.
-			h.fake.validDirs = new Set();
-			return {};
-		};
-
-		const result = await h.server.start();
-
-		expect(result).toEqual({ ok: false, code: "no_folder" });
+	it.each(["darwin", "linux", "win32"] as const)("requires an already-running engine on %s without launching Docker", async (platform) => {
+		const h = harness({ engine: "down", platform });
+		expect(await h.server.start()).toMatchObject({ ok: false, code: "docker_not_running", detail: expect.stringContaining("resume existing services") });
+		expect(h.verbs()).not.toContain("open");
 		expect(h.verbs()).not.toContain("up");
 	});
 
@@ -439,27 +417,6 @@ describe("start, stop and restart", () => {
 
 		expect(await server.start()).toEqual({ ok: false, code: "invalid_folder" });
 		expect(h.verbs()).not.toContain("up");
-	});
-
-	it("gives up waiting for Docker after the timeout and does not start the stack", async () => {
-		const h = harness({ engine: "down" });
-		h.fake.handlers["open"] = () => ({});
-		const result = await h.server.start();
-
-		expect(result).toEqual({ ok: false, code: "docker_start_timeout" });
-		expect(h.verbs()).not.toContain("up");
-		expect(h.fake.now - 1_000_000).toBeGreaterThanOrEqual(120_000);
-	});
-
-	it("does not try to launch Docker off macOS, nor for stop and restart", async () => {
-		const linux = harness({ engine: "down", platform: "linux" });
-		expect(await linux.server.start()).toEqual({ ok: false, code: "docker_not_running" });
-		expect(linux.calls.some((call) => call.file === "/usr/bin/open")).toBe(false);
-
-		const mac = harness({ engine: "down" });
-		expect(await mac.server.stop()).toEqual({ ok: false, code: "docker_not_running" });
-		expect(await mac.server.restart()).toEqual({ ok: false, code: "docker_not_running" });
-		expect(mac.calls.some((call) => call.file === "/usr/bin/open")).toBe(false);
 	});
 
 	it("refuses with the reason when the stack is not ready to run", async () => {
@@ -651,7 +608,7 @@ describe("Docker's home and plugins are AO's own", () => {
 		};
 		await h.server.start();
 		const open = h.calls.find((call) => call.file === "/usr/bin/open");
-		expect(open?.env.DOCKER_CONFIG).toBeUndefined();
+		expect(open).toBeUndefined();
 	});
 });
 
@@ -722,7 +679,7 @@ describe("no Compose command runs without a trusted plugin, anywhere", () => {
 		it(`${command} (${entry}): never runs when no trusted plugin is found, wherever in the sequence it disappears`, async () => {
 			let ranWithoutPlugin = 0;
 			let ranWithPlugin = 0;
-			for (let present = 0; present <= 14; present += 1) {
+			for (let present = 0; present <= 60; present += 1) {
 				const h = harness(patch);
 				let lookups = 0;
 				let lastLookupFound = false;
@@ -946,26 +903,19 @@ describe("the local Docker engine", () => {
 		const h = harness({ endpoint: null, env: HOSTILE_ENV });
 
 		expect((await h.server.getStatus()).state).toBe("docker_not_running");
-		expect(await h.server.stop()).toEqual({ ok: false, code: "docker_not_running" });
-		expect(await h.server.restart()).toEqual({ ok: false, code: "docker_not_running" });
+		expect(await h.server.stop()).toMatchObject({ ok: false, code: "docker_not_running" });
+		expect(await h.server.restart()).toMatchObject({ ok: false, code: "docker_not_running" });
 		expect(await h.server.getLogs("backend", 5)).toEqual({ ok: false, code: "docker_not_running" });
 
 		const engine = h.calls.filter((call) => call.file === DOCKER && !(call.args[0] === "compose" && call.args[1] === "version"));
 		expect(engine).toEqual([]);
 	});
 
-	it("starts Docker Desktop and then follows its socket once it appears", async () => {
+	it("does not launch Docker to obtain a missing socket", async () => {
 		const h = harness({ endpoint: null });
-		h.fake.handlers["open"] = () => {
-			h.fake.endpoint = SOCKET;
-			return {};
-		};
-
-		expect(await h.server.start()).toEqual({ ok: true });
-
-		const up = h.calls.find((call) => call.args.includes("up"));
-		expect(up?.env.DOCKER_HOST).toBe(SOCKET);
-		expect(h.calls.find((call) => call.file === "/usr/bin/open")?.env.DOCKER_HOST).toBeUndefined();
+		expect(await h.server.start()).toMatchObject({ ok: false, code: "docker_not_running" });
+		expect(h.verbs()).not.toContain("open");
+		expect(h.verbs()).not.toContain("up");
 	});
 
 	it("gives every command a PATH of trusted directories only, ignoring AO's inherited PATH", async () => {
@@ -1099,21 +1049,6 @@ describe("cancel", () => {
 		expect(await started).toEqual({ ok: false, code: "cancelled" });
 		expect((await h.server.getStatus()).error).toBeNull();
 		expect(await h.server.stop()).toEqual({ ok: true });
-	});
-
-	it("also cancels the wait for Docker Desktop", async () => {
-		const h = harness({ engine: "down" });
-		h.fake.handlers["open"] = () => ({});
-		let sleeps = 0;
-		h.options.sleep = async (ms) => {
-			sleeps += 1;
-			h.fake.now += ms;
-			if (sleeps === 2) server.cancel();
-		};
-		const server = createMulticaLocalServer(h.options);
-
-		expect(await server.start()).toEqual({ ok: false, code: "cancelled" });
-		expect(h.verbs()).not.toContain("up");
 	});
 
 	it("does not create .env when cancelled while the settings are still being read", async () => {
@@ -1357,7 +1292,7 @@ describe("fixed project mutation preflight", () => {
 	it("proves an empty project in the selected engine before each mutation", async () => {
 		const h = harness();
 		for (const action of ["start", "stop", "restart"] as const) expect(await h.server[action]()).toEqual({ ok: true });
-		expect(h.verbs().filter((verb) => verb === "project-containers")).toHaveLength(6);
+		expect(h.verbs().filter((verb) => verb === "project-containers")).toHaveLength(9);
 		expect(h.calls.filter((call) => call.args[0] === "container").every((call) => call.env.DOCKER_HOST === SOCKET)).toBe(true);
 		expect(h.calls.find((call) => call.args.includes("up"))?.args).toEqual(expect.arrayContaining(["--no-build", "--pull", "never"]));
 	});
@@ -1382,22 +1317,67 @@ describe("fixed project mutation preflight", () => {
 		expect(mutations(h)).toEqual([]);
 	});
 
-	it("permits one approved takeover and a separately approved restore to the preserved recipe", async () => {
+	it("verifies real private recovery artifacts before takeover and restoration, rejecting tampering", async () => {
 		const h = conflicting("exited");
-		const approvals: string[] = [];
-		const recovery = vi.fn(async () => undefined);
-		const server = createMulticaLocalServer({ ...h.options, approveProjectMutation: async (request) => {
-			approvals.push(`${request.action}:${request.stackDir}`);
-			expect(request.snapshot.containers[0]).toMatchObject({ service: "backend", state: "exited", image: "old/backend:retained", imageId: `sha256:${"b".repeat(64)}`, configFiles: "/old/docker-compose.selfhost.yml" });
-			return { digest: request.digest, action: request.action, recoveryReceipt: "/private/recovery.json" };
-		}, verifyRecovery: recovery });
-		expect(await server.start()).toEqual({ ok: true });
-		h.fake.validDirs.add("/old");
-		h.fake.stackDir = "/old";
-		expect(await server.start()).toEqual({ ok: true });
-		expect(approvals).toEqual([`start:${DIR}`, "start:/old"]);
-		expect(recovery).toHaveBeenCalledTimes(2);
-		expect(mutations(h)).toEqual(["up", "up"]);
+		const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), "multica-takeover-")));
+		await chmod(dir, 0o700);
+		try {
+			const artifacts: Record<string, { path: string; sha256: string }> = {};
+			for (const key of ["configurationArchive", "imageArchive", "dataBackup", "restoreProcedure", "restoreVerification"]) {
+				const content = `${key}: preserved original state`;
+				const file = path.join(dir, key);
+				await writeFile(file, content, { mode: 0o600 });
+				artifacts[key] = { path: file, sha256: createHash("sha256").update(content).digest("hex") };
+			}
+			const restored = path.join(dir, "restored-data");
+			await writeFile(restored, await readFile(artifacts.dataBackup!.path), { mode: 0o600 });
+			expect(await readFile(restored, "utf8")).toBe("dataBackup: preserved original state");
+			const receipt = path.join(dir, "receipt.json");
+			const approvals: string[] = [];
+			const server = createMulticaLocalServer({ ...h.options, approveProjectMutation: async (request) => {
+				approvals.push(`${request.action}:${request.stackDir}`);
+				await writeFile(receipt, JSON.stringify({ version: 1, snapshotDigest: request.digest, configurationPreserved: true, imageIdentitiesPreserved: true, dataBackupComplete: true, restoreVerified: true, ...artifacts }), { mode: 0o600 });
+				return { digest: request.digest, action: request.action, recoveryReceipt: receipt };
+			} });
+			expect(await server.start()).toEqual({ ok: true });
+			h.fake.validDirs.add("/old");
+			h.fake.stackDir = "/old";
+			expect(await server.start()).toEqual({ ok: true });
+			expect(approvals).toEqual([`start:${DIR}`, "start:/old"]);
+			await writeFile(artifacts.restoreVerification!.path, "tampered restore evidence");
+			expect(await server.start()).toMatchObject({ ok: false, code: "inspect_failed" });
+			expect(mutations(h)).toEqual(["up", "up"]);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it.each(["multica_pgdata", "multica_backend_uploads"])("finds existing target volume %s without project labels", async (name) => {
+		const h = harness({ handlers: {
+			"project-volume-all": () => ({ stdout: JSON.stringify(name) }),
+			"project-resource-inspect": () => ({ stdout: JSON.stringify({ Name: name, CreatedAt: "restored", Labels: null }) }),
+		} });
+		const approve = vi.fn(async () => null);
+		const server = createMulticaLocalServer({ ...h.options, approveProjectMutation: approve });
+		expect(await server.start()).toMatchObject({ ok: false });
+		expect(approve).toHaveBeenCalledWith(expect.objectContaining({ snapshot: expect.objectContaining({ volumes: [name] }) }));
+		expect(mutations(h)).toEqual([]);
+	});
+
+	it("finds target containers and networks with another owner's labels", async () => {
+		const value = JSON.parse(inventory("exited"));
+		value[5] = { "com.docker.compose.project": "other" };
+		const h = harness({ handlers: {
+			"project-named-containers": () => ({ stdout: id }),
+			"project-inspect": () => ({ stdout: JSON.stringify(value) }),
+			"project-network-all": () => ({ stdout: '"multica_default"' }),
+			"project-resource-inspect": () => ({ stdout: JSON.stringify({ Name: "multica_default", Id: "old-network", Labels: { "com.docker.compose.project": "other" } }) }),
+		} });
+		const approve = vi.fn(async () => null);
+		const server = createMulticaLocalServer({ ...h.options, approveProjectMutation: approve });
+		expect(await server.restart()).toMatchObject({ ok: false });
+		expect(approve).toHaveBeenCalledWith(expect.objectContaining({ snapshot: expect.objectContaining({ containers: [expect.objectContaining({ project: "other" })], networks: ["multica_default"] }) }));
+		expect(mutations(h)).toEqual([]);
 	});
 
 	it.each(["project", "endpoint", "target", "engine", "cancel", "expired"])("rejects %s changes during approval", async (kind) => {
@@ -1422,5 +1402,64 @@ describe("fixed project mutation preflight", () => {
 		else h.fake.handlers["project-inspect"] = () => kind === "failure" ? { error: { code: 1 } } : { stdout: kind };
 		expect(await h.server.restart()).toMatchObject({ ok: false, code: "inspect_failed" });
 		expect(mutations(h)).toEqual([]);
+	});
+});
+
+
+describe("existing-project log authorization", () => {
+	it("does not read log bytes when approval is absent or declined", async () => {
+		for (const approveProjectLogs of [undefined, async () => false]) {
+			const h = harness({ handlers: { logs: () => ({ stdout: "verification code: 987654" }) } });
+			const server = createMulticaLocalServer({ ...h.options, approveProjectLogs });
+			expect(await server.getLogs("backend", 5)).toEqual({ ok: false, code: "cancelled" });
+			expect(h.verbs()).not.toContain("logs");
+		}
+	});
+	it("discards logs if an existing project appears during the read", async () => {
+		const h = harness();
+		h.fake.handlers.logs = () => {
+			h.fake.handlers["project-volume-all"] = () => ({ stdout: '"multica_pgdata"' });
+			return { stdout: "verification code: 987654" };
+		};
+		const result = await h.server.getLogs("backend", 5);
+		expect(result).toMatchObject({ ok: false, code: "inspect_failed" });
+		expect(JSON.stringify([result, h.emitted])).not.toContain("987654");
+	});
+});
+
+
+describe("exclusive engine control", () => {
+	it("fails closed in the desktop's default configuration without a provider", async () => {
+		const h = harness();
+		const server = createMulticaLocalServer({ ...h.options, executeExclusiveMutation: undefined });
+		for (const action of ["start", "stop", "restart"] as const) {
+			expect(await server[action]()).toMatchObject({ ok: false, code: "command_failed", detail: expect.stringContaining("Exclusive engine control is unavailable") });
+		}
+		expect(h.verbs()).not.toContain("up");
+		expect(h.verbs()).not.toContain("stop");
+		expect(h.verbs()).not.toContain("restart");
+	});
+	it("refuses Compose when a conflict arrives after final inspection and exclusive control is unavailable", async () => {
+		const h = harness();
+		let inspected = 0;
+		h.fake.handlers["project-network-all"] = () => {
+			if (++inspected === 2) h.fake.handlers["project-volume-all"] = () => ({ stdout: '"multica_pgdata"' });
+			return {};
+		};
+		const server = createMulticaLocalServer({ ...h.options, executeExclusiveMutation: undefined });
+		expect(await server.start()).toMatchObject({ ok: false, code: "command_failed", detail: expect.stringContaining("Exclusive engine control is unavailable") });
+		expect(inspected).toBeGreaterThanOrEqual(2);
+		expect(h.fake.handlers["project-volume-all"]).toBeDefined();
+		expect(h.verbs()).not.toContain("up");
+	});
+	it("rechecks the approved snapshot inside exclusive execution before issuing Compose", async () => {
+		const h = harness();
+		const server = createMulticaLocalServer({ ...h.options, executeExclusiveMutation: async (request, execute) => {
+			expect(request.snapshot.volumes).toEqual([]);
+			h.fake.handlers["project-volume-all"] = () => ({ stdout: '"multica_pgdata"' });
+			return execute();
+		} });
+		expect(await server.start()).toMatchObject({ ok: false, code: "command_failed", detail: expect.stringContaining("Concurrent project") });
+		expect(h.verbs()).not.toContain("up");
 	});
 });

@@ -1,3 +1,4 @@
+import type { ProjectLogRequest } from "./multica-local-server";
 import type { ProjectApproval, ProjectApprovalRequest } from "./multica-local-server-preflight";
 import { verifyRecoveryReceipt } from "./multica-local-server-preflight";
 
@@ -29,4 +30,13 @@ export async function approveLocalServerMutation(request: ProjectApprovalRequest
 		buttons: ["Cancel", "Approve takeover and downtime"], defaultId: 0, cancelId: 0, noLink: true,
 	});
 	return approved.response === 1 ? { digest: request.digest, action: request.action, recoveryReceipt: file } : null;
+}
+
+export async function approveLocalServerLogs(request: ProjectLogRequest, dialogs: Pick<Dialogs, "show">): Promise<boolean> {
+	const result = await dialogs.show({
+		type: "warning", message: "Read local server logs?",
+		detail: `Service: ${request.service}\nMaximum lines: ${request.tail}\nFolder: ${request.stackDir}\nSnapshot: ${request.digest}\n${JSON.stringify(request.snapshot, null, 2)}\n\nThese may be an existing project's logs and contain sign-in codes, credentials or private data. Approve only if you are authorized to read this project's logs.`,
+		buttons: ["Cancel", "Read logs"], defaultId: 0, cancelId: 0, noLink: true,
+	});
+	return result.response === 1;
 }

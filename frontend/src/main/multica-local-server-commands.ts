@@ -26,7 +26,7 @@ const TIMEOUT_MS = {
 	open: 15_000,
 } as const;
 
-export type CommandName = "dockerVersion" | "composeVersion" | "composeList" | "ps" | "up" | "stop" | "restart" | "logs" | "openDocker" | "projectContainers" | "projectInspect" | "projectVolumes" | "projectNetworks" | "projectEngine";
+export type CommandName = "dockerVersion" | "composeVersion" | "composeList" | "ps" | "up" | "stop" | "restart" | "logs" | "openDocker" | "projectContainers" | "projectInspect" | "projectVolumes" | "projectNetworks" | "projectEngine" | "projectNamedContainers" | "projectAllVolumes" | "projectAllNetworks" | "projectResourceInspect";
 
 export type CommandSpec = {
 	readonly name: CommandName;
@@ -98,14 +98,24 @@ export const projectEngineCommand = (docker: string): CommandSpec =>
 export const projectContainersCommand = (docker: string): CommandSpec =>
 	issue("projectContainers", docker, ["container", "ls", "--all", "--no-trunc", "--filter", "label=com.docker.compose.project=multica", "--format", "{{.ID}}"], TIMEOUT_MS.list);
 
+export function projectNamedContainersCommand(docker: string, services: readonly string[]): CommandSpec {
+	if (services.length === 0 || services.length > 100 || !services.every((service) => /^[a-z][a-z0-9_-]{0,62}$/.test(service))) throw new Error("invalid target services");
+	return issue("projectNamedContainers", docker, ["container", "ls", "--all", "--no-trunc", ...services.flatMap((service) => ["--filter", `name=^/multica[-_]${service}[-_][0-9]+$`]), "--format", "{{.ID}}"], TIMEOUT_MS.list);
+}
+
 export function projectInspectCommand(docker: string, ids: readonly string[]): CommandSpec {
 	if (ids.length === 0 || ids.length > 100 || !ids.every((id) => /^[a-f0-9]{64}$/.test(id))) throw new Error("invalid container inventory");
 	return issue("projectInspect", docker, ["container", "inspect", "--format", "[{{json .Id}},{{json .Name}},{{json .Image}},{{json .Config.Image}},{{json .State.Status}},{{json .Config.Labels}},{{json .Mounts}}]", ...ids], TIMEOUT_MS.ps);
 }
 
-export function projectResourcesCommand(docker: string, resource: "volume" | "network"): CommandSpec {
+export function projectResourcesCommand(docker: string, resource: "volume" | "network", all = false): CommandSpec {
 	if (resource !== "volume" && resource !== "network") throw new Error("invalid project resource");
-	return issue(resource === "volume" ? "projectVolumes" : "projectNetworks", docker, [resource, "ls", "--filter", "label=com.docker.compose.project=multica", "--format", "{{json .Name}}"], TIMEOUT_MS.list);
+	return issue(all ? resource === "volume" ? "projectAllVolumes" : "projectAllNetworks" : resource === "volume" ? "projectVolumes" : "projectNetworks", docker, [resource, "ls", ...(all ? [] : ["--filter", "label=com.docker.compose.project=multica"]), "--format", "{{json .Name}}"], TIMEOUT_MS.list);
+}
+
+export function projectResourceInspectCommand(docker: string, resource: "volume" | "network", names: readonly string[]): CommandSpec {
+	if ((resource !== "volume" && resource !== "network") || names.length === 0 || names.length > 100 || !names.every((name) => /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(name))) throw new Error("invalid resource inventory");
+	return issue("projectResourceInspect", docker, [resource, "inspect", "--format", "{{json .}}", ...names], TIMEOUT_MS.ps);
 }
 
 export const psCommand = (docker: string, stack: StackPaths): CommandSpec =>
