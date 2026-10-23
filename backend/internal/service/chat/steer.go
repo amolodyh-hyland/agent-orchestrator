@@ -194,6 +194,9 @@ func (s *Service) PromoteQueuedTurn(
 	id domain.SessionID,
 	turnID string,
 ) (PromoteQueuedTurnResult, error) {
+	if err := domain.HoldOuterTarget(ctx, s.store, id, "promote_to_steer"); err != nil {
+		return PromoteQueuedTurnResult{}, err
+	}
 	if _, err := s.requireChatSession(ctx, id); err != nil {
 		return PromoteQueuedTurnResult{}, err
 	}
@@ -221,6 +224,9 @@ func (c *Controller) PromoteQueuedTurn(
 	ctx context.Context,
 	turnID string,
 ) (PromoteQueuedTurnResult, error) {
+	if err := domain.HoldOuterTarget(ctx, c.store, c.sessionID, "promote_to_steer"); err != nil {
+		return PromoteQueuedTurnResult{}, err
+	}
 	steerer, ok := c.steerer()
 	if !ok {
 		return PromoteQueuedTurnResult{}, ErrSteerUnsupported
@@ -400,6 +406,9 @@ func (c *Controller) Steer(ctx context.Context, msg ports.ChatUserMessage) (Stee
 }
 
 func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage) (SteerResult, error) {
+	if err := domain.HoldOuterTarget(ctx, c.store, c.sessionID, "steer"); err != nil {
+		return SteerResult{}, err
+	}
 	if msg.Origin == domain.MessageOriginAutomation || msg.ReportBatchID != "" {
 		if err := domain.CheckFactoryFeedback(ctx, c.store, c.sessionID); err != nil {
 			return SteerResult{}, err

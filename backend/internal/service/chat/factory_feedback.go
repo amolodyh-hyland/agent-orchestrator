@@ -21,6 +21,9 @@ func (s *Service) SetFeedbackAdmission(a FeedbackAdmission) {
 	s.mu.Unlock()
 }
 func (s *Service) holdUnapprovedContinuation(ctx context.Context, id domain.SessionID) error {
+	if err := domain.HoldOuterTarget(ctx, s.store, id, "alternate_input"); err != nil {
+		return err
+	}
 	s.mu.RLock()
 	a := s.feedbackAdmission
 	s.mu.RUnlock()
@@ -45,15 +48,25 @@ func (s *Service) acquireFeedbackInput(ctx context.Context, id domain.SessionID,
 	return a.AcquireFeedbackInput(ctx, id, msg, action)
 }
 func (c *Controller) acquireFeedbackInput(ctx context.Context, msg ports.ChatUserMessage, action string) (func(), error) {
+	outerRelease, outerErr := c.acquireOuterInput(ctx, msg, action)
+	if outerErr != nil {
+		return nil, outerErr
+	}
 	if c.reviewID != "" || c.feedbackInput == nil {
 		if err := domain.CheckFactoryFeedback(ctx, c.store, c.sessionID); err != nil {
+			outerRelease()
 			return nil, err
 		}
-		return func() {}, nil
+		return outerRelease, nil
 	}
 	msg.FeedbackControllerGeneration = c.generation
 	msg.FeedbackConversationID = c.conversation.ID
-	return c.feedbackInput(ctx, c.sessionID, msg, action)
+	feedbackRelease, err := c.feedbackInput(ctx, c.sessionID, msg, action)
+	if err != nil {
+		outerRelease()
+		return nil, err
+	}
+	return func() { feedbackRelease(); outerRelease() }, nil
 }
 
 // DeliverFactoryFeedback queues exact findings without waking or replacing a controller.

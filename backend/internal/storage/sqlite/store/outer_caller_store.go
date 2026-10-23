@@ -1,0 +1,89 @@
+package store
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"fmt"
+	"strconv"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
+)
+
+func callerVerifier(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+func (s *Store) IssueOuterCaller(ctx context.Context, id domain.SessionID) (string, error) {
+	b, found, err := s.OuterBinding(ctx)
+	if err != nil || !found {
+		return "", err
+	}
+	r, found, err := s.GetSession(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	if !found || r.IsTerminated {
+		return "", domain.ErrOuterHeld
+	}
+	var bytes [32]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return "", err
+	}
+	token := base64.RawURLEncoding.EncodeToString(bytes[:])
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return "", err
+	}
+	defer s.writeMu.Unlock()
+	err = s.qw.IssueOuterCaller(ctx, gen.IssueOuterCallerParams{Verifier: callerVerifier(token), SessionID: string(id), ProjectID: string(r.ProjectID), Generation: strconv.FormatInt(r.CleanupGeneration, 10), OuterScope: boolInt(string(r.ProjectID) == b.AnchorProjectID)})
+	return token, err
+}
+
+func (s *Store) AuthenticateOuterCaller(ctx context.Context, token string) (domain.OuterCaller, error) {
+	if len(token) != 43 {
+		return domain.OuterCaller{}, domain.ErrOuterHeld
+	}
+	row, err := s.qr.GetOuterCaller(ctx, callerVerifier(token))
+	if err != nil {
+		return domain.OuterCaller{}, domain.ErrOuterHeld
+	}
+	r, found, err := s.GetSession(ctx, domain.SessionID(row.SessionID))
+	if err != nil {
+		return domain.OuterCaller{}, err
+	}
+	if !found || r.IsTerminated || string(r.ProjectID) != row.ProjectID || strconv.FormatInt(r.CleanupGeneration, 10) != row.Generation {
+		return domain.OuterCaller{}, domain.ErrOuterHeld
+	}
+	b, found, err := s.OuterBinding(ctx)
+	if err != nil || !found {
+		return domain.OuterCaller{}, domain.ErrOuterHeld
+	}
+	outer := string(r.ProjectID) == b.AnchorProjectID
+	if outer != (row.OuterScope != 0) {
+		return domain.OuterCaller{}, domain.ErrOuterHeld
+	}
+	return domain.OuterCaller{ProjectID: r.ProjectID, SessionID: r.ID, Generation: row.Generation, Outer: outer}, nil
+}
+
+func (s *Store) OuterCallerState(ctx context.Context, id domain.SessionID) (string, error) {
+	r, found, err := s.GetSession(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", domain.ErrOuterHeld
+	}
+	var count int
+	err = s.readDB.QueryRowContext(ctx, "SELECT count(*) FROM outer_callers WHERE session_id=? AND generation=?", string(id), fmt.Sprint(r.CleanupGeneration)).Scan(&count)
+	if err != nil {
+		return "", err
+	}
+	if count == 0 {
+		return "owned_relaunch_required", nil
+	}
+	return "scoped", nil
+}

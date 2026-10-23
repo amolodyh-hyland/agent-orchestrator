@@ -20,6 +20,8 @@ import (
 // session list). Renaming, renumbering, or deleting a shipped migration
 // produces exactly that class of failure, so this list is append-only.
 var shippedMigrations = map[int64]string{
+	230: "0230_outer_requests.sql",
+	229: "0229_outer_binding.sql",
 	228: "0228_factory_review_feedback.sql",
 	227: "0227_factory_monitor_cursor.sql",
 	226: "0226_factory_run_monitoring.sql",

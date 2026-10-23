@@ -1120,6 +1120,7 @@ type ChatEvent struct {
 	// NativeAcceptance marks driver-proven receipt of this exact native turn.
 	// Locally scheduled or synthetic turn-started events must leave it false.
 	NativeAcceptance bool
+	NativeSettlement bool
 	Kind             ChatEventKind
 	// NativeUserMessageID is an adapter-proven native user record identity.
 	// Unlike ProviderItemID, it is never synthesized or namespaced by AO.

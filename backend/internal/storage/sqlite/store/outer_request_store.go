@@ -1,0 +1,311 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"slices"
+	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
+)
+
+func outerReceipt(row gen.OuterRequest) (domain.OuterRequestReceipt, error) {
+	r := domain.OuterRequestReceipt{TurnID: row.TurnID, AttemptedAt: timeFromNull(row.AttemptedAt), SubmittedAt: timeFromNull(row.SubmittedAt), AcceptedAt: timeFromNull(row.AcceptedAt), SettledAt: timeFromNull(row.SettledAt), ProviderTurnID: row.ProviderTurnID, State: "recorded"}
+	if err := json.Unmarshal([]byte(row.Document), &r.Request); err != nil {
+		return r, err
+	}
+	if r.TurnID != "" {
+		r.State = "ao_queued"
+	}
+	if !r.AttemptedAt.IsZero() {
+		r.State = "unknown"
+	}
+	if !r.SubmittedAt.IsZero() {
+		r.State = "provider_submitted"
+	}
+	if !r.AcceptedAt.IsZero() {
+		r.State = "native_accepted"
+	}
+	if !r.SettledAt.IsZero() {
+		r.State = "settled"
+	}
+	return r, nil
+}
+func (s *Store) GetOuterRequest(ctx context.Context, id string) (domain.OuterRequestReceipt, error) {
+	r, err := s.conversationReader(ctx).GetOuterRequest(ctx, id)
+	if err != nil {
+		return domain.OuterRequestReceipt{}, err
+	}
+	return outerReceipt(r)
+}
+func (s *Store) ListOuterRequests(ctx context.Context, id domain.SessionID) ([]domain.OuterRequestReceipt, error) {
+	rows, err := s.qr.ListOuterRequests(ctx, string(id))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.OuterRequestReceipt, 0, len(rows))
+	for _, row := range rows {
+		r, err := outerReceipt(row)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+func (s *Store) CreateOuterRequest(ctx context.Context, r domain.OuterRequest) error {
+	a, ok := domain.OuterNativeActionFrom(ctx)
+	if !ok || a.Operation != "outer.send" || a.SessionID != r.SessionID || a.RequestID != r.ID {
+		return domain.ErrOuterHeld
+	}
+	data, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "issue outer request", func(q *gen.Queries) error {
+		if err := validateOuterRequest(ctx, q, r, r.IssuedAt); err != nil {
+			return err
+		}
+		if err := q.InsertOuterRequest(ctx, gen.InsertOuterRequestParams{ID: r.ID, Document: string(data)}); err != nil {
+			return err
+		}
+		return appendOuterAudit(ctx, q, domain.OuterAudit{Operation: "outer.send", State: "recorded", RequestID: r.ID, SessionID: r.SessionID, Generation: r.ControllerGeneration, Digest: r.PayloadDigest, Sources: r.Sources})
+	})
+}
+
+func validateOuterRequest(ctx context.Context, q *gen.Queries, r domain.OuterRequest, now time.Time) error {
+	doc, err := q.GetOuterBinding(ctx)
+	if err != nil {
+		return err
+	}
+	var b domain.OuterBinding
+	if err := json.Unmarshal([]byte(doc), &b); err != nil {
+		return err
+	}
+	if b.Paused || b.HistoryHeld || b.SessionID != r.SessionID || b.Revision != r.BindingRevision || b.ScopeRevision != r.ScopeRevision || !now.Before(r.ExpiresAt) {
+		return domain.ErrOuterHeld
+	}
+	for _, source := range r.Sources {
+		for _, id := range append(append([]string{}, source.Sources...), source.ProjectID) {
+			if id != "" && !slices.Contains(b.ProjectIDs, id) {
+				return domain.ErrOuterHeld
+			}
+		}
+	}
+	row, err := q.GetSession(ctx, r.SessionID)
+	if err != nil {
+		return err
+	}
+	rec := rowToRecord(row)
+	if rec.IsTerminated || rec.Harness != domain.HarnessCodex || rec.Mode != domain.SessionModeChat || rec.Metadata.ControllerGeneration != r.ControllerGeneration || rec.Metadata.ProviderConversationID != r.ProviderConversationID {
+		return domain.ErrOuterHeld
+	}
+	conv, err := q.SelectConversationByID(ctx, r.ConversationID)
+	if err != nil {
+		return err
+	}
+	project, err := q.GetProject(ctx, rec.ProjectID)
+	if err != nil {
+		return err
+	}
+	p := projectRowFromGen(project)
+	if !p.ArchivedAt.IsZero() {
+		return domain.ErrOuterHeld
+	}
+	if domain.OuterSettingsDigest(rec, conversationToDomain(conv), p) != r.SettingsDigest {
+		return domain.ErrOuterHeld
+	}
+	return nil
+}
+
+func (s *Store) AttemptOuterRequest(ctx context.Context, id, epoch string, now time.Time) error {
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "attempt outer submission", func(q *gen.Queries) error {
+		row, err := q.GetOuterRequest(ctx, id)
+		if err != nil {
+			return err
+		}
+		r, err := outerReceipt(row)
+		if err != nil {
+			return err
+		}
+		if r.Request.Epoch != epoch || r.TurnID == "" || !r.AttemptedAt.IsZero() {
+			return domain.ErrOuterHeld
+		}
+		if err := validateOuterRequest(ctx, q, r.Request, now); err != nil {
+			return err
+		}
+		if err := s.reserveOuterCapacity(ctx, q, domain.OuterCapacity{RequestID: id, SessionID: r.Request.SessionID, Generation: r.Request.ControllerGeneration, Foreground: true, ReservedAt: now}); err != nil {
+			return err
+		}
+		count, err := q.AttemptOuterRequest(ctx, gen.AttemptOuterRequestParams{ID: id, AttemptedAt: nullTime(now)})
+		if err != nil {
+			return err
+		}
+		if count != 1 {
+			return domain.ErrOuterHeld
+		}
+		return appendOuterAudit(ctx, q, domain.OuterAudit{Operation: "outer.submit", State: "attempted", RequestID: id, SessionID: r.Request.SessionID, Generation: r.Request.ControllerGeneration, Digest: r.Request.PayloadDigest, ReceiptID: r.TurnID})
+	})
+}
+
+func (s *Store) reserveOuterCapacity(ctx context.Context, q *gen.Queries, r domain.OuterCapacity) error {
+	reservations, err := q.ListOuterCapacity(ctx)
+	if err != nil {
+		return err
+	}
+	stations, heavy, background := len(reservations), 0, 0
+	owners := map[domain.SessionID]bool{r.SessionID: true}
+	for _, v := range reservations {
+		owners[domain.SessionID(v.SessionID)] = true
+		if v.Heavy != 0 {
+			heavy++
+		}
+		if v.Foreground == 0 {
+			background++
+		}
+	}
+	// Relevant outside work is observed, never stopped or silently ignored.
+	sessions, err := s.ListAllSessions(ctx)
+	if err != nil {
+		return err
+	}
+	for _, v := range sessions {
+		if v.IsTerminated || owners[v.ID] {
+			continue
+		}
+		switch v.Activity.State {
+		case domain.ActivityActive, domain.ActivityWaitingInput, domain.ActivityBlocked:
+			stations++
+		case domain.ActivityIdle, domain.ActivityExited:
+		default:
+			return domain.ErrOuterHeld
+		}
+	}
+	if stations >= 2 || (r.Heavy && heavy >= 1) {
+		return domain.ErrOuterHeld
+	}
+	doc, err := q.GetOuterBinding(ctx)
+	if err != nil {
+		return err
+	}
+	var b domain.OuterBinding
+	if err := json.Unmarshal([]byte(doc), &b); err != nil {
+		return err
+	}
+	if !r.Foreground && b.ForegroundReserve && background >= 1 {
+		return domain.ErrOuterHeld
+	}
+	return q.ReserveOuterCapacity(ctx, gen.ReserveOuterCapacityParams{RequestID: r.RequestID, SessionID: string(r.SessionID), Generation: r.Generation, Heavy: boolInt(r.Heavy), Foreground: boolInt(r.Foreground), ReservedAt: r.ReservedAt})
+}
+
+func (s *Store) ReserveOuterCapacity(ctx context.Context, r domain.OuterCapacity) error {
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "reserve outer station", func(q *gen.Queries) error { return s.reserveOuterCapacity(ctx, q, r) })
+}
+func (s *Store) OuterCapacity(ctx context.Context) ([]domain.OuterCapacity, error) {
+	rows, err := s.qr.ListOuterCapacity(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.OuterCapacity, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, domain.OuterCapacity{RequestID: r.RequestID, SessionID: domain.SessionID(r.SessionID), Generation: r.Generation, Heavy: r.Heavy != 0, Foreground: r.Foreground != 0, ReservedAt: r.ReservedAt})
+	}
+	return out, nil
+}
+
+func linkOuterRequest(ctx context.Context, q *gen.Queries, session domain.SessionID, generation, conversation, turn string, msg domain.ConversationMessage, now time.Time) error {
+	doc, err := q.GetOuterBinding(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var b domain.OuterBinding
+	if err := json.Unmarshal([]byte(doc), &b); err != nil {
+		return err
+	}
+	row, err := q.GetSession(ctx, session)
+	if err != nil {
+		return err
+	}
+	if row.ProjectID == nil || string(*row.ProjectID) != b.AnchorProjectID {
+		return nil
+	}
+	a, ok := domain.OuterNativeActionFrom(ctx)
+	if !ok || a.Operation != "outer.send" || a.SessionID != session || a.RequestID != msg.ClientMessageID {
+		return domain.ErrOuterHeld
+	}
+	request, err := q.GetOuterRequest(ctx, msg.ClientMessageID)
+	if err != nil {
+		return domain.ErrOuterHeld
+	}
+	receipt, err := outerReceipt(request)
+	if err != nil {
+		return err
+	}
+	r := receipt.Request
+	if r.ControllerGeneration != generation || r.ConversationID != conversation || msg.Text != r.Payload || msg.Origin != domain.MessageOriginHuman || msg.DeliveryContentJSON != "" || msg.Continuation {
+		return domain.ErrOuterHeld
+	}
+	if err := validateOuterRequest(ctx, q, r, now); err != nil {
+		return err
+	}
+	count, err := q.LinkOuterRequest(ctx, gen.LinkOuterRequestParams{ID: r.ID, TurnID: turn})
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return domain.ErrOuterHeld
+	}
+	return appendOuterAudit(ctx, q, domain.OuterAudit{Operation: "outer.enqueue", State: "ao_queued", RequestID: r.ID, SessionID: session, ReceiptID: turn, Digest: r.PayloadDigest})
+}
+
+func (s *Store) CheckOuterPendingReply(ctx context.Context, id domain.SessionID, conv, generation, turn, request string) error {
+	count, err := s.qr.OuterPendingInteraction(ctx, gen.OuterPendingInteractionParams{ConversationID: conv, RequestID: request, ProviderTurnID: turn, Generation: generation, SessionID: id})
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return domain.ErrOuterHeld
+	}
+	return s.AppendOuterAudit(ctx, domain.OuterAudit{Operation: "outer.pending_reply", State: "attempted", SessionID: id, Generation: generation, ReceiptID: request})
+}
+
+func (s *Store) RecordOuterSettlement(ctx context.Context, conversation, providerTurn, generation string, at time.Time) error {
+	q, release := s.conversationWriter(ctx)
+	defer release()
+	row, err := q.OuterRequestForProvider(ctx, gen.OuterRequestForProviderParams{ConversationID: conversation, ProviderTurnID: providerTurn, Generation: generation})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !row.AcceptedAt.Valid || row.SettledAt.Valid {
+		return nil
+	}
+	if err := q.SettleOuterRequest(ctx, gen.SettleOuterRequestParams{ConversationID: conversation, ProviderTurnID: providerTurn, SettledAt: nullTime(at)}); err != nil {
+		return err
+	}
+	if _, err := q.ReleaseOuterCapacity(ctx, gen.ReleaseOuterCapacityParams{RequestID: row.ID, ReleasedAt: nullTime(at), ReleaseEvidence: "native_turn_settled:" + providerTurn}); err != nil {
+		return err
+	}
+	return appendOuterAudit(ctx, q, domain.OuterAudit{Operation: "outer.settlement", State: "settled", RequestID: row.ID, ReceiptID: providerTurn, Generation: generation})
+}

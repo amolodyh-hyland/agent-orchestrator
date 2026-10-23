@@ -114,6 +114,9 @@ func (s *Service) ReorderQueuedTurns(
 
 // CancelQueuedTurn drops one queue row that has not yet dispatched.
 func (c *Controller) CancelQueuedTurn(ctx context.Context, turnID string) error {
+	if err := domain.CheckOuterOperation(ctx, c.store, "queue.cancel", "", c.sessionID); err != nil {
+		return err
+	}
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 	if c.handoffActive() {
@@ -124,6 +127,9 @@ func (c *Controller) CancelQueuedTurn(ctx context.Context, turnID string) error 
 
 // EditQueuedTurn rewrites the durable human prompt for a queued turn.
 func (c *Controller) EditQueuedTurn(ctx context.Context, turnID string, edit QueuedMessageEdit) error {
+	if err := domain.HoldOuterTarget(ctx, c.store, c.sessionID, "queue.edit"); err != nil {
+		return err
+	}
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 	delivery, err := queuedEditDelivery(turnID, edit)
@@ -245,6 +251,9 @@ func queuedEditDelivery(turnID string, edit QueuedMessageEdit) (domain.Conversat
 
 // ReorderQueuedTurns permutes undispatched queue rows without changing their text.
 func (c *Controller) ReorderQueuedTurns(ctx context.Context, turnIDs []string) error {
+	if err := domain.HoldOuterTarget(ctx, c.store, c.sessionID, "queue.reorder"); err != nil {
+		return err
+	}
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 	if c.handoffActive() {

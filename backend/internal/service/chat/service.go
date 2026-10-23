@@ -55,6 +55,7 @@ type SessionReader interface {
 type Service struct {
 	libraryAdmission       LibraryAdmission
 	feedbackAdmission      FeedbackAdmission
+	outerAdmission         OuterAdmission
 	store                  Store
 	reader                 SnapshotReader
 	pageReader             SnapshotPageReader
@@ -409,6 +410,16 @@ func (s *Service) settleOrphanedWork(ctx context.Context, session domain.Session
 // conversation: presenting unrelated history as continuous is worse than an error
 // the user can act on.
 func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, error) {
+	bound, outerErr := domain.IsOuter(ctx, s.store, cfg.SessionID)
+	if outerErr != nil {
+		return nil, outerErr
+	}
+	if bound && !cfg.ReconnectOnly {
+		a, ok := domain.OuterNativeActionFrom(ctx)
+		if !ok || (a.Operation != "spawn" && a.Operation != "resume" && a.Operation != "restore") {
+			return nil, domain.ErrOuterHeld
+		}
+	}
 	owner := conversationOwner(cfg)
 	if owner.Kind == domain.ConversationOwnerReview {
 		cfg.ReadOnly = true
@@ -1038,6 +1049,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
 	controller.libraryInput = s.acquireLibraryInput
 	controller.feedbackInput = s.acquireFeedbackInput
+	controller.outerInput = s.acquireOuterInput
 	controller.skillView = s.librarySkillView
 	controller.skillCurrent = s.skillControllerCurrent
 	controller.permissionFallbackOff = cfg.DisablePermissionFallback

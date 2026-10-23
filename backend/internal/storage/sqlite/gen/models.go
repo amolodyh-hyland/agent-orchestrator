@@ -545,6 +545,62 @@ type Notification struct {
 	SourceKey   string
 }
 
+type OuterAudit struct {
+	Sequence int64
+	ID       string
+	Document string
+}
+
+type OuterBinding struct {
+	Singleton int64
+	Revision  int64
+	Document  string
+}
+
+type OuterCaller struct {
+	Verifier   string
+	SessionID  string
+	ProjectID  string
+	Generation string
+	OuterScope int64
+}
+
+type OuterCapacity struct {
+	RequestID       string
+	SessionID       string
+	Generation      string
+	Heavy           int64
+	Foreground      int64
+	ReservedAt      time.Time
+	ReleasedAt      sql.NullTime
+	ReleaseEvidence string
+}
+
+type OuterEvidence struct {
+	ID         string
+	SessionID  string
+	SourceJson string
+	Content    string
+	RecordedAt time.Time
+}
+
+type OuterRequest struct {
+	ID             string
+	Document       string
+	TurnID         string
+	AttemptedAt    sql.NullTime
+	SubmittedAt    sql.NullTime
+	AcceptedAt     sql.NullTime
+	SettledAt      sql.NullTime
+	ProviderTurnID string
+}
+
+type OuterSource struct {
+	ConversationID string
+	SourceKey      string
+	Document       string
+}
+
 type PR struct {
 	URL                      string
 	SessionID                domain.SessionID

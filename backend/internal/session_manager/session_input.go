@@ -54,6 +54,12 @@ func (m *Manager) AcquireSessionInput(handle domain.SessionID) (release func(), 
 	if !known {
 		return nil, false
 	}
+	if err := domain.HoldOuterTarget(ctx, m.store, id, "terminal.write"); err != nil {
+		return nil, false
+	}
+	if err := domain.CheckOuterOperation(ctx, m.store, "terminal.write", "", id); err != nil {
+		return nil, false
+	}
 	// Raw bytes cannot carry a native continuation receipt. This transport stays
 	// closed for factory participants, including Enter and escape sequences.
 	if err := domain.CheckFactoryFeedback(ctx, m.store, id); err != nil {
@@ -69,6 +75,10 @@ func (m *Manager) AcquireSessionInput(handle domain.SessionID) (release func(), 
 	}
 	currentOwner, known := m.sessionInputOwner(ctx, handle)
 	if !known || currentOwner != id {
+		libraryRelease()
+		return nil, false
+	}
+	if err := domain.HoldOuterTarget(ctx, m.store, id, "terminal.write"); err != nil {
 		libraryRelease()
 		return nil, false
 	}

@@ -215,6 +215,13 @@ func (m *Manager) writeInput(terminalID string, a *attachment, raw []byte, relea
 		release()
 		return
 	}
+	finalRelease, allowed := m.acquireSessionInput(terminalID)
+	if !allowed {
+		release()
+		return
+	}
+	previousRelease := release
+	release = func() { finalRelease(); previousRelease() }
 	lane.lastInputAt = time.Now()
 	_ = a.writeLeased(raw, release)
 }

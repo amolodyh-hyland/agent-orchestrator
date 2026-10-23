@@ -1266,6 +1266,9 @@ func (s *Store) appendUserMessage(
 	}
 
 	err = s.inTx(ctx, "append user message", func(q *gen.Queries) error {
+		if err := linkOuterRequest(ctx, q, session, generation, conversationID, turnID, msg, now); err != nil {
+			return err
+		}
 		sequence, err := q.NextConversationSequence(ctx, gen.NextConversationSequenceParams{
 			UpdatedAt: now,
 			ID:        conversationID,
