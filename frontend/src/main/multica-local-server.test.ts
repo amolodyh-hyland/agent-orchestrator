@@ -149,9 +149,10 @@ function harness(patch: Partial<Fake> = {}) {
 					fake.handlers["project-network"] = () => ({ stdout: '"multica_default"' });
 				} else {
 					const previous = fake.handlers["project-inspect"];
+					const stoppedIds = args.slice(4);
 					if (previous) fake.handlers["project-inspect"] = async (args, signal) => {
 						const result = await previous(args, signal);
-						try { return { ...result, stdout: (result.stdout ?? "").split("\n").filter(Boolean).map((line) => { const row = JSON.parse(line); row[4] = verb === "restart" ? "running" : "exited"; return JSON.stringify(row); }).join("\n") }; } catch { return result; }
+						try { return { ...result, stdout: (result.stdout ?? "").split("\n").filter(Boolean).map((line) => { const row = JSON.parse(line); if (verb !== "safety-stop" || stoppedIds.includes(row[0])) row[4] = verb === "restart" ? "running" : "exited"; return JSON.stringify(row); }).join("\n") }; } catch { return result; }
 					};
 				}
 				fake.afterMutation?.(verb);
@@ -1489,7 +1490,7 @@ describe("concrete local server project control", () => {
 		expect(approve).not.toHaveBeenCalled();
 	});
 
-	it.each(["image", "volume", "volume-identity", "container", "network", "inspection"])("detects a late %s conflict, stops affected containers and releases the lock after verification", async (kind) => {
+	it.each(["image", "volume", "volume-identity", "container", "network", "inspection"])("detects a late %s conflict, leaves unproven IDs running and releases the lock after verification", async (kind) => {
 		const h = harness({ handlers: kind === "volume-identity" ? { "project-volume": () => ({ stdout: '"multica_pgdata"' }) } : {} });
 		let held = false;
 		let checkedAfterMutation = false;
@@ -1518,16 +1519,75 @@ describe("concrete local server project control", () => {
 		const server = createMulticaLocalServer({ ...h.options, approveProjectMutation: async (request) => ({ digest: request.digest, action: request.action, recoveryReceipt: "/private/receipt.json" }), verifyRecovery: async () => undefined, acquireProjectLock: async () => { held = true; return { release: async () => { expect(checkedAfterMutation).toBe(true); held = false; } }; } });
 		const result = await server.start();
 		expect(result).toMatchObject({ ok: false, code: "inspect_failed", detail: expect.stringContaining("Post-mutation verification failed") });
-		expect(h.verbs()).toContain("safety-stop");
+		expect(h.verbs()).not.toContain("safety-stop");
 		expect(held).toBe(false);
 		expect(JSON.stringify(h.calls)).not.toMatch(/"down"|"rm"|"remove"/);
 		if (kind === "inspection") expect(result).toMatchObject({ detail: expect.stringContaining("Safety stop could not be verified") });
-		else expect(result).toMatchObject({ detail: expect.stringContaining("Affected containers are stopped") });
+		else expect(result).toMatchObject({ detail: expect.stringContaining("Unapproved containers were not stopped") });
 	});
 });
 
 
 describe("post-verification for existing stack actions", () => {
+	const foreignId = "e".repeat(64);
+	function introduceForeignContainer(h: ReturnType<typeof harness>, replacement: boolean) {
+		const previous = h.fake.handlers["project-inspect"]!;
+		const rows = async () => {
+			const reply = await previous([]);
+			const values = reply.stdout!.split("\n").map((line) => JSON.parse(line));
+			const foreign = structuredClone(values[0]);
+			foreign[0] = foreignId;
+			foreign[4] = "running";
+			if (replacement) {
+				foreign[2] = `sha256:${"f".repeat(64)}`;
+				values[0] = foreign;
+			}
+			else {
+				foreign[1] = "/multica-foreign-1";
+				foreign[5]["com.docker.compose.service"] = "foreign";
+				values.push(foreign);
+			}
+			return values;
+		};
+		h.fake.handlers["project-containers"] = async () => ({ stdout: (await rows()).map((row) => row[0]).join("\n") });
+		h.fake.handlers["project-inspect"] = async () => ({ stdout: (await rows()).map((row) => JSON.stringify(row)).join("\n") });
+	}
+
+	it.each([false, true])("leaves a late foreign container running after an initially empty Start (replacement: %s)", async (replacement) => {
+		const h = harness();
+		h.fake.afterMutation = (verb) => { if (verb === "up") introduceForeignContainer(h, replacement); };
+		const result = await h.server.start();
+		expect(result).toMatchObject({ ok: false, code: "inspect_failed", detail: expect.stringContaining(`Unapproved containers were not stopped:`) });
+		expect(result).toMatchObject({ detail: expect.stringContaining(foreignId) });
+		expect(result).toMatchObject({ detail: expect.stringContaining("explicit approval is required") });
+		expect(h.verbs()).not.toContain("safety-stop");
+		const observed = await h.fake.handlers["project-inspect"]!([]);
+		expect(observed.stdout!.split("\n").map((row) => JSON.parse(row)).find((row) => row[0] === foreignId)[4]).toBe("running");
+	});
+
+	it.each(["known owner", "takeover", "replacement", "failed stop"])("limits compensation to exact authorized IDs for %s and leaves foreign services running", async (kind) => {
+		const h = harness();
+		expect(await h.server.start()).toEqual({ ok: true });
+		const approve = vi.fn(async (request: Parameters<NonNullable<MulticaLocalServerOptions["approveProjectMutation"]>>[0]) => ({ digest: request.digest, action: request.action, recoveryReceipt: "/private/receipt.json" }));
+		const server = kind === "known owner" ? h.server : createMulticaLocalServer({ ...h.options, approveProjectMutation: approve, verifyRecovery: async () => undefined });
+		h.fake.afterMutation = (verb) => { if (verb === "restart") introduceForeignContainer(h, kind === "replacement"); };
+		if (kind === "failed stop") h.fake.handlers["safety-stop"] = () => ({ error: { code: 1 } });
+		const result = await server.restart();
+		expect(result).toMatchObject({ ok: false, code: "inspect_failed", detail: expect.stringContaining(foreignId) });
+		if (kind !== "known owner") expect(approve).toHaveBeenCalledOnce();
+		const stops = h.calls.filter((call) => call.args[0] === "container" && call.args[1] === "stop");
+		expect(stops).toHaveLength(1);
+		expect(stops[0]!.args.slice(4)).toEqual((kind === "replacement" ? ["c", "d"] : ["b", "c", "d"]).map((hex) => hex.repeat(64)));
+		const observed = await h.fake.handlers["project-inspect"]!([]);
+		const rows = observed.stdout!.split("\n").map((row) => JSON.parse(row));
+		expect(rows.find((row) => row[0] === foreignId)[4]).toBe("running");
+		if (kind === "failed stop") expect(result).toMatchObject({ detail: expect.stringContaining("Safety stop could not be verified") });
+		else {
+			expect(result).toMatchObject({ detail: expect.stringContaining("Authorized containers are stopped") });
+			expect(rows.filter((row) => row[0] !== foreignId).every((row) => row[4] === "exited")).toBe(true);
+		}
+	});
+
 	it("does not carry Start authority through an approved Stop after configuration changes", async () => {
 		const h = harness();
 		let identity = "initial configuration";

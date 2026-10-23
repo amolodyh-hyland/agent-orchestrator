@@ -19,8 +19,6 @@ import { DEFAULT_MULTICA_SETTINGS, type MulticaCheckResult, type MulticaSettings
 import {
 	COMPOSE_FILE_NAME,
 	composeListCommand,
-	projectContainersCommand,
-	projectNamedContainersCommand,
 	stopContainersCommand,
 	composeVersionCommand,
 	dockerVersionCommand,
@@ -409,21 +407,24 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 		return { ok: false, code: "docker_not_running", detail: "Start Docker separately with explicit approval: engine startup can resume existing services. Then retry the project preflight." };
 	}
 
-	async function stopUnverifiedProject(docker: string, endpoint: string, targets: ProjectTargets): Promise<string> {
+	async function stopUnverifiedProject(docker: string, endpoint: string, targets: ProjectTargets, authority: ProjectSnapshot): Promise<string> {
+		const authorizedIds = new Set(authority.containers.map((container) => container.id));
+		const unapproved = new Set<string>();
+		const reportUnapproved = () => unapproved.size > 0 ? ` Unapproved containers were not stopped: ${[...unapproved].sort().join(", ")}. They may still be running; explicit approval is required.` : "";
 		try {
-			const found: string[] = [];
-			for (const spec of [projectContainersCommand(docker), projectNamedContainersCommand(docker, targets.services)]) {
-				const result = await run(spec, undefined, endpoint);
-				if (result.error) throw new Error("Cannot inventory safety stop");
-				found.push(...result.stdout.trim().split(/\r?\n/).filter(Boolean));
-			}
-			const ids = [...new Set(found)];
+			const inspect = () => inspectMulticaProject(endpoint, docker, (spec) => run(spec, undefined, endpoint), targets);
+			const current = await inspect();
+			if (current.engineId !== authority.engineId) throw new Error("Safety stop engine changed");
+			for (const container of current.containers) if (!authorizedIds.has(container.id)) unapproved.add(container.id);
+			const ids = current.containers.filter((container) => authorizedIds.has(container.id)).map((container) => container.id);
 			if (ids.length > 0 && (await run(stopContainersCommand(docker, ids), undefined, endpoint)).error) throw new Error("Safety stop failed");
-			const stopped = await inspectMulticaProject(endpoint, docker, (spec) => run(spec, undefined, endpoint), targets);
-			if (stopped.containers.some((c) => !["exited", "created", "dead"].includes(c.state))) throw new Error("Stop not verified");
-			return "Affected containers are stopped. Data was not rolled back; inspect the project and use the approved restore procedure if needed.";
+			const stopped = await inspect();
+			if (stopped.engineId !== authority.engineId) throw new Error("Safety stop engine changed");
+			for (const container of stopped.containers) if (!authorizedIds.has(container.id)) unapproved.add(container.id);
+			if (stopped.containers.some((c) => authorizedIds.has(c.id) && !["exited", "created", "dead"].includes(c.state))) throw new Error("Stop not verified");
+			return `${ids.length > 0 ? "Authorized containers are stopped." : "No currently observed container IDs have established stop authority; no containers were stopped."}${reportUnapproved()} Data was not rolled back; inspect the project and use the approved restore procedure if needed.`;
 		} catch {
-			return "Safety stop could not be verified. Inspect the selected engine immediately; containers may still be running. Data was not rolled back.";
+			return `Safety stop could not be verified. Inspect the selected engine immediately; containers may still be running. No unapproved container IDs were stopped.${reportUnapproved()} Data was not rolled back.`;
 		}
 	}
 
@@ -496,7 +497,7 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 					}
 				} catch {
 					verifiedOwner = null;
-					const stopped = await stopUnverifiedProject(fresh.docker, endpoint, targets);
+					const stopped = await stopUnverifiedProject(fresh.docker, endpoint, targets, before);
 					return { ok: false, code: "inspect_failed", detail: `Post-mutation verification failed: concurrent external activity or unexpected identities. ${stopped}` };
 				}
 				if (result.ok) portFailure = false;
