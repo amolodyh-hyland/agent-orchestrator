@@ -163,6 +163,7 @@ func TestUnobservedACPCatalogDoesNotBlockOrdinaryMessages(t *testing.T) {
 func TestUnobservedCatalogStillRejectsSelectionsAndKnownLibraryTokens(t *testing.T) {
 	p := &catalogConversation{rows: []ports.ChatSkill{nativeSkill("/owned/SKILL.md")}}
 	c := catalogController(p, "generation")
+	c.harness = domain.HarnessClaudeCode
 	catalog, err := c.loadSkillCatalog(context.Background(), false, "")
 	if err != nil {
 		t.Fatal(err)
@@ -184,16 +185,63 @@ func TestUnobservedCatalogStillRejectsSelectionsAndKnownLibraryTokens(t *testing
 	}
 }
 
-func TestSideDispatchValidatesNativeSkillInvocations(t *testing.T) {
+func TestCodexUnavailableCatalogRefusesManualSkillDispatch(t *testing.T) {
 	for _, tt := range []struct {
 		name string
 		rows []ports.ChatSkill
-		text string
-		want string
 	}{
-		{"unique", []ports.ChatSkill{nativeSkill("/owned/SKILL.md")}, "$review args", "completed"},
-		{"ambiguous", []ports.ChatSkill{nativeSkill("/first/SKILL.md"), nativeSkill("/second/SKILL.md")}, "$review args", "failed"},
-		{"quoted_background", []ports.ChatSkill{nativeSkill("/first/SKILL.md"), nativeSkill("/second/SKILL.md")}, "ordinary question", "completed"},
+		{"no_observations", nil},
+		{"unique_with_scan_error", []ports.ChatSkill{nativeSkill("/owned/SKILL.md")}},
+		{"same_name_with_scan_error", []ports.ChatSkill{nativeSkill("/first/SKILL.md"), nativeSkill("/second/SKILL.md")}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &catalogConversation{rows: tt.rows, err: ports.ErrChatSkillsNotReady}
+			c := catalogController(p, "generation")
+			if _, err := c.sendTurn(context.Background(), ports.ChatUserMessage{Text: "$review args"}); err == nil || !strings.Contains(err.Error(), "catalog_not_observed") {
+				t.Fatalf("unvalidated native invocation accepted: %v", err)
+			}
+			if len(p.messages) != 0 {
+				t.Fatalf("native invocation fell back to text: %+v", p.messages)
+			}
+		})
+	}
+	t.Run("listing_unsupported", func(t *testing.T) {
+		p := &fakeSender{}
+		c := catalogController(p, "generation")
+		if _, err := c.sendTurn(context.Background(), ports.ChatUserMessage{Text: "$review args"}); err == nil || len(p.modes) != 0 {
+			t.Fatalf("unsupported listing fell back to text: %v", err)
+		}
+	})
+	for _, text := range []string{"ordinary message", "inspect /tmp/example", "/tmp/example", "show $ and /tmp/example"} {
+		t.Run(text, func(t *testing.T) {
+			p := &catalogConversation{err: ports.ErrChatSkillsNotReady}
+			c := catalogController(p, "generation")
+			if _, err := c.sendTurn(context.Background(), ports.ChatUserMessage{Text: text}); err != nil {
+				t.Fatal(err)
+			}
+			if len(p.messages) != 1 || p.messages[0].Text != text || len(p.messages[0].NativeSkills) != 0 {
+				t.Fatalf("ordinary text changed: %+v", p.messages)
+			}
+		})
+	}
+}
+
+func TestSideDispatchValidatesNativeSkillInvocations(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		rows   []ports.ChatSkill
+		err    error
+		text   string
+		want   string
+		reason string
+	}{
+		{"unique", []ports.ChatSkill{nativeSkill("/owned/SKILL.md")}, nil, "$review args", "completed", ""},
+		{"ambiguous", []ports.ChatSkill{nativeSkill("/first/SKILL.md"), nativeSkill("/second/SKILL.md")}, nil, "$review args", "failed", "ambiguous_native_name"},
+		{"quoted_background", []ports.ChatSkill{nativeSkill("/first/SKILL.md"), nativeSkill("/second/SKILL.md")}, nil, "ordinary question", "completed", ""},
+		{"unique_with_scan_error", []ports.ChatSkill{nativeSkill("/owned/SKILL.md")}, ports.ErrChatSkillsNotReady, "$review args", "failed", "catalog_not_observed"},
+		{"same_name_with_scan_error", []ports.ChatSkill{nativeSkill("/first/SKILL.md"), nativeSkill("/second/SKILL.md")}, ports.ErrChatSkillsNotReady, "$review args", "failed", "catalog_not_observed"},
+		{"ordinary_with_scan_error", nil, ports.ErrChatSkillsNotReady, "ordinary question", "completed", ""},
+		{"path_with_scan_error", nil, ports.ErrChatSkillsNotReady, "inspect /tmp/example", "completed", ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -218,7 +266,7 @@ func TestSideDispatchValidatesNativeSkillInvocations(t *testing.T) {
 			if err != nil || !found {
 				t.Fatalf("claim: %v %v", found, err)
 			}
-			p := &catalogConversation{rows: tt.rows}
+			p := &catalogConversation{rows: tt.rows, err: tt.err}
 			runtime := &sideRuntime{side: side, conv: p, completed: make(chan ports.ChatEvent, 1)}
 			runtime.completed <- ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "turn-1", TurnState: domain.TurnStateCompleted}
 			manager.runTurn(runtime, side, turn)
@@ -227,8 +275,8 @@ func TestSideDispatchValidatesNativeSkillInvocations(t *testing.T) {
 				t.Fatalf("side turn: %+v %v", settled, err)
 			}
 			if tt.want == "failed" {
-				if len(p.messages) != 0 || !strings.Contains(settled.ErrorMessage, "ambiguous_native_name") {
-					t.Fatalf("ambiguous side invocation reached provider: %+v %+v", p.messages, settled)
+				if len(p.messages) != 0 || !strings.Contains(settled.ErrorMessage, tt.reason) {
+					t.Fatalf("unvalidated side invocation reached provider: %+v %+v", p.messages, settled)
 				}
 				return
 			}

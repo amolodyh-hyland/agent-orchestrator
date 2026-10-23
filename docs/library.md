@@ -130,6 +130,9 @@ structured items; ambiguous names are refused. Quoted history, references, and
 attachments do not select skills. A provider awaiting its first command catalog
 still accepts ordinary text, including paths and dollar words. Explicit catalog
 selections and known pinned library tokens remain checked.
+Codex requires an available validated catalog for every `$name` candidate; scan
+errors or unsupported listing refuse those submissions instead of sending them
+as text-only turns. Ordinary text and paths remain available.
 
 The ordinary message endpoint accepts optional `skillSelection` with `entryId`,
 `snapshotId`, `controllerGeneration`, `catalogRevision`, `bindingRef`, and `token`.

@@ -178,3 +178,17 @@ func TestSkillCatalogAbsenceIsNotEmpty(t *testing.T) {
 		t.Fatalf("catalog absence: %v", err)
 	}
 }
+
+func TestSkillCatalogScanErrorsDiscardPartialSameNameEntries(t *testing.T) {
+	d, srv := newTestDriver(t)
+	srv.reply("skills/list", `{"data":[{"cwd":"/tmp/ws","errors":[],"skills":[{"name":"review","enabled":true,"scope":"repo","path":"/first/SKILL.md"},{"name":"review","enabled":true,"scope":"user","path":"/second/SKILL.md"}]},{"cwd":"/tmp/other","errors":[{"path":"/broken/SKILL.md","message":"scan failed"}],"skills":[]}]}`)
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conv.Close()
+	rows, err := conv.(ports.ChatSkillLister).ListSkills(context.Background())
+	if !errors.Is(err, ports.ErrChatSkillsNotReady) || len(rows) != 0 {
+		t.Fatalf("partial catalog accepted: %+v %v", rows, err)
+	}
+}

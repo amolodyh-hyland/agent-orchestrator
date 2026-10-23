@@ -380,9 +380,13 @@ func (c *Controller) resolveSkillMessage(ctx context.Context, msg ports.ChatUser
 	msg.Content = content
 	msg.NativeSkills = nil
 	hasToken := false
+	hasDollarToken := false
 	for _, word := range strings.Fields(msg.Text) {
 		if strings.HasPrefix(word, "$") || strings.HasPrefix(word, "/") {
 			hasToken = true
+		}
+		if strings.HasPrefix(word, "$") && len(word) > 1 {
+			hasDollarToken = true
 		}
 	}
 	if !hasToken {
@@ -392,11 +396,13 @@ func (c *Controller) resolveSkillMessage(ctx context.Context, msg ports.ChatUser
 	if err != nil {
 		return msg, err
 	}
-	if catalog.Status == "controller_not_ready" && selection != nil && skillTokenPresent(msg.Text, selection.Token) {
+	activeSelection := selection != nil && skillTokenPresent(msg.Text, selection.Token)
+	catalogUnavailable := catalog.Status == "controller_not_ready" || !catalog.CanList
+	if catalogUnavailable && (activeSelection || c.harness == domain.HarnessCodex && hasDollarToken) {
 		return msg, skillError(catalog.ReasonCode)
 	}
 	var chosen *ports.ChatSkill
-	if selection != nil && skillTokenPresent(msg.Text, selection.Token) {
+	if activeSelection {
 		if selection.ControllerGeneration != c.generation || selection.CatalogRevision != catalog.CatalogRevision || selection.SnapshotID != catalog.SnapshotID {
 			return msg, skillError("stale_selection")
 		}
