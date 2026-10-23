@@ -95,6 +95,10 @@ turn has no enforceable mid-turn boundary. Admission reports
 snapshot. A successor selection requires a new session.
 
 Deferred chat prompts are revalidated after preparation and durable provider-ID
-binding. The input lease covers the deferred provider start for both main and
-side conversations; a revocation completed before that boundary discards the
-prepared turn and settles it as failed.
+binding. Both main and side ACP conversations pass admission into the scheduled
+worker. It acquires the lease immediately before writing `session/prompt` and
+releases it after the frame write, before waiting for the response. A revocation
+completed before submission refuses the write and settles the turn as failed.
+A stalled write closes its transport after five seconds so it cannot indefinitely
+hold admission; an already submitted prompt never keeps revocation waiting for
+its response.

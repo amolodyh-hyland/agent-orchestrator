@@ -208,3 +208,34 @@ func TestLibraryDeferredStartHoldsAdmissionUntilProviderDispatch(t *testing.T) {
 	}
 	admission.revoke()
 }
+
+type guardedLibraryDeferredConversation struct {
+	libraryDeferredConversation
+	acquire func(context.Context) (func(), error)
+}
+
+func (c *guardedLibraryDeferredConversation) StartDeferredTurnWithAdmission(_ string, acquire func(context.Context) (func(), error)) error {
+	c.acquire = acquire
+	return nil
+}
+
+func TestLibraryDeferredDriverOwnsTransportAdmission(t *testing.T) {
+	admission := &deferredLibraryAdmission{}
+	provider := &guardedLibraryDeferredConversation{}
+	if err := startLibraryDeferredTurn(context.Background(), provider, "prepared", "continue", func(ctx context.Context, text string) (func(), error) {
+		if text != "continue" {
+			t.Fatalf("wrong admission text: %q", text)
+		}
+		return admission.AcquireChatInput(ctx, "session", text)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if provider.acquire == nil || provider.starts.Load() != 0 || admission.calls.Load() != 0 {
+		t.Fatal("scheduled driver did not receive ownership of transport admission")
+	}
+	admission.revoke()
+	if release, err := provider.acquire(context.Background()); err == nil {
+		release()
+		t.Fatal("transport admission bypassed completed revocation")
+	}
+}

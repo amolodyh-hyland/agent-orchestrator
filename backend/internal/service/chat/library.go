@@ -36,9 +36,20 @@ func (c *Controller) acquireLibraryInput(ctx context.Context, text string) (func
 }
 
 // startLibraryDeferredTurn revalidates after preparation and durable binding. The
-// lease covers the actual provider dispatch, so revocation either precedes this
-// check or waits until the start has completed.
+// asynchronous driver owns the final admission check at its transport write.
+// Synchronous starters retain the lease until their dispatch returns.
 func startLibraryDeferredTurn(ctx context.Context, deferred ports.ChatDeferredTurnStarter, id, text string, acquire func(context.Context, string) (func(), error)) error {
+	if err := ctx.Err(); err != nil {
+		deferred.DiscardDeferredTurn(id)
+		return err
+	}
+	if guarded, ok := deferred.(ports.ChatDeferredTurnAdmissionStarter); ok {
+		err := guarded.StartDeferredTurnWithAdmission(id, func(turnCtx context.Context) (func(), error) { return acquire(turnCtx, text) })
+		if err != nil {
+			deferred.DiscardDeferredTurn(id)
+		}
+		return err
+	}
 	release, err := acquire(ctx, text)
 	if err == nil {
 		err = deferred.StartDeferredTurn(id)

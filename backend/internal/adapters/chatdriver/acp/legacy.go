@@ -33,13 +33,25 @@ type legacyACPTransport struct {
 }
 
 type lockedWriteCloser struct {
-	mu    sync.Mutex
-	inner io.WriteCloser
+	mu     sync.Mutex
+	inner  io.WriteCloser
+	prompt atomic.Pointer[promptSubmission]
 }
 
 func (w *lockedWriteCloser) Write(data []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if submission := w.prompt.Load(); submission != nil {
+		var envelope struct {
+			Method string `json:"method"`
+		}
+		if err := json.Unmarshal(data, &envelope); err != nil {
+			return 0, err
+		}
+		if envelope.Method == acpsdk.AgentMethodSessionPrompt {
+			return submission.write(w.inner, data)
+		}
+	}
 	return w.inner.Write(data)
 }
 
