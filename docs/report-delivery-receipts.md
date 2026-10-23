@@ -56,7 +56,12 @@ Chat messages by their unique stable batch/client identity. Matching historical
 Codex native-start evidence is recovered during upgrade; synthetic start events
 never establish acceptance. A retry deduplicated against an existing message
 can still acquire the same token-fenced receipt link. Ambiguous or unidentifiable
-pre-upgrade Chat claims are held for inspection rather than submitted again.
+pre-upgrade Chat claims and previously attempted pending batches are held for
+inspection rather than submitted again. This includes an ambiguous piggyback
+send released back to pending: its human client ID cannot establish the report
+link. The old schema supplies no definitive no-start evidence for such retries;
+error text alone never permits resubmission. Unattempted pending batches remain
+eligible.
 
 `GET /api/v1/reports?projectId=...` exposes `deliveryState`, `deliveryStatus`,
 `deliveryBatchId`, `lastError` and `resolutionNote`. `held` includes cancelled or

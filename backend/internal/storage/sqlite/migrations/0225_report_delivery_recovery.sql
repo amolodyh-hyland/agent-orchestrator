@@ -42,11 +42,12 @@ UPDATE report_chat_deliveries SET submitted_at=accepted_at
 WHERE accepted_at IS NOT NULL AND submitted_at IS NULL;
 
 INSERT INTO report_delivery_resolutions(batch_id,resolution,note,resolved_at)
-SELECT DISTINCT r.delivery_batch_id, 'held',
- 'Upgrade could not correlate the existing Chat delivery; inspect its transcript and explicitly resolve if delivered elsewhere', r.claimed_at
-FROM reports r WHERE r.delivery_state='claimed' AND r.delivery_batch_id<>''
+SELECT r.delivery_batch_id, 'held',
+ 'Upgrade could not correlate the existing Chat delivery; inspect its transcript and explicitly resolve if delivered elsewhere', coalesce(max(r.claimed_at), min(r.created_at))
+FROM reports r WHERE (r.delivery_state='claimed' OR (r.delivery_state='pending' AND r.delivery_attempts>0)) AND r.delivery_batch_id<>''
 AND NOT EXISTS (SELECT 1 FROM report_chat_deliveries d WHERE d.batch_id=r.delivery_batch_id)
-AND EXISTS (SELECT 1 FROM sessions s WHERE s.project_id=r.project_id AND s.kind='orchestrator' AND s.session_mode='chat');
+AND EXISTS (SELECT 1 FROM sessions s WHERE s.project_id=r.project_id AND s.kind='orchestrator' AND s.session_mode='chat')
+GROUP BY r.delivery_batch_id;
 
 -- +goose Down
 DROP TABLE report_delivery_resolutions;

@@ -125,3 +125,89 @@ func TestReportUpgradeRecoversPreMigrationChatDelivery(t *testing.T) {
 		})
 	}
 }
+
+func TestReportUpgradeHoldsReleasedPendingPiggyback(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	db := openMigratedDatabaseCopyAt(t, dir, 221, pragmas)
+	st := sqlitestore.NewStore(db, db)
+	now := time.Date(2026, 10, 23, 0, 0, 0, 0, time.UTC)
+	if err := st.UpsertProject(ctx, domain.ProjectRecord{ID: "upgrade", Path: dir, RegisteredAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	worker, err := st.CreateSession(ctx, domain.SessionRecord{ProjectID: "upgrade", Kind: domain.KindWorker, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	orch, err := st.CreateSession(ctx, domain.SessionRecord{ProjectID: "upgrade", Kind: domain.KindOrchestrator, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := st.CreateConversation(ctx, "piggyback-conversation", domain.ConversationScopeProject, "upgrade", orch.ID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, id := range []string{"piggyback-report", "piggyback-report-2", "unattempted-report"} {
+		at := now.Add(time.Duration(i) * time.Second)
+		if _, err := st.CreateReport(ctx, domain.ReportRecord{ID: id, SessionID: worker.ID, ProjectID: "upgrade", State: domain.ReportNeedsInput, Note: "retained " + id, CreatedAt: at, AvailableAt: at, DeliveryState: domain.ReportPending, RepeatCount: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`UPDATE reports SET delivery_batch_id='report-batch:piggyback-report',delivery_state='claimed',claim_token='old-daemon',claimed_at=?,delivery_attempts=1 WHERE id<>'unattempted-report'`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE reports SET delivery_batch_id='report-batch:unattempted-report' WHERE id='unattempted-report'`); err != nil {
+		t.Fatal(err)
+	}
+	if created, err := st.AppendUserMessage(ctx, conversation.ID, orch.ID, "old-generation", domain.ConversationMessage{ID: "human-message", ClientMessageID: "human-client-id", Origin: domain.MessageOriginHuman, Text: "human prompt with appended reports"}, "human-turn", now); err != nil || !created {
+		t.Fatalf("legacy piggyback append=%v err=%v", created, err)
+	}
+	if err := st.BindTurnToProvider(ctx, "human-turn", "possibly-started-native-turn", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE reports SET delivery_state='pending',claim_token='',claimed_at=NULL,last_error='ambiguous provider response' WHERE claim_token='old-daemon'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if _, err := reopened.RequeueClaimedReports(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, linked, err := reopened.ReportChatReceipt(ctx, "report-batch:piggyback-report"); err != nil || linked {
+		t.Fatalf("human client identity must remain uncorrelated: linked=%v err=%v", linked, err)
+	}
+	for _, id := range []string{"piggyback-report", "piggyback-report-2"} {
+		report, _, err := reopened.GetReport(ctx, id)
+		if err != nil || report.DeliveryState != domain.ReportPending || report.DeliveryStatus != "held" || report.LastError == "" || report.DeliveryAttempts != 1 || !report.ClaimedAt.IsZero() {
+			t.Fatalf("released pending report=%+v err=%v", report, err)
+		}
+	}
+	pending, err := reopened.ListPendingReportSchedule(ctx, 10)
+	if err != nil || len(pending) != 1 || pending[0].ID != "unattempted-report" {
+		t.Fatalf("only unattempted report should remain eligible: %+v err=%v", pending, err)
+	}
+	delivery := &noUpgradeResend{}
+	coordinator := reportsvc.NewCoordinator(reportsvc.CoordinatorDeps{Store: reopened, Delivery: delivery, Now: func() time.Time { return now }, RetryDelay: time.Second})
+	if _, err := coordinator.RunDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	service := reportsvc.New(reportsvc.Deps{Store: reopened, Now: func() time.Time { return now }})
+	if err := service.ResolveDelivery(ctx, "piggyback-report", "delivered_elsewhere", "verified human transcript"); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"piggyback-report", "piggyback-report-2"} {
+		report, _, err := reopened.GetReport(ctx, id)
+		if err != nil || report.DeliveryStatus != "delivered_elsewhere" || report.ResolutionNote != "verified human transcript" || !report.AcknowledgedAt.IsZero() {
+			t.Fatalf("resolved pending piggyback=%+v err=%v", report, err)
+		}
+	}
+	if _, err := coordinator.RunDue(ctx); err != nil || delivery.calls != 0 {
+		t.Fatalf("ambiguous piggyback resent: calls=%d err=%v", delivery.calls, err)
+	}
+}
