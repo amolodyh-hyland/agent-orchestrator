@@ -2,14 +2,11 @@ package library
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"path"
-	"reflect"
 	"sort"
 	"strings"
-	"syscall"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -19,26 +16,22 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-func targetIdentity(info os.FileInfo) (string, error) {
-	v := reflect.Indirect(reflect.ValueOf(info.Sys()))
-	if !v.IsValid() || v.Kind() != reflect.Struct {
-		return "", fail("unsupported_provider")
-	}
-	dev, ino := v.FieldByName("Dev"), v.FieldByName("Ino")
-	if !dev.IsValid() || !ino.IsValid() {
-		return "", fail("unsupported_provider")
-	}
-	return fmt.Sprintf("%v:%v", dev.Interface(), ino.Interface()), nil
+// filesystemBoundary distinguishes bind mounts even when they share a device.
+type filesystemBoundary struct {
+	device string
+	mount  string
 }
 
 type inspection struct {
-	ctx        context.Context
-	nodes      int
-	totalBytes int64
-	afterRead  func(string)
-	candidates int
-	files      map[string]string
-	dirs       map[string]bool
+	ctx         context.Context
+	boundary    *filesystemBoundary
+	boundaryFor func(*os.File) (filesystemBoundary, error)
+	nodes       int
+	totalBytes  int64
+	afterRead   func(string)
+	candidates  int
+	files       map[string]string
+	dirs        map[string]bool
 }
 
 func (i *inspection) walk(root *os.Root, prefix string, depth int) error {
@@ -52,6 +45,10 @@ func (i *inspection) walk(root *os.Root, prefix string, depth int) error {
 	dir, err := root.Open(".")
 	if err != nil {
 		return fail("missing_source")
+	}
+	if err := i.checkBoundary(dir); err != nil {
+		_ = dir.Close()
+		return err
 	}
 	nodes, err := dir.ReadDir(domain.MaxLibraryNodes + 1)
 	_ = dir.Close()
@@ -109,7 +106,10 @@ func (i *inspection) walk(root *os.Root, prefix string, depth int) error {
 			if pre.Mode().Perm()&0o111 != 0 {
 				return fail("executable_file")
 			}
-			f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+			if err := checkLibraryRegularFile(pre); err != nil {
+				return err
+			}
+			f, err := openLibraryFile(root, name)
 			if err != nil {
 				return fail("source_changed")
 			}
@@ -118,12 +118,26 @@ func (i *inspection) walk(root *os.Root, prefix string, depth int) error {
 				_ = f.Close()
 				return fail("source_changed")
 			}
+			if err := checkLibraryRegularFile(actual); err != nil {
+				_ = f.Close()
+				return err
+			}
+			if err := i.checkBoundary(f); err != nil {
+				_ = f.Close()
+				return err
+			}
 			data, err := io.ReadAll(io.LimitReader(f, domain.MaxLibraryFileBytes+1))
 			post, statErr := f.Stat()
 			_ = f.Close()
 			current, currentErr := root.Lstat(name)
 			if err != nil || statErr != nil || currentErr != nil || !os.SameFile(pre, current) || current.Mode()&os.ModeSymlink != 0 || post.Size() != pre.Size() || !post.ModTime().Equal(pre.ModTime()) || int64(len(data)) != pre.Size() {
 				return fail("source_changed")
+			}
+			if err := checkLibraryRegularFile(post); err != nil {
+				return err
+			}
+			if err := checkLibraryRegularFile(current); err != nil {
+				return err
 			}
 			if len(data) > domain.MaxLibraryFileBytes {
 				return fail("file_limit")
@@ -148,13 +162,33 @@ func (i *inspection) walk(root *os.Root, prefix string, depth int) error {
 	return nil
 }
 
+func (i *inspection) checkBoundary(f *os.File) error {
+	boundaryFor := i.boundaryFor
+	if boundaryFor == nil {
+		boundaryFor = libraryFilesystemBoundary
+	}
+	boundary, err := boundaryFor(f)
+	if err != nil {
+		return err
+	}
+	if i.boundary == nil {
+		i.boundary = &boundary
+	} else if *i.boundary != boundary {
+		return fail("mount_boundary")
+	}
+	return nil
+}
+
 func inspectRoot(ctx context.Context, local domain.LibraryLocalSource, existing map[string]domain.LibraryStagedEntry, authority string) ([]domain.LibraryStagedEntry, error) {
 	pre, err := os.Lstat(local.RootPath)
 	if err != nil || !pre.IsDir() || pre.Mode()&os.ModeSymlink != 0 {
 		return nil, fail("source_changed")
 	}
 	identity, err := targetIdentity(pre)
-	if err != nil || identity != local.TargetIdentity {
+	if err != nil {
+		return nil, err
+	}
+	if identity != local.TargetIdentity {
 		return nil, fail("root_replaced")
 	}
 	root, err := os.OpenRoot(local.RootPath)
@@ -170,7 +204,7 @@ func inspectRoot(ctx context.Context, local domain.LibraryLocalSource, existing 
 	if err := scan.walk(root, "", 0); err != nil {
 		return nil, err
 	}
-	verify := inspection{ctx: ctx, files: map[string]string{}, dirs: map[string]bool{}}
+	verify := inspection{ctx: ctx, boundary: scan.boundary, files: map[string]string{}, dirs: map[string]bool{}}
 	if err := verify.walk(root, "", 0); err != nil {
 		return nil, err
 	}
