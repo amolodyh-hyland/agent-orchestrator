@@ -55,6 +55,7 @@ const {
 	dragStarts,
 	downloadUpdateMock,
 	getMock,
+	apiState,
 	navigateMock,
 	mockLocation,
 	mockParams,
@@ -77,10 +78,11 @@ const {
 		dragEnds: new Map<string, (event: { active: { id: string }; over: { id: string } | null }) => void>(),
 		dragOvers: new Map<string, (event: DragOverTestEvent) => void>(),
 		dragStarts: new Map<string, (event: { active: { id: string } }) => void>(),
+		apiState: { trusted: false },
 		getMock: vi.fn(),
 		postMock: vi.fn(),
 		navigateMock: vi.fn(),
-		mockLocation: { pathname: "/" },
+		mockLocation: { pathname: "/", search: {} as { observation?: true } },
 		mockParams: { hostId: undefined as string | undefined, projectId: undefined as string | undefined, sessionId: undefined as string | undefined },
 		renameSessionMock: vi.fn().mockResolvedValue(undefined),
 		spawnMock: vi.fn(),
@@ -163,7 +165,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 		useNavigate: () => navigateMock,
 		useParams: () => ({ ...mockParams }),
 		useRouterState: ({ select }: { select: (state: { location: { pathname: string } }) => unknown }) =>
-			select({ location: { pathname: mockLocation.pathname } }),
+			select({ location: mockLocation }),
 	};
 });
 
@@ -188,7 +190,7 @@ vi.mock("../hooks/useSettings", () => ({
 
 vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: postMock },
-	hasTrustedApiBaseUrl: () => false,
+	hasTrustedApiBaseUrl: () => apiState.trusted,
 	apiErrorMessage: (error: unknown) => {
 		if (error instanceof Error) return error.message;
 		if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string") {
@@ -562,6 +564,8 @@ beforeEach(() => {
 	mockParams.sessionId = undefined;
 	mockParams.hostId = undefined;
 	mockLocation.pathname = "/";
+	mockLocation.search = {};
+	apiState.trusted = false;
 });
 
 afterEach(() => {
@@ -569,6 +573,52 @@ afterEach(() => {
 });
 
 describe("Sidebar", () => {
+	it("warms an exited Chat session outside observation routes", async () => {
+		apiState.trusted = true;
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [{
+			...session, mode: "chat", status: "exited",
+			activity: { state: "exited", lastActivityAt: "2026-06-30T00:00:00Z" },
+		}] }] });
+		fireEvent.mouseEnter(screen.getByRole("button", { name: "Open fix login" }));
+		await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/resume-agent", {
+			params: { path: { sessionId: session.id } },
+		}));
+	});
+
+	it.each(["cockpit", "observation board"])("disables hover warm-up and cancels pending timers on %s", async (route) => {
+		apiState.trusted = true;
+		const stopped: WorkspaceSession = {
+			...session, mode: "chat", status: "exited",
+			activity: { state: "exited", lastActivityAt: "2026-06-30T00:00:00Z" },
+		};
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const noop = vi.fn().mockResolvedValue(undefined);
+		window.localStorage.setItem("ao.sidebar.expanded-projects", JSON.stringify([workspace.id]));
+		const tree = (task: WorkspaceSession) => (
+			<QueryClientProvider client={client}><TooltipProvider><SidebarProvider>
+				<Sidebar workspaces={[{ ...workspace, sessions: [task] }]} onCloneProject={noop} onCreateProject={noop} onInitializeProject={noop} onRemoveProject={noop} onCreateRemoteProject={noop} onInitializeRemoteProject={noop} />
+			</SidebarProvider></TooltipProvider></QueryClientProvider>
+		);
+		const view = render(tree(stopped));
+		const row = screen.getByRole("button", { name: "Open fix login" });
+		// Start both timers outside observation, then enter it without leaving the row.
+		fireEvent.mouseEnter(row);
+		if (route === "cockpit") mockLocation.pathname = "/cockpit";
+		else { mockLocation.pathname = "/projects/proj-1"; mockLocation.search = { observation: true }; }
+		view.rerender(tree({ ...stopped }));
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 400)); });
+		expect(postMock).not.toHaveBeenCalled();
+		expect(getMock.mock.calls.some(([path]) => path.includes("conversation"))).toBe(false);
+		// New hover/focus callbacks on the observation route must also stay inert.
+		fireEvent.mouseEnter(row);
+		fireEvent.focus(row);
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 400)); });
+		expect(postMock).not.toHaveBeenCalled();
+		expect(getMock.mock.calls.some(([path]) => path.includes("conversation"))).toBe(false);
+		view.unmount();
+		client.clear();
+	});
+
 	it("creates local or remote projects from the header button", async () => {
 		const user = userEvent.setup();
 		renderSidebar({

@@ -19,6 +19,7 @@ import {
 	AlertTriangle,
 	Archive,
 	CalendarClock,
+	PanelsTopLeft,
 	ChevronRight,
 	Download,
 	File,
@@ -524,6 +525,7 @@ function useSelection() {
 	});
 	const goHome = useCallback(() => void navigate({ to: "/" }), [navigate]);
 	const goAutomations = useCallback(() => void navigate({ to: "/automations" }), [navigate]);
+	const goCockpit = useCallback(() => void navigate({ to: "/cockpit" }), [navigate]);
 	const goArtifacts = useCallback(() => void navigate({ to: "/artifacts" }), [navigate]);
 	const goStandaloneBoard = useCallback(() => void navigate({ to: "/sessions" }), [navigate]);
 	const goGlobalSettings = useCallback(() => openGlobalSettings(), [openGlobalSettings]);
@@ -550,6 +552,8 @@ function useSelection() {
 		isHome: pathname === "/",
 		isAutomations: pathname === "/automations",
 		isArtifacts: pathname === "/artifacts",
+		isCockpit: pathname === "/cockpit",
+		goCockpit,
 		activeRemoteHostId: params.hostId,
 		activeRemoteProjectId: params.hostId ? params.projectId : undefined,
 		activeRemoteSessionId: params.hostId ? params.sessionId : undefined,
@@ -566,7 +570,7 @@ function useSelection() {
 		goSettings,
 		goProject,
 		goSession,
-	}), [goArtifacts, goAutomations, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
+	}), [goCockpit, goArtifacts, goAutomations, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
 }
 
 // Colour tracks the session's board section, preserving SCM state while the
@@ -1021,6 +1025,15 @@ export function Sidebar({
 					</SidebarGroup>
 				) : null}
 				<SidebarMenu className="mb-3 gap-0.5 group-data-[collapsible=icon]:gap-1">
+					<SidebarMenuItem>
+						<SidebarTopNavRow
+							active={selection.isCockpit}
+							icon={<PanelsTopLeft aria-hidden="true" />}
+							label={t("cockpit.title")}
+							onClick={selection.goCockpit}
+							tooltip={isCollapsed ? t("cockpit.title") : undefined}
+						/>
+					</SidebarMenuItem>
 					<SidebarMenuItem>
 						<SidebarTopNavRow
 							active={selection.isAutomations}
@@ -2412,18 +2425,26 @@ const SessionRow = memo(function SessionRow({
 	const lastTouchAtRef = useRef(0);
 	const suppressTouchOpenRef = useRef(false);
 	const hoverTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-	const canPrefetch = session.mode === "chat" && !session.cloud && !session.hostId && !active && !listIsDragging && !reorder?.isDragging;
-	useEffect(() => () => clearTimeout(hoverTimerRef.current), [canPrefetch]);
+	const observationOnly = useRouterState({
+		select: (state) => state.location.pathname === "/cockpit" || state.location.search?.observation === true,
+	});
+	const canPrefetch = !observationOnly && session.mode === "chat" && !session.cloud && !session.hostId && !active && !listIsDragging && !reorder?.isDragging;
+	// Pending callbacks must see the current route even when queued by an older render.
+	const canPrefetchRef = useRef(canPrefetch);
+	canPrefetchRef.current = canPrefetch;
 	const resumeTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-	useEffect(() => () => clearTimeout(resumeTimerRef.current), [canPrefetch]);
+	useLayoutEffect(() => () => {
+		clearTimeout(hoverTimerRef.current);
+		clearTimeout(resumeTimerRef.current);
+	}, [canPrefetch]);
 	const prefetchConversation = () => {
-		if (!canPrefetch || !hasTrustedApiBaseUrl() || queryClient.getQueryData(conversationQueryKey(session.id))) return;
+		if (!canPrefetchRef.current || !hasTrustedApiBaseUrl() || queryClient.getQueryData(conversationQueryKey(session.id))) return;
 		void queryClient.prefetchInfiniteQuery(conversationQueryOptions(session.id));
 	};
 	// A stopped agent takes seconds to come back. Start it while the pointer rests
 	// on the row so the chat is ready when it opens; opening joins this request.
 	const warmUpAgent = () => {
-		if (!canPrefetch || !hasTrustedApiBaseUrl() || !canResumeAgent(session)) return;
+		if (!canPrefetchRef.current || !hasTrustedApiBaseUrl() || !canResumeAgent(session)) return;
 		void resumeAgentOnOpen(session.id)
 			.catch(() => {})
 			.finally(() => {

@@ -57,3 +57,5 @@ Persist durable facts, derive display status:
 - session table: `activity_state`, `is_terminated`, identity, metadata
 - PR tables: PR/CI/review facts
 - derived read model: `service.Session` computes display status from session + PR facts
+
+- [Selected-project cockpit](project-cockpit.md): desktop read-only project selection, fact timestamps and source navigation.

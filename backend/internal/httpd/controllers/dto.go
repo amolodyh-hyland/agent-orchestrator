@@ -230,6 +230,7 @@ type SessionInterfaceTransitionIDParam struct {
 
 // ListSessionsQuery is the query string accepted by GET /api/v1/sessions.
 type ListSessionsQuery struct {
+	ReadOnly         *bool  `query:"readOnly,omitempty" description:"When true, project observed facts without repairing persisted artifact metadata or starting execution."`
 	Project          string `query:"project,omitempty" description:"Project id filter."`
 	Active           *bool  `query:"active,omitempty" description:"When true, return non-terminated sessions; when false, return terminated sessions."`
 	OrchestratorOnly *bool  `query:"orchestratorOnly,omitempty" description:"When true, return only orchestrator sessions."`

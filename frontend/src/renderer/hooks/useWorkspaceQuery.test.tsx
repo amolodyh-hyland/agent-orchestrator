@@ -766,6 +766,7 @@ describe("useWorkspaceScope board presentation", () => {
 		await waitFor(() => expect(result.current.data?.session?.id).toBe("s"));
 		expect(result.current.data?.project?.name).toBe("Hosted");
 		expect(remoteGetMock).toHaveBeenCalledTimes(2);
+		expect(remoteGetMock).toHaveBeenCalledWith("/api/v1/sessions", { params: { query: { readOnly: true } } });
 		expect(getMock).not.toHaveBeenCalled();
 		expect(listProjectsMock).not.toHaveBeenCalled();
 		expect(listSessionsMock).not.toHaveBeenCalled();

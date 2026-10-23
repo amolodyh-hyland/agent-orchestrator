@@ -1,7 +1,7 @@
 import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
 import { AppBrowserLinkContext } from "../components/AppLink";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
-import { CatchBoundary, createFileRoute, Outlet, useMatch, useMatchRoute, useNavigate, useParams, useRouter } from "@tanstack/react-router";
+import { CatchBoundary, createFileRoute, Outlet, useMatch, useMatchRoute, useNavigate, useParams, useRouter, useSearch } from "@tanstack/react-router";
 import { isCancelledError, useQueryClient } from "@tanstack/react-query";
 import { lazy, memo, Suspense, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FolderPlus } from "lucide-react";
@@ -104,6 +104,8 @@ function preloadSessionView(): void {
 }
 
 export const Route = createFileRoute("/_shell")({
+	validateSearch: (search: Record<string, unknown>): { observation?: true } =>
+		search.observation === true ? { observation: true } : {},
 	// Prefetch the workspace list for the whole shell (parent loaders run before
 	// children); pairs with the router's defaultPreload: "intent" so a hovered
 	// nav target is warm before the click.
@@ -304,6 +306,8 @@ function ShellLayout() {
 	const navigate = useNavigate();
 	const router = useRouter();
 	const matchRoute = useMatchRoute();
+	const routeSearch = useSearch({ strict: false });
+	const observationOnly = Boolean(matchRoute({ to: "/cockpit" })) || routeSearch.observation === true;
 	const queryClient = useQueryClient();
 	const { client: cloudClient } = useCloudCp();
 	const { org: cloudOrg } = useCloudOrg();
@@ -322,7 +326,7 @@ function ShellLayout() {
 	workspacesRef.current = workspaces;
 	const remoteWorkspacesRef = useRef(remoteWorkspaces);
 	remoteWorkspacesRef.current = remoteWorkspaces;
-	const daemonStatus = useDaemonStatus(queryClient);
+	const daemonStatus = useDaemonStatus(queryClient, observationOnly);
 	const daemonIsReady = daemonStatus.state === "ready";
 	// Warm the lazy chunks the first session open needs once the app is idle, so
 	// moving them off the startup path does not add a wait on first use.
@@ -512,7 +516,7 @@ function ShellLayout() {
 	// looking at the project, so the picker never shows a loading flash the
 	// first time they actually open the dialog.
 	useEffect(() => {
-		if (!scopedProjectId || scopedProjectId === STANDALONE_WORKSPACE_ID) return;
+		if (observationOnly || !scopedProjectId || scopedProjectId === STANDALONE_WORKSPACE_ID) return;
 		const projectQueryKey = ["project", scopedProjectId];
 		void queryClient
 			.prefetchQuery({
@@ -533,7 +537,7 @@ function ShellLayout() {
 					void queryClient.prefetchQuery(agentModelsQueryOptions(defaultWorkerAgent, scopedProjectId));
 				}
 			});
-	}, [queryClient, scopedProjectId]);
+	}, [observationOnly, queryClient, scopedProjectId]);
 	// The root route is the intentionally minimal home surface, regardless of
 	// whether projects have already been registered.
 	const isHomeRoute = Boolean(matchRoute({ to: "/" }));
@@ -1058,7 +1062,7 @@ function ShellLayout() {
 	// The renderer owns Developer Mode; the daemon must know its value before
 	// either the view-close path or the idle sweep can hibernate a provider.
 	useEffect(() => {
-		if (usesPreviewWorkspaceData || daemonStatus.state !== "ready" || !daemonStatus.port) return;
+		if (observationOnly || usesPreviewWorkspaceData || daemonStatus.state !== "ready" || !daemonStatus.port) return;
 		let cancelled = false;
 		let retry: ReturnType<typeof setTimeout> | undefined;
 		const sync = () => {
@@ -1078,7 +1082,7 @@ function ShellLayout() {
 			cancelled = true;
 			clearTimeout(retry);
 		};
-	}, [daemonStatus.pid, daemonStatus.port, daemonStatus.state, developerMode]);
+	}, [daemonStatus.pid, daemonStatus.port, daemonStatus.state, developerMode, observationOnly]);
 
 	// A daemon port is not enough to render a trustworthy empty state: the
 	// route loader may have cached [] before Electron reported the port. Fetch
@@ -1343,7 +1347,7 @@ function ShellLayout() {
 			<AppBrowserLinkContext.Provider value={canOpenBrowserLink ? openBrowserLink : undefined}>
 			<SessionTopbarProvider>
 				<NotificationRuntime />
-				<HarnessUpdateNotice enabled={daemonStatus.state === "ready"} />
+				<HarnessUpdateNotice enabled={daemonStatus.state === "ready" && !observationOnly} />
 				<TrayRuntime />
 				{isDragActive ? (
 					<div

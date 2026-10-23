@@ -2644,6 +2644,13 @@ func parseSessionListFilter(r *http.Request) (sessionsvc.ListFilter, error) {
 		}
 		filter.Fresh = fresh
 	}
+	if raw := q.Get("readOnly"); raw != "" {
+		readOnly, err := strconv.ParseBool(raw)
+		if err != nil {
+			return sessionsvc.ListFilter{}, errors.New("readOnly must be a boolean")
+		}
+		filter.ReadOnly = readOnly
+	}
 	return filter, nil
 }
 
