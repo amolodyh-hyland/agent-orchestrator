@@ -1237,6 +1237,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/library": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the inert library catalog */
+        get: operations["getLibrary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/library/operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register, inspect, approve, revoke or bind local library content */
+        post: operations["operateLibrary"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/library/sessions/{sessionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read retained library bytes and current input admission */
+        get: operations["getSessionLibrary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/link-preview": {
         parameters: {
             query?: never;
@@ -5921,6 +5972,206 @@ export interface components {
             freed?: boolean;
             ok: boolean;
             sessionId: string;
+        };
+        LibraryAdmission: {
+            inputAllowed: boolean;
+            midTurnBoundary: string;
+            reasonCode: string;
+            replacementRequired: boolean;
+            sessionId: string;
+            snapshotId?: string;
+            state: string;
+            stopRequired: boolean;
+            /** Format: int64 */
+            trustEpoch: number;
+        };
+        LibraryApproval: {
+            actorId: string;
+            approvalId: string;
+            approvedAt: string;
+            authorityId: string;
+            entries: components["schemas"]["LibrarySelectedEntry"][];
+            expiresAt?: string;
+            policyRevision: string;
+            purposes: string[];
+            rootIdentity: components["schemas"]["LibraryRootIdentity"];
+            selectionDigest: string;
+            sourceId: string;
+            state: string;
+            /** Format: int64 */
+            trustEpoch: number;
+        };
+        LibraryBinding: {
+            approvedContentHash: string;
+            bindingId: string;
+            enabled: boolean;
+            entryId: string;
+            ownerId: string;
+            position: number;
+            projectId: string;
+            required: boolean;
+            /** Format: int64 */
+            revision: number;
+            roles: components["schemas"]["ProjectContextRole"][];
+            sessionId?: string;
+            sourceId: string;
+        };
+        LibraryEntry: {
+            contentHash: string;
+            displayName: string;
+            entryId: string;
+            entryPoint: string;
+            files: components["schemas"]["LibraryFile"][];
+            format: string;
+            kind: string;
+            provenance: components["schemas"]["LibraryProvenance"];
+            reasonCode: string;
+            requirements: string[];
+            schemaVersion: number;
+            sourceId: string;
+            status: string;
+        };
+        LibraryFile: {
+            mode: string;
+            path: string;
+            sha256: string;
+            /** Format: int64 */
+            sizeBytes: number;
+        };
+        LibraryOperation: {
+            approvalId?: string;
+            binding?: components["schemas"]["LibraryBinding"];
+            bindingId?: string;
+            entries?: components["schemas"]["LibrarySelectedEntry"][];
+            /** Format: int64 */
+            expectedRevision: number;
+            expiresAt?: string;
+            localPath?: string;
+            operation: string;
+            projectId?: string;
+            purposes?: string[];
+            rootIdentity?: components["schemas"]["LibraryRootIdentity"];
+            rootKind?: string;
+            scope?: string;
+            sessionId?: string;
+            sourceId?: string;
+        };
+        LibraryProvenance: {
+            adapterVersion: string;
+            originAuthorityId: string;
+            originEntryId: string;
+            originKind: string;
+            originSourceId: string;
+            resolverId: string;
+            /** Format: int64 */
+            sourceRevision: number;
+            verification: string;
+        };
+        LibraryResult: {
+            admission?: components["schemas"]["LibraryAdmission"];
+            approvals: components["schemas"]["LibraryApproval"][];
+            bindings: components["schemas"]["LibraryBinding"][];
+            entries: components["schemas"]["LibraryEntry"][];
+            preview?: components["schemas"]["LibraryStagedEntry"][];
+            reasonCode: string;
+            /** Format: int64 */
+            revision: number;
+            runtimeBindings: components["schemas"]["LibraryRuntimeBinding"][];
+            snapshot?: components["schemas"]["LibrarySnapshot"];
+            sources: components["schemas"]["LibrarySource"][];
+            status: string;
+            /** Format: int64 */
+            trustEpoch: number;
+            warnings: string[];
+        };
+        LibraryRootIdentity: {
+            resolverId: string;
+            /** Format: int64 */
+            rootGeneration: number;
+            rootRef: string;
+        };
+        LibraryRuntimeBinding: {
+            adapterId: string;
+            adapterVersion: string;
+            canInvoke: boolean;
+            /** Format: int64 */
+            catalogRevision: number;
+            contentHash: string;
+            /** Format: int64 */
+            controllerGeneration: number;
+            entryId: string;
+            providerId: string;
+            providerVersion: string;
+            reasonCode: string;
+            sessionId: string;
+            snapshotId: string;
+            status: string;
+            /** Format: int64 */
+            trustEpoch: number;
+        };
+        LibrarySelectedEntry: {
+            contentHash: string;
+            entryId: string;
+        };
+        LibrarySnapshot: {
+            adapterId: string;
+            adapterVersion: string;
+            channel: string;
+            createdAt: string;
+            entries: components["schemas"]["LibrarySnapshotEntry"][];
+            ownedSnapshotRef: string;
+            projectContextDigest: string;
+            projectId: string;
+            /** Format: int64 */
+            projectRevision: number;
+            providerId: string;
+            /** Format: int64 */
+            registryRevision: number;
+            role: components["schemas"]["ProjectContextRole"];
+            schemaVersion: number;
+            sessionId: string;
+            snapshotDigest?: string;
+            snapshotId: string;
+            /** Format: int64 */
+            trustEpoch: number;
+            warnings: string[];
+        };
+        LibrarySnapshotEntry: {
+            approvalId?: string;
+            bindingIds: string[];
+            bindingRevisions: number[];
+            content: {
+                [key: string]: string;
+            } | null;
+            entry: components["schemas"]["LibraryEntry"];
+            reasonCode: string;
+            required: boolean;
+            rootIdentity: components["schemas"]["LibraryRootIdentity"];
+            /** Format: int64 */
+            sourceRevision: number;
+            status: string;
+        };
+        LibrarySource: {
+            detached: boolean;
+            inspectionState: string;
+            originKind: string;
+            ownerId: string;
+            resolverId: string;
+            /** Format: int64 */
+            revision: number;
+            /** Format: int64 */
+            rootGeneration: number;
+            rootRef: string;
+            scope: string;
+            sourceId: string;
+        };
+        LibraryStagedEntry: {
+            content: {
+                [key: string]: string;
+            } | null;
+            entry: components["schemas"]["LibraryEntry"];
+            present: boolean;
+            rootIdentity: components["schemas"]["LibraryRootIdentity"];
         };
         LinkPreviewResponse: {
             description?: string;
@@ -11786,6 +12037,163 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getLibrary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryResult"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    operateLibrary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LibraryOperation"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryResult"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionLibrary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryResult"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

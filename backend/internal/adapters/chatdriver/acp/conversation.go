@@ -43,6 +43,8 @@ type preparedTurn struct {
 	id              string
 	clientMessageID string
 	prompt          []acpsdk.ContentBlock
+	acquire         func(context.Context) (func(), error)
+	spentPreamble   bool
 }
 
 type interruptAttempt struct {
@@ -83,6 +85,7 @@ type nestedMessageState struct {
 
 type conversation struct {
 	conn                 *acpsdk.ClientSideConnection
+	promptWriter         *lockedWriteCloser
 	legacyWire           *legacyACPTransport
 	proc                 *process
 	log                  *slog.Logger
@@ -174,6 +177,7 @@ type conversation struct {
 var _ ports.ChatConversation = (*conversation)(nil)
 var _ ports.ChatHistoryReader = (*conversation)(nil)
 var _ ports.ChatDeferredTurnStarter = (*conversation)(nil)
+var _ ports.ChatDeferredTurnAdmissionStarter = (*conversation)(nil)
 var _ ports.ChatConfigOptionController = (*conversation)(nil)
 var _ ports.ChatSkillLister = (*conversation)(nil)
 var _ ports.ChatSteerer = (*conversation)(nil)
@@ -219,6 +223,7 @@ func newConversation(
 	}
 	legacyWire, sdkWriter, sdkReader := newLegacyACPTransport(proc.stdin)
 	c.legacyWire = legacyWire
+	c.promptWriter = legacyWire.writer
 	c.conn = acpsdk.NewClientSideConnection(
 		c, sdkWriter, newExtensionMethodReader(sdkReader, extensionAliases),
 	)
@@ -641,6 +646,10 @@ func (c *conversation) setSessionOption(ctx context.Context, sessionID string, o
 }
 
 func (c *conversation) StartDeferredTurn(providerTurnID string) error {
+	return c.StartDeferredTurnWithAdmission(providerTurnID, nil)
+}
+
+func (c *conversation) StartDeferredTurnWithAdmission(providerTurnID string, acquire func(context.Context) (func(), error)) error {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -651,17 +660,18 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 		return errors.New("ACP prepared turn not found")
 	}
 	turn := *c.prepared
+	turn.acquire = acquire
 	c.prepared = nil
 	// Standing context leads the first prompt so the provider reads it as
 	// context rather than as part of what the user asked. It is consumed here,
-	// not in SendTurn, because this is the first point at which a prompt is
-	// guaranteed to reach the provider: settings validation, a busy conversation
-	// and a discarded prepared turn all fail in SendTurn, and spending the
-	// preamble on any of them would silently drop AO's instructions from the
-	// session's first real turn.
+	// not in SendTurn, because this starts asynchronous submission. Settings
+	// validation, a busy conversation, and discarding all precede submission.
+	// Spending the preamble on them would silently drop AO's instructions from the
+	// session's first real turn. A refused transport admission restores it.
 	if !c.preambleSpent && len(c.preamble) > 0 {
 		turn.prompt = append(append([]acpsdk.ContentBlock(nil), c.preamble...), turn.prompt...)
 		c.preambleSpent = true
+		turn.spentPreamble = true
 	}
 	c.activeTurn = turn.id
 	c.settlingTurn = ""
@@ -693,10 +703,8 @@ func (c *conversation) runTurn(ctx context.Context, sessionID string, turn prepa
 	if messageID == "" {
 		messageID = uuid.NewString()
 	}
-	resp, err := c.conn.Prompt(ctx, acpsdk.PromptRequest{
-		SessionId: acpsdk.SessionId(sessionID),
-		MessageId: &messageID,
-		Prompt:    turn.prompt,
+	resp, err := c.submitPrompt(ctx, turn, acpsdk.PromptRequest{
+		SessionId: acpsdk.SessionId(sessionID), MessageId: &messageID, Prompt: turn.prompt,
 	})
 
 	c.finishPrompt(turn.id, resp, err)

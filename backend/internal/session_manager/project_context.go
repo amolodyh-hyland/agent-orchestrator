@@ -19,6 +19,25 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+// LibrarySelection pins child snapshots and guards task launch and terminal admission.
+type LibrarySelection interface {
+	Pin(context.Context, domain.ProjectContextManifest, domain.ProjectRecord, string) error
+	CheckLaunch(context.Context, domain.SessionID) error
+	AcquireTaskInput(domain.SessionID) (func(), bool)
+}
+
+// SetLibrarySelection installs the daemon-owned library selection boundary.
+func (m *Manager) SetLibrarySelection(library LibrarySelection) {
+	m.libraryMu.Lock()
+	m.librarySelection = library
+	m.libraryMu.Unlock()
+}
+func (m *Manager) librarySelectionValue() LibrarySelection {
+	m.libraryMu.RLock()
+	defer m.libraryMu.RUnlock()
+	return m.librarySelection
+}
+
 type projectContextSnapshotStore interface {
 	CreateProjectContextSnapshot(context.Context, domain.ProjectContextManifest) (bool, error)
 	GetProjectContextSnapshot(context.Context, domain.SessionID) (domain.ProjectContextManifest, bool, error)
@@ -82,11 +101,20 @@ func (m *Manager) ensureProjectContextSnapshot(ctx context.Context, rec domain.S
 	if _, found, err := store.GetProjectContextSnapshot(ctx, rec.ID); err != nil {
 		return err
 	} else if found {
+		if library := m.librarySelectionValue(); library != nil {
+			return library.CheckLaunch(ctx, rec.ID)
+		}
 		return nil
 	}
 	manifest, err := m.resolveProjectContext(ctx, rec, project)
 	if err != nil {
 		return err
+	}
+	if library := m.librarySelectionValue(); library != nil {
+		if err := library.Pin(ctx, manifest, project, string(rec.Harness)); err != nil {
+			return err
+		}
+		return library.CheckLaunch(ctx, rec.ID)
 	}
 	created, err := store.CreateProjectContextSnapshot(ctx, manifest)
 	if err != nil {
@@ -106,6 +134,11 @@ func (m *Manager) ensureProjectContextSnapshot(ctx context.Context, rec domain.S
 }
 
 func (m *Manager) projectContextSnapshot(ctx context.Context, id domain.SessionID) (domain.ProjectContextManifest, bool, error) {
+	if library := m.librarySelectionValue(); library != nil {
+		if err := library.CheckLaunch(ctx, id); err != nil {
+			return domain.ProjectContextManifest{}, false, err
+		}
+	}
 	store, ok := m.store.(projectContextSnapshotStore)
 	if !ok {
 		return domain.ProjectContextManifest{}, false, nil

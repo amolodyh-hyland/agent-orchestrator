@@ -278,7 +278,13 @@ func (c *Controller) PromoteQueuedTurn(
 		Text: queued.Text, Content: content, Origin: queued.Origin,
 		ClientMessageID: queued.ClientMessageID,
 	}
+	libraryRelease, admissionErr := c.acquireLibraryInput(ctx, msg.Text)
+	if admissionErr != nil {
+		release()
+		return PromoteQueuedTurnResult{}, admissionErr
+	}
 	ref, err := steerer.Steer(ctx, target, msg)
+	libraryRelease()
 	if err != nil {
 		classified := classify(err)
 		switch {
@@ -372,6 +378,11 @@ func (c *Controller) Steer(ctx context.Context, msg ports.ChatUserMessage) (Stee
 }
 
 func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage) (SteerResult, error) {
+	libraryRelease, admissionErr := c.acquireLibraryInput(ctx, msg.Text)
+	if admissionErr != nil {
+		return SteerResult{}, admissionErr
+	}
+	defer libraryRelease()
 
 	requestJSON, err := encodeSteerDeliveryRequest(msg)
 	if err != nil {

@@ -1366,9 +1366,16 @@ func (m *sideManager) runTurn(runtime *sideRuntime, side domain.SideConversation
 	if turn.DispatchAttempt > 0 {
 		providerRequestID = fmt.Sprintf("%s:retry:%d", turn.ClientMessageID, turn.DispatchAttempt)
 	}
+	libraryRelease, admissionErr := m.service.acquireLibraryInput(ctx, side.SessionID, text)
+	if admissionErr != nil {
+		_ = m.store.SettleSideTurn(ctx, side.ID, turn.ID, side.Generation, "failed", "", admissionErr.Error(), m.service.now())
+		m.failOpen(side, admissionErr)
+		return
+	}
 	ref, err := runtime.conv.SendTurn(ctx, ports.ChatUserMessage{Text: text, Content: content,
 		ClientMessageID: providerRequestID, Origin: domain.MessageOriginHuman,
 		Settings: ports.ChatTurnSettings{Model: side.Model, Effort: side.Effort}})
+	libraryRelease()
 	if err != nil {
 		if firstDelivery {
 			m.failOpen(side, ErrSidePolicyRecreate)
@@ -1404,8 +1411,9 @@ func (m *sideManager) runTurn(runtime *sideRuntime, side domain.SideConversation
 	// ACP prepares session/prompt in SendTurn and waits for an explicit start.
 	// Bind the provider turn to this side before any streamed event can arrive.
 	if deferred, ok := runtime.conv.(ports.ChatDeferredTurnStarter); ok {
-		if err := deferred.StartDeferredTurn(ref.ProviderTurnID); err != nil {
-			deferred.DiscardDeferredTurn(ref.ProviderTurnID)
+		if err := startLibraryDeferredTurn(ctx, deferred, ref.ProviderTurnID, text, func(ctx context.Context, text string) (func(), error) {
+			return m.service.acquireLibraryInput(ctx, side.SessionID, text)
+		}); err != nil {
 			_ = m.store.SettleSideTurn(context.Background(), side.ID, turn.ID, side.Generation,
 				"failed", ref.ProviderTurnID, err.Error(), m.service.now())
 			m.announce(side.ID)

@@ -816,12 +816,23 @@ type ChatTurnRef struct {
 // project it.
 //
 // Drivers whose SendTurn already receives a provider acknowledgement (Codex's
-// app-server, for example) do not implement this interface.
+// app-server, for example) do not implement this interface. A driver that
+// schedules submission after returning must also implement
+// ChatDeferredTurnAdmissionStarter to guard that asynchronous boundary.
 type ChatDeferredTurnStarter interface {
 	StartDeferredTurn(providerTurnID string) error
 	// DiscardDeferredTurn releases a prepared turn when AO could not persist its
 	// correlation id. No provider request has started at this point.
 	DiscardDeferredTurn(providerTurnID string)
+}
+
+// ChatDeferredTurnAdmissionStarter moves admission into an asynchronous driver's
+// actual transport submission. The driver must acquire immediately before the
+// prompt is written, release after that write (not after the turn's response),
+// and settle the turn as failed if acquisition is refused.
+type ChatDeferredTurnAdmissionStarter interface {
+	ChatDeferredTurnStarter
+	StartDeferredTurnWithAdmission(providerTurnID string, acquire func(context.Context) (func(), error)) error
 }
 
 // ChatDecisionOption is one choice the provider says is valid for a pending
