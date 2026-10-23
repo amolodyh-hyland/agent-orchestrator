@@ -1,4 +1,7 @@
 import path from "node:path";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { hasProjectConflict, inspectMulticaProject, snapshotDigest, verifyRecoveryReceipt, type ProjectApproval, type ProjectApprovalRequest } from "./multica-local-server-preflight";
 import {
 	EMPTY_LOCAL_SERVER_STATUS,
 	localServerAvailability,
@@ -85,6 +88,9 @@ export type MulticaLocalServer = {
 };
 
 export type MulticaLocalServerOptions = {
+	approveProjectMutation?: (request: ProjectApprovalRequest) => Promise<ProjectApproval | null>;
+	verifyRecovery?: (file: string, digest: string) => Promise<void>;
+	stackIdentity?: (stack: StackPaths) => Promise<string>;
 	readServerSettings: () => Promise<MulticaSettings>;
 	readStackSettings: () => Promise<LocalServerSettings>;
 	writeStackSettings: (settings: LocalServerSettings) => Promise<unknown>;
@@ -177,8 +183,9 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 
 	// Every engine command runs against the local endpoint found now, or not at all: with no
 	// local engine listening it reports "not running" instead of reaching for any other one.
-	const run = async (spec: CommandSpec, signal?: AbortSignal): Promise<CommandResult> => {
+	const run = async (spec: CommandSpec, signal?: AbortSignal, pinnedEndpoint?: string): Promise<CommandResult> => {
 		const endpoint = findEndpoint();
+		if (pinnedEndpoint !== undefined && endpoint !== pinnedEndpoint) return { error: new Error("selected engine changed"), stdout: "", stderr: "selected engine changed" };
 		if (spec.engine && endpoint === null) {
 			return { error: Object.assign(new Error("no local Docker engine endpoint"), { code: "NO_LOCAL_ENGINE" }), stdout: "", stderr: "" };
 		}
@@ -435,6 +442,7 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 		state: LocalServerState,
 		build: (docker: string, stack: StackPaths) => CommandSpec,
 		mayLaunchDocker: boolean,
+		action: ProjectApprovalRequest["action"],
 	): Promise<LocalServerResult> {
 		return operate(state, async (signal) => {
 			const prepared = await prepare();
@@ -449,8 +457,34 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 			const fresh = await prepare();
 			if (signal.aborted) return { ok: false, code: "cancelled" };
 			if (!fresh.ok) return fresh;
+			const endpoint = findEndpoint();
+			if (!endpoint) return { ok: false, code: "inspect_failed" };
+			const identity = options.stackIdentity ?? (async (stack: StackPaths) => createHash("sha256").update(await readFile(stack.file)).update(await readFile(path.join(stack.dir, ENV_FILE_NAME))).digest("hex"));
+			const targetIdentity = await identity(fresh.stack);
+			try {
+				const inspect = () => inspectMulticaProject(endpoint, fresh.docker, (command) => run(command, signal, endpoint));
+				const snapshot = await inspect();
+				const digest = snapshotDigest(snapshot);
+				if (hasProjectConflict(snapshot)) {
+					if (!options.approveProjectMutation) return { ok: false, code: "command_failed", detail: "Existing multica project requires explicit takeover and downtime approval with recovery evidence." };
+					const approvalStarted = clock();
+					const approval = await options.approveProjectMutation({ action, stackDir: fresh.stack.dir, snapshot, digest });
+					if (signal.aborted || !approval || approval.digest !== digest || approval.action !== action) return { ok: false, code: "cancelled" };
+					await (options.verifyRecovery ?? verifyRecoveryReceipt)(approval.recoveryReceipt, digest);
+					if (clock() - approvalStarted > 5 * 60_000) return { ok: false, code: "cancelled" };
+				}
+				const final = await prepare();
+				if (!final.ok) return final;
+				if (final.docker !== fresh.docker || final.stack.dir !== fresh.stack.dir || await identity(final.stack) !== targetIdentity || snapshotDigest(await inspect()) !== digest) {
+					return { ok: false, code: "inspect_failed", detail: "Stack or project changed; inspect and approve again." };
+				}
+			} catch {
+				if (signal.aborted) return { ok: false, code: "cancelled" };
+				return { ok: false, code: "inspect_failed", detail: "Project ownership or protected recovery evidence could not be verified." };
+			}
+			if (signal.aborted) return { ok: false, code: "cancelled" };
 			setOp(state);
-			const result = outcome(await run(build(fresh.docker, fresh.stack), signal), signal);
+			const result = outcome(await run(build(fresh.docker, fresh.stack), signal, endpoint), signal);
 			if (result.ok) portFailure = false;
 			return result;
 		});
@@ -484,9 +518,9 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 			timer = setInterval(() => void refreshAndPublish(), options.pollMs ?? DEFAULT_POLL_MS);
 			timer.unref?.();
 		},
-		start: () => stackCommand("starting_server", upCommand, true),
-		stop: () => stackCommand("stopping", stopCommand, false),
-		restart: () => stackCommand("restarting", restartCommand, false),
+		start: () => stackCommand("starting_server", upCommand, true, "start"),
+		stop: () => stackCommand("stopping", stopCommand, false, "stop"),
+		restart: () => stackCommand("restarting", restartCommand, false, "restart"),
 		cancel: () => {
 			// Creating .env is one quick write that cannot be taken back half-way: once it has started, cancel says so.
 			if (setupWriting) return { ok: false, code: "busy" };

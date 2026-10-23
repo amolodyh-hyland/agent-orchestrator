@@ -111,6 +111,9 @@ function harness(patch: Partial<Fake> = {}) {
 	const writes: unknown[] = [];
 
 	const verbOf = (args: string[]): string => {
+		if (args[0] === "info") return "project-engine";
+		if (args[0] === "container") return args[1] === "ls" ? "project-containers" : "project-inspect";
+		if (args[0] === "volume" || args[0] === "network") return `project-${args[0]}`;
 		if (args[0] === "version") return "docker-version";
 		if (args[0] === "-a") return "open";
 		if (args[1] === "version") return "compose-version";
@@ -135,6 +138,7 @@ function harness(patch: Partial<Fake> = {}) {
 			});
 			return;
 		}
+		if (verb === "project-engine") return finish({ stdout: "engine-test-12345" });
 		if (verb === "docker-version") return finish(fake.engine === "up" ? { stdout: "27.0.0\n" } : { error: { code: 1 }, stderr: "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" });
 		if (verb === "compose-version") return finish(fake.composePlugin ? { stdout: "v2.29.0\n" } : { error: { code: 1 }, stderr: "docker: 'compose' is not a docker command." });
 		if (verb === "compose-ls") return finish({ stdout: fake.composeList });
@@ -147,6 +151,7 @@ function harness(patch: Partial<Fake> = {}) {
 	};
 
 	const options: MulticaLocalServerOptions = {
+		stackIdentity: async () => "target-compose-and-env-digest",
 		readServerSettings: async () => fake.settings,
 		readStackSettings: async () => ({ stackDir: fake.stackDir }),
 		writeStackSettings: async (settings) => {
@@ -356,7 +361,7 @@ describe("start, stop and restart", () => {
 		const h = harness();
 		expect(await h.server.start()).toEqual({ ok: true });
 		const up = h.calls.find((call) => call.args.includes("up"));
-		expect(up).toMatchObject({ file: DOCKER, args: ["compose", "-f", FILE, "--project-directory", DIR, "-p", "multica", "up", "-d"] });
+		expect(up).toMatchObject({ file: DOCKER, args: ["compose", "-f", FILE, "--project-directory", DIR, "-p", "multica", "up", "-d", "--no-build", "--pull", "never"] });
 	});
 
 	it("stops and restarts with their commands", async () => {
@@ -1336,3 +1341,86 @@ describe("dispose", () => {
 
 beforeEach(() => undefined);
 afterEach(() => vi.restoreAllMocks());
+
+describe("fixed project mutation preflight", () => {
+	const id = "a".repeat(64);
+	const inventory = (state: string, imageId = `sha256:${"b".repeat(64)}`) => JSON.stringify([id, "/multica-backend-1", imageId, "old/backend:retained", state, {
+		"com.docker.compose.project": "multica", "com.docker.compose.service": "backend",
+		"com.docker.compose.project.config_files": "/old/docker-compose.selfhost.yml", "com.docker.compose.project.working_dir": "/old",
+	}, [{ Type: "volume", Name: "multica_backend_uploads", Source: "/volumes/uploads", Destination: "/app/data/uploads", RW: true }]]);
+	const conflicting = (state = "running") => harness({ handlers: {
+		"project-containers": () => ({ stdout: id }), "project-inspect": () => ({ stdout: inventory(state) }),
+		"project-volume": () => ({ stdout: '"multica_pgdata"' }), "project-network": () => ({ stdout: '"multica_default"' }),
+	} });
+	const mutations = (h: ReturnType<typeof harness>) => h.verbs().filter((verb) => ["up", "stop", "restart"].includes(verb));
+
+	it("proves an empty project in the selected engine before each mutation", async () => {
+		const h = harness();
+		for (const action of ["start", "stop", "restart"] as const) expect(await h.server[action]()).toEqual({ ok: true });
+		expect(h.verbs().filter((verb) => verb === "project-containers")).toHaveLength(6);
+		expect(h.calls.filter((call) => call.args[0] === "container").every((call) => call.env.DOCKER_HOST === SOCKET)).toBe(true);
+		expect(h.calls.find((call) => call.args.includes("up"))?.args).toEqual(expect.arrayContaining(["--no-build", "--pull", "never"]));
+	});
+
+	it.each(["running", "exited", "created", "paused"])("blocks %s services without takeover approval, even from a fresh folder", async (state) => {
+		const h = conflicting(state);
+		for (const action of ["start", "stop", "restart"] as const) expect(await h.server[action]()).toMatchObject({ ok: false, code: "command_failed" });
+		expect(mutations(h)).toEqual([]);
+	});
+
+	it("blocks retained project data even without containers", async () => {
+		const h = harness({ handlers: { "project-volume": () => ({ stdout: '"multica_pgdata"' }) } });
+		expect(await h.server.start()).toMatchObject({ ok: false });
+		expect(mutations(h)).toEqual([]);
+	});
+
+	it.each(["missing", "wrong digest", "wrong action", "unverified restore"])("rejects %s approval", async (kind) => {
+		const h = conflicting("exited");
+		const approveProjectMutation: NonNullable<MulticaLocalServerOptions["approveProjectMutation"]> = async (request) => kind === "missing" ? null : ({ digest: kind === "wrong digest" ? "stale" : request.digest, action: kind === "wrong action" ? "stop" : request.action, recoveryReceipt: "/private/recovery.json" });
+		const server = createMulticaLocalServer({ ...h.options, approveProjectMutation, verifyRecovery: async () => { throw new Error("restore not verified"); } });
+		expect(await server.start()).toMatchObject({ ok: false });
+		expect(mutations(h)).toEqual([]);
+	});
+
+	it("permits one approved takeover and a separately approved restore to the preserved recipe", async () => {
+		const h = conflicting("exited");
+		const approvals: string[] = [];
+		const recovery = vi.fn(async () => undefined);
+		const server = createMulticaLocalServer({ ...h.options, approveProjectMutation: async (request) => {
+			approvals.push(`${request.action}:${request.stackDir}`);
+			expect(request.snapshot.containers[0]).toMatchObject({ service: "backend", state: "exited", image: "old/backend:retained", imageId: `sha256:${"b".repeat(64)}`, configFiles: "/old/docker-compose.selfhost.yml" });
+			return { digest: request.digest, action: request.action, recoveryReceipt: "/private/recovery.json" };
+		}, verifyRecovery: recovery });
+		expect(await server.start()).toEqual({ ok: true });
+		h.fake.validDirs.add("/old");
+		h.fake.stackDir = "/old";
+		expect(await server.start()).toEqual({ ok: true });
+		expect(approvals).toEqual([`start:${DIR}`, "start:/old"]);
+		expect(recovery).toHaveBeenCalledTimes(2);
+		expect(mutations(h)).toEqual(["up", "up"]);
+	});
+
+	it.each(["project", "endpoint", "target", "engine", "cancel", "expired"])("rejects %s changes during approval", async (kind) => {
+		const h = conflicting();
+		let target = "before";
+		const server = createMulticaLocalServer({ ...h.options, stackIdentity: async () => target, verifyRecovery: async () => undefined, approveProjectMutation: async (request) => {
+			if (kind === "project") h.fake.handlers["project-inspect"] = () => ({ stdout: inventory("running", `sha256:${"c".repeat(64)}`) });
+			if (kind === "endpoint") h.fake.endpoint = "unix:///another.sock";
+			if (kind === "target") target = "changed";
+			if (kind === "engine") h.fake.handlers["project-engine"] = () => ({ stdout: "different-engine-1234" });
+			if (kind === "cancel") server.cancel();
+			if (kind === "expired") h.fake.now += 300_001;
+			return { digest: request.digest, action: request.action, recoveryReceipt: "/private/recovery.json" };
+		} });
+		expect(await server.start()).toMatchObject({ ok: false, ...(kind === "cancel" ? { code: "cancelled" } : {}) });
+		expect(mutations(h)).toEqual([]);
+	});
+
+	it.each(["not-json", "[]", "duplicate", "failure"])("fails closed on ambiguous inventory: %s", async (kind) => {
+		const h = conflicting();
+		if (kind === "duplicate") h.fake.handlers["project-containers"] = () => ({ stdout: `${id}\n${id}` });
+		else h.fake.handlers["project-inspect"] = () => kind === "failure" ? { error: { code: 1 } } : { stdout: kind };
+		expect(await h.server.restart()).toMatchObject({ ok: false, code: "inspect_failed" });
+		expect(mutations(h)).toEqual([]);
+	});
+});

@@ -21,12 +21,12 @@ const TIMEOUT_MS = {
 	logs: 15_000,
 	stop: 60_000,
 	restart: 120_000,
-	// The first start pulls the images.
+	// Images must already exist in the selected engine.
 	up: 10 * 60_000,
 	open: 15_000,
 } as const;
 
-export type CommandName = "dockerVersion" | "composeVersion" | "composeList" | "ps" | "up" | "stop" | "restart" | "logs" | "openDocker";
+export type CommandName = "dockerVersion" | "composeVersion" | "composeList" | "ps" | "up" | "stop" | "restart" | "logs" | "openDocker" | "projectContainers" | "projectInspect" | "projectVolumes" | "projectNetworks" | "projectEngine";
 
 export type CommandSpec = {
 	readonly name: CommandName;
@@ -53,6 +53,7 @@ export type StackPaths = {
 const issued = new WeakSet<CommandSpec>();
 
 function issue(name: CommandName, file: string, args: string[], timeoutMs: number, engine = true): CommandSpec {
+	assertAbsolute(file, "command binary");
 	const spec: CommandSpec = Object.freeze({ name, file, args: Object.freeze(args), timeoutMs, engine, docker: file !== OPEN_BINARY, compose: file !== OPEN_BINARY && args[0] === "compose" });
 	issued.add(spec);
 	return spec;
@@ -91,11 +92,27 @@ export const composeListCommand = (docker: string): CommandSpec => {
 	return issue("composeList", docker, ["compose", "ls", "--all", "--format", "json"], TIMEOUT_MS.list);
 };
 
+export const projectEngineCommand = (docker: string): CommandSpec =>
+	issue("projectEngine", docker, ["info", "--format", "{{.ID}}"], TIMEOUT_MS.list);
+
+export const projectContainersCommand = (docker: string): CommandSpec =>
+	issue("projectContainers", docker, ["container", "ls", "--all", "--no-trunc", "--filter", "label=com.docker.compose.project=multica", "--format", "{{.ID}}"], TIMEOUT_MS.list);
+
+export function projectInspectCommand(docker: string, ids: readonly string[]): CommandSpec {
+	if (ids.length === 0 || ids.length > 100 || !ids.every((id) => /^[a-f0-9]{64}$/.test(id))) throw new Error("invalid container inventory");
+	return issue("projectInspect", docker, ["container", "inspect", "--format", "[{{json .Id}},{{json .Name}},{{json .Image}},{{json .Config.Image}},{{json .State.Status}},{{json .Config.Labels}},{{json .Mounts}}]", ...ids], TIMEOUT_MS.ps);
+}
+
+export function projectResourcesCommand(docker: string, resource: "volume" | "network"): CommandSpec {
+	if (resource !== "volume" && resource !== "network") throw new Error("invalid project resource");
+	return issue(resource === "volume" ? "projectVolumes" : "projectNetworks", docker, [resource, "ls", "--filter", "label=com.docker.compose.project=multica", "--format", "{{json .Name}}"], TIMEOUT_MS.list);
+}
+
 export const psCommand = (docker: string, stack: StackPaths): CommandSpec =>
 	issue("ps", docker, [...composeBase(docker, stack), "ps", "--all", "--format", "json"], TIMEOUT_MS.ps);
 
 export const upCommand = (docker: string, stack: StackPaths): CommandSpec =>
-	issue("up", docker, [...composeBase(docker, stack), "up", "-d"], TIMEOUT_MS.up);
+	issue("up", docker, [...composeBase(docker, stack), "up", "-d", "--no-build", "--pull", "never"], TIMEOUT_MS.up);
 
 export const stopCommand = (docker: string, stack: StackPaths): CommandSpec =>
 	issue("stop", docker, [...composeBase(docker, stack), "stop"], TIMEOUT_MS.stop);
