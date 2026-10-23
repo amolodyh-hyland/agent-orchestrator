@@ -179,6 +179,10 @@ func (s *Service) Operate(ctx context.Context, in Operation) (result Result, err
 }
 
 func (s *Service) operate(ctx context.Context, in Operation) (Result, error) {
+	return s.operateWithCommit(ctx, in, nil)
+}
+
+func (s *Service) operateWithCommit(ctx context.Context, in Operation, onCommit func()) (Result, error) {
 	if !domain.ValidLibraryID(s.owner) || !domain.ValidLibraryID(s.authority) || !domain.ValidLibraryID(s.resolver) {
 		return Result{}, fail("resolver_unavailable")
 	}
@@ -345,6 +349,9 @@ func (s *Service) operate(ctx context.Context, in Operation) (Result, error) {
 	})
 	if err != nil {
 		return Result{}, err
+	}
+	if onCommit != nil {
+		onCommit()
 	}
 	state, err = s.store.ReadLibraryRegistry(ctx)
 	if err != nil {

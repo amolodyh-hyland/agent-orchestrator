@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	sqlitestore "github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
 type taskLifecycleFixture struct {
@@ -238,5 +239,84 @@ func TestTaskLibraryDeniedRevocationReleasesPrecommitFence(t *testing.T) {
 		t.Fatal("denied mutation left admission closed")
 	} else {
 		release()
+	}
+}
+
+type postCommitFailureStore struct {
+	*sqlitestore.Store
+	committed   bool
+	responseErr error
+	afterCommit func()
+}
+
+func (s *postCommitFailureStore) UpdateLibraryRegistry(ctx context.Context, change func(*domain.LibraryRegistry) (domain.LibraryAudit, error)) error {
+	if err := s.Store.UpdateLibraryRegistry(ctx, change); err != nil {
+		return err
+	}
+	s.committed = true
+	if s.afterCommit != nil {
+		s.afterCommit()
+	}
+	return nil
+}
+
+func (s *postCommitFailureStore) ReadLibraryRegistry(ctx context.Context) (domain.LibraryRegistry, error) {
+	if s.committed {
+		return domain.LibraryRegistry{}, s.responseErr
+	}
+	return s.Store.ReadLibraryRegistry(ctx)
+}
+
+type postCommitLifecycle struct {
+	t                         *testing.T
+	fenced, released, stopped bool
+}
+
+func (l *postCommitLifecycle) FenceLibraryInput(context.Context, domain.SessionID) (func(), error) {
+	l.fenced = true
+	return func() { l.released = true }, nil
+}
+
+func (l *postCommitLifecycle) StopLibraryRuntime(ctx context.Context, _ domain.SessionID) error {
+	if ctx.Err() != nil {
+		l.t.Errorf("shutdown used cancelled request: %v", ctx.Err())
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok || time.Until(deadline) > 30*time.Second {
+		l.t.Error("shutdown context is not bounded")
+	}
+	if !l.fenced || l.released {
+		l.t.Error("committed revocation released input fence")
+	}
+	l.stopped = true
+	return nil
+}
+
+func TestTaskLibraryCommittedRevocationStopsAfterResponseFailure(t *testing.T) {
+	for _, cancelRequest := range []bool{false, true} {
+		t.Run(map[bool]string{false: "registry_read", true: "cancelled_request"}[cancelRequest], func(t *testing.T) {
+			f, rec := pinnedTaskFixture(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			responseErr := errors.New("post-commit registry read failed")
+			wrapped := &postCommitFailureStore{Store: f.store, responseErr: responseErr}
+			if cancelRequest {
+				wrapped.responseErr, wrapped.afterCommit = context.Canceled, cancel
+			}
+			f.svc.store = wrapped
+			lifecycle := &postCommitLifecycle{t: t}
+			f.svc.SetTaskLibraryLifecycle(lifecycle)
+			_, err := f.svc.Operate(ctx, Operation{Operation: "revoke", ApprovalID: f.result.Approvals[0].ApprovalID, ExpectedRevision: f.result.Revision})
+			if !errors.Is(err, wrapped.responseErr) {
+				t.Fatalf("response error lost: %v", err)
+			}
+			if !lifecycle.stopped || lifecycle.released {
+				t.Fatalf("stopped=%v fence released=%v", lifecycle.stopped, lifecycle.released)
+			}
+			f.svc.store = f.store
+			if err := f.svc.CheckLaunch(context.Background(), rec.ID); reason(err) != "revoked" {
+				t.Fatalf("ledger did not stay revoked: %v", err)
+			}
+		})
 	}
 }

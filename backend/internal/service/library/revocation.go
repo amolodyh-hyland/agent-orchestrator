@@ -80,11 +80,10 @@ func (s *Service) revokeRuntimes(ctx context.Context, in Operation) (Result, err
 			fenced[id] = true
 		}
 	}
-	result, err := s.operate(ctx, in)
-	if err != nil {
-		return result, err
+	result, responseErr := s.operateWithCommit(ctx, in, func() { committed = true })
+	if !committed {
+		return result, responseErr
 	}
-	committed = true
 	// Commit revocation even if stopping fails. Admission stays closed from the durable ledger.
 	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
@@ -123,7 +122,7 @@ func (s *Service) revokeRuntimes(ctx context.Context, in Operation) (Result, err
 		result.Status, result.ReasonCode = "unavailable", "runtime_stop_failed"
 		return result, fail("runtime_stop_failed")
 	}
-	return result, nil
+	return result, responseErr
 }
 
 func (s *Service) selectionRevoking(snapshot domain.LibrarySnapshot) bool {
