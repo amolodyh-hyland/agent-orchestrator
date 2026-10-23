@@ -417,6 +417,40 @@ type Cue struct {
 	UpdatedAt time.Time
 }
 
+type FactoryRun struct {
+	ID        string
+	ProjectID string
+	SessionID string
+	Version   int64
+	Document  string
+}
+
+type FactoryRunEvidence struct {
+	ID       string
+	RunID    string
+	Version  int64
+	Document string
+}
+
+type LibraryAudit struct {
+	ID        int64
+	EventJson string
+}
+
+type LibraryRegistry struct {
+	ID           int64
+	Revision     int64
+	RegistryJson string
+}
+
+type LibrarySessionSnapshot struct {
+	SessionID     string
+	SnapshotID    string
+	ContextDigest string
+	ManifestJson  string
+	Digest        string
+}
+
 type ManagedHarnessRelease struct {
 	Harness   string
 	Release   string

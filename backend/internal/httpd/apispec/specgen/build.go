@@ -19,6 +19,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/factoryrun"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/githubpat"
 	importsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/importer"
 	librarysvc "github.com/aoagents/agent-orchestrator/backend/internal/service/library"
@@ -160,6 +161,23 @@ func schemaName(_ reflect.Type, defaultName string) string {
 // by projectOperations(). Add an entry when a new contract type is introduced;
 // the drift test fails until the spec is regenerated, which flags the gap.
 var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
+	"DomainFactoryRun":                                     "FactoryRun",
+	"DomainRunRepoBinding":                                 "RunRepoBinding",
+	"DomainRunSource":                                      "RunSource",
+	"DomainRunArtifact":                                    "RunArtifact",
+	"DomainRunRepoFacts":                                   "RunRepoFacts",
+	"DomainRunCheckReceipt":                                "RunCheckReceipt",
+	"DomainRunCompletion":                                  "RunCompletion",
+	"DomainRunFinding":                                     "RunFinding",
+	"DomainRunReviewReceipt":                               "RunReviewReceipt",
+	"DomainRunEvidence":                                    "RunEvidence",
+	"DomainRunDetail":                                      "RunDetail",
+	"FactoryrunCreateInput":                                "CreateFactoryRunRequest",
+	"FactoryrunRecordInput":                                "RecordFactoryRunRequest",
+	"FactoryrunAdvanceInput":                               "AdvanceFactoryRunRequest",
+	"ControllersListFactoryRunsResponse":                   "ListFactoryRunsResponse",
+	"ControllersListFactoryRunsQuery":                      "ListFactoryRunsQuery",
+	"ControllersFactoryRunIDParam":                         "FactoryRunIDParam",
 	"ControllersAgentAccountIDParam":                       "AgentAccountIDParam",
 	"ControllersAgentAccountLoginIDParam":                  "AgentAccountLoginIDParam",
 	"ControllersAgentAccountSessionIDParam":                "AgentAccountSessionIDParam",
@@ -752,6 +770,7 @@ func operations() []operation {
 	ops = append(ops, reviewOperations()...)
 	ops = append(ops, notificationOperations()...)
 	ops = append(ops, reportOperations()...)
+	ops = append(ops, factoryRunOperations()...)
 	ops = append(ops, usageOperations()...)
 	ops = append(ops, pushOperations()...)
 	ops = append(ops, importOperations()...)
@@ -3748,5 +3767,16 @@ func awakeOperations() []operation {
 		common(http.MethodPost, "/api/v1/awake/recover", "recoverAwake", nil, nil),
 		common(http.MethodDelete, "/api/v1/awake/history", "clearAwakeHistory", nil, nil),
 		common(http.MethodPost, "/api/v1/awake/downloads", "awakeDownloads", controllers.AwakeDownloadsRequest{}, nil),
+	}
+}
+
+func factoryRunOperations() []operation {
+	errorResponses := []respUnit{{http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}}
+	return []operation{
+		{method: http.MethodGet, path: "/api/v1/runs", id: "listFactoryRuns", tag: "runs", summary: "List manually created project runs", pathParams: []any{controllers.ListFactoryRunsQuery{}}, resps: append([]respUnit{{http.StatusOK, controllers.ListFactoryRunsResponse{}}}, errorResponses...)},
+		{method: http.MethodGet, path: "/api/v1/runs/{runId}", id: "getFactoryRun", tag: "runs", summary: "Read run history and current evidence blockers", pathParams: []any{controllers.FactoryRunIDParam{}}, resps: append([]respUnit{{http.StatusOK, domain.RunDetail{}}}, errorResponses...)},
+		{method: http.MethodPost, path: "/api/v1/runs", id: "createFactoryRun", tag: "runs", summary: "Record a human run decision without starting execution", reqBody: factoryrun.CreateInput{}, resps: append([]respUnit{{http.StatusCreated, domain.RunDetail{}}}, errorResponses...)},
+		{method: http.MethodPost, path: "/api/v1/runs/{runId}/evidence", id: "recordFactoryRunEvidence", tag: "runs", summary: "Append completion or review evidence without delivering feedback", pathParams: []any{controllers.FactoryRunIDParam{}}, reqBody: factoryrun.RecordInput{}, resps: append([]respUnit{{http.StatusOK, domain.RunDetail{}}}, errorResponses...)},
+		{method: http.MethodPost, path: "/api/v1/runs/{runId}/advance", id: "advanceFactoryRun", tag: "runs", summary: "Record a human stage decision, retaining a hold when evidence is missing", pathParams: []any{controllers.FactoryRunIDParam{}}, reqBody: factoryrun.AdvanceInput{}, resps: append([]respUnit{{http.StatusOK, domain.RunDetail{}}}, errorResponses...)},
 	}
 }

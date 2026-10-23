@@ -3709,3 +3709,18 @@ type CountUnseenNotificationsQuery struct {
 type NotificationCountResponse struct {
 	Count int64 `json:"count"`
 }
+
+// FactoryRunIDParam selects one stable run identity.
+type FactoryRunIDParam struct {
+	RunID string `path:"runId" json:"-"`
+}
+
+// ListFactoryRunsQuery scopes a run listing to one project.
+type ListFactoryRunsQuery struct {
+	ProjectID string `query:"projectId" json:"-"`
+}
+
+// ListFactoryRunsResponse contains persisted run records.
+type ListFactoryRunsResponse struct {
+	Runs []domain.FactoryRun `json:"runs"`
+}
