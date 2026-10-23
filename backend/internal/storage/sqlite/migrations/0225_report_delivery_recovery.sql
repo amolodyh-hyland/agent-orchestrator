@@ -46,7 +46,19 @@ SELECT r.delivery_batch_id, 'held',
  'Upgrade could not correlate the existing Chat delivery; inspect its transcript and explicitly resolve if delivered elsewhere', coalesce(max(r.claimed_at), min(r.created_at))
 FROM reports r WHERE (r.delivery_state='claimed' OR (r.delivery_state='pending' AND r.delivery_attempts>0)) AND r.delivery_batch_id<>''
 AND NOT EXISTS (SELECT 1 FROM report_chat_deliveries d WHERE d.batch_id=r.delivery_batch_id)
-AND EXISTS (SELECT 1 FROM sessions s WHERE s.project_id=r.project_id AND s.kind='orchestrator' AND s.session_mode='chat')
+AND (
+ EXISTS (SELECT 1 FROM sessions s WHERE s.project_id=r.project_id AND s.kind='orchestrator' AND s.session_mode='chat')
+ OR EXISTS (
+  SELECT 1 FROM conversation_messages m
+  JOIN conversation_turns t ON t.id=m.turn_id AND t.conversation_id=m.conversation_id
+  JOIN sessions s ON s.id=t.handled_by_session_id
+  WHERE s.project_id=r.project_id AND s.kind='orchestrator'
+    AND m.role='user' AND m.created_at>=r.created_at
+    AND instr(m.text,'<ao-worker-reports>')>0 AND instr(m.text,'</ao-worker-reports>')>0
+    AND (instr(m.text,coalesce(nullif(r.note,''),nullif(r.message,'')))>0
+         OR EXISTS (SELECT 1 FROM report_outputs o WHERE o.report_id=r.id AND instr(m.text,o.reference)>0))
+ )
+)
 GROUP BY r.delivery_batch_id;
 
 -- +goose Down

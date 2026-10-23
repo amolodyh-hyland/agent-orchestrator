@@ -60,8 +60,10 @@ pre-upgrade Chat claims and previously attempted pending batches are held for
 inspection rather than submitted again. This includes an ambiguous piggyback
 send released back to pending: its human client ID cannot establish the report
 link. The old schema supplies no definitive no-start evidence for such retries;
-error text alone never permits resubmission. Unattempted pending batches remain
-eligible.
+error text alone never permits resubmission. Historical orchestrator report
+envelopes retain this hold after a completed Chat-to-TUI switch; current interface
+mode cannot clear the ambiguity. Older messages and report envelopes without
+matching report text or output references do not hold a genuine TUI delivery. Unattempted pending batches remain eligible.
 
 `GET /api/v1/reports?projectId=...` exposes `deliveryState`, `deliveryStatus`,
 `deliveryBatchId`, `lastError` and `resolutionNote`. `held` includes cancelled or

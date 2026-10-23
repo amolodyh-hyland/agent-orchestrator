@@ -172,7 +172,7 @@ func TestReportChatBusyQueueExpiryRestartAndNativeAcceptance(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if drained.State != domain.ReportReceiptQueued {
+				if drained.State != domain.ReportReceiptQueued && drained.ProviderTurnID != "" {
 					break
 				}
 				if time.Now().After(deadline) {
