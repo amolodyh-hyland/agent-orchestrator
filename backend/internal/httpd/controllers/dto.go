@@ -3724,3 +3724,15 @@ type ListFactoryRunsQuery struct {
 type ListFactoryRunsResponse struct {
 	Runs []domain.FactoryRun `json:"runs"`
 }
+
+// RunEvidencePage is an exclusive version page of immutable receipts.
+type RunEvidencePage struct {
+	Evidence         []domain.RunEvidence `json:"evidence"`
+	NextAfterVersion int64                `json:"nextAfterVersion"`
+}
+
+// RunEvidencePageQuery bounds history reads independently of current readiness.
+type RunEvidencePageQuery struct {
+	AfterVersion int64 `query:"afterVersion" required:"false"`
+	Limit        int64 `query:"limit" required:"false"`
+}

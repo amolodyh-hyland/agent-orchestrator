@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
@@ -55,12 +56,42 @@ func (s *Store) ListRunEvidence(ctx context.Context, id string) ([]domain.RunEvi
 		}
 		records = append(records, record)
 	}
+	slices.Reverse(records)
 	return records, nil
+}
+
+// PageRunEvidence reads a bounded, exclusive version cursor.
+func (s *Store) PageRunEvidence(ctx context.Context, id string, after, limit int64) ([]domain.RunEvidence, error) {
+	if after < -1 || limit < 1 || limit > 100 {
+		return nil, errors.New("invalid evidence page")
+	}
+	docs, err := s.qr.PageRunEvidence(ctx, gen.PageRunEvidenceParams{RunID: id, AfterVersion: after, PageSize: limit})
+	return decodeRunEvidence(docs, err)
+}
+
+// CurrentRunEvidence reads only the most recent receipt per repository/kind at a version.
+func (s *Store) CurrentRunEvidence(ctx context.Context, id string, version int64) ([]domain.RunEvidence, error) {
+	docs, err := s.qr.CurrentRunEvidence(ctx, gen.CurrentRunEvidenceParams{RunID: id, AtVersion: version})
+	return decodeRunEvidence(docs, err)
+}
+func decodeRunEvidence(docs []string, err error) ([]domain.RunEvidence, error) {
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.RunEvidence, 0, len(docs))
+	for _, doc := range docs {
+		var e domain.RunEvidence
+		if err := json.Unmarshal([]byte(doc), &e); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, nil
 }
 
 // SaveFactoryRun atomically compares immutable intent/version and appends evidence.
 func (s *Store) SaveFactoryRun(ctx context.Context, record domain.FactoryRun, evidence domain.RunEvidence, create bool) error {
-	if evidence.RunID != record.ID || evidence.Version != record.Version || record.Version < 0 || evidence.ID == "" {
+	if evidence.RunID != record.ID || evidence.Version != record.Version || record.Version < 0 || evidence.ID == "" || record.Version > 511 {
 		return domain.ErrRunConflict
 	}
 	if err := s.writeMu.LockContext(ctx); err != nil {
@@ -71,6 +102,9 @@ func (s *Store) SaveFactoryRun(ctx context.Context, record domain.FactoryRun, ev
 		document, err := json.Marshal(record)
 		if err != nil {
 			return err
+		}
+		if len(document) > 64<<10 {
+			return errors.New("run admission exceeds limit")
 		}
 		if create {
 			if record.Version != 0 {
@@ -99,6 +133,9 @@ func (s *Store) SaveFactoryRun(ctx context.Context, record domain.FactoryRun, ev
 		data, err := json.Marshal(evidence)
 		if err != nil {
 			return err
+		}
+		if len(data) > 256<<10 {
+			return errors.New("run evidence exceeds limit")
 		}
 		return q.InsertRunEvidence(ctx, gen.InsertRunEvidenceParams{ID: evidence.ID, RunID: record.ID, Version: record.Version, Document: string(data)})
 	})

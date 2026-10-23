@@ -1,3 +1,4 @@
+import { registerFactoryRunConfirmation } from "./main/factory-run-confirmation";
 import { createMainProcessDelegationAuthority } from "./main/multica-delegation-authority";
 import { registerDesktopDelegation } from "./main/multica-delegation-desktop";
 import { registerProjectContextIpc } from "./main/project-context-ipc";
@@ -400,6 +401,7 @@ let multicaViewHost: MulticaViewHost | null = null;
 let multicaIssueLinkService: MulticaIssueLinkService | null = null;
 let multicaStatusSync: MulticaStatusSync | null = null;
 let multicaStatusSyncIpc: { dispose: () => void } | null = null;
+let factoryRunConfirmation: ReturnType<typeof registerFactoryRunConfirmation> | null = null;
 let multicaDelegation: ReturnType<typeof registerDesktopDelegation> | null = null;
 let multicaLocalServer: MulticaLocalServer | null = null;
 let multicaLocalServerIpc: { dispose: () => void } | null = null;
@@ -1145,6 +1147,17 @@ async function createWindowInternal(): Promise<void> {
 		stateDir: browserProfileStateDir(), vault: createSafeStorageVault(safeStorage, process.platform),
 		readProfileConfig: createProfileConfigReader(() => os.homedir()),
 	});
+	factoryRunConfirmation = registerFactoryRunConfirmation({
+		ipcMain, shellWebContents, authority: delegationConfirmation.authority,
+		origin: () => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null,
+		fetch: (url, init) => net.fetch(url instanceof URL ? url.href : url, init),
+		confirm: async (detail) => {
+			if (!mainWindow || mainWindow.isDestroyed()) return false;
+			const result = await dialog.showMessageBox(mainWindow, { type: "question", title: "Confirm run evidence",
+				message: "Record this exact human confirmation?", detail, buttons: ["Cancel", "Confirm record"], defaultId: 0, cancelId: 0, noLink: true });
+			return result.response === 1;
+		},
+	});
 	multicaDelegation = registerDesktopDelegation({
 		ipcMain, shellWebContents, authority: delegationConfirmation.authority,
 		credentials: multicaCredentials,
@@ -1420,6 +1433,7 @@ async function createWindowInternal(): Promise<void> {
 		multicaIssueLinkService = null;
 		multicaStatusSyncIpc?.dispose();
 		multicaStatusSyncIpc = null;
+		factoryRunConfirmation?.dispose();
 		multicaDelegation?.dispose();
 		multicaDelegation = null;
 		multicaLocalServerIpc?.dispose();

@@ -1,3 +1,4 @@
+import { FactoryRunDialog } from "./FactoryRunDialog";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
@@ -316,6 +317,11 @@ export function ShellTopbar({
 								url={session.cloud.coderWorkspaceUrl}
 								style={noDragStyle}
 							/>
+						) : null}
+						{session && !hostId && !session.cloud && project?.kind !== CLOUD_PROJECT_KIND ? (
+							<span className="inline-flex" style={noDragStyle}>
+								<FactoryRunDialog key={`run-${session.id}`} projectId={session.workspaceId} sessionId={session.id} />
+							</span>
 						) : null}
 						{/* Cues run from the topbar into the selected session. */}
 						{session && !hostId && !session.cloud && supportsLocalCues ? (

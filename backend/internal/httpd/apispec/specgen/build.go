@@ -177,6 +177,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"FactoryrunAdvanceInput":                               "AdvanceFactoryRunRequest",
 	"ControllersListFactoryRunsResponse":                   "ListFactoryRunsResponse",
 	"ControllersListFactoryRunsQuery":                      "ListFactoryRunsQuery",
+	"ControllersRunEvidencePage":                           "RunEvidencePage",
+	"ControllersRunEvidencePageQuery":                      "RunEvidencePageQuery",
 	"ControllersFactoryRunIDParam":                         "FactoryRunIDParam",
 	"ControllersAgentAccountIDParam":                       "AgentAccountIDParam",
 	"ControllersAgentAccountLoginIDParam":                  "AgentAccountLoginIDParam",
@@ -3775,8 +3777,9 @@ func factoryRunOperations() []operation {
 	return []operation{
 		{method: http.MethodGet, path: "/api/v1/runs", id: "listFactoryRuns", tag: "runs", summary: "List manually created project runs", pathParams: []any{controllers.ListFactoryRunsQuery{}}, resps: append([]respUnit{{http.StatusOK, controllers.ListFactoryRunsResponse{}}}, errorResponses...)},
 		{method: http.MethodGet, path: "/api/v1/runs/{runId}", id: "getFactoryRun", tag: "runs", summary: "Read run history and current evidence blockers", pathParams: []any{controllers.FactoryRunIDParam{}}, resps: append([]respUnit{{http.StatusOK, domain.RunDetail{}}}, errorResponses...)},
-		{method: http.MethodPost, path: "/api/v1/runs", id: "createFactoryRun", tag: "runs", summary: "Record a human run decision without starting execution", reqBody: factoryrun.CreateInput{}, resps: append([]respUnit{{http.StatusCreated, domain.RunDetail{}}}, errorResponses...)},
+		{method: http.MethodGet, path: "/api/v1/runs/{runId}/evidence", id: "listFactoryRunEvidence", tag: "runs", summary: "Read a bounded exclusive-version history page", pathParams: []any{controllers.FactoryRunIDParam{}, controllers.RunEvidencePageQuery{}}, resps: append([]respUnit{{http.StatusOK, controllers.RunEvidencePage{}}}, errorResponses...)},
+		{method: http.MethodPost, path: "/api/v1/runs", id: "createFactoryRun", tag: "runs", summary: "Submit an unconfirmed run claim without starting execution", reqBody: factoryrun.CreateInput{}, resps: append([]respUnit{{http.StatusCreated, domain.RunDetail{}}}, errorResponses...)},
 		{method: http.MethodPost, path: "/api/v1/runs/{runId}/evidence", id: "recordFactoryRunEvidence", tag: "runs", summary: "Append completion or review evidence without delivering feedback", pathParams: []any{controllers.FactoryRunIDParam{}}, reqBody: factoryrun.RecordInput{}, resps: append([]respUnit{{http.StatusOK, domain.RunDetail{}}}, errorResponses...)},
-		{method: http.MethodPost, path: "/api/v1/runs/{runId}/advance", id: "advanceFactoryRun", tag: "runs", summary: "Record a human stage decision, retaining a hold when evidence is missing", pathParams: []any{controllers.FactoryRunIDParam{}}, reqBody: factoryrun.AdvanceInput{}, resps: append([]respUnit{{http.StatusOK, domain.RunDetail{}}}, errorResponses...)},
+		{method: http.MethodPost, path: "/api/v1/runs/{runId}/advance", id: "advanceFactoryRun", tag: "runs", summary: "Submit an unconfirmed stage claim; desktop native confirmation is required", pathParams: []any{controllers.FactoryRunIDParam{}}, reqBody: factoryrun.AdvanceInput{}, resps: append([]respUnit{{http.StatusOK, domain.RunDetail{}}}, errorResponses...)},
 	}
 }

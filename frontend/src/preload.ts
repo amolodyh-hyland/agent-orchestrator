@@ -1,3 +1,4 @@
+import { RUN_PREVIEW, RUN_CANCEL, RUN_RESULT, installRunUserAction, type RunAction, type RunPreview, type RunResult } from "./shared/factory-run-confirmation";
 import { CHOOSE_PROJECT_CONTEXT_CHANNEL, type ProjectContextLinkRequest, type ProjectContextLinkSelection } from "./shared/project-context";
 import { installDelegationUserAction } from "./shared/multica-delegation-user-action";
 import { DELEGATION_SETTINGS, DELEGATION_SETTINGS_CHANGED, DELEGATION_STATUS, DELEGATION_PREVIEW, DELEGATION_CANCEL_PREVIEW, DELEGATION_RESULT, DELEGATION_CREDENTIAL, type DelegationConfirmationBridge } from "./shared/multica-delegation-confirmation";
@@ -775,6 +776,15 @@ const api = {
 		get: () => ipcRenderer.invoke("uiSettings:get") as Promise<UiSettings>,
 		set: (settings: Partial<UiSettings>) => ipcRenderer.invoke("uiSettings:set", settings) as Promise<UiSettings>,
 	},
+	factoryRun: {
+		preview: (runId: string, action: RunAction) => ipcRenderer.invoke(RUN_PREVIEW, runId, action) as Promise<RunPreview | null>,
+		cancel: (id: string) => ipcRenderer.invoke(RUN_CANCEL, id) as Promise<void>,
+		onResult: (listener: (result: RunResult) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, result: RunResult) => listener(result);
+			ipcRenderer.on(RUN_RESULT, wrapped);
+			return () => { ipcRenderer.off(RUN_RESULT, wrapped); };
+		},
+	},
 	multicaDelegation: {
 		settings: () => ipcRenderer.invoke(DELEGATION_SETTINGS),
 		onSettingsChanged: (listener) => {
@@ -1029,3 +1039,5 @@ contextBridge.exposeInMainWorld("ao", api);
 
 export type AoBridge = typeof api;
 installDelegationUserAction(document, (channel, input) => ipcRenderer.invoke(channel, input));
+
+installRunUserAction(document, (channel, input) => ipcRenderer.invoke(channel, input));

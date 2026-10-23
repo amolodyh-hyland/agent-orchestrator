@@ -119,18 +119,20 @@ type RunReviewReceipt struct {
 
 // RunEvidence is one immutable receipt or human stage decision.
 type RunEvidence struct {
-	ID         string            `json:"id"`
-	RunID      string            `json:"runId"`
-	Version    int64             `json:"version"`
-	Kind       string            `json:"kind" enum:"created,completion,review,advance,hold"`
-	Actor      string            `json:"actor"`
-	Decision   string            `json:"decision"`
-	Stage      string            `json:"stage"`
-	RecordedAt time.Time         `json:"recordedAt"`
-	Completion *RunCompletion    `json:"completion,omitempty"`
-	Review     *RunReviewReceipt `json:"review,omitempty"`
-	Observed   []RunRepoFacts    `json:"observed"`
-	Blockers   []string          `json:"blockers"`
+	ID                 string            `json:"id"`
+	RunID              string            `json:"runId"`
+	Version            int64             `json:"version"`
+	Kind               string            `json:"kind" enum:"created,completion,review,advance,hold"`
+	Actor              string            `json:"actor"`
+	Decision           string            `json:"decision"`
+	Stage              string            `json:"stage"`
+	Confirmed          bool              `json:"confirmed"`
+	ConfirmationDigest string            `json:"confirmationDigest,omitempty"`
+	RecordedAt         time.Time         `json:"recordedAt"`
+	Completion         *RunCompletion    `json:"completion,omitempty"`
+	Review             *RunReviewReceipt `json:"review,omitempty"`
+	Observed           []RunRepoFacts    `json:"observed"`
+	Blockers           []string          `json:"blockers"`
 }
 
 // RunDetail combines durable history with freshly derived evidence blockers.

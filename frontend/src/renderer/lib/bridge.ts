@@ -313,6 +313,7 @@ export const aoBridge: AoBridge =
 			get: async () => ({ ...DEFAULT_UI_SETTINGS }),
 			set: async (settings) => coerceUiSettings({ ...DEFAULT_UI_SETTINGS, ...settings }),
 		},
+		factoryRun: { preview: async () => null, cancel: async () => undefined, onResult: () => () => undefined },
 		multicaDelegation: {
 			settings: async () => ({ enabled: false }),
 			onSettingsChanged: () => () => undefined,

@@ -2191,7 +2191,7 @@ export interface paths {
         /** List manually created project runs */
         get: operations["listFactoryRuns"];
         put?: never;
-        /** Record a human run decision without starting execution */
+        /** Submit an unconfirmed run claim without starting execution */
         post: operations["createFactoryRun"];
         delete?: never;
         options?: never;
@@ -2225,7 +2225,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Record a human stage decision, retaining a hold when evidence is missing */
+        /** Submit an unconfirmed stage claim; desktop native confirmation is required */
         post: operations["advanceFactoryRun"];
         delete?: never;
         options?: never;
@@ -2240,7 +2240,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Read a bounded exclusive-version history page */
+        get: operations["listFactoryRunEvidence"];
         put?: never;
         /** Append completion or review evidence without delivering feedback */
         post: operations["recordFactoryRunEvidence"];
@@ -7088,6 +7089,8 @@ export interface components {
             actor: string;
             blockers: string[];
             completion?: components["schemas"]["RunCompletion"];
+            confirmationDigest?: string;
+            confirmed: boolean;
             decision: string;
             id: string;
             /** @enum {string} */
@@ -7100,6 +7103,11 @@ export interface components {
             stage: string;
             /** Format: int64 */
             version: number;
+        };
+        RunEvidencePage: {
+            evidence: components["schemas"]["RunEvidence"][];
+            /** Format: int64 */
+            nextAfterVersion: number;
         };
         RunFinding: {
             id: string;
@@ -15826,6 +15834,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunDetail"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listFactoryRunEvidence: {
+        parameters: {
+            query?: {
+                afterVersion?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunEvidencePage"];
                 };
             };
             /** @description Bad Request */

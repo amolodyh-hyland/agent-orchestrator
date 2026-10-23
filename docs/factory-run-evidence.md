@@ -1,6 +1,6 @@
 # Manual run evidence
 
-A run records one human-approved task around an existing Project and implementation
+A run records one task claim, confirmed by a person in the desktop app, around an existing Project and implementation
 session. It does not start, resume, send to, review, publish, or terminate a session.
 The stages are `design`, `implementation`, `review`, and `handoff`. Advancing a stage
 records a decision; it grants no execution or release authority. Feedback
@@ -36,7 +36,7 @@ receipt. Single-repository sessions may use the existing session metadata when
 no `session_worktrees` row exists. Scratch projects are unsupported.
 
 `ao run list --project example` lists persisted run records. `ao run get
-factory-example-1` returns the run, ordered evidence history, current independently
+factory-example-1` returns the run, its most recent 100 history entries, current independently
 observed repository facts, next action, and blockers. Reads do not mutate the
 run, claim reports, acknowledge delivery, or submit a turn. The API routes are:
 
@@ -76,6 +76,19 @@ and escapes outside those roots are refused. Files must be regular, at most
 32 MiB, present, and match their digest. Receipts retain digests and references;
 existing session artifact storage owns the files.
 
+API and CLI mutations are **unconfirmed claims**. Caller-supplied `actor`,
+`decision`, `verifiedBy` and `independent` values never grant readiness. In the
+local session topbar, open **Run evidence**, enter the run ID and preview a pending
+claim. A real user click and the native confirmation dialog attest the exact
+creation, check receipt or review claim. Confirm each pending claim separately;
+preview and confirm a stage decision separately. The dialog binds the run version,
+current source observations, claim contents and artifact-verification results to
+an evidence digest. Changed HEAD, evidence or version requires a fresh preview.
+The private desktop key arrives through the existing inherited bootstrap pipe;
+it is never exposed to the renderer, API, CLI or settings. Expiring, single-use
+requests and version checks reject replay. A standalone daemon without that
+bootstrap can record claims and read history but cannot confirm or advance runs.
+
 Check receipts include `name`, full `sha`, `environment`, `exitCode`, `verifiedBy`,
 and the hashed `output` artifact. They are human-verified attestations of an
 existing execution, not a test runner or independent proof that a command ran.
@@ -102,8 +115,10 @@ ao run advance factory-example-1 --expected-version 0 \
 ```
 
 Each mutation appends an immutable evidence row and changes the run's version
-in the same SQLite transaction. A blocked advance appends a `hold` decision and
-keeps the stage. Failed structural requests and stale versions return errors.
+in the same SQLite transaction. A public advance claim always holds for native confirmation. A blocked native
+advance appends a `hold` decision and
+keeps the stage. Identical repeated public blocked observations are deduplicated
+without changing the version. Failed structural requests and stale versions return errors.
 A version conflict requires reading the latest history before making a new
 decision. After a lost response, inspect the stable run ID/version; do not
 invent a replacement execution or assume the write failed. A crash before
@@ -127,7 +142,8 @@ cleanup. Handoff always retains a separate human release decision.
 Domain shapes live in `backend/internal/domain/factory_run.go`; the service in
 `backend/internal/service/factoryrun/`; repository/file inspection in
 `backend/internal/adapters/runrepo/`; storage/query definitions in the existing
-SQLite layer, with additive migration `0222_factory_run_evidence.sql`.
+SQLite layer, with additive migrations `0222_factory_run_evidence.sql` and
+`0223_factory_run_evidence_bounds.sql`. Existing migrations remain unchanged.
 Controller routes and `ao run` use the existing API/CLI layering. Evidence is
 immutable at the database boundary and retained independently of report delivery.
 
@@ -137,3 +153,29 @@ missing and modified artifacts, staged/unstaged/deleted/untracked source,
 hidden index changes, ownership drift, concurrent versions, immutable evidence,
 failed-append rollback, process crash, and restart. API/CLI tests cover strict
 bounded input, request paths, version transmission and error envelopes.
+
+## Read and admission limits
+
+Read older history with `ao run get RUN --after-version -1 --limit 100`, then
+continue from `nextAfterVersion`. The corresponding route is
+`GET /api/v1/runs/RUN/evidence?afterVersion=-1&limit=100`. Cursors are exclusive;
+pages accept 1–100 entries. Readiness selects the latest receipt per owned
+repository and kind from an indexed query, independently of paginated history.
+
+Runs admit at most eight repositories, 50 required checks, 64 KiB per submitted
+claim, 64 KiB per header and 256 KiB per stored observation/receipt. A run has at
+most 512 immutable events; reaching that bound preserves history and makes the
+ledger read-only. Native dialogs refuse previews over 24,000 characters. Git
+output is bounded to 1 MiB per command, repository facts to 16 KiB and 4,096 paths,
+and each raw source/artifact file to 32 MiB (256 MiB total source bytes per pass).
+Oversized or unsupported observations hold readiness. Registered project repositories must own their `.git` directory; linked project
+roots are conservatively held. Git submodules and worktree
+bytes requiring normalization are conservatively held rather than converted.
+
+Repository and artifact roots are anchored beneath validated filesystem parents;
+root symlinks are refused. Unix inspection enters an inherited open directory in
+a child-only trampoline; Windows holds each path component without delete sharing.
+Git plumbing compares index/tree object identities to raw file bytes. It disables
+global/system configuration, filesystem monitors, optional locks, pagers and
+external diff/textconv, and never invokes status, worktree diff, clean/process
+filters, hooks or project-defined commands. This inspection does not run checks.

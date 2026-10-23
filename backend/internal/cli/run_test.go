@@ -11,7 +11,7 @@ import (
 )
 
 func TestFactoryRunCLIHTTPBoundary(t *testing.T) {
-	for _, operation := range []string{"list", "get", "create", "record", "advance"} {
+	for _, operation := range []string{"list", "get", "history", "create", "record", "advance"} {
 		t.Run(operation, func(t *testing.T) {
 			cfg := setConfigEnv(t)
 			requests := 0
@@ -25,6 +25,11 @@ func TestFactoryRunCLIHTTPBoundary(t *testing.T) {
 				switch operation {
 				case "get":
 					path += "/run-1"
+				case "history":
+					path += "/run-1/evidence"
+					if r.URL.Query().Get("afterVersion") != "4" || r.URL.Query().Get("limit") != "7" {
+						t.Error("lost history cursor")
+					}
 				case "create":
 					method = http.MethodPost
 				case "record":
@@ -51,11 +56,16 @@ func TestFactoryRunCLIHTTPBoundary(t *testing.T) {
 			defer server.Close()
 			writeRunFileFor(t, cfg, server)
 			args := []string{"run", operation}
+			if operation == "history" {
+				args = []string{"run", "get"}
+			}
 			switch operation {
 			case "list":
 				args = append(args, "--project", "p & one")
 			case "get":
 				args = append(args, "run-1")
+			case "history":
+				args = append(args, "run-1", "--after-version", "4", "--limit", "7")
 			case "advance":
 				args = append(args, "run-1", "--expected-version", "4", "--actor", "human", "--decision", "approved")
 			default:

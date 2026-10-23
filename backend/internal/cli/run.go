@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -31,16 +32,23 @@ func newRunCommand(ctx *commandContext) *cobra.Command {
 		return writeJSON(cmd.OutOrStdout(), response)
 	}}
 	list.Flags().StringVarP(&project, "project", "p", "", "Project id")
+	var afterVersion, historyLimit int64
 	get := &cobra.Command{Use: "get <run-id>", Args: usageArgs(cobra.ExactArgs(1)), Short: "Show current blockers and immutable evidence history", RunE: func(cmd *cobra.Command, args []string) error {
 		var response json.RawMessage
-		if err := ctx.getJSON(cmd.Context(), "runs/"+url.PathEscape(args[0]), &response); err != nil {
+		path := "runs/" + url.PathEscape(args[0])
+		if cmd.Flags().Changed("after-version") {
+			path += "/evidence?afterVersion=" + strconv.FormatInt(afterVersion, 10) + "&limit=" + strconv.FormatInt(historyLimit, 10)
+		}
+		if err := ctx.getJSON(cmd.Context(), path, &response); err != nil {
 			return err
 		}
 		return writeJSON(cmd.OutOrStdout(), response)
 	}}
+	get.Flags().Int64Var(&afterVersion, "after-version", -1, "Read history after this version (exclusive)")
+	get.Flags().Int64Var(&historyLimit, "limit", 100, "History page size, 1..100")
 	cmd.AddCommand(list, get, newRunFileCommand(ctx, "create", false), newRunFileCommand(ctx, "record", true))
 	var input advanceRunDTO
-	advance := &cobra.Command{Use: "advance <run-id>", Short: "Record a human decision to advance or hold; starts no execution", Args: usageArgs(cobra.ExactArgs(1)), RunE: func(cmd *cobra.Command, args []string) error {
+	advance := &cobra.Command{Use: "advance <run-id>", Short: "Submit a stage claim; only native desktop confirmation advances", Args: usageArgs(cobra.ExactArgs(1)), RunE: func(cmd *cobra.Command, args []string) error {
 		if !cmd.Flags().Changed("expected-version") || input.ExpectedVersion < 0 || strings.TrimSpace(input.Actor) == "" || strings.TrimSpace(input.Decision) == "" {
 			return usageError{errors.New("--expected-version, --actor and --decision are required")}
 		}
@@ -51,8 +59,8 @@ func newRunCommand(ctx *commandContext) *cobra.Command {
 		return writeJSON(cmd.OutOrStdout(), response)
 	}}
 	advance.Flags().Int64Var(&input.ExpectedVersion, "expected-version", 0, "Latest observed run version")
-	advance.Flags().StringVar(&input.Actor, "actor", "", "Human decision maker")
-	advance.Flags().StringVar(&input.Decision, "decision", "", "Human decision reference or reason")
+	advance.Flags().StringVar(&input.Actor, "actor", "", "Claimed decision maker (requires desktop confirmation)")
+	advance.Flags().StringVar(&input.Decision, "decision", "", "Claimed decision reference or reason")
 	cmd.AddCommand(advance)
 	return cmd
 }
@@ -64,7 +72,7 @@ func newRunFileCommand(ctx *commandContext, name string, record bool) *cobra.Com
 		use += " <run-id>"
 		argCount = 1
 	}
-	cmd := &cobra.Command{Use: use, Short: "Record a human-approved JSON request without starting execution", Args: usageArgs(cobra.ExactArgs(argCount)), RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &cobra.Command{Use: use, Short: "Submit an unconfirmed JSON claim without starting execution", Args: usageArgs(cobra.ExactArgs(argCount)), RunE: func(cmd *cobra.Command, args []string) error {
 		if file == "" {
 			return usageError{errors.New("--file is required")}
 		}
@@ -90,6 +98,6 @@ func newRunFileCommand(ctx *commandContext, name string, record bool) *cobra.Com
 		}
 		return writeJSON(cmd.OutOrStdout(), response)
 	}}
-	cmd.Flags().StringVar(&file, "file", "", "Human-approved request JSON file")
+	cmd.Flags().StringVar(&file, "file", "", "Unconfirmed request JSON file")
 	return cmd
 }

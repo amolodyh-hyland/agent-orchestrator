@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
@@ -31,6 +32,7 @@ type FactoryRunsController struct{ Svc FactoryRunService }
 func (c *FactoryRunsController) Register(r chi.Router) {
 	r.Get("/runs", c.list)
 	r.Get("/runs/{runId}", c.get)
+	r.Get("/runs/{runId}/evidence", c.history)
 	r.Post("/runs", c.create)
 	r.Post("/runs/{runId}/evidence", c.record)
 	r.Post("/runs/{runId}/advance", c.advance)
@@ -139,4 +141,41 @@ func (c *FactoryRunsController) advance(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, detail)
+}
+
+func (c *FactoryRunsController) history(w http.ResponseWriter, r *http.Request) {
+	if !c.ready(w, r) {
+		return
+	}
+	svc, ok := c.Svc.(interface {
+		History(context.Context, string, int64, int64) ([]domain.RunEvidence, error)
+	})
+	if !ok {
+		apispec.NotImplemented(w, r, r.Method, r.URL.Path)
+		return
+	}
+	after, limit := int64(-1), int64(100)
+	var err error
+	if raw := r.URL.Query().Get("afterVersion"); raw != "" {
+		after, err = strconv.ParseInt(raw, 10, 64)
+	}
+	if err == nil {
+		if raw := r.URL.Query().Get("limit"); raw != "" {
+			limit, err = strconv.ParseInt(raw, 10, 64)
+		}
+	}
+	if err != nil {
+		envelope.WriteAPIError(w, r, 400, "bad_request", "RUN_INVALID", "Invalid history cursor", nil)
+		return
+	}
+	records, err := svc.History(r.Context(), chi.URLParam(r, "runId"), after, limit)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	next := after
+	if len(records) > 0 {
+		next = records[len(records)-1].Version
+	}
+	envelope.WriteJSON(w, http.StatusOK, RunEvidencePage{Evidence: records, NextAfterVersion: next})
 }

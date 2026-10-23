@@ -9,6 +9,47 @@ import (
 	"context"
 )
 
+const currentRunEvidence = `-- name: CurrentRunEvidence :many
+SELECT outer_e.document FROM factory_run_evidence AS outer_e WHERE outer_e.run_id = ?1 AND outer_e.version IN (
+ SELECT MAX(inner_e.version) FROM factory_run_evidence AS inner_e
+ WHERE inner_e.run_id = ?1 AND inner_e.version <= ?2
+ GROUP BY CASE
+ WHEN json_extract(inner_e.document, '$.completion.repoName') IS NOT NULL THEN 'completion:' || json_extract(inner_e.document, '$.completion.repoName')
+ WHEN json_extract(inner_e.document, '$.review.repoName') IS NOT NULL THEN 'review:' || json_extract(inner_e.document, '$.review.repoName')
+ WHEN json_extract(inner_e.document, '$.kind') = 'created' THEN 'created'
+ WHEN json_extract(inner_e.document, '$.kind') = 'advance' THEN 'advance'
+ ELSE 'decision' END
+) ORDER BY outer_e.version LIMIT 19
+`
+
+type CurrentRunEvidenceParams struct {
+	RunID     string
+	AtVersion int64
+}
+
+func (q *Queries) CurrentRunEvidence(ctx context.Context, arg CurrentRunEvidenceParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, currentRunEvidence, arg.RunID, arg.AtVersion)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var document string
+		if err := rows.Scan(&document); err != nil {
+			return nil, err
+		}
+		items = append(items, document)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getFactoryRun = `-- name: GetFactoryRun :one
 SELECT document FROM factory_runs WHERE id = ?
 `
@@ -66,7 +107,7 @@ func (q *Queries) InsertRunEvidence(ctx context.Context, arg InsertRunEvidencePa
 }
 
 const listFactoryRuns = `-- name: ListFactoryRuns :many
-SELECT document FROM factory_runs WHERE project_id = ? ORDER BY id
+SELECT document FROM factory_runs WHERE project_id = ? ORDER BY id LIMIT 1000
 `
 
 func (q *Queries) ListFactoryRuns(ctx context.Context, projectID string) ([]string, error) {
@@ -93,11 +134,44 @@ func (q *Queries) ListFactoryRuns(ctx context.Context, projectID string) ([]stri
 }
 
 const listRunEvidence = `-- name: ListRunEvidence :many
-SELECT document FROM factory_run_evidence WHERE run_id = ? ORDER BY version
+SELECT document FROM factory_run_evidence WHERE run_id = ? ORDER BY version DESC LIMIT 100
 `
 
 func (q *Queries) ListRunEvidence(ctx context.Context, runID string) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listRunEvidence, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var document string
+		if err := rows.Scan(&document); err != nil {
+			return nil, err
+		}
+		items = append(items, document)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const pageRunEvidence = `-- name: PageRunEvidence :many
+SELECT document FROM factory_run_evidence WHERE run_id = ?1 AND version > ?2 ORDER BY version LIMIT ?3
+`
+
+type PageRunEvidenceParams struct {
+	RunID        string
+	AfterVersion int64
+	PageSize     int64
+}
+
+func (q *Queries) PageRunEvidence(ctx context.Context, arg PageRunEvidenceParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, pageRunEvidence, arg.RunID, arg.AfterVersion, arg.PageSize)
 	if err != nil {
 		return nil, err
 	}

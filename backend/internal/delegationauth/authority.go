@@ -10,13 +10,19 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 // Authority holds a boot-scoped key received only through the inherited desktop pipe.
-type Authority struct{ key []byte }
+type Authority struct {
+	key       []byte
+	runMu     sync.Mutex
+	runNonces map[string]int64
+}
 
 // New constructs a verifier without retaining the caller's mutable key buffer.
 func New(key []byte) (*Authority, error) {
@@ -98,4 +104,36 @@ func ReadDesktopHandoff(r io.Reader) (string, *Authority, error) {
 	}
 	authority, err := New(key)
 	return handoff.BrowserToken, authority, err
+}
+
+// AuthorizeRun authenticates a distinct, exact run confirmation request namespace.
+func (a *Authority) AuthorizeRun(body []byte, proof string) bool {
+	return a.matches(append([]byte("factory-run-v1:"), body...), proof)
+}
+
+// ConsumeRun rejects replay, expiry and excessive outstanding desktop requests.
+// The caller must first authenticate the exact body containing nonce and expiry.
+func (a *Authority) ConsumeRun(nonce string, expires int64) bool {
+	if a == nil || len(nonce) < 16 || len(nonce) > 128 {
+		return false
+	}
+	now := time.Now().UnixMilli()
+	if expires <= now || expires > now+10000 {
+		return false
+	}
+	a.runMu.Lock()
+	defer a.runMu.Unlock()
+	if a.runNonces == nil {
+		a.runNonces = map[string]int64{}
+	}
+	for n, e := range a.runNonces {
+		if e <= now {
+			delete(a.runNonces, n)
+		}
+	}
+	if _, used := a.runNonces[nonce]; used || len(a.runNonces) >= 1024 {
+		return false
+	}
+	a.runNonces[nonce] = expires
+	return true
 }

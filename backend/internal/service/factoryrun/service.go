@@ -1,7 +1,11 @@
 package factoryrun
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"slices"
@@ -27,6 +31,8 @@ type Store interface {
 	GetFactoryRun(context.Context, string) (domain.FactoryRun, error)
 	ListFactoryRuns(context.Context, string) ([]domain.FactoryRun, error)
 	ListRunEvidence(context.Context, string) ([]domain.RunEvidence, error)
+	PageRunEvidence(context.Context, string, int64, int64) ([]domain.RunEvidence, error)
+	CurrentRunEvidence(context.Context, string, int64) ([]domain.RunEvidence, error)
 	SaveFactoryRun(context.Context, domain.FactoryRun, domain.RunEvidence, bool) error
 }
 
@@ -89,6 +95,10 @@ func failure(err error) error {
 	}
 	return err
 }
+func bounded(value any) bool {
+	data, err := json.Marshal(value)
+	return err == nil && len(data) <= 64<<10
+}
 func decision(actor, note string) bool {
 	return strings.TrimSpace(actor) != "" && strings.TrimSpace(note) != "" && len(actor) <= 200 && len(note) <= 1000
 }
@@ -103,12 +113,12 @@ func (s *Service) List(ctx context.Context, projectID string) ([]domain.FactoryR
 
 // Create snapshots owned bindings and records the initial human decision.
 func (s *Service) Create(ctx context.Context, in CreateInput) (domain.RunDetail, error) {
-	if !decision(in.Actor, in.Decision) || in.ID == "" || len(in.ID) > 128 || in.TaskID == "" || in.PolicyDecision == "" || !domain.SHA256Digest(in.DesignDigest) || len(in.RequiredChecks) == 0 || len(in.RequiredChecks) > 50 {
+	if !bounded(in) || !decision(in.Actor, in.Decision) || in.ID == "" || len(in.ID) > 128 || in.TaskID == "" || in.PolicyDecision == "" || !domain.SHA256Digest(in.DesignDigest) || len(in.RequiredChecks) == 0 || len(in.RequiredChecks) > 50 {
 		return domain.RunDetail{}, invalid("Run id, task, approved design digest, policy decision, required checks and human decision are required")
 	}
 	seen := map[string]bool{}
 	for _, name := range in.RequiredChecks {
-		if strings.TrimSpace(name) == "" || seen[name] {
+		if strings.TrimSpace(name) == "" || len(name) > 128 || seen[name] {
 			return domain.RunDetail{}, invalid("Check names must be nonempty and unique")
 		}
 		seen[name] = true
@@ -163,6 +173,9 @@ func (s *Service) owned(ctx context.Context, run domain.FactoryRun) (domain.Sess
 	if len(rows) == 0 && project.Kind.WithDefault() == domain.ProjectKindSingleRepo {
 		rows = []domain.SessionWorktreeRecord{{SessionID: session.ID, RepoName: domain.RootWorkspaceRepoName, Branch: session.Metadata.Branch, BaseSHA: session.Metadata.DiffBaseSHA, WorktreePath: session.Metadata.WorkspacePath, State: "active"}}
 	}
+	if len(rows) > 8 {
+		return session, nil, invalid("At most eight owned repositories are supported per run")
+	}
 	if len(rows) == 0 {
 		return session, nil, invalid("Owned worktree records are required")
 	}
@@ -202,14 +215,16 @@ func (s *Service) Get(ctx context.Context, id string) (domain.RunDetail, error) 
 	if err != nil {
 		return domain.RunDetail{}, failure(err)
 	}
-	history, err := s.store.ListRunEvidence(ctx, id)
+	history, err := s.store.CurrentRunEvidence(ctx, id, run.Version)
 	if err != nil {
 		return domain.RunDetail{}, err
 	}
-	if len(history) != int(run.Version)+1 {
-		return domain.RunDetail{}, apierr.Conflict("RUN_SNAPSHOT_CHANGED", "Run changed while reading; retry", nil)
+
+	page, err := s.store.PageRunEvidence(ctx, id, max(-1, run.Version-100), min(100, run.Version+1))
+	if err != nil {
+		return domain.RunDetail{}, err
 	}
-	detail := domain.RunDetail{Run: run, Evidence: history, Blockers: []string{}, Observed: []domain.RunRepoFacts{}}
+	detail := domain.RunDetail{Run: run, Evidence: page, Blockers: []string{}, Observed: []domain.RunRepoFacts{}}
 	detail.Blockers, detail.Observed = s.evaluate(ctx, run, history, run.Stage == "review" || run.Stage == "handoff")
 	switch run.Stage {
 	case "design":
@@ -234,7 +249,7 @@ func (s *Service) Get(ctx context.Context, id string) (domain.RunDetail, error) 
 func handoffMatches(history []domain.RunEvidence, observed []domain.RunRepoFacts) bool {
 	for i := len(history) - 1; i >= 0; i-- {
 		evidence := history[i]
-		if evidence.Kind != "advance" || evidence.Stage != "handoff" {
+		if !evidence.Confirmed || evidence.Kind != "advance" || evidence.Stage != "handoff" {
 			continue
 		}
 		if len(evidence.Observed) != len(observed) {
@@ -253,15 +268,28 @@ func handoffMatches(history []domain.RunEvidence, observed []domain.RunRepoFacts
 
 // Record retains a completion or review claim even when verification holds readiness.
 func (s *Service) Record(ctx context.Context, id string, in RecordInput) (domain.RunDetail, error) {
-	if !decision(in.Actor, in.Decision) || (in.Completion == nil) == (in.Review == nil) {
+	if !bounded(in) || !decision(in.Actor, in.Decision) || (in.Completion == nil) == (in.Review == nil) {
 		return domain.RunDetail{}, invalid("One completion or review receipt and a human decision are required")
 	}
 	run, err := s.store.GetFactoryRun(ctx, id)
 	if err != nil {
 		return domain.RunDetail{}, failure(err)
 	}
+	if run.Version >= 511 {
+		return domain.RunDetail{}, invalid("Run evidence limit reached; history is preserved and read-only")
+	}
 	if run.Version != in.ExpectedVersion {
 		return domain.RunDetail{}, failure(domain.ErrRunConflict)
+	}
+	repoName := ""
+	if in.Completion != nil {
+		repoName = in.Completion.RepoName
+	}
+	if in.Review != nil {
+		repoName = in.Review.RepoName
+	}
+	if !slices.ContainsFunc(run.Repositories, func(b domain.RunRepoBinding) bool { return b.RepoName == repoName }) {
+		return domain.RunDetail{}, invalid("Receipt repository is not owned by this run")
 	}
 	run.Version++
 	kind := "completion"
@@ -285,7 +313,7 @@ func (s *Service) Record(ctx context.Context, id string, in RecordInput) (domain
 		receipt.Findings = append([]domain.RunFinding{}, receipt.Findings...)
 		evidence.Review = &receipt
 	}
-	history, err := s.store.ListRunEvidence(ctx, id)
+	history, err := s.store.CurrentRunEvidence(ctx, id, run.Version)
 	if err != nil {
 		return domain.RunDetail{}, err
 	}
@@ -298,14 +326,24 @@ func (s *Service) Record(ctx context.Context, id string, in RecordInput) (domain
 
 // Advance records a human decision and retains the stage if evidence is missing.
 func (s *Service) Advance(ctx context.Context, id string, in AdvanceInput) (domain.RunDetail, error) {
-	if !decision(in.Actor, in.Decision) {
+	if !bounded(in) || !decision(in.Actor, in.Decision) {
 		return domain.RunDetail{}, invalid("A human decision is required")
 	}
 	detail, err := s.Get(ctx, id)
 	if err != nil {
 		return detail, err
 	}
+	return s.advanceDecision(ctx, detail, in, false, "")
+}
+
+// Apply only the source snapshot actually bound to the approved native preview.
+// Re-observing after approval must never turn an approved hold into an advance.
+func (s *Service) advanceDecision(ctx context.Context, detail domain.RunDetail, in AdvanceInput, confirmed bool, digest string) (domain.RunDetail, error) {
+	id := detail.Run.ID
 	run := detail.Run
+	if run.Version >= 511 {
+		return domain.RunDetail{}, invalid("Run evidence limit reached; history is preserved and read-only")
+	}
 	if run.Version != in.ExpectedVersion {
 		return domain.RunDetail{}, failure(domain.ErrRunConflict)
 	}
@@ -315,6 +353,9 @@ func (s *Service) Advance(ctx context.Context, id string, in AdvanceInput) (doma
 			return detail, invalid("Handoff retains separate human release authority")
 		}
 		blockers = slices.DeleteFunc(blockers, func(code string) bool { return code == "handoff_decision_stale" })
+	}
+	if !confirmed {
+		blockers = append(blockers, "human_confirmation_required")
 	}
 	kind := "hold"
 	if len(blockers) == 0 {
@@ -330,15 +371,28 @@ func (s *Service) Advance(ctx context.Context, id string, in AdvanceInput) (doma
 	}
 	run.Version++
 	evidence := event(run, kind, in.Actor, in.Decision)
-	evidence.Blockers = detail.Blockers
+	evidence.Confirmed = confirmed
+	evidence.ConfirmationDigest = digest
+	evidence.Blockers = blockers
 	if kind == "advance" {
 		evidence.Blockers = []string{}
 	}
 	evidence.Observed = detail.Observed
+	if kind == "hold" && len(detail.Evidence) > 0 {
+		last := detail.Evidence[len(detail.Evidence)-1]
+		if last.Kind == "hold" && last.Actor == evidence.Actor && last.Decision == evidence.Decision && last.Confirmed == evidence.Confirmed && slices.Equal(last.Blockers, evidence.Blockers) && sameObservations(last.Observed, evidence.Observed) {
+			return detail, nil
+		}
+	}
 	if err := s.store.SaveFactoryRun(ctx, run, evidence, false); err != nil {
 		return domain.RunDetail{}, failure(err)
 	}
 	return s.Get(ctx, id)
+}
+func sameObservations(a, b []domain.RunRepoFacts) bool {
+	left, _ := json.Marshal(a)
+	right, _ := json.Marshal(b)
+	return bytes.Equal(left, right)
 }
 
 func (s *Service) artifact(ctx context.Context, session domain.SessionRecord, repo ownedRepo, artifact domain.RunArtifact) bool {
@@ -375,7 +429,19 @@ func (s *Service) evaluate(ctx context.Context, run domain.FactoryRun, history [
 	}
 	completions := map[string]*domain.RunCompletion{}
 	reviews := map[string]*domain.RunReviewReceipt{}
+	createdConfirmed := false
+	for _, e := range history {
+		if e.Kind == "created" && e.Confirmed {
+			createdConfirmed = true
+		}
+	}
+	if !createdConfirmed {
+		blockers = append(blockers, "human_creation_confirmation_required")
+	}
 	for _, evidence := range history {
+		if (evidence.Completion != nil || evidence.Review != nil) && !evidence.Confirmed {
+			blockers = append(blockers, "human_evidence_confirmation_required")
+		}
 		if evidence.Completion != nil {
 			completions[evidence.Completion.RepoName] = evidence.Completion
 		}
@@ -473,4 +539,96 @@ func (s *Service) reviewBlockers(ctx context.Context, run domain.FactoryRun, ses
 		return []string{prefix + "review_unverified"}
 	}
 	return nil
+}
+
+// ConfirmationPreview binds the exact run version, current claims, source facts,
+// artifact verification results and requested action to a native dialog.
+type ConfirmationPreview struct {
+	Detail domain.RunDetail `json:"detail"`
+	Action string           `json:"action"`
+	Digest string           `json:"digest"`
+}
+
+// Preview is read-only; possessing its digest grants no authority.
+func (s *Service) Preview(ctx context.Context, id, action string) (ConfirmationPreview, error) {
+	if action != "evidence" && action != "advance" {
+		return ConfirmationPreview{}, invalid("Unknown confirmation action")
+	}
+	d, err := s.Get(ctx, id)
+	if err != nil {
+		return ConfirmationPreview{}, err
+	}
+	current, err := s.store.CurrentRunEvidence(ctx, id, d.Run.Version)
+	if err != nil {
+		return ConfirmationPreview{}, err
+	}
+	d.Evidence = current
+	p := ConfirmationPreview{Detail: d, Action: action}
+	data, err := json.Marshal(p)
+	if err != nil {
+		return p, err
+	}
+	sum := sha256.Sum256(data)
+	p.Digest = hex.EncodeToString(sum[:])
+	return p, nil
+}
+
+// Confirm is a private desktop composition boundary. Never mount it on public
+// controllers: the caller must authenticate an exact request with the boot key.
+func (s *Service) Confirm(ctx context.Context, id, action string, version int64, digest string) (domain.RunDetail, error) {
+	preview, err := s.Preview(ctx, id, action)
+	if err != nil {
+		return domain.RunDetail{}, err
+	}
+	if version >= 511 {
+		return domain.RunDetail{}, invalid("Run evidence limit reached; history is preserved and read-only")
+	}
+	if preview.Detail.Run.Version != version || !domain.SHA256Digest(digest) || preview.Digest != digest {
+		return domain.RunDetail{}, failure(domain.ErrRunConflict)
+	}
+	if action == "advance" {
+		return s.advanceDecision(ctx, preview.Detail, AdvanceInput{ExpectedVersion: version, Actor: "desktop-user", Decision: "Native confirmation of " + digest}, true, digest)
+	}
+	history := preview.Detail.Evidence
+	if len(history) == 0 {
+		return domain.RunDetail{}, invalid("No claim to confirm")
+	}
+	index := -1
+	for i := len(history) - 1; i >= 0; i-- {
+		if !history[i].Confirmed && slices.Contains([]string{"created", "completion", "review"}, history[i].Kind) {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return domain.RunDetail{}, invalid("No pending claim to confirm")
+	}
+	last := history[index]
+	if last.Confirmed {
+		return domain.RunDetail{}, invalid("Latest event is not an unconfirmed claim")
+	}
+	run := preview.Detail.Run
+	run.Version++
+	e := event(run, last.Kind, "desktop-user", "Native confirmation of "+digest)
+	e.Confirmed = true
+	e.ConfirmationDigest = digest
+	e.Completion = last.Completion
+	e.Review = last.Review
+	e.Observed = preview.Detail.Observed
+	e.Blockers = preview.Detail.Blockers
+	if err := s.store.SaveFactoryRun(ctx, run, e, false); err != nil {
+		return domain.RunDetail{}, failure(err)
+	}
+	return s.Get(ctx, id)
+}
+
+// History returns an exclusive version page; observation never loads the ledger.
+func (s *Service) History(ctx context.Context, id string, after, limit int64) ([]domain.RunEvidence, error) {
+	if after < -1 || limit < 1 || limit > 100 {
+		return nil, invalid("History cursor >= -1 and limit 1..100 required")
+	}
+	if _, err := s.store.GetFactoryRun(ctx, id); err != nil {
+		return nil, failure(err)
+	}
+	return s.store.PageRunEvidence(ctx, id, after, limit)
 }

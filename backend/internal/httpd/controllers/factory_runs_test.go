@@ -33,6 +33,10 @@ func (f *fakeFactoryRuns) Record(context.Context, string, factoryrun.RecordInput
 	f.calls++
 	return domain.RunDetail{}, nil
 }
+func (f *fakeFactoryRuns) History(context.Context, string, int64, int64) ([]domain.RunEvidence, error) {
+	f.calls++
+	return []domain.RunEvidence{{Version: 2}}, nil
+}
 func (f *fakeFactoryRuns) Advance(context.Context, string, factoryrun.AdvanceInput) (domain.RunDetail, error) {
 	f.calls++
 	return domain.RunDetail{}, nil
@@ -48,10 +52,13 @@ func TestFactoryRunRoutesAndBoundedStrictInput(t *testing.T) {
 	}{
 		{"GET", "/api/v1/runs?projectId=p", "", 200},
 		{"GET", "/api/v1/runs/r", "", 200},
+		{"GET", "/api/v1/runs/r/evidence?afterVersion=1&limit=5", "", 200},
+		{"GET", "/api/v1/runs/r/evidence?afterVersion=bad", "", 400},
 		{"POST", "/api/v1/runs", `{"id":"r","actor":"human","decision":"approved"}`, 201},
 		{"POST", "/api/v1/runs/r/evidence", `{"expectedVersion":0,"actor":"human","decision":"receipt"}`, 200},
 		{"POST", "/api/v1/runs/r/advance", `{"expectedVersion":1,"actor":"human","decision":"advance"}`, 200},
 		{"POST", "/api/v1/runs/r/advance", `{"launch":true}`, 400},
+		{"POST", "/api/v1/runs/r/evidence", `{"expectedVersion":1,"actor":"desktop-user","decision":"forged","confirmed":true}`, 400},
 		{"POST", "/api/v1/runs/r/advance", `{"actor":"human","decision":"missing version"}`, 400},
 		{"POST", "/api/v1/runs/r/evidence", `{"expectedVersion":null}`, 400},
 		{"POST", "/api/v1/runs", `{} {}`, 400},

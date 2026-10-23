@@ -103,15 +103,11 @@ func (f *fixture) create() domain.RunDetail {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	return detail
+	return f.confirm(detail, "evidence")
 }
 func (f *fixture) advance(detail domain.RunDetail) domain.RunDetail {
 	f.t.Helper()
-	result, err := f.svc.Advance(f.ctx, detail.Run.ID, factoryrun.AdvanceInput{ExpectedVersion: detail.Run.Version, Actor: "human", Decision: "next stage"})
-	if err != nil {
-		f.t.Fatal(err)
-	}
-	return result
+	return f.confirm(detail, "advance")
 }
 func (f *fixture) claim() *domain.RunCompletion {
 	f.t.Helper()
@@ -123,7 +119,7 @@ func (f *fixture) claim() *domain.RunCompletion {
 }
 func (f *fixture) record(detail domain.RunDetail, claim *domain.RunCompletion) domain.RunDetail {
 	f.t.Helper()
-	result, err := f.svc.Record(f.ctx, detail.Run.ID, factoryrun.RecordInput{ExpectedVersion: detail.Run.Version, Actor: "human", Decision: "verify receipt", Completion: claim})
+	result, err := f.recordInput(f.ctx, detail.Run.ID, factoryrun.RecordInput{ExpectedVersion: detail.Run.Version, Actor: "human", Decision: "verify receipt", Completion: claim})
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -152,7 +148,7 @@ func TestFactoryRunManualProgressionAndRestart(t *testing.T) {
 	detail = f.advance(detail)
 	blocked(t, detail, "review_missing")
 	review := &domain.RunReviewReceipt{RepoName: claim.RepoName, ReviewerID: "independent-reviewer", Independent: true, SHA: claim.Facts.HeadSHA, BeforeFingerprint: claim.Facts.Fingerprint, AfterFingerprint: claim.Facts.Fingerprint, Verdict: "approved", Round: 1, Artifact: f.artifact}
-	detail, err := f.svc.Record(f.ctx, detail.Run.ID, factoryrun.RecordInput{ExpectedVersion: detail.Run.Version, Actor: "human", Decision: "accept local review", Review: review})
+	detail, err := f.recordInput(f.ctx, detail.Run.ID, factoryrun.RecordInput{ExpectedVersion: detail.Run.Version, Actor: "human", Decision: "accept local review", Review: review})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +313,7 @@ func TestFactoryRunCrashHelper(t *testing.T) {
 	if _, err := tx.Exec("UPDATE factory_runs SET version=999 WHERE id='run-1'"); err != nil {
 		os.Exit(23)
 	}
-	if _, err := tx.Exec("INSERT INTO factory_run_evidence(id,run_id,version,document) VALUES('crash','run-1',999,'{}')"); err != nil {
+	if _, err := tx.Exec("INSERT INTO factory_run_evidence(id,run_id,version,document) VALUES('crash','run-1',2,'{}')"); err != nil {
 		os.Exit(24)
 	}
 	os.Exit(29)
@@ -342,7 +338,7 @@ func TestFactoryRunCrashRollsBackAndRestartRetainsHistory(t *testing.T) {
 	}
 	f.svc = factoryrun.New(f.db, runrepo.Reader{}, f.dir)
 	restored, err := f.svc.Get(f.ctx, detail.Run.ID)
-	if err != nil || restored.Run.Version != 0 || len(restored.Evidence) != 1 {
+	if err != nil || restored.Run.Version != 1 || len(restored.Evidence) != 2 {
 		t.Fatalf("crash retained partial transaction: %+v %v", restored, err)
 	}
 }
@@ -370,7 +366,7 @@ func TestFactoryRunReviewCannotMaskFindingsOrMutation(t *testing.T) {
 			case "exhausted":
 				receipt.Round = 4
 			}
-			got, err := f.svc.Record(f.ctx, detail.Run.ID, factoryrun.RecordInput{ExpectedVersion: detail.Run.Version, Actor: "human", Decision: "review receipt", Review: receipt})
+			got, err := f.recordInput(f.ctx, detail.Run.ID, factoryrun.RecordInput{ExpectedVersion: detail.Run.Version, Actor: "human", Decision: "review receipt", Review: receipt})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -428,7 +424,7 @@ func TestFactoryRunReferencesNativePerSHAReviewWithoutDelivery(t *testing.T) {
 		t.Fatal(err)
 	}
 	receipt := &domain.RunReviewReceipt{RepoName: claim.RepoName, ReviewRunID: "native-pass", ReviewerID: native.ID, Independent: true, SHA: claim.Facts.HeadSHA, BeforeFingerprint: claim.Facts.Fingerprint, AfterFingerprint: claim.Facts.Fingerprint, Verdict: "approved", Round: 1, Artifact: f.artifact}
-	detail, err := f.svc.Record(f.ctx, detail.Run.ID, factoryrun.RecordInput{ExpectedVersion: detail.Run.Version, Actor: "human", Decision: "record existing native review", Review: receipt})
+	detail, err := f.recordInput(f.ctx, detail.Run.ID, factoryrun.RecordInput{ExpectedVersion: detail.Run.Version, Actor: "human", Decision: "record existing native review", Review: receipt})
 	if err != nil || len(detail.Blockers) > 0 {
 		t.Fatalf("native receipt: %v %v", detail.Blockers, err)
 	}
@@ -437,7 +433,7 @@ func TestFactoryRunReferencesNativePerSHAReviewWithoutDelivery(t *testing.T) {
 		t.Fatalf("record changed native delivery: %+v %v", pass, err)
 	}
 	receipt.ReviewerID = "another-reviewer"
-	detail, err = f.svc.Record(f.ctx, detail.Run.ID, factoryrun.RecordInput{ExpectedVersion: detail.Run.Version, Actor: "human", Decision: "mismatched reviewer", Review: receipt})
+	detail, err = f.recordInput(f.ctx, detail.Run.ID, factoryrun.RecordInput{ExpectedVersion: detail.Run.Version, Actor: "human", Decision: "mismatched reviewer", Review: receipt})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,7 +452,7 @@ func TestFactoryRunRequiresHumanDecisionAndSupportsLegacyOwnership(t *testing.T)
 		t.Fatalf("missing human decision: %v", err)
 	}
 	unchanged, err := f.svc.Get(f.ctx, detail.Run.ID)
-	if err != nil || unchanged.Run.Version != 0 || len(unchanged.Evidence) != 1 {
+	if err != nil || unchanged.Run.Version != detail.Run.Version || len(unchanged.Evidence) != len(detail.Evidence) {
 		t.Fatalf("invalid decision changed run: %+v %v", unchanged, err)
 	}
 	detail = f.advance(detail)
@@ -533,7 +529,7 @@ func TestFactoryRunChangedCandidateRequiresNewHandoffDecision(t *testing.T) {
 	approve := func(detail domain.RunDetail, claim *domain.RunCompletion) domain.RunDetail {
 		t.Helper()
 		receipt := &domain.RunReviewReceipt{RepoName: claim.RepoName, ReviewerID: "independent-reviewer", Independent: true, SHA: claim.Facts.HeadSHA, BeforeFingerprint: claim.Facts.Fingerprint, AfterFingerprint: claim.Facts.Fingerprint, Verdict: "approved", Round: 1, Artifact: f.artifact}
-		result, err := f.svc.Record(f.ctx, detail.Run.ID, factoryrun.RecordInput{ExpectedVersion: detail.Run.Version, Actor: "human", Decision: "accept exact source review", Review: receipt})
+		result, err := f.recordInput(f.ctx, detail.Run.ID, factoryrun.RecordInput{ExpectedVersion: detail.Run.Version, Actor: "human", Decision: "accept exact source review", Review: receipt})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -561,5 +557,190 @@ func TestFactoryRunChangedCandidateRequiresNewHandoffDecision(t *testing.T) {
 	last := detail.Evidence[len(detail.Evidence)-1]
 	if last.Kind != "advance" || len(last.Observed) != 1 || last.Observed[0].HeadSHA != claim.Facts.HeadSHA {
 		t.Fatalf("decision lost exact source: %+v", last)
+	}
+}
+
+func (f *fixture) confirm(detail domain.RunDetail, action string) domain.RunDetail {
+	f.t.Helper()
+	preview, err := f.svc.Preview(f.ctx, detail.Run.ID, action)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if preview.Detail.Run.Version != detail.Run.Version {
+		f.t.Fatal("unexpected concurrent version")
+	}
+	result, err := f.svc.Confirm(f.ctx, detail.Run.ID, action, detail.Run.Version, preview.Digest)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return result
+}
+func (f *fixture) recordInput(ctx context.Context, id string, in factoryrun.RecordInput) (domain.RunDetail, error) {
+	d, err := f.svc.Record(ctx, id, in)
+	if err != nil {
+		return d, err
+	}
+	return f.confirm(d, "evidence"), nil
+}
+
+func TestPublicClaimsCannotForgeHumanApproval(t *testing.T) {
+	f := setup(t)
+	d, err := f.svc.Create(f.ctx, factoryrun.CreateInput{ID: "forged", ProjectID: "p", TaskID: "task", SessionID: f.session.ID, DesignDigest: strings.Repeat("a", 64), PolicyDecision: "approved", RequiredChecks: []string{"focused"}, Actor: "desktop-user", Decision: "native human approved"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked(t, d, "human_creation_confirmation_required")
+	d, err = f.svc.Advance(f.ctx, d.Run.ID, factoryrun.AdvanceInput{ExpectedVersion: d.Run.Version, Actor: "desktop-user", Decision: "I approve"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Run.Stage != "design" {
+		t.Fatal("public actor forged human advancement")
+	}
+	d = f.confirm(d, "evidence") // Trusted native confirmation of the still-pending creation.
+	d = f.advance(d)
+	claim := f.claim()
+	claim.Checks[0].VerifiedBy = "desktop-user"
+	d, err = f.svc.Record(f.ctx, d.Run.ID, factoryrun.RecordInput{ExpectedVersion: d.Run.Version, Actor: "desktop-user", Decision: "verified", Completion: claim})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked(t, d, "human_evidence_confirmation_required")
+	d = f.advance(d)
+	if d.Run.Stage != "implementation" {
+		t.Fatal("native stage confirmation cannot confirm an untrusted receipt")
+	}
+	d = f.confirm(d, "evidence")
+	d = f.advance(d)
+	receipt := &domain.RunReviewReceipt{RepoName: claim.RepoName, ReviewerID: "independent-human", Independent: true, SHA: claim.Facts.HeadSHA, BeforeFingerprint: claim.Facts.Fingerprint, AfterFingerprint: claim.Facts.Fingerprint, Verdict: "approved", Round: 1, Artifact: f.artifact}
+	d, err = f.svc.Record(f.ctx, d.Run.ID, factoryrun.RecordInput{ExpectedVersion: d.Run.Version, Actor: "desktop-user", Decision: "independent review", Review: receipt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked(t, d, "human_evidence_confirmation_required")
+	held := f.advance(d)
+	if held.Run.Stage != "review" {
+		t.Fatal("forged independence reached handoff")
+	}
+}
+
+func TestConfirmationBindsVersionAndActualEvidence(t *testing.T) {
+	f := setup(t)
+	d := f.create()
+	p, err := f.svc.Preview(f.ctx, d.Run.ID, "advance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Confirm(f.ctx, d.Run.ID, "advance", d.Run.Version, strings.Repeat("a", 64)); err == nil {
+		t.Fatal("accepted forged digest")
+	}
+	git(t, f.worktree, "commit", "--allow-empty", "-m", "changed source")
+	if _, err := f.svc.Confirm(f.ctx, d.Run.ID, "advance", d.Run.Version, p.Digest); err == nil {
+		t.Fatal("accepted changed source under native preview")
+	}
+	p, err = f.svc.Preview(f.ctx, d.Run.ID, "advance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err = f.svc.Confirm(f.ctx, d.Run.ID, "advance", d.Run.Version, p.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Confirm(f.ctx, d.Run.ID, "advance", d.Run.Version-1, p.Digest); err == nil {
+		t.Fatal("accepted replay")
+	}
+}
+
+func TestRunAdmissionHistoryPagesAndBlockedDeduplication(t *testing.T) {
+	f := setup(t)
+	d := f.create()
+	d = f.advance(d)
+	input := factoryrun.AdvanceInput{ExpectedVersion: d.Run.Version, Actor: "claimant", Decision: "same blocked claim"}
+	first, err := f.svc.Advance(f.ctx, d.Run.ID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.ExpectedVersion = first.Run.Version
+	second, err := f.svc.Advance(f.ctx, d.Run.ID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Run.Version != second.Run.Version {
+		t.Fatal("duplicate blocked observation grew history")
+	}
+	var all []domain.RunEvidence
+	cursor := int64(-1)
+	for {
+		page, err := f.svc.History(f.ctx, d.Run.ID, cursor, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		all = append(all, page...)
+		cursor = page[len(page)-1].Version
+	}
+	if len(all) != int(second.Run.Version)+1 {
+		t.Fatal("history pagination lost evidence")
+	}
+	current, err := f.db.CurrentRunEvidence(f.ctx, d.Run.ID, second.Run.Version)
+	if err != nil || len(current) > 3 {
+		t.Fatalf("current projection loaded ledger: %d %v", len(current), err)
+	}
+	if _, err := f.svc.History(f.ctx, d.Run.ID, -1, 101); err == nil {
+		t.Fatal("unbounded page admitted")
+	}
+	claim := f.claim()
+	claim.Checks[0].Environment = strings.Repeat("x", 65<<10)
+	if _, err := f.svc.Record(f.ctx, d.Run.ID, factoryrun.RecordInput{ExpectedVersion: second.Run.Version, Actor: "human", Decision: "oversized", Completion: claim}); err == nil {
+		t.Fatal("oversized receipt admitted")
+	}
+	claim = f.claim()
+	claim.RepoName = "not-owned"
+	if _, err := f.svc.Record(f.ctx, d.Run.ID, factoryrun.RecordInput{ExpectedVersion: second.Run.Version, Actor: "human", Decision: "unbounded projection key", Completion: claim}); err == nil {
+		t.Fatal("unowned projection key admitted")
+	}
+}
+
+type afterInspectionReader struct {
+	runrepo.Reader
+	once  sync.Once
+	after func()
+}
+
+func (r *afterInspectionReader) Inspect(ctx context.Context, repo, worktree, base string) (domain.RunRepoFacts, error) {
+	facts, err := r.Reader.Inspect(ctx, repo, worktree, base)
+	if err == nil {
+		r.once.Do(r.after)
+	}
+	return facts, err
+}
+func TestNativeConfirmationCannotTurnApprovedHoldIntoAdvance(t *testing.T) {
+	f := setup(t)
+	d := f.advance(f.create())
+	d = f.record(d, f.claim())
+	dirty := filepath.Join(f.worktree, "untracked-source")
+	if err := os.WriteFile(dirty, []byte("dirty"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := f.svc.Preview(f.ctx, d.Run.ID, "advance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked(t, p.Detail, "dirty_source")
+	observer := &afterInspectionReader{after: func() {
+		if err := os.Remove(dirty); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	f.svc = factoryrun.New(f.db, observer, f.dir)
+	result, err := f.svc.Confirm(f.ctx, d.Run.ID, "advance", d.Run.Version, p.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := result.Evidence[len(result.Evidence)-1]
+	if result.Run.Stage != "implementation" || last.Kind != "hold" || !strings.Contains(strings.Join(last.Blockers, ","), "dirty_source") {
+		t.Fatal("native confirmation advanced a different source observation", result)
 	}
 }
