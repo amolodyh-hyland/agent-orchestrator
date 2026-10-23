@@ -399,14 +399,14 @@ describe("send keys", () => {
 		await waitFor(() => expect(onSend.mock.calls[0]?.[0]).toBe(markdown));
 	});
 
-	it("undo removes the live inline-code conversion", async () => {
+	it("undo removes the text edit together with its live inline-code conversion", async () => {
 		const { field } = renderComposer();
 		await typeInComposer(field, "`sample`");
 		await waitFor(() => expect(field.querySelector(".chat-composer-markdown-code")).not.toBeNull());
 		await userEvent.keyboard("{Control>}z{/Control}");
 
 		await waitFor(() => expect(field.querySelector(".chat-composer-markdown-code")).toBeNull());
-		expect(composerWireText(field)).toBe("`sample`");
+		expect(composerWireText(field)).toBe("");
 	});
 
 	it("keeps Enter inside a fenced code block until its closing fence and sends the source Markdown", async () => {

@@ -1,10 +1,47 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+	composerCodeRegions,
+	createComposerGraphemeNavigator,
 	createComposerMarkdownRangeCursor,
 	isComposerCodeFenceAt,
 	isComposerOpenCodeFenceAt,
 	parseComposerMarkdown,
 } from "./composerMarkdown";
+
+describe("composer grapheme navigation", () => {
+	it("segments unchanged content once and looks up successive boundaries", () => {
+		const segment = vi.spyOn(Intl.Segmenter.prototype, "segment");
+		try {
+			const adjacent = createComposerGraphemeNavigator();
+			const text = "a👩‍💻".repeat(500);
+			let offset = text.length;
+			for (let index = 0; index < 1000; index += 1) offset = adjacent(text, offset, -1);
+			expect(offset).toBe(0);
+			expect(adjacent(text, offset, 1)).toBe(1);
+			expect(segment).toHaveBeenCalledTimes(1);
+			expect(adjacent(text + "e\u0301", text.length + 2, -1)).toBe(text.length);
+			expect(segment).toHaveBeenCalledTimes(2);
+		} finally {
+			segment.mockRestore();
+		}
+	});
+});
+
+describe("composer code content boundaries", () => {
+	it.each([
+		["before ``a ` b`` after", "a ` b", undefined],
+		["```ts\nvalue\n```", "value", "ts"],
+		["  ````custom info\r\nfirst\r\n\r\n`````  ", "first\r\n", "custom info"],
+		["```\n\n```", "", ""],
+		["```\n", "", ""],
+		["```python\nvalue", "value", "python"],
+	])("separates hidden syntax from content without normalizing source: %s", (source, content, language) => {
+		const [region] = composerCodeRegions(source);
+		expect(source.slice(region.contentStart, region.contentEnd)).toBe(content);
+		expect(region.language).toBe(language);
+		expect(source.slice(0, region.contentStart) + content + source.slice(region.contentEnd)).toBe(source);
+	});
+});
 
 describe("parseComposerMarkdown", () => {
 	it("recognizes a closed inline span and leaves an incomplete span plain", () => {

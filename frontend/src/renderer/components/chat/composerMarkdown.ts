@@ -4,6 +4,27 @@ export type ComposerMarkdownCodeRange = {
 	kind: "inline" | "fenced";
 };
 
+export function createComposerGraphemeNavigator() {
+	const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+	let cachedText: string | undefined;
+	let boundaries: number[] = [];
+	return (text: string, offset: number, direction: -1 | 1): number => {
+		if (text !== cachedText) {
+			cachedText = text;
+			boundaries = [0];
+			for (const segment of segmenter.segment(text)) boundaries.push(segment.index + segment.segment.length);
+		}
+		let low = 0;
+		let high = boundaries.length;
+		while (low < high) {
+			const middle = (low + high) >>> 1;
+			if (boundaries[middle] < offset || (direction > 0 && boundaries[middle] === offset)) low = middle + 1;
+			else high = middle;
+		}
+		return boundaries[direction < 0 ? Math.max(0, low - 1) : Math.min(low, boundaries.length - 1)];
+	};
+}
+
 type ComposerCodeFence = {
 	start: number;
 	end: number;
@@ -217,4 +238,34 @@ export function isComposerOpenCodeFenceAt(text: string, offset: number): boolean
 	return parseComposerMarkdown(text).fences.some((fence) =>
 		fence.closeStart === undefined && offset >= fence.start,
 	);
+}
+
+export type ComposerCodeRegion = ComposerMarkdownCodeRange & {
+	contentStart: number;
+	contentEnd: number;
+	language?: string;
+};
+
+export function composerCodeRegions(text: string): ComposerCodeRegion[] {
+	const analysis = parseComposerMarkdown(text);
+	const fences = new Map(analysis.fences.map((fence) => [fence.start, fence]));
+	return analysis.codeRanges.map((range) => {
+		if (range.kind === "inline") {
+			const size = backtickRunEnd(text, range.start) - range.start;
+			return { ...range, contentStart: range.start + size, contentEnd: range.end - size };
+		}
+		const fence = fences.get(range.start)!;
+		const openingEnd = text.indexOf("\n", range.start);
+		const opening = text.slice(range.start, openingEnd).match(/^ {0,3}`{3,}([^`]*)$/);
+		let contentEnd = fence.closeStart ?? range.end;
+		if (fence.closeStart !== undefined && contentEnd > openingEnd + 1) {
+			contentEnd -= text[contentEnd - 2] === "\r" ? 2 : 1;
+		}
+		return {
+			...range,
+			contentStart: openingEnd + 1,
+			contentEnd,
+			language: opening?.[1].trim() || "",
+		};
+	});
 }

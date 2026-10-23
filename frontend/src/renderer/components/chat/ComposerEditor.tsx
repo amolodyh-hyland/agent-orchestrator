@@ -7,6 +7,8 @@ import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext
 import {
 	$addUpdateTag,
 	$createRangeSelectionFromDom,
+	$createRangeSelection,
+	$setSelection,
 	$getNodeByKey,
 	$getRoot,
 	$getSelection,
@@ -14,6 +16,8 @@ import {
 	$isRangeSelection,
 	$isTextNode,
 	$createParagraphNode,
+	$createLineBreakNode,
+	$isLineBreakNode,
 	$createTextNode,
 	CLEAR_HISTORY_COMMAND,
 	COMMAND_PRIORITY_HIGH,
@@ -21,9 +25,20 @@ import {
 	getDOMSelectionFromTarget,
 	HISTORIC_TAG,
 	HISTORY_PUSH_TAG,
+	HISTORY_MERGE_TAG,
 	KEY_ENTER_COMMAND,
 	KEY_ESCAPE_COMMAND,
 	KEY_TAB_COMMAND,
+	KEY_BACKSPACE_COMMAND,
+	KEY_DELETE_COMMAND,
+	KEY_ARROW_LEFT_COMMAND,
+	KEY_ARROW_RIGHT_COMMAND,
+	SELECTION_CHANGE_COMMAND,
+	CONTROLLED_TEXT_INSERTION_COMMAND,
+	DELETE_CHARACTER_COMMAND,
+	PASTE_COMMAND,
+	CUT_COMMAND,
+	CUT_TAG,
 	type EditorConfig,
 	type LexicalEditor,
 	type LexicalNode,
@@ -51,11 +66,8 @@ import { Box, Image as ImageIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { composerFileIcon } from "./composerFileIcon";
-import {
-	createComposerMarkdownRangeCursor,
-	isComposerOpenCodeFenceAt,
-	parseComposerMarkdown,
-} from "./composerMarkdown";
+import { composerCodeRegions, createComposerGraphemeNavigator, isComposerOpenCodeFenceAt } from "./composerMarkdown";
+import { COMPOSER_CODE_LANGUAGE_TAG, ComposerCodeNode, ComposerCodePlaceholderNode, ComposerCodePlugin } from "./ComposerCode";
 import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
 import { splitInlineImagePaths } from "./messageAttachments";
 
@@ -285,42 +297,381 @@ function $serializeComposer(): string {
 		.join("\n");
 }
 
-function $formatComposerMarkdown(): void {
-	const ranges = parseComposerMarkdown($serializeComposer()).codeRanges;
-	const rangeCursor = createComposerMarkdownRangeCursor(ranges);
-	const formatNode = (node: LexicalNode, start: number): number => {
-		if ($isTextNode(node)) {
-			const end = start + node.getTextContent().length;
-			const parts = node.splitText(...rangeCursor.splitOffsets(start, end));
-			let partStart = start;
-			for (const part of parts) {
-				const partEnd = partStart + part.getTextContent().length;
-				const range = rangeCursor.coveringRange(partStart, partEnd);
-				const shouldBeCode = Boolean(range);
-				if (part.hasFormat("code") !== shouldBeCode) part.toggleFormat("code");
-				const style = range?.kind === "fenced" ? COMPOSER_CODE_BLOCK_STYLE : "";
-				if (style && part.getStyle() !== style) part.setStyle(style);
-				else if (!style && part.getStyle() === COMPOSER_CODE_BLOCK_STYLE) part.setStyle("");
-				partStart = partEnd;
-			}
-			rangeCursor.advanceTo(end);
-			return end;
-		}
+const COMPOSER_MARKER_STYLE = "display: none";
+const adjacentComposerGrapheme = createComposerGraphemeNavigator();
 
-		if ($isElementNode(node)) {
-			let offset = start;
-			for (const child of node.getChildren()) offset = formatNode(child, offset);
-			return offset;
-		}
-		return start + node.getTextContent().length;
+function $composerLeaves(): LexicalNode[] {
+	const leaves: LexicalNode[] = [];
+	const visit = (node: LexicalNode) => {
+		if ($isElementNode(node)) node.getChildren().forEach(visit);
+		else leaves.push(node);
 	};
+	visit($getRoot());
+	return leaves;
+}
 
-	const paragraphs = $getRoot().getChildren();
-	let offset = 0;
-	for (const [index, paragraph] of paragraphs.entries()) {
-		offset = formatNode(paragraph, offset);
-		if (index < paragraphs.length - 1) offset += 1;
+function $selectComposerOffset(offset: number, point: RangeSelection["anchor"], raw = false): void {
+	const positioned: { node: LexicalNode; start: number }[] = [];
+	let cursor = 0;
+	const visit = (node: LexicalNode) => {
+		if ($isElementNode(node) && node.getChildrenSize()) node.getChildren().forEach(visit);
+		else {
+			positioned.push({ node, start: cursor });
+			cursor += node.getTextContentSize();
+		}
+	};
+	for (const paragraph of $getRoot().getChildren()) {
+		visit(paragraph);
+		cursor += 1;
 	}
+	for (const { node, start } of positioned) {
+		const end = start + node.getTextContentSize();
+		if (offset <= end) {
+			if ($isElementNode(node)) {
+				point.set(node.getKey(), 0, "element");
+				return;
+			}
+			const parent = node.getParentOrThrow();
+			const index = node.getIndexWithinParent();
+			if (!raw && $isTextNode(node) && node.getStyle() === COMPOSER_MARKER_STYLE) {
+				const region = parent instanceof ComposerCodeNode ? parent : null;
+				if (region && ((index === 0 && offset === start) || (index > 0 && offset === end))) {
+					point.set(region.getParentOrThrow().getKey(), region.getIndexWithinParent() + (index > 0 ? 1 : 0), "element");
+				} else {
+					const visible = index === 0 ? node.getNextSibling() : node.getPreviousSibling();
+					if ($isTextNode(visible)) point.set(visible.getKey(), index === 0 ? 0 : visible.getTextContentSize(), "text");
+					else point.set(parent.getKey(), index + (index === 0 ? 1 : 0), "element");
+				}
+			} else if ($isTextNode(node)) point.set(node.getKey(), Math.max(0, offset - start), "text");
+			else point.set(parent.getKey(), index + (offset === end ? 1 : 0), "element");
+			return;
+		}
+	}
+}
+
+function $formatComposerMarkdown(): void {
+	const source = $serializeComposer();
+	const regions = composerCodeRegions(source);
+	const selection = $getSelection();
+	const offsets = $isRangeSelection(selection)
+		? [
+				$documentOffsetForPoint(selection.anchor.getNode(), selection.anchor.offset),
+				$documentOffsetForPoint(selection.focus.getNode(), selection.focus.offset),
+			]
+		: undefined;
+	const previous = new Map<number, ComposerCodeNode>();
+	let previousOffset = 0;
+	const collect = (node: LexicalNode) => {
+		if (node instanceof ComposerCodeNode) previous.set(previousOffset, node);
+		if ($isElementNode(node)) node.getChildren().forEach(collect);
+		else previousOffset += node.getTextContentSize();
+	};
+	const root = $getRoot();
+	const paragraphs = root.getChildren();
+	paragraphs.forEach((node, index) => {
+		collect(node);
+		if (index < paragraphs.length - 1) previousOffset += 1;
+	});
+	if (!regions.length && !previous.size) return;
+	const structureStable =
+		paragraphs.length === 1 &&
+		previous.size === regions.length &&
+		regions.every((region) => {
+			const block = previous.get(region.start);
+			return block?.__kind === region.kind && block.getTextContentSize() === region.end - region.start;
+		});
+
+	const leaves: LexicalNode[] = [];
+	paragraphs.forEach((paragraph, index) => {
+		const visit = (node: LexicalNode) => {
+			if ($isElementNode(node)) node.getChildren().forEach(visit);
+			else leaves.push(node);
+		};
+		visit(paragraph);
+		if (index < paragraphs.length - 1) leaves.push($createLineBreakNode());
+	});
+	const paragraph = $isElementNode(paragraphs[0]) ? paragraphs[0] : $createParagraphNode();
+	if (!structureStable) {
+		paragraph.append(...leaves);
+		for (const child of paragraph.getChildren()) if ($isElementNode(child)) child.remove();
+		for (const extra of paragraphs.slice(1)) extra.remove();
+		if (!paragraph.isAttached()) root.append(paragraph);
+	}
+
+	const boundaries = regions.flatMap((region) => [region.start, region.contentStart, region.contentEnd, region.end]);
+	let offset = 0;
+	const parts: { node: LexicalNode; start: number; end: number }[] = [];
+	let boundaryIndex = 0;
+	for (const leaf of leaves) {
+		const end = offset + leaf.getTextContentSize();
+		while (boundaryIndex < boundaries.length && boundaries[boundaryIndex] <= offset) boundaryIndex += 1;
+		const splits: number[] = [];
+		while (boundaryIndex < boundaries.length && boundaries[boundaryIndex] < end)
+			splits.push(boundaries[boundaryIndex++] - offset);
+		const nodes = $isTextNode(leaf) ? leaf.splitText(...splits) : [leaf];
+		for (const node of nodes) {
+			const partEnd = offset + node.getTextContentSize();
+			parts.push({ node, start: offset, end: partEnd });
+			offset = partEnd;
+		}
+	}
+	let regionIndex = 0;
+	let wrapper: ComposerCodeNode | undefined;
+	const emptyBlocks: { wrapper: ComposerCodeNode; contentOffset: number }[] = [];
+	for (const part of parts) {
+		while (regionIndex < regions.length && part.start >= regions[regionIndex].end) {
+			regionIndex += 1;
+			wrapper = undefined;
+		}
+		const region = regions[regionIndex];
+		const inRegion = region && part.start >= region.start && part.end <= region.end;
+		const marker =
+			inRegion && part.end > part.start && (part.end <= region.contentStart || part.start >= region.contentEnd);
+		let node = part.node;
+		if (node instanceof ComposerCodePlaceholderNode && (!inRegion || region.contentStart !== region.contentEnd)) {
+			node.remove();
+			continue;
+		}
+		if (marker && $isLineBreakNode(node)) node = node.replace($createTextNode(node.getTextContent()));
+		if ($isTextNode(node)) {
+			if (node.hasFormat("code") !== Boolean(inRegion)) node.toggleFormat("code");
+			const style = marker
+				? COMPOSER_MARKER_STYLE
+				: inRegion && region.kind === "fenced"
+					? COMPOSER_CODE_BLOCK_STYLE
+					: "";
+			if (node.getStyle() !== style) node.setStyle(style);
+		}
+		if (inRegion) {
+			if (!wrapper) {
+				const old = previous.get(region.start);
+				wrapper = old?.__kind === region.kind ? old : new ComposerCodeNode(region.kind);
+				if (!structureStable) node.insertBefore(wrapper);
+				if (region.kind === "fenced" && region.contentStart === region.contentEnd) {
+					emptyBlocks.push({ wrapper, contentOffset: region.contentStart - region.start });
+				}
+			}
+			if (!structureStable) wrapper.append(node);
+		}
+	}
+	for (const { wrapper: block, contentOffset } of emptyBlocks) {
+		if (block.getChildren().some((node) => node instanceof ComposerCodePlaceholderNode)) continue;
+		let offset = 0;
+		for (const child of block.getChildren()) {
+			offset += child.getTextContentSize();
+			if (offset !== contentOffset) continue;
+			child.insertAfter(new ComposerCodePlaceholderNode());
+			break;
+		}
+	}
+	if (!structureStable && $isRangeSelection(selection) && offsets?.[0] !== undefined && offsets[1] !== undefined) {
+		const restored = $createRangeSelection();
+		$setSelection(restored);
+		$selectComposerOffset(offsets[0], restored.anchor);
+		$selectComposerOffset(offsets[1], restored.focus);
+		const anchor = restored.anchor.getNode();
+		if ($isTextNode(anchor)) {
+			restored.format = anchor.getFormat();
+			restored.style = anchor.getStyle();
+		}
+	}
+}
+
+function $codeEdgeKey(event: globalThis.KeyboardEvent, direction: -1 | 1, remove = false): boolean {
+	const selection = $getSelection();
+	if (
+		!$isRangeSelection(selection) ||
+		!selection.isCollapsed() ||
+		event.isComposing ||
+		event.metaKey ||
+		event.ctrlKey ||
+		event.altKey
+	)
+		return false;
+	const offset = $documentOffsetForPoint(selection.anchor.getNode(), selection.anchor.offset);
+	if (offset === undefined) return false;
+	const source = $serializeComposer();
+	const regions = composerCodeRegions(source);
+	const region = regions.find((candidate) =>
+		remove
+			? direction < 0
+				? offset === candidate.contentStart || offset === candidate.end
+				: offset === candidate.contentEnd || offset === candidate.start
+			: offset >= candidate.start && offset <= candidate.end,
+	);
+	if (!region) return false;
+	if (remove) {
+		$addUpdateTag(HISTORY_PUSH_TAG);
+		$selectComposerOffset(region.start, selection.anchor);
+		$selectComposerOffset(region.end, selection.focus);
+		selection.insertText(source.slice(region.contentStart, region.contentEnd));
+		const next = $getSelection();
+		if ($isRangeSelection(next)) {
+			const target =
+				region.start + (direction < 0 && offset === region.contentStart ? 0 : region.contentEnd - region.contentStart);
+			$selectComposerOffset(target, next.anchor);
+			$selectComposerOffset(target, next.focus);
+		}
+	} else {
+		let target: number;
+		if (direction < 0) {
+			if (offset > region.contentEnd) target = region.contentEnd;
+			else if (offset <= region.contentStart) target = region.start;
+			else
+				target =
+					region.contentStart +
+					adjacentComposerGrapheme(
+						source.slice(region.contentStart, region.contentEnd),
+						offset - region.contentStart,
+						direction,
+					);
+		} else {
+			if (offset < region.contentStart) target = region.contentStart;
+			else if (offset >= region.contentEnd) target = region.end;
+			else
+				target =
+					region.contentStart +
+					adjacentComposerGrapheme(
+						source.slice(region.contentStart, region.contentEnd),
+						offset - region.contentStart,
+						direction,
+					);
+		}
+		if (target === offset) return false;
+		$selectComposerOffset(target, selection.anchor);
+		$selectComposerOffset(target, selection.focus);
+	}
+	event.preventDefault();
+	return true;
+}
+
+function $normalizeCodeRangeSelection(replacement = ""): string | undefined {
+	const selection = $getSelection();
+	if (!$isRangeSelection(selection) || selection.isCollapsed()) return;
+	const anchor = $documentOffsetForPoint(selection.anchor.getNode(), selection.anchor.offset);
+	const focus = $documentOffsetForPoint(selection.focus.getNode(), selection.focus.offset);
+	if (anchor === undefined || focus === undefined) return;
+	const source = $serializeComposer();
+	const regions = composerCodeRegions(source);
+	let start = Math.min(anchor, focus);
+	let end = Math.max(anchor, focus);
+	const repairs: { offset: number; end?: number; text: string }[] = [];
+	for (const region of regions) {
+		// A visible endpoint at the code edge can sit inside the hidden syntax.
+		// Keep that syntax with the untouched code, including a fence's line boundary.
+		if (start >= region.contentEnd && start < region.end && end >= region.end) {
+			start = region.end;
+			const after = replacement + source.slice(end);
+			if (region.kind === "fenced" && after && !after.startsWith("\n") && !after.startsWith("\r\n")) {
+				repairs.push({
+					offset: start,
+					text: source.slice(region.start, region.contentStart).endsWith("\r\n") ? "\r\n" : "\n",
+				});
+			}
+			continue;
+		}
+		if (end > region.start && end <= region.contentStart && start <= region.start) {
+			end = region.start;
+			const before = source.slice(0, start) + replacement;
+			if (region.kind === "fenced" && before && !before.endsWith("\n")) {
+				repairs.push({
+					offset: end,
+					text: source.slice(region.start, region.contentStart).endsWith("\r\n") ? "\r\n" : "\n",
+				});
+			}
+			continue;
+		}
+		if (
+			start <= region.contentStart &&
+			end >= region.contentEnd &&
+			(start < region.contentStart || end > region.contentEnd)
+		) {
+			start = Math.min(start, region.start);
+			end = Math.max(end, region.end);
+		} else {
+			if (start >= region.start && start < region.contentStart) start = region.contentStart;
+			if (end > region.contentEnd && end <= region.end) end = region.contentEnd;
+		}
+	}
+	let copied = source.slice(start, end);
+	// Repair the unselected code before the normal replacement removes a crossing
+	// selection. The clipboard receives balanced Markdown for the selected code too.
+	const head = regions.find(
+		(region) => start > region.contentStart && start < region.contentEnd && end > region.contentEnd,
+	);
+	const tail = regions.find(
+		(region) => start < region.contentStart && end > region.contentStart && end < region.contentEnd,
+	);
+	let closing = "";
+	if (head) {
+		const opening = source.slice(head.start, head.contentStart);
+		closing = source.slice(head.contentEnd, head.end);
+		copied = opening + copied;
+		const after = replacement + source.slice(end);
+		if (head.kind === "fenced" && after && !after.startsWith("\n") && !after.startsWith("\r\n")) {
+			closing += opening.endsWith("\r\n") ? "\r\n" : "\n";
+		}
+		repairs.push({ offset: start, text: closing });
+	}
+	if (tail) {
+		let opening = source.slice(tail.start, tail.contentStart);
+		const before = source.slice(0, start) + closing + replacement;
+		if (tail.kind === "fenced" && before && !before.endsWith("\n")) {
+			opening = (opening.endsWith("\r\n") ? "\r\n" : "\n") + opening;
+		}
+		copied += source.slice(tail.contentEnd, tail.end);
+		repairs.push({ offset: end, text: opening });
+	}
+	if (head?.kind === "inline" && tail?.kind === "inline" && !replacement) {
+		// Join the survivors under one delimiter pair: adjacent closing/opening runs
+		// would coalesce into a different backtick delimiter.
+		const remaining = source.slice(head.contentStart, start) + source.slice(end, tail.contentEnd);
+		let markerLength = Math.max(head.contentStart - head.start, tail.end - tail.contentEnd);
+		for (const match of remaining.matchAll(/`+/g)) markerLength = Math.max(markerLength, match[0].length + 1);
+		const marker = "`".repeat(markerLength);
+		repairs.length = 0;
+		repairs.push({ offset: head.start, end: head.contentStart, text: marker });
+		repairs.push({ offset: tail.contentEnd, end: tail.end, text: marker });
+	}
+	if (!repairs.length && start === Math.min(anchor, focus) && end === Math.max(anchor, focus)) return;
+	for (const repair of repairs.sort((left, right) => right.offset - left.offset)) {
+		const insertion = $createRangeSelection();
+		$setSelection(insertion);
+		$selectComposerOffset(repair.offset, insertion.anchor, true);
+		$selectComposerOffset(repair.end ?? repair.offset, insertion.focus, true);
+		insertion.insertText(repair.text);
+		const delta = repair.text.length - ((repair.end ?? repair.offset) - repair.offset);
+		if (repair.offset <= start) start += delta;
+		if (repair.offset < end) end += delta;
+	}
+	const restored = $createRangeSelection();
+	$setSelection(restored);
+	$selectComposerOffset(anchor <= focus ? start : end, restored.anchor, true);
+	$selectComposerOffset(anchor <= focus ? end : start, restored.focus, true);
+	return copied;
+}
+
+function $insertComposerCodeNewline(allowClosed = false): boolean {
+	const selection = $getSelection();
+	if (!$isRangeSelection(selection)) return false;
+	const anchor = $documentOffsetForPoint(selection.anchor.getNode(), selection.anchor.offset);
+	const focus = $documentOffsetForPoint(selection.focus.getNode(), selection.focus.offset);
+	if (anchor === undefined || focus === undefined) return false;
+	const source = $serializeComposer();
+	if (!allowClosed && !isComposerOpenCodeFenceAt(source, anchor)) return false;
+	if (
+		!composerCodeRegions(source).some(
+			(region) =>
+				region.kind === "fenced" &&
+				anchor >= region.contentStart &&
+				anchor <= region.contentEnd &&
+				focus >= region.contentStart &&
+				focus <= region.contentEnd,
+		)
+	)
+		return false;
+	selection.insertText("\n");
+	return true;
 }
 
 function $selectionIsInsideOpenComposerCodeFence(): boolean {
@@ -461,11 +812,8 @@ function $removeChip(chip: LexicalNode): void {
 }
 
 function $removeImageTokens(remove: (path: string) => boolean): void {
-	for (const paragraph of $getRoot().getChildren()) {
-		if (!$isElementNode(paragraph)) continue;
-		for (const child of paragraph.getChildren()) {
-			if (child instanceof ComposerTokenNode && child.__kind === "image" && remove(child.__value)) $removeChip(child);
-		}
+	for (const child of $composerLeaves()) {
+		if (child instanceof ComposerTokenNode && child.__kind === "image" && remove(child.__value)) $removeChip(child);
 	}
 }
 
@@ -523,35 +871,16 @@ function $wrapSelectionWithMarkdown(opening: string, closing: string, codeBlock 
 			closingText = `${closing}${after && !after.startsWith("\n") ? "\n" : ""}`;
 		}
 	}
+	const anchorOffset = $documentOffsetForPoint(selection.anchor.getNode(), selection.anchor.offset);
+	const focusOffset = $documentOffsetForPoint(selection.focus.getNode(), selection.focus.offset);
+	const start = Math.min(anchorOffset ?? 0, focusOffset ?? 0);
 	$addUpdateTag(HISTORY_PUSH_TAG);
 	selection.insertText(`${openingText}${selectedText}${closingText}`);
-
 	const insertedSelection = $getSelection();
-	if (!$isRangeSelection(insertedSelection)) return true;
-	const anchorNode = insertedSelection.anchor.getNode();
-	if (!$isTextNode(anchorNode)) return true;
-
-	if (codeBlock) {
-		const closingStart = anchorNode.getTextContent().lastIndexOf("```", insertedSelection.anchor.offset);
-		if (closingStart > 0) {
-			anchorNode.select(closingStart - 1, closingStart - 1);
-			return true;
-		}
-		const parent = anchorNode.getParent();
-		const previousSibling = anchorNode.getPreviousSibling();
-		if (parent && previousSibling?.getTextContent() === "\n") {
-			const offset = parent.getChildren().findIndex((node) => node.getKey() === previousSibling.getKey());
-			if (offset >= 0) parent.select(offset, offset);
-			return true;
-		}
-		const previousParagraph = parent?.getPreviousSibling();
-		if ($isElementNode(previousParagraph)) previousParagraph.selectEnd();
-		return true;
-	}
-
-	if (!selectedText) {
-		const offset = insertedSelection.anchor.offset - closing.length;
-		anchorNode.select(offset, offset);
+	if ($isRangeSelection(insertedSelection) && (codeBlock || !selectedText)) {
+		const target = start + openingText.length + selectedText.length;
+		$selectComposerOffset(target, insertedSelection.anchor);
+		$selectComposerOffset(target, insertedSelection.focus);
 	}
 	return true;
 }
@@ -695,7 +1024,8 @@ const EditorBridge = forwardRef<
 				) return;
 				editor.update(() => $formatComposerMarkdown(), {
 					discrete: true,
-					tag: COMPOSER_MARKDOWN_FORMAT_TAG,
+					// Presentation belongs to the edit that triggered recognition.
+					tag: [COMPOSER_MARKDOWN_FORMAT_TAG, HISTORY_MERGE_TAG],
 				});
 			});
 		};
@@ -715,6 +1045,7 @@ const EditorBridge = forwardRef<
 			}
 			if (
 				!tags.has(PROGRAMMATIC_TEXT_UPDATE_TAG) &&
+				!tags.has(COMPOSER_CODE_LANGUAGE_TAG) &&
 				!tags.has(HISTORIC_TAG) &&
 				text !== previousText
 			) {
@@ -729,6 +1060,96 @@ const EditorBridge = forwardRef<
 			}
 		};
 	}, [compositionEndScheduler, compositionState, editor, onChange, onDismissSuggestion, promptSuggestion]);
+
+	useEffect(() => {
+		const commands = [
+			editor.registerCommand(
+				CONTROLLED_TEXT_INSERTION_COMMAND,
+				(input) => {
+					if (!editor.isComposing() && !compositionState.current) {
+						const text = typeof input === "string" ? input : (input.dataTransfer?.getData("text/plain") ?? input.data);
+						if (text !== null && text !== undefined) $normalizeCodeRangeSelection(text);
+					}
+					return false;
+				},
+				COMMAND_PRIORITY_HIGH,
+			),
+			editor.registerCommand(
+				PASTE_COMMAND,
+				(event) => {
+					if (editor.isComposing() || compositionState.current || !event || !("clipboardData" in event)) return false;
+					const clipboard = event.clipboardData;
+					const text = clipboard?.getData("text/plain") || clipboard?.getData("text/uri-list");
+					// Lexical's plain-text paste normalizes CRLF to LF; restored drafts retain their original line endings.
+					if (text) $normalizeCodeRangeSelection(text.replace(/\r\n/g, "\n"));
+					return false;
+				},
+				COMMAND_PRIORITY_HIGH,
+			),
+			editor.registerCommand(
+				CUT_COMMAND,
+				(event) => {
+					if (editor.isComposing() || compositionState.current) return false;
+					const copied = $normalizeCodeRangeSelection();
+					if (copied === undefined || !event || !("clipboardData" in event) || !event.clipboardData) return false;
+					event.clipboardData.setData("text/plain", copied);
+					event.preventDefault();
+					$addUpdateTag(CUT_TAG);
+					const selection = $getSelection();
+					if ($isRangeSelection(selection)) selection.removeText();
+					return true;
+				},
+				COMMAND_PRIORITY_HIGH,
+			),
+			editor.registerCommand(
+				DELETE_CHARACTER_COMMAND,
+				() => {
+					if (!editor.isComposing() && !compositionState.current) $normalizeCodeRangeSelection();
+					return false;
+				},
+				COMMAND_PRIORITY_HIGH,
+			),
+			editor.registerCommand(
+				KEY_BACKSPACE_COMMAND,
+				(event) => !editor.isComposing() && !compositionState.current && $codeEdgeKey(event, -1, true),
+				COMMAND_PRIORITY_HIGH,
+			),
+			editor.registerCommand(
+				KEY_DELETE_COMMAND,
+				(event) => !editor.isComposing() && !compositionState.current && $codeEdgeKey(event, 1, true),
+				COMMAND_PRIORITY_HIGH,
+			),
+			editor.registerCommand(
+				KEY_ARROW_LEFT_COMMAND,
+				(event) => !editor.isComposing() && !compositionState.current && !event.shiftKey && $codeEdgeKey(event, -1),
+				COMMAND_PRIORITY_HIGH,
+			),
+			editor.registerCommand(
+				KEY_ARROW_RIGHT_COMMAND,
+				(event) => !editor.isComposing() && !compositionState.current && !event.shiftKey && $codeEdgeKey(event, 1),
+				COMMAND_PRIORITY_HIGH,
+			),
+			editor.registerCommand(
+				SELECTION_CHANGE_COMMAND,
+				() => {
+					if (editor.isComposing() || compositionState.current) return false;
+					const selection = $getSelection();
+					if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
+					const node = selection.anchor.getNode();
+					if ($isTextNode(node) && node.getStyle() === COMPOSER_MARKER_STYLE) {
+						const offset = $documentOffsetForPoint(node, selection.anchor.offset);
+						if (offset !== undefined) {
+							$selectComposerOffset(offset, selection.anchor);
+							$selectComposerOffset(offset, selection.focus);
+						}
+					}
+					return false;
+				},
+				COMMAND_PRIORITY_HIGH,
+			),
+		];
+		return () => commands.forEach((unregister) => unregister());
+	}, [compositionState, editor]);
 
 	useEffect(() => {
 		const complete = (event: globalThis.KeyboardEvent | null, key: "Enter" | "Tab") => {
@@ -776,7 +1197,12 @@ const EditorBridge = forwardRef<
 		const removeEnter = editor.registerCommand(
 			KEY_ENTER_COMMAND,
 			(event) => {
-				if (event?.isComposing || event?.shiftKey || editor.isComposing()) return false;
+				if (event?.isComposing || editor.isComposing() || compositionState.current) return false;
+				if (!event?.defaultPrevented && $insertComposerCodeNewline(event?.shiftKey)) {
+					event?.preventDefault();
+					return true;
+				}
+				if (event?.shiftKey) return false;
 				if (complete(event, "Enter")) return true;
 				return false;
 			},
@@ -883,7 +1309,7 @@ export const ComposerEditor = forwardRef<
 	}, [promptSuggestion]);
 	const initialConfig = {
 		namespace: "AOChatComposer",
-		nodes: [ComposerTokenNode],
+		nodes: [ComposerTokenNode, ComposerCodeNode, ComposerCodePlaceholderNode],
 		editable: !disabled,
 		theme: {
 			paragraph: "m-0",
@@ -954,7 +1380,7 @@ export const ComposerEditor = forwardRef<
 								if (event.defaultPrevented) event.stopPropagation();
 							}}
 							className={cn(
-								"chat-composer-scrollbar max-h-40 min-h-[4.5rem] w-full overflow-y-auto overscroll-contain bg-transparent py-1 pl-[7px] pr-0 text-base! leading-relaxed text-foreground caret-foreground outline-none selection:bg-foreground selection:text-background",
+								"chat-composer-scrollbar max-h-40 has-[.chat-composer-code-block]:max-h-[min(24rem,50vh)] min-h-[4.5rem] w-full overflow-y-auto overscroll-contain bg-transparent py-1 pl-[7px] pr-0 text-base! leading-relaxed text-foreground caret-foreground outline-none selection:bg-foreground selection:text-background",
 								suggestion && "absolute inset-0 overflow-visible overscroll-auto",
 								concealed ? "invisible" : disabled && "opacity-50",
 							)}
@@ -969,6 +1395,7 @@ export const ComposerEditor = forwardRef<
 					</span>
 				) : null}
 				<HistoryPlugin />
+				<ComposerCodePlugin />
 				<EditorBridge
 					ref={ref}
 					disabled={disabled}
