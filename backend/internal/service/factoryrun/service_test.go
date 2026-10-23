@@ -21,6 +21,7 @@ import (
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 type fixture struct {
@@ -63,7 +64,7 @@ func setup(t *testing.T) *fixture {
 	}
 	git(t, f.worktree, "commit", "-am", "candidate")
 	var err error
-	f.db, err = sqlite.Open(f.dir)
+	f.db, err = sqlitetest.Open(f.dir)
 	if err != nil {
 		t.Fatal(err)
 	}
