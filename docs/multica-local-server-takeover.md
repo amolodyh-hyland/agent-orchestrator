@@ -4,9 +4,15 @@ Local server controls always target Compose project `multica`, regardless of dir
 
 A failed or incomplete inventory blocks mutation. An empty inventory is checked again immediately before the command. Approval is native, one action only, bound to the exact engine/project snapshot and selected stack. Cancel, changed source/env/folder/engine/project, unverifiable recovery evidence or an approval older than five minutes blocks mutation. Builds and pulls are disabled by `up -d --no-build --pull never`. The stack validator still rejects build overrides, host binds, non-bare volume declarations and non-loopback ports.
 
-**Activation is blocked in this revision.** The desktop has no enforcing provider for exclusive engine control. Start, stop and restart therefore refuse to run Compose even after a successful preflight and takeover approval. This is a deployment blocker, not a successful activation path. A cooperative host lock cannot exclude another app or CLI with direct access to the same socket, and a check after migration cannot undo data changes. Do not bypass the refusal with a manual command.
+Both the official-image recipe and the fork recipe use the same local-server service. Start, Stop and Restart are enabled under its concrete host advisory lock. The former unconditional refusal affected both recipes and has been removed.
 
-A future trusted execution provider must exclude every competing engine writer while comparing the approved snapshot and performing the mutation, bind the engine/target configuration, verify the resulting service/image/volume identities before releasing control, and preserve recovery evidence on any failure. Renderer inputs, a checkbox, a lockfile alone, or an assertion of exclusive access cannot enable it. No such provider is installed or configured by this change. The controls never run `down`, delete volumes, execute a recovery procedure, or claim that a backup file proves successful restoration.
+The lock is the atomically created `multica-project.lock` directory inside AO's `local-server-docker` state directory. It contains only a PID and random owner nonce, uses private permissions and is shared by all three desktop mutation paths and instances using that state directory. It is acquired before preparation/inspection and held through approval, Compose, post-verification and any safety-stop attempt. A competing operation returns busy. No CLI Compose-server mutation path exists: `ao multica start/stop/restart` controls the separate hosted agent daemon, not this Compose project. Any future Compose-server CLI operation must acquire this same lock and verification path.
+
+The initial Start resolves Compose's exact service image IDs, volume mounts and resource names using images already present in the selected engine. These facts and the protected configuration identity bind the approval. After each mutation AO verifies engine identity, container/service identity and state, exact image IDs, mounts, resource names and identities. Stop and Restart must retain the approved container/image/resource identities; Start must match its approved target plan. A successfully verified project is remembered in memory for ordinary operations in this same desktop instance. An unchanged known project does not need repeated takeover approval. Changed configuration/images/resources, another folder, or an unrecognized project (including after app restart) requires fresh approval and recovery evidence.
+
+**Accepted residual risk:** raw Docker commands, other applications and AO instances using separate state roots do not honor this advisory lock. Do not use them concurrently against this engine/project. Instances that coordinate this project must share the local-server state directory. Post-verification detects observable interference after the command, but cannot prevent an external writer or undo a migration/data change that already happened. If verification fails, AO attempts to stop the exact affected container IDs, reinspects them, reports the mismatch and preserves all data and recovery evidence. If the inspection or safety stop cannot be verified, it reports that containers may still be running. It never returns success for that operation, deletes volumes, runs `down`, or performs an automatic data restore. An external client can also act after the final observation; a successful check is not a permanent engine lease.
+
+A crash leaves the lock retained rather than expiring or reclaiming it by PID age. Only an operator who has verified the owning operation/process and Docker work have ended may approve removal of the lock's `owner.json` and then its empty directory. An unsafe lock path or uncertain ownership blocks mutation; do not remove it to bypass an active operation.
 
 Docker must already be running. The controls never launch Docker Desktop: engine startup can itself resume existing services through restart policies. Starting the engine is a separate explicit human action.
 
@@ -14,7 +20,7 @@ Reading logs requires its own native approval bound to the current engine/projec
 
 ## Prepare recovery before approving takeover
 
-The first native dialog displays the snapshot and its SHA-256 digest, affected services (running or stopped), exact image IDs, configuration paths and mounts. Cancel while preparing recovery. Obtain separate approval for any backup downtime or disposable restoration work before running it. Do not stop existing services merely to make the conflict disappear; retained data still belongs to the same project.
+The first native dialog displays the existing snapshot, approved target plan and action-bound SHA-256 digest, affected services (running or stopped), exact image IDs, configuration paths and mounts. Cancel while preparing recovery. Obtain separate approval for any backup downtime or disposable restoration work before running it. Do not stop existing services merely to make the conflict disappear; retained data still belongs to the same project.
 
 The operator must preserve and test all of the following in a private directory (0700, owned by the operator, with no writable or symlink ancestors). All files below must be ordinary private files (0600), not symlinks. Store them outside source control and outside the deployment directory being replaced.
 
@@ -33,7 +39,7 @@ Create a JSON receipt with this shape. Replace every path/digest with the actual
 ```json
 {
   "version": 1,
-  "snapshotDigest": "digest displayed by the native dialog",
+  "snapshotDigest": "action/plan-bound digest displayed by the native dialog",
   "configurationPreserved": true,
   "imageIdentitiesPreserved": true,
   "dataBackupComplete": true,

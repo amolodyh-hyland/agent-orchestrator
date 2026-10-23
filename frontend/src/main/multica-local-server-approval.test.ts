@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { approveLocalServerLogs, approveLocalServerMutation } from "./multica-local-server-approval";
 import type { ProjectApprovalRequest } from "./multica-local-server-preflight";
 
-const request: ProjectApprovalRequest = { action: "restart", stackDir: "/new/stack", digest: "digest", snapshot: { endpoint: "unix:///engine.sock", engineId: "engine-1234", containers: [], volumes: ["multica_pgdata"], networks: [], resources: [] } };
+const request: ProjectApprovalRequest = { action: "restart", stackDir: "/new/stack", digest: "digest", plan: { services: [], volumes: [], networks: [] }, snapshot: { endpoint: "unix:///engine.sock", engineId: "engine-1234", containers: [], volumes: ["multica_pgdata"], networks: [], resources: [] } };
 
 function dialogs(responses: number[], verify = vi.fn(async () => undefined)) {
 	return { show: vi.fn(async () => ({ response: responses.shift() ?? 0 })), chooseReceipt: vi.fn(async () => "/private/recovery.json"), verify };

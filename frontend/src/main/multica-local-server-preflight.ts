@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { lstat, open, realpath } from "node:fs/promises";
 import path from "node:path";
 import { constants } from "node:fs";
+import type { ProjectMutationPlan } from "./multica-local-server-verification";
 import { CORE_SCHEMA, load } from "js-yaml";
 import { projectEngineCommand, projectContainersCommand, projectNamedContainersCommand, projectInspectCommand, projectResourcesCommand, projectResourceInspectCommand, type CommandResult, type CommandSpec } from "./multica-local-server-commands";
 
@@ -13,7 +14,7 @@ export type ProjectSnapshot = {
 	networks: string[];
 	resources: Array<{ kind: "volume" | "network"; name: string; fingerprint: string; project: string | null }>;
 };
-export type ProjectApprovalRequest = { action: "start" | "stop" | "restart"; stackDir: string; snapshot: ProjectSnapshot; digest: string };
+export type ProjectApprovalRequest = { action: "start" | "stop" | "restart"; stackDir: string; snapshot: ProjectSnapshot; digest: string; plan: ProjectMutationPlan };
 export type ProjectApproval = { digest: string; action: ProjectApprovalRequest["action"]; recoveryReceipt: string };
 export const snapshotDigest = (snapshot: ProjectSnapshot): string => createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
 
@@ -72,7 +73,10 @@ export async function inspectMulticaProject(endpoint: string, docker: string, ru
 		if (names.length > 0) {
 			const values = lines(await checked(projectResourceInspectCommand(docker, kind, names))).map((line) => JSON.parse(line));
 			if (values.length !== names.length || JSON.stringify(values.map((v) => v?.Name).sort()) !== JSON.stringify(names)) throw new Error("incomplete resource identities");
-			for (const value of values) resources.push({ kind, name: value.Name, fingerprint: createHash("sha256").update(JSON.stringify(value)).digest("hex"), project: typeof value.Labels?.["com.docker.compose.project"] === "string" ? value.Labels["com.docker.compose.project"] : null });
+			for (const value of values) {
+				const stable = kind === "network" ? { Id: value.Id, Name: value.Name, Created: value.Created, Driver: value.Driver, Scope: value.Scope, Labels: value.Labels, Internal: value.Internal, IPAM: value.IPAM, Options: value.Options } : value;
+				resources.push({ kind, name: value.Name, fingerprint: createHash("sha256").update(JSON.stringify(stable)).digest("hex"), project: typeof value.Labels?.["com.docker.compose.project"] === "string" ? value.Labels["com.docker.compose.project"] : null });
+			}
 		}
 		return names;
 	};

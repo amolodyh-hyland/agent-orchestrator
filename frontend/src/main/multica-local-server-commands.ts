@@ -26,7 +26,7 @@ const TIMEOUT_MS = {
 	open: 15_000,
 } as const;
 
-export type CommandName = "dockerVersion" | "composeVersion" | "composeList" | "ps" | "up" | "stop" | "restart" | "logs" | "openDocker" | "projectContainers" | "projectInspect" | "projectVolumes" | "projectNetworks" | "projectEngine" | "projectNamedContainers" | "projectAllVolumes" | "projectAllNetworks" | "projectResourceInspect";
+export type CommandName = "dockerVersion" | "composeVersion" | "composeList" | "ps" | "up" | "stop" | "restart" | "logs" | "openDocker" | "projectContainers" | "projectInspect" | "projectVolumes" | "projectNetworks" | "projectEngine" | "projectNamedContainers" | "projectAllVolumes" | "projectAllNetworks" | "projectResourceInspect" | "composeConfig" | "imageInspect" | "stopContainers";
 
 export type CommandSpec = {
 	readonly name: CommandName;
@@ -116,6 +116,19 @@ export function projectResourcesCommand(docker: string, resource: "volume" | "ne
 export function projectResourceInspectCommand(docker: string, resource: "volume" | "network", names: readonly string[]): CommandSpec {
 	if ((resource !== "volume" && resource !== "network") || names.length === 0 || names.length > 100 || !names.every((name) => /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(name))) throw new Error("invalid resource inventory");
 	return issue("projectResourceInspect", docker, [resource, "inspect", "--format", "{{json .}}", ...names], TIMEOUT_MS.ps);
+}
+
+export const composeConfigCommand = (docker: string, stack: StackPaths): CommandSpec =>
+	issue("composeConfig", docker, [...composeBase(docker, stack), "config", "--format", "json"], TIMEOUT_MS.ps);
+
+export function imageInspectCommand(docker: string, image: string): CommandSpec {
+	if (!/^[a-zA-Z0-9][a-zA-Z0-9/:_.@-]{0,511}$/.test(image)) throw new Error("invalid image reference");
+	return issue("imageInspect", docker, ["image", "inspect", "--format", "{{.Id}}", image], TIMEOUT_MS.ps);
+}
+
+export function stopContainersCommand(docker: string, ids: readonly string[]): CommandSpec {
+	if (ids.length === 0 || ids.length > 100 || !ids.every((id) => /^[a-f0-9]{64}$/.test(id))) throw new Error("invalid stop inventory");
+	return issue("stopContainers", docker, ["container", "stop", "--time", "10", ...ids], TIMEOUT_MS.stop);
 }
 
 export const psCommand = (docker: string, stack: StackPaths): CommandSpec =>

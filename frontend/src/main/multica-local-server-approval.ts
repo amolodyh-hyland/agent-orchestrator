@@ -9,7 +9,7 @@ type Dialogs = {
 };
 
 export async function approveLocalServerMutation(request: ProjectApprovalRequest, dialogs: Dialogs): Promise<ProjectApproval | null> {
-	const inventory = JSON.stringify(request.snapshot, null, 2);
+	const inventory = JSON.stringify({ existing: request.snapshot, approvedPlan: request.plan }, null, 2);
 	const selected = await dialogs.show({
 		type: "warning", message: "Existing multica project: recovery required",
 		detail: `Action: ${request.action}\nTarget: ${request.stackDir}\nSnapshot: ${request.digest}\n${inventory}\n\nThis includes stopped services and retained data. A different folder or port still targets this project. Preserve its protected Compose and environment files, exact images and data; test restoration in disposable state first. Select the private recovery receipt for this exact snapshot to continue.`,
@@ -26,7 +26,7 @@ export async function approveLocalServerMutation(request: ProjectApprovalRequest
 	}
 	const approved = await dialogs.show({
 		type: "warning", message: `Approve ${request.action}, takeover and downtime?`,
-		detail: `Target: ${request.stackDir}\nSnapshot: ${request.digest}\n${inventory}\n\nRecovery receipt: ${file}\nI confirm this receipt preserves all listed services' protected configuration and exact image identities, backs up all necessary data, and records a restore procedure successfully tested in disposable state. I approve this one action's takeover and downtime for every listed service. No image build or pull is authorized.`,
+		detail: `Target: ${request.stackDir}\nSnapshot: ${request.digest}\n${inventory}\n\nRecovery receipt: ${file}\nI confirm this receipt preserves all listed services' protected configuration and exact image identities, backs up all necessary data, and records a restore procedure successfully tested in disposable state. I approve this one action's takeover and downtime for every listed service. No image build or pull is authorized. Other Docker clients do not honor the local control lock. If post-verification detects interference, affected containers will be stopped and reported; migrations and data changes cannot be undone automatically.`,
 		buttons: ["Cancel", "Approve takeover and downtime"], defaultId: 0, cancelId: 0, noLink: true,
 	});
 	return approved.response === 1 ? { digest: request.digest, action: request.action, recoveryReceipt: file } : null;

@@ -31,7 +31,7 @@ import type { LocalServerStatus } from "../shared/multica-local-server";
 import { checkMulticaServer } from "./multica-server-check";
 import { createMulticaLocalServer, type MulticaLocalServer, type MulticaLocalServerOptions } from "./multica-local-server";
 import type { ComposePluginIdentity, ExecError, ExecFileLike } from "./multica-local-server-commands";
-import type { SetupOutcome, StackCheck } from "./multica-local-server-stack";
+import { validateStackDir, type SetupOutcome, type StackCheck } from "./multica-local-server-stack";
 import { STARTING_GRACE_MS } from "./multica-local-server-state";
 
 const DOCKER = "/usr/local/bin/docker";
@@ -80,11 +80,16 @@ type Fake = {
 	dockerConfig: "ok" | "untrusted";
 	dockerUntrusted: boolean;
 	composeUntrusted: boolean;
+	afterMutation?: (verb: string) => void;
+	backendImage: string;
+	webImage: string;
 };
 
 function harness(patch: Partial<Fake> = {}) {
 	const fake: Fake = {
 		engine: "up",
+		backendImage: "ghcr.io/multica-ai/multica-backend:latest",
+		webImage: "ghcr.io/multica-ai/multica-web:latest",
 		composePlugin: true,
 		ps: "",
 		composeList: "[]",
@@ -116,7 +121,8 @@ function harness(patch: Partial<Fake> = {}) {
 
 	const verbOf = (args: string[]): string => {
 		if (args[0] === "info") return "project-engine";
-		if (args[0] === "container") return args[1] === "ls" ? args.some((arg) => arg.startsWith("name=")) ? "project-named-containers" : "project-containers" : "project-inspect";
+		if (args[0] === "image") return "image-inspect";
+		if (args[0] === "container") return args[1] === "stop" ? "safety-stop" : args[1] === "ls" ? args.some((arg) => arg.startsWith("name=")) ? "project-named-containers" : "project-containers" : "project-inspect";
 		if (args[0] === "volume" || args[0] === "network") return args[1] === "inspect" ? "project-resource-inspect" : `project-${args[0]}${args.includes("--filter") ? "" : "-all"}`;
 		if (args[0] === "version") return "docker-version";
 		if (args[0] === "-a") return "open";
@@ -128,7 +134,28 @@ function harness(patch: Partial<Fake> = {}) {
 	const exec: ExecFileLike = (file, args, options, callback) => {
 		calls.push({ file, args, env: options.env });
 		const verb = verbOf(args);
+		let finished = false;
 		const finish = (reply: Reply) => {
+			if (finished) return;
+			finished = true;
+			if (!reply.error && ["up", "stop", "restart", "safety-stop"].includes(verb)) {
+				if (verb === "up") {
+					const dir = fake.stackDir || DIR;
+					const definitions = [["backend", "b", fake.backendImage, "backend_uploads", "/app/data/uploads"], ["frontend", "c", fake.webImage, "", ""], ["postgres", "d", "pgvector/pgvector:pg17", "pgdata", "/var/lib/postgresql/data"]];
+					const rows = definitions.map(([service, hex, image, volume, destination]) => [hex!.repeat(64), `/multica-${service}-1`, `sha256:${hex!.repeat(64)}`, image, "running", { "com.docker.compose.project": "multica", "com.docker.compose.service": service, "com.docker.compose.project.config_files": `${dir}/docker-compose.selfhost.yml`, "com.docker.compose.project.working_dir": dir }, volume ? [{ Type: "volume", Name: `multica_${volume}`, Destination: destination, RW: true }] : []]);
+					fake.handlers["project-containers"] = () => ({ stdout: rows.map((row) => row[0]).join("\n") });
+					fake.handlers["project-inspect"] = () => ({ stdout: rows.map((row) => JSON.stringify(row)).join("\n") });
+					fake.handlers["project-volume"] = () => ({ stdout: '"multica_pgdata"\n"multica_backend_uploads"' });
+					fake.handlers["project-network"] = () => ({ stdout: '"multica_default"' });
+				} else {
+					const previous = fake.handlers["project-inspect"];
+					if (previous) fake.handlers["project-inspect"] = async (args, signal) => {
+						const result = await previous(args, signal);
+						try { return { ...result, stdout: (result.stdout ?? "").split("\n").filter(Boolean).map((line) => { const row = JSON.parse(line); row[4] = verb === "restart" ? "running" : "exited"; return JSON.stringify(row); }).join("\n") }; } catch { return result; }
+					};
+				}
+				fake.afterMutation?.(verb);
+			}
 			const error = reply.error ? Object.assign(new Error(reply.error.message ?? "command failed"), reply.error) : null;
 			callback(error as ExecError | null, reply.stdout ?? "", reply.stderr ?? "");
 		};
@@ -143,6 +170,8 @@ function harness(patch: Partial<Fake> = {}) {
 			return;
 		}
 		if (verb === "project-resource-inspect") return finish({ stdout: args.slice(4).map((name) => JSON.stringify({ Name: name, CreatedAt: "retained-volume-created-at", Labels: { "com.docker.compose.project": "multica" } })).join("\n") });
+		if (verb === "config") return finish({ stdout: JSON.stringify({ name: "multica", services: { backend: { image: fake.backendImage, volumes: [{ type: "volume", source: "backend_uploads", target: "/app/data/uploads" }] }, frontend: { image: fake.webImage }, postgres: { image: "pgvector/pgvector:pg17", volumes: [{ type: "volume", source: "pgdata", target: "/var/lib/postgresql/data" }] } }, volumes: { pgdata: { name: "multica_pgdata" }, backend_uploads: { name: "multica_backend_uploads" } }, networks: { default: { name: "multica_default" } } }) });
+		if (verb === "image-inspect") return finish({ stdout: `sha256:${(args.at(-1)?.includes("backend") ? "b" : (args.at(-1)?.includes("frontend") || args.at(-1)?.includes("web")) ? "c" : "d").repeat(64)}` });
 		if (verb === "project-engine") return finish({ stdout: "engine-test-12345" });
 		if (verb === "docker-version") return finish(fake.engine === "up" ? { stdout: "27.0.0\n" } : { error: { code: 1 }, stderr: "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" });
 		if (verb === "compose-version") return finish(fake.composePlugin ? { stdout: "v2.29.0\n" } : { error: { code: 1 }, stderr: "docker: 'compose' is not a docker command." });
@@ -156,7 +185,7 @@ function harness(patch: Partial<Fake> = {}) {
 	};
 
 	const options: MulticaLocalServerOptions = {
-		executeExclusiveMutation: async (_request, execute) => execute(),
+		acquireProjectLock: async () => ({ release: async () => undefined }),
 		stackIdentity: async () => "target-compose-and-env-digest",
 		readProjectTargets: async () => ({ services: ["backend", "frontend", "postgres"], volumes: ["multica_backend_uploads", "multica_pgdata"], networks: ["multica_default"] }),
 		approveProjectLogs: async () => true,
@@ -1334,18 +1363,19 @@ describe("fixed project mutation preflight", () => {
 			expect(await readFile(restored, "utf8")).toBe("dataBackup: preserved original state");
 			const receipt = path.join(dir, "receipt.json");
 			const approvals: string[] = [];
-			const server = createMulticaLocalServer({ ...h.options, approveProjectMutation: async (request) => {
+			const options: MulticaLocalServerOptions = { ...h.options, approveProjectMutation: async (request) => {
 				approvals.push(`${request.action}:${request.stackDir}`);
 				await writeFile(receipt, JSON.stringify({ version: 1, snapshotDigest: request.digest, configurationPreserved: true, imageIdentitiesPreserved: true, dataBackupComplete: true, restoreVerified: true, ...artifacts }), { mode: 0o600 });
 				return { digest: request.digest, action: request.action, recoveryReceipt: receipt };
-			} });
+			} };
+			const server = createMulticaLocalServer(options);
 			expect(await server.start()).toEqual({ ok: true });
 			h.fake.validDirs.add("/old");
 			h.fake.stackDir = "/old";
 			expect(await server.start()).toEqual({ ok: true });
 			expect(approvals).toEqual([`start:${DIR}`, "start:/old"]);
 			await writeFile(artifacts.restoreVerification!.path, "tampered restore evidence");
-			expect(await server.start()).toMatchObject({ ok: false, code: "inspect_failed" });
+			expect(await createMulticaLocalServer(options).start()).toMatchObject({ ok: false, code: "inspect_failed" });
 			expect(mutations(h)).toEqual(["up", "up"]);
 		} finally {
 			await rm(dir, { recursive: true, force: true });
@@ -1428,38 +1458,105 @@ describe("existing-project log authorization", () => {
 });
 
 
-describe("exclusive engine control", () => {
-	it("fails closed in the desktop's default configuration without a provider", async () => {
-		const h = harness();
-		const server = createMulticaLocalServer({ ...h.options, executeExclusiveMutation: undefined });
-		for (const action of ["start", "stop", "restart"] as const) {
-			expect(await server[action]()).toMatchObject({ ok: false, code: "command_failed", detail: expect.stringContaining("Exclusive engine control is unavailable") });
-		}
-		expect(h.verbs()).not.toContain("up");
-		expect(h.verbs()).not.toContain("stop");
-		expect(h.verbs()).not.toContain("restart");
+
+
+describe("concrete local server project control", () => {
+	it.each(["official", "fork"])("runs %s Start/Stop/Restart with the real host lock and no competing project", async (recipeKind) => {
+		const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), "multica-controlled-stack-")));
+		await chmod(dir, 0o700);
+		try {
+			let recipe = await readFile(path.join(process.cwd(), "src/main/testdata/multica-fork-compose.yml"), "utf8");
+			if (recipeKind === "official") recipe = recipe.replaceAll("local/multica-backend", "ghcr.io/multica-ai/multica-backend").replaceAll("local/multica-web", "ghcr.io/multica-ai/multica-web").replaceAll("fork-24da23749ef7369dcbafa175d57c3154b5bba323", "latest");
+			await writeFile(path.join(dir, "docker-compose.selfhost.yml"), recipe, { mode: 0o600 });
+			await writeFile(path.join(dir, ".env"), "JWT_SECRET=disposable-test-only\n", { mode: 0o600 });
+			const h = harness({ stackDir: dir, backendImage: recipeKind === "official" ? "ghcr.io/multica-ai/multica-backend:latest" : "local/multica-backend:fork-24da23749ef7369dcbafa175d57c3154b5bba323", webImage: recipeKind === "official" ? "ghcr.io/multica-ai/multica-web:latest" : "local/multica-web:fork-24da23749ef7369dcbafa175d57c3154b5bba323" });
+			const lockRoot = path.join(dir, "control");
+			const options: MulticaLocalServerOptions = { ...h.options, dockerHomeDir: lockRoot, acquireProjectLock: undefined, stackIdentity: undefined, readProjectTargets: undefined, validate: (target) => validateStackDir(target) };
+			h.fake.afterMutation = () => { expect(h.verbs()).not.toContain("safety-stop"); };
+			const server = createMulticaLocalServer(options);
+			for (const action of ["start", "stop", "restart"] as const) expect(await server[action]()).toEqual({ ok: true });
+			expect(h.verbs().filter((verb) => ["up", "stop", "restart"].includes(verb))).toEqual(["up", "stop", "restart"]);
+			expect(await readFile(path.join(lockRoot, "multica-project.lock", "owner.json"), "utf8").catch(() => null)).toBeNull();
+		} finally { await rm(dir, { recursive: true, force: true }); }
 	});
-	it("refuses Compose when a conflict arrives after final inspection and exclusive control is unavailable", async () => {
+
+	it("refuses a contended host lock before any mutation or approval", async () => {
 		const h = harness();
-		let inspected = 0;
-		h.fake.handlers["project-network-all"] = () => {
-			if (++inspected === 2) h.fake.handlers["project-volume-all"] = () => ({ stdout: '"multica_pgdata"' });
-			return {};
+		const approve = vi.fn(async () => null);
+		const server = createMulticaLocalServer({ ...h.options, acquireProjectLock: async () => null, approveProjectMutation: approve });
+		expect(await server.start()).toMatchObject({ ok: false, code: "busy" });
+		expect(h.verbs()).not.toContain("up");
+		expect(approve).not.toHaveBeenCalled();
+	});
+
+	it.each(["image", "volume", "volume-identity", "container", "network", "inspection"])("detects a late %s conflict, stops affected containers and releases the lock after verification", async (kind) => {
+		const h = harness({ handlers: kind === "volume-identity" ? { "project-volume": () => ({ stdout: '"multica_pgdata"' }) } : {} });
+		let held = false;
+		let checkedAfterMutation = false;
+		const exec = h.options.exec;
+		h.options.exec = (file, args, options, callback) => {
+			if (args[0] === "container" && args[1] === "stop") expect(held).toBe(true);
+			if (args[0] === "info" && h.verbs().includes("up")) { expect(held).toBe(true); checkedAfterMutation = true; }
+			return exec(file, args, options, callback);
 		};
-		const server = createMulticaLocalServer({ ...h.options, executeExclusiveMutation: undefined });
-		expect(await server.start()).toMatchObject({ ok: false, code: "command_failed", detail: expect.stringContaining("Exclusive engine control is unavailable") });
-		expect(inspected).toBeGreaterThanOrEqual(2);
-		expect(h.fake.handlers["project-volume-all"]).toBeDefined();
-		expect(h.verbs()).not.toContain("up");
+		h.fake.afterMutation = (verb) => {
+			if (verb !== "up") return;
+			expect(held).toBe(true);
+			const previous = h.fake.handlers["project-inspect"]!;
+			if (kind === "inspection") { h.fake.handlers["project-resource-inspect"] = () => ({ error: { code: 1 } }); return; }
+			if (kind === "volume-identity") h.fake.handlers["project-resource-inspect"] = (args) => ({ stdout: args.slice(4).map((name) => JSON.stringify({ Name: name, CreatedAt: name === "multica_pgdata" ? "replaced-volume" : "retained-volume-created-at", Labels: { "com.docker.compose.project": "multica" } })).join("\n") });
+			if (kind === "volume") h.fake.handlers["project-volume"] = () => ({ stdout: '"multica_pgdata"\n"multica_backend_uploads"\n"foreign-data"' });
+			if (kind === "network") h.fake.handlers["project-network"] = () => ({ stdout: '"multica_default"\n"unexpected_network"' });
+			h.fake.handlers["project-inspect"] = async (args, signal) => {
+				const reply = await previous(args, signal);
+				const rows = reply.stdout!.split("\n").map((line) => JSON.parse(line));
+				if (kind === "image") rows[0][2] = `sha256:${"e".repeat(64)}`;
+				if (kind === "container") rows[0][5]["com.docker.compose.project"] = "external-owner";
+				return { stdout: rows.map((row) => JSON.stringify(row)).join("\n") };
+			};
+		};
+		const server = createMulticaLocalServer({ ...h.options, approveProjectMutation: async (request) => ({ digest: request.digest, action: request.action, recoveryReceipt: "/private/receipt.json" }), verifyRecovery: async () => undefined, acquireProjectLock: async () => { held = true; return { release: async () => { expect(checkedAfterMutation).toBe(true); held = false; } }; } });
+		const result = await server.start();
+		expect(result).toMatchObject({ ok: false, code: "inspect_failed", detail: expect.stringContaining("Post-mutation verification failed") });
+		expect(h.verbs()).toContain("safety-stop");
+		expect(held).toBe(false);
+		expect(JSON.stringify(h.calls)).not.toMatch(/"down"|"rm"|"remove"/);
+		if (kind === "inspection") expect(result).toMatchObject({ detail: expect.stringContaining("Safety stop could not be verified") });
+		else expect(result).toMatchObject({ detail: expect.stringContaining("Affected containers are stopped") });
 	});
-	it("rechecks the approved snapshot inside exclusive execution before issuing Compose", async () => {
+});
+
+
+describe("post-verification for existing stack actions", () => {
+	it("does not carry Start authority through an approved Stop after configuration changes", async () => {
 		const h = harness();
-		const server = createMulticaLocalServer({ ...h.options, executeExclusiveMutation: async (request, execute) => {
-			expect(request.snapshot.volumes).toEqual([]);
-			h.fake.handlers["project-volume-all"] = () => ({ stdout: '"multica_pgdata"' });
-			return execute();
+		let identity = "initial configuration";
+		const approvals: string[] = [];
+		const server = createMulticaLocalServer({ ...h.options, stackIdentity: async () => identity, verifyRecovery: async () => undefined, approveProjectMutation: async (request) => {
+			approvals.push(request.action);
+			return { digest: request.digest, action: request.action, recoveryReceipt: "/private/receipt.json" };
 		} });
-		expect(await server.start()).toMatchObject({ ok: false, code: "command_failed", detail: expect.stringContaining("Concurrent project") });
-		expect(h.verbs()).not.toContain("up");
+		expect(await server.start()).toEqual({ ok: true });
+		identity = "changed configuration";
+		expect(await server.stop()).toEqual({ ok: true });
+		expect(await server.start()).toEqual({ ok: true });
+		expect(approvals).toEqual(["stop", "start"]);
+	});
+
+	it.each(["stop", "restart"] as const)("detects an image replacement during %s and performs the safety stop", async (action) => {
+		const h = harness();
+		expect(await h.server.start()).toEqual({ ok: true });
+		h.fake.afterMutation = (verb) => {
+			if (verb !== action) return;
+			const previous = h.fake.handlers["project-inspect"]!;
+			h.fake.handlers["project-inspect"] = async (args, signal) => {
+				const reply = await previous(args, signal);
+				const rows = reply.stdout!.split("\n").map((line) => JSON.parse(line));
+				rows[0][2] = `sha256:${"f".repeat(64)}`;
+				return { stdout: rows.map((row) => JSON.stringify(row)).join("\n") };
+			};
+		};
+		expect(await h.server[action]()).toMatchObject({ ok: false, code: "inspect_failed", detail: expect.stringContaining("Post-mutation verification failed") });
+		expect(h.verbs()).toContain("safety-stop");
 	});
 });

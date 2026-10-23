@@ -1,4 +1,6 @@
 import path from "node:path";
+import { acquireLocalServerProjectLock, type LocalServerProjectLock } from "./multica-local-server-lock";
+import { mutationApprovalDigest, projectMatchesMutation, resolveMutationPlan, type ProjectMutationPlan } from "./multica-local-server-verification";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { hasProjectConflict, inspectMulticaProject, resolveProjectTargets, snapshotDigest, verifyRecoveryReceipt, type ProjectApproval, type ProjectApprovalRequest, type ProjectSnapshot, type ProjectTargets } from "./multica-local-server-preflight";
@@ -17,6 +19,9 @@ import { DEFAULT_MULTICA_SETTINGS, type MulticaCheckResult, type MulticaSettings
 import {
 	COMPOSE_FILE_NAME,
 	composeListCommand,
+	projectContainersCommand,
+	projectNamedContainersCommand,
+	stopContainersCommand,
 	composeVersionCommand,
 	dockerVersionCommand,
 	composePluginStillTrusted,
@@ -84,15 +89,10 @@ export type MulticaLocalServer = {
 	dispose: () => void;
 };
 
-export type ExclusiveMutationRequest = { endpoint: string; snapshot: ProjectSnapshot; digest: string; stack: StackPaths; targetIdentity: string; command: CommandSpec };
-
-/** Requires a trusted provider that fences every engine writer through snapshot comparison and mutation. A cooperative lock is insufficient. */
-export type ExclusiveMutation = (request: ExclusiveMutationRequest, execute: () => Promise<CommandResult>) => Promise<CommandResult>;
-
 export type ProjectLogRequest = { stackDir: string; snapshot: ProjectSnapshot; digest: string; service: LocalServerService; tail: number };
 
 export type MulticaLocalServerOptions = {
-	executeExclusiveMutation?: ExclusiveMutation;
+	acquireProjectLock?: () => Promise<LocalServerProjectLock | null>;
 	approveProjectLogs?: (request: ProjectLogRequest) => Promise<boolean>;
 	readProjectTargets?: (stack: StackPaths) => Promise<ProjectTargets>;
 	approveProjectMutation?: (request: ProjectApprovalRequest) => Promise<ProjectApproval | null>;
@@ -139,6 +139,7 @@ type Prepared = { ok: true; stack: StackPaths; docker: string } | { ok: false; c
 export function createMulticaLocalServer(options: MulticaLocalServerOptions): MulticaLocalServer {
 	const clock = options.now ?? Date.now;
 	const canLaunchDocker = false;
+	const acquireProjectLock = options.acquireProjectLock ?? (() => acquireLocalServerProjectLock(options.dockerHomeDir));
 	const readTargets = options.readProjectTargets ?? (async (stack: StackPaths) => resolveProjectTargets(await readFile(stack.file, "utf8")));
 	const findEndpoint =
 		options.findEndpoint ?? (() => findLocalDockerEndpoint({ home: options.home, platform: options.platform, uid: typeof process.getuid === "function" ? process.getuid() : undefined }));
@@ -157,6 +158,7 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 	const ensureDockerConfig = options.ensureDockerConfig ?? ((pluginDir: string | null) => ensureLocalDockerConfig({ root: options.dockerHomeDir, pluginDir, uid }));
 	const findPathDirs = options.findPathDirs ?? (() => trustedPathDirs({ home: options.home, platform: options.platform, uid, gid }));
 
+	let verifiedOwner: { snapshot: string; targetIdentity: string; stackDir: string; startPlan?: string } | null = null;
 	let disposed = false;
 	let watching = false;
 	let timer: NodeJS.Timeout | undefined;
@@ -407,63 +409,101 @@ export function createMulticaLocalServer(options: MulticaLocalServerOptions): Mu
 		return { ok: false, code: "docker_not_running", detail: "Start Docker separately with explicit approval: engine startup can resume existing services. Then retry the project preflight." };
 	}
 
+	async function stopUnverifiedProject(docker: string, endpoint: string, targets: ProjectTargets): Promise<string> {
+		try {
+			const found: string[] = [];
+			for (const spec of [projectContainersCommand(docker), projectNamedContainersCommand(docker, targets.services)]) {
+				const result = await run(spec, undefined, endpoint);
+				if (result.error) throw new Error("Cannot inventory safety stop");
+				found.push(...result.stdout.trim().split(/\r?\n/).filter(Boolean));
+			}
+			const ids = [...new Set(found)];
+			if (ids.length > 0 && (await run(stopContainersCommand(docker, ids), undefined, endpoint)).error) throw new Error("Safety stop failed");
+			const stopped = await inspectMulticaProject(endpoint, docker, (spec) => run(spec, undefined, endpoint), targets);
+			if (stopped.containers.some((c) => !["exited", "created", "dead"].includes(c.state))) throw new Error("Stop not verified");
+			return "Affected containers are stopped. Data was not rolled back; inspect the project and use the approved restore procedure if needed.";
+		} catch {
+			return "Safety stop could not be verified. Inspect the selected engine immediately; containers may still be running. Data was not rolled back.";
+		}
+	}
+
 	async function stackCommand(
 		state: LocalServerState,
 		build: (docker: string, stack: StackPaths) => CommandSpec,
 		action: ProjectApprovalRequest["action"],
 	): Promise<LocalServerResult> {
 		return operate(state, async (signal) => {
-			const prepared = await prepare();
-			if (signal.aborted) return { ok: false, code: "cancelled" };
-			if (!prepared.ok) return prepared;
-			const engine = await ensureEngine(prepared.docker, signal);
-			if (!engine.ok) return engine;
-			const installed = await composeInstalled(prepared.docker);
-			if (signal.aborted) return { ok: false, code: "cancelled" };
-			if (!installed) return { ok: false, code: composeUntrusted() ? "docker_untrusted" : "compose_missing" };
-			// Revalidate after prerequisite checks before inspecting project ownership.
-			const fresh = await prepare();
-			if (signal.aborted) return { ok: false, code: "cancelled" };
-			if (!fresh.ok) return fresh;
-			const endpoint = findEndpoint();
-			if (!endpoint) return { ok: false, code: "inspect_failed" };
-			const identity = options.stackIdentity ?? (async (stack: StackPaths) => createHash("sha256").update(await readFile(stack.file)).update(await readFile(path.join(stack.dir, ENV_FILE_NAME))).digest("hex"));
-			const targetIdentity = await identity(fresh.stack);
-			let approvedSnapshot: ProjectSnapshot;
+			let lock: LocalServerProjectLock | null;
+			try { lock = await acquireProjectLock(); } catch { return { ok: false, code: "command_failed", detail: "The local server project lock is unsafe or unavailable; nothing was changed." }; }
+			if (!lock) return { ok: false, code: "busy", detail: "Another local server operation owns the project lock. A retained crash lock requires operator recovery." };
 			try {
-				const targets = await readTargets(fresh.stack);
-				const inspect = () => inspectMulticaProject(endpoint, fresh.docker, (command) => run(command, signal, endpoint), targets);
-				const snapshot = await inspect();
-				const digest = snapshotDigest(snapshot);
-				approvedSnapshot = snapshot;
-				if (hasProjectConflict(snapshot)) {
-					if (!options.approveProjectMutation) return { ok: false, code: "command_failed", detail: "Existing multica project requires explicit takeover and downtime approval with recovery evidence." };
-					const approvalStarted = clock();
-					const approval = await options.approveProjectMutation({ action, stackDir: fresh.stack.dir, snapshot, digest });
-					if (signal.aborted || !approval || approval.digest !== digest || approval.action !== action) return { ok: false, code: "cancelled" };
-					await (options.verifyRecovery ?? verifyRecoveryReceipt)(approval.recoveryReceipt, digest);
-					if (clock() - approvalStarted > 5 * 60_000) return { ok: false, code: "cancelled" };
-				}
-				const final = await prepare();
-				if (!final.ok) return final;
-				if (final.docker !== fresh.docker || final.stack.dir !== fresh.stack.dir || await identity(final.stack) !== targetIdentity || snapshotDigest(await inspect()) !== digest) {
-					return { ok: false, code: "inspect_failed", detail: "Stack or project changed; inspect and approve again." };
-				}
-			} catch {
+				const prepared = await prepare();
 				if (signal.aborted) return { ok: false, code: "cancelled" };
-				return { ok: false, code: "inspect_failed", detail: "Project ownership or protected recovery evidence could not be verified." };
+				if (!prepared.ok) return prepared;
+				const engine = await ensureEngine(prepared.docker, signal);
+				if (!engine.ok) return engine;
+				const installed = await composeInstalled(prepared.docker);
+				if (signal.aborted) return { ok: false, code: "cancelled" };
+				if (!installed) return { ok: false, code: composeUntrusted() ? "docker_untrusted" : "compose_missing" };
+				const fresh = await prepare();
+				if (signal.aborted) return { ok: false, code: "cancelled" };
+				if (!fresh.ok) return fresh;
+				const endpoint = findEndpoint();
+				if (!endpoint) return { ok: false, code: "inspect_failed" };
+				const identity = options.stackIdentity ?? (async (stack: StackPaths) => createHash("sha256").update(await readFile(stack.file)).update(await readFile(path.join(stack.dir, ENV_FILE_NAME))).digest("hex"));
+				const targetIdentity = await identity(fresh.stack);
+				let before: ProjectSnapshot;
+				let plan: ProjectMutationPlan;
+				let targets: ProjectTargets;
+				try {
+					targets = await readTargets(fresh.stack);
+					before = await inspectMulticaProject(endpoint, fresh.docker, (spec) => run(spec, signal, endpoint), targets);
+					plan = await resolveMutationPlan(action, before, targets, fresh.docker, fresh.stack, (spec) => run(spec, signal, endpoint));
+					const digest = mutationApprovalDigest(before, plan, targetIdentity, action, fresh.stack);
+					const owned = verifiedOwner?.snapshot === snapshotDigest(before) && verifiedOwner.targetIdentity === targetIdentity && verifiedOwner.stackDir === fresh.stack.dir && (action !== "start" || verifiedOwner.startPlan === JSON.stringify(plan));
+					if (hasProjectConflict(before) && !owned) {
+						if (!options.approveProjectMutation) return { ok: false, code: "command_failed", detail: "Existing multica project requires explicit takeover and downtime approval with recovery evidence." };
+						const approvalStarted = clock();
+						const approval = await options.approveProjectMutation({ action, stackDir: fresh.stack.dir, snapshot: before, digest, plan });
+						if (signal.aborted || !approval || approval.digest !== digest || approval.action !== action) return { ok: false, code: "cancelled" };
+						await (options.verifyRecovery ?? verifyRecoveryReceipt)(approval.recoveryReceipt, digest);
+						if (clock() - approvalStarted > 5 * 60_000) return { ok: false, code: "cancelled" };
+					}
+					const final = await prepare();
+					if (!final.ok) return final;
+					const current = await inspectMulticaProject(endpoint, fresh.docker, (spec) => run(spec, signal, endpoint), targets);
+					if (final.docker !== fresh.docker || final.stack.dir !== fresh.stack.dir || await identity(final.stack) !== targetIdentity || snapshotDigest(current) !== snapshotDigest(before) ||
+						JSON.stringify(await resolveMutationPlan(action, before, targets, fresh.docker, fresh.stack, (spec) => run(spec, signal, endpoint))) !== JSON.stringify(plan)) return { ok: false, code: "inspect_failed", detail: "Stack, images or project changed; inspect and approve again." };
+				} catch {
+					if (signal.aborted) return { ok: false, code: "cancelled" };
+					const problem = composeProblem();
+					if (problem) return { ok: false, code: problem };
+					return { ok: false, code: "inspect_failed", detail: "Project ownership, images or protected recovery evidence could not be verified. Images must be built or pulled separately." };
+				}
+				if (signal.aborted) return { ok: false, code: "cancelled" };
+				setOp(state);
+				const result = outcome(await run(build(fresh.docker, fresh.stack), signal, endpoint), signal);
+				try {
+					const after = await inspectMulticaProject(endpoint, fresh.docker, (spec) => run(spec, undefined, endpoint), targets);
+					if (!projectMatchesMutation(action, before, after, targets, plan, fresh.stack)) {
+						if (!result.ok && snapshotDigest(after) === snapshotDigest(before)) return result;
+						throw new Error("Post-mutation identities do not match approval");
+					}
+					if (await identity(fresh.stack) !== targetIdentity) throw new Error("Configuration changed during mutation");
+					if (result.ok) {
+						const previousStartPlan = verifiedOwner?.snapshot === snapshotDigest(before) && verifiedOwner.targetIdentity === targetIdentity && verifiedOwner.stackDir === fresh.stack.dir ? verifiedOwner.startPlan : undefined;
+						verifiedOwner = { snapshot: snapshotDigest(after), targetIdentity, stackDir: fresh.stack.dir, startPlan: action === "start" ? JSON.stringify(plan) : previousStartPlan };
+					}
+				} catch {
+					verifiedOwner = null;
+					const stopped = await stopUnverifiedProject(fresh.docker, endpoint, targets);
+					return { ok: false, code: "inspect_failed", detail: `Post-mutation verification failed: concurrent external activity or unexpected identities. ${stopped}` };
+				}
+				if (result.ok) portFailure = false;
+				return result;
+			} finally {
+				await lock.release();
 			}
-			if (signal.aborted) return { ok: false, code: "cancelled" };
-			if (!options.executeExclusiveMutation) return { ok: false, code: "command_failed", detail: "Exclusive engine control is unavailable. Start, stop and restart are blocked: a lock file cannot exclude other clients with Docker-socket access." };
-			setOp(state);
-			const command = build(fresh.docker, fresh.stack);
-			const result = outcome(await options.executeExclusiveMutation({ endpoint, snapshot: approvedSnapshot, digest: snapshotDigest(approvedSnapshot), stack: fresh.stack, targetIdentity, command }, async () => {
-				const current = await inspectMulticaProject(endpoint, fresh.docker, (spec) => run(spec, signal, endpoint), await readTargets(fresh.stack));
-				if (snapshotDigest(current) !== snapshotDigest(approvedSnapshot) || await identity(fresh.stack) !== targetIdentity) return { error: new Error("Project or configuration changed before exclusive mutation"), stdout: "", stderr: "Concurrent project or configuration change; mutation refused." };
-				return run(command, signal, endpoint);
-			}), signal);
-			if (result.ok) portFailure = false;
-			return result;
 		});
 	}
 
