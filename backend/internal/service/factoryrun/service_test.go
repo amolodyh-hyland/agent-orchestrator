@@ -526,3 +526,40 @@ func TestFactoryRunWorkspaceRequiresEveryOwnedRepository(t *testing.T) {
 	}
 	blocked(t, detail, "ownership_unavailable")
 }
+
+func TestFactoryRunChangedCandidateRequiresNewHandoffDecision(t *testing.T) {
+	f := setup(t)
+	detail := f.advance(f.create())
+	approve := func(detail domain.RunDetail, claim *domain.RunCompletion) domain.RunDetail {
+		t.Helper()
+		receipt := &domain.RunReviewReceipt{RepoName: claim.RepoName, ReviewerID: "independent-reviewer", Independent: true, SHA: claim.Facts.HeadSHA, BeforeFingerprint: claim.Facts.Fingerprint, AfterFingerprint: claim.Facts.Fingerprint, Verdict: "approved", Round: 1, Artifact: f.artifact}
+		result, err := f.svc.Record(f.ctx, detail.Run.ID, factoryrun.RecordInput{ExpectedVersion: detail.Run.Version, Actor: "human", Decision: "accept exact source review", Review: receipt})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	claim := f.claim()
+	detail = f.record(detail, claim)
+	detail = f.advance(detail)
+	detail = approve(detail, claim)
+	detail = f.advance(detail)
+	if detail.NextAction != "human_release_decision" {
+		t.Fatal(detail.Blockers)
+	}
+	originalVersion := detail.Run.Version
+	git(t, f.worktree, "commit", "--allow-empty", "-m", "new candidate")
+	claim = f.claim()
+	claim.Attempt = 2
+	detail = f.record(detail, claim)
+	detail = approve(detail, claim)
+	blocked(t, detail, "handoff_decision_stale")
+	detail = f.advance(detail)
+	if detail.Run.Stage != "handoff" || detail.NextAction != "human_release_decision" || detail.Run.Version <= originalVersion {
+		t.Fatalf("handoff reconfirmation: %+v", detail)
+	}
+	last := detail.Evidence[len(detail.Evidence)-1]
+	if last.Kind != "advance" || len(last.Observed) != 1 || last.Observed[0].HeadSHA != claim.Facts.HeadSHA {
+		t.Fatalf("decision lost exact source: %+v", last)
+	}
+}

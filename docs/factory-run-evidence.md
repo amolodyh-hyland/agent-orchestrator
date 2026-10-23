@@ -109,7 +109,10 @@ decision. After a lost response, inspect the stable run ID/version; do not
 invent a replacement execution or assume the write failed. A crash before
 commit exposes neither a partial header nor a partial receipt. Restarts retain
 all committed decisions and re-evaluate files, ownership, HEAD, checks and review.
-New claims append history; they never overwrite old receipts.
+New claims append history; they never overwrite old receipts. A handoff decision
+also pins the observed source. After HEAD or ownership changes, fresh receipts
+alone cannot reuse that decision: explicitly advance again to reconfirm handoff
+at the new source. This does not authorize publication or installation.
 
 The ledger's stages are human decisions, not persisted derived session status.
 Report coordinator/outbox delivery and native review records keep their existing

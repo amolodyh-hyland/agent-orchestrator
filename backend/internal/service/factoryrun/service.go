@@ -221,11 +221,34 @@ func (s *Service) Get(ctx context.Context, id string) (domain.RunDetail, error) 
 		detail.NextAction = "advance_to_handoff"
 	case "handoff":
 		detail.NextAction = "human_release_decision"
+		if !handoffMatches(history, detail.Observed) {
+			detail.Blockers = append(detail.Blockers, "handoff_decision_stale")
+		}
 	}
 	if len(detail.Blockers) > 0 {
 		detail.NextAction = "hold"
 	}
 	return detail, nil
+}
+
+func handoffMatches(history []domain.RunEvidence, observed []domain.RunRepoFacts) bool {
+	for i := len(history) - 1; i >= 0; i-- {
+		evidence := history[i]
+		if evidence.Kind != "advance" || evidence.Stage != "handoff" {
+			continue
+		}
+		if len(evidence.Observed) != len(observed) {
+			return false
+		}
+		for _, facts := range observed {
+			index := slices.IndexFunc(evidence.Observed, func(before domain.RunRepoFacts) bool { return before.WorktreePath == facts.WorktreePath })
+			if index < 0 || !sameFacts(evidence.Observed[index], facts) {
+				return false
+			}
+		}
+		return len(observed) > 0
+	}
+	return false
 }
 
 // Record retains a completion or review claim even when verification holds readiness.
@@ -286,11 +309,15 @@ func (s *Service) Advance(ctx context.Context, id string, in AdvanceInput) (doma
 	if run.Version != in.ExpectedVersion {
 		return domain.RunDetail{}, failure(domain.ErrRunConflict)
 	}
+	blockers := slices.Clone(detail.Blockers)
 	if run.Stage == "handoff" {
-		return detail, invalid("Handoff retains separate human release authority")
+		if len(blockers) == 0 {
+			return detail, invalid("Handoff retains separate human release authority")
+		}
+		blockers = slices.DeleteFunc(blockers, func(code string) bool { return code == "handoff_decision_stale" })
 	}
 	kind := "hold"
-	if len(detail.Blockers) == 0 {
+	if len(blockers) == 0 {
 		kind = "advance"
 		switch run.Stage {
 		case "design":
@@ -304,6 +331,9 @@ func (s *Service) Advance(ctx context.Context, id string, in AdvanceInput) (doma
 	run.Version++
 	evidence := event(run, kind, in.Actor, in.Decision)
 	evidence.Blockers = detail.Blockers
+	if kind == "advance" {
+		evidence.Blockers = []string{}
+	}
 	evidence.Observed = detail.Observed
 	if err := s.store.SaveFactoryRun(ctx, run, evidence, false); err != nil {
 		return domain.RunDetail{}, failure(err)
