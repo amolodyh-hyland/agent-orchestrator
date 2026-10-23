@@ -1,0 +1,20 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, expect, it, vi } from "vitest";
+import { RunMonitoring } from "./RunMonitoring";
+const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
+vi.mock("../lib/api-client", () => ({ apiClient: { GET: mocks.get, POST: mocks.post } }));
+afterEach(() => { cleanup(); vi.clearAllMocks(); });
+it("shows one attention, unknown ownership and separate acknowledgement facts without submitting a turn", async () => {
+	mocks.get.mockResolvedValue({ data: { runs: [{ runId: "r", projectId: "p", taskId: "t", stage: "implementation", state: "in_progress", freshness: "unknown", ownership: "unknown", config: { nextOwner: "" }, observedAt: "2026-10-23T00:00:00Z", lastActivityAt: "2026-10-22T00:00:00Z", deadline: "2026-10-22T00:05:00Z", participants: [{ sessionId: "worker" }], attention: { condition: "ownership_unknown" }, reports: [{ id: "report", deliveryState: "pending", nativeReceipt: "ao_queued" }] }] } });
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	render(<QueryClientProvider client={client}><RunMonitoring projectId="p" sessionId="worker" /></QueryClientProvider>);
+	await screen.findByText(/r · implementation · In progress/);
+	expect(screen.getAllByText(/Needs attention/)).toHaveLength(1);
+	expect(screen.getByText(/Unknown — human decision required/)).toBeInTheDocument();
+	expect(screen.getByText(/Report delivery.*pending.*Native receipt.*ao_queued/)).toBeInTheDocument();
+	await userEvent.click(screen.getByRole("button", { name: "Request status" }));
+	expect(mocks.get).toHaveBeenCalledTimes(2); expect(mocks.post).not.toHaveBeenCalled();
+	client.clear();
+});

@@ -1839,6 +1839,11 @@ func (c *Controller) inheritPermissionFallback(source *Controller) {
 // A turn the provider refused over its permission mode did not start, so
 // asking again cannot run the work twice.
 func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (ports.ChatTurnRef, error) {
+	if msg.Origin == domain.MessageOriginAutomation || msg.ReportBatchID != "" {
+		if err := domain.CheckFactoryFeedback(ctx, c.store, c.sessionID); err != nil {
+			return ports.ChatTurnRef{}, err
+		}
+	}
 	requested := msg.Settings.Approval
 	var ref ports.ChatTurnRef
 	// A review conversation is read-only whatever its mode, so it never steps down.
@@ -1854,6 +1859,12 @@ func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (p
 		release, admissionErr := c.acquireLibraryInput(ctx, attempt.Text)
 		if admissionErr != nil {
 			return admissionErr
+		}
+		if attempt.Origin == domain.MessageOriginAutomation || attempt.ReportBatchID != "" {
+			if err := domain.CheckFactoryFeedback(ctx, c.store, c.sessionID); err != nil {
+				release()
+				return err
+			}
 		}
 		ref, sendErr = c.conv.SendTurn(ctx, attempt)
 		release()
@@ -2019,7 +2030,15 @@ func (c *Controller) dispatch(
 	// provider-id binding above must exist before the first streamed update can be
 	// projected. Eager drivers do not implement this optional interface.
 	if hasDeferredStart {
-		if err := startLibraryDeferredTurn(ctx, deferred, ref.ProviderTurnID, excerptDeliveryMessage(msg).Text, c.acquireLibraryInput); err != nil {
+		guardedAcquire := func(ctx context.Context, text string) (func(), error) {
+			if msg.Origin == domain.MessageOriginAutomation || msg.ReportBatchID != "" {
+				if err := domain.CheckFactoryFeedback(ctx, c.store, c.sessionID); err != nil {
+					return nil, err
+				}
+			}
+			return c.acquireLibraryInput(ctx, text)
+		}
+		if err := startLibraryDeferredTurn(ctx, deferred, ref.ProviderTurnID, excerptDeliveryMessage(msg).Text, guardedAcquire); err != nil {
 			c.mu.Lock()
 			c.pendingTurnID = ""
 			c.mu.Unlock()

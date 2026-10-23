@@ -306,3 +306,50 @@ func (d *coordinatorDelivery) Interrupt(_ context.Context, target domain.Session
 func (s *coordinatorStore) ReportChatReceipt(context.Context, string) (domain.ReportDeliveryReceipt, bool, error) {
 	return s.receipt, s.receipt.State != "", nil
 }
+
+type factoryCoordinatorStore struct {
+	*coordinatorStore
+	held map[domain.SessionID]bool
+}
+
+func (s *factoryCoordinatorStore) ListSessions(_ context.Context, project domain.ProjectID) ([]domain.SessionRecord, error) {
+	out := make([]domain.SessionRecord, 0, len(s.sessions))
+	for _, session := range s.sessions {
+		if session.ProjectID == project {
+			out = append(out, session)
+		}
+	}
+	return out, nil
+}
+func (s *factoryCoordinatorStore) FactoryFeedbackHeld(_ context.Context, id domain.SessionID) (bool, error) {
+	return s.held[id], nil
+}
+
+func TestFactoryFeedbackHeldAcrossDelayRestartAndPiggyback(t *testing.T) {
+	now := time.Date(2026, 10, 23, 0, 0, 0, 0, time.UTC)
+	store := &factoryCoordinatorStore{coordinatorStore: newCoordinatorStore(now), held: map[domain.SessionID]bool{"orch": true}}
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}, {ID: "other", ProjectID: "q", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}}
+	stuck := reportAt("held", "worker", now, now, "stuck")
+	stuck.State = domain.ReportStuck
+	other := reportAt("ordinary", "ordinary", now, now, "ordinary")
+	other.ProjectID = "q"
+	store.add(stuck, other)
+	delivery := &coordinatorDelivery{}
+	for range 3 {
+		c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }, RetryDelay: time.Second})
+		if _, err := c.RunDue(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		batch, err := c.PreparePiggyback(context.Background(), "orch")
+		if err != nil || len(batch.Reports) != 0 {
+			t.Fatalf("held piggyback: %+v %v", batch, err)
+		}
+		now = now.Add(time.Minute)
+	}
+	if len(delivery.interrupts) != 0 || len(delivery.submissions) != 1 || delivery.submissions[0].target != "other" {
+		t.Fatalf("unauthorized continuation: %+v", delivery)
+	}
+	if store.reports[0].DeliveryState == domain.ReportAcknowledged {
+		t.Fatal("held report acknowledged")
+	}
+}

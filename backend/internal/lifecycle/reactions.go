@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -927,6 +928,12 @@ const (
 )
 
 func (m *Manager) sendOnce(ctx context.Context, id domain.SessionID, prURL, key, sig, msg string, maxAttempts int, urgent bool) (sendOnceOutcome, error) {
+	if err := domain.CheckFactoryFeedback(ctx, m.store, id); err != nil {
+		if errors.Is(err, domain.ErrFactoryFeedbackHeld) {
+			return sendOnceAccounted, nil
+		}
+		return sendOnceAccounted, err
+	}
 	if m.guard == nil {
 		return sendOnceAccounted, nil
 	}

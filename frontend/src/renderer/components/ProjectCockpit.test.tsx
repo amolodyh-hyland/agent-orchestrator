@@ -37,6 +37,7 @@ beforeEach(() => {
 	projects = [{ id: "a", name: "Alpha", path: "/a" }, { id: "b", name: "Beta", path: "/b" }, { id: "c", name: "Excluded", path: "/c" }];
 	vi.clearAllMocks();
 	mocks.get.mockImplementation(async (path, options) => {
+		if (path === "/api/v1/runs/monitoring") return { data: { runs: [] } };
 		if (path === "/api/v1/projects") return { data: { projects } };
 		if (path === "/api/v1/sessions") {
 			expect(options).toEqual({ params: { query: { readOnly: true } } });
@@ -56,7 +57,7 @@ function assertReadOnly() {
 	expect(mocks.post).not.toHaveBeenCalled();
 	expect(mocks.patch).not.toHaveBeenCalled();
 	expect(mocks.del).not.toHaveBeenCalled();
-	expect(mocks.get.mock.calls.every(([path]) => ["/api/v1/projects", "/api/v1/sessions", "/api/v1/reports"].includes(path))).toBe(true);
+	expect(mocks.get.mock.calls.every(([path]) => ["/api/v1/projects", "/api/v1/sessions", "/api/v1/reports", "/api/v1/runs/monitoring"].includes(path))).toBe(true);
 }
 
 describe("Project cockpit", () => {
@@ -75,7 +76,7 @@ describe("Project cockpit", () => {
 		expect(alpha.getByText(/Source updated:/)).toHaveTextContent(/min old/);
 		expect(alpha.getByText(/Recorded:/)).toHaveTextContent(/min old/);
 		expect(screen.getAllByText(/Reported state \(claim\): done/)).toHaveLength(2);
-		expect(screen.getAllByText(/Unavailable until/)).toHaveLength(2);
+		expect(screen.queryByText(/Unavailable until/)).not.toBeInTheDocument();
 		expect(screen.queryByText("Foreign secret")).not.toBeInTheDocument();
 		expect(document.querySelector('script')).toBeNull();
 		expect(screen.queryByRole("link", { name: "https://example.invalid/steer" })).not.toBeInTheDocument();

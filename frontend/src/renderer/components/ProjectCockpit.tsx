@@ -1,3 +1,4 @@
+import { RunMonitoring } from "./RunMonitoring";
 import { useQueries } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
@@ -112,6 +113,7 @@ export function ProjectCockpit() {
 									<p className="text-xs text-muted-foreground">{t("cockpit.sourceUpdated", { timestamp: timestamp(session.updatedAt) })}</p>
 								</li>)}
 							</ul>}
+							<RunMonitoring projectId={id} />
 							<h3 className="font-medium">{t("cockpit.reports")}</h3>
 							<p className="text-xs text-muted-foreground">{t("cockpit.claimsOnly")}</p>
 							{query.isPending ? <p role="status">{t("cockpit.loading")}</p> : null}
@@ -125,10 +127,7 @@ export function ProjectCockpit() {
 						</section>;
 					})}
 				</div>
-				<dl className="mt-4 space-y-2 text-muted-foreground">
-					<div><dt>{t("cockpit.verifiedEvidence")}</dt><dd>{t("cockpit.unavailable")}</dd></div>
-					<div><dt>{t("cockpit.receipts")}</dt><dd>{t("cockpit.unavailable")}</dd></div>
-				</dl>
+				<p className="mt-4 text-xs text-muted-foreground">{t("factoryMonitor.receiptHelp", { defaultValue: "Native receipts appear on linked runs. Recorded or queued feedback does not prove native acceptance or completion." })}</p>
 			</main>
 		</div>
 	);

@@ -1342,6 +1342,11 @@ func (s *Service) Send(
 	id domain.SessionID,
 	msg ports.ChatUserMessage,
 ) (domain.ConversationTurn, error) {
+	if msg.Origin == domain.MessageOriginAutomation || msg.ReportBatchID != "" {
+		if err := domain.CheckFactoryFeedback(ctx, s.store, id); err != nil {
+			return domain.ConversationTurn{}, err
+		}
+	}
 	record, err := s.requireChatSession(ctx, id)
 	if err != nil {
 		return domain.ConversationTurn{}, err

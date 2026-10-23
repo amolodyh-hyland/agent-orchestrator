@@ -163,6 +163,10 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 		_, err := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(c.retryDelay), fmt.Sprintf("project %s has no active orchestrator", projectID))
 		return err
 	}
+	if err := domain.CheckFactoryFeedback(ctx, c.store, target.ID); err != nil {
+		_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(c.retryDelay), err.Error())
+		return deferErr
+	}
 	if batch.hasState(domain.ReportStuck) {
 		interrupted := false
 		var nextInterrupt time.Time
@@ -251,6 +255,13 @@ func (c *Coordinator) PreparePiggyback(ctx context.Context, target domain.Sessio
 	}
 	if rec.Kind != domain.KindOrchestrator || rec.IsTerminated || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat {
 		return PreparedBatch{}, nil
+	}
+	policyErr := domain.CheckFactoryFeedback(ctx, c.store, target)
+	if errors.Is(policyErr, domain.ErrFactoryFeedbackHeld) {
+		return PreparedBatch{}, nil
+	}
+	if policyErr != nil {
+		return PreparedBatch{}, policyErr
 	}
 	batch, err := c.claim(ctx, rec.ProjectID)
 	if err != nil || len(batch.Reports) == 0 {

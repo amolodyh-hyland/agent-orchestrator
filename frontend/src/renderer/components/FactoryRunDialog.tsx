@@ -1,3 +1,4 @@
+import { RunMonitoring } from "./RunMonitoring";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { RunAction, RunPreview } from "../../shared/factory-run-confirmation";
@@ -44,6 +45,7 @@ export function FactoryRunDialog({ projectId, sessionId }: { projectId: string; 
 		<Button variant="ghost" size="sm" onClick={() => setOpen(true)}>{copy("open", "Run evidence")}</Button>
 		<Dialog open={open} onOpenChange={(value) => { clear(); setOpen(value); }}>
 			<DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>{copy("title", "Review run evidence")}</DialogTitle></DialogHeader>
+				<RunMonitoring projectId={projectId} sessionId={sessionId} />
 				<p>{copy("help", "Submissions are unconfirmed claims. Each receipt and stage decision requires a separate native confirmation. This records evidence only.")}</p>
 				<Input aria-label={copy("id", "Run ID")} value={runId} onChange={(event) => { clear(); setRunId(event.target.value); }} />
 				<Button onClick={() => void load("evidence")}>{copy("receipt", "Preview pending claim")}</Button>

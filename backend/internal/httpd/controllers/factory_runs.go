@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -26,11 +27,18 @@ type FactoryRunService interface {
 }
 
 // FactoryRunsController serves manual decisions and read-only evidence projections.
-type FactoryRunsController struct{ Svc FactoryRunService }
+type FactoryRunsController struct {
+	Svc     FactoryRunService
+	Monitor *factoryrun.Monitor
+}
 
 // Register mounts run routes without any execution-producing callback.
 func (c *FactoryRunsController) Register(r chi.Router) {
 	r.Get("/runs", c.list)
+	r.Get("/runs/monitoring", c.monitorList)
+	r.Get("/runs/{runId}/status", c.monitorStatus)
+	r.Post("/runs/{runId}/monitor", c.monitorConfigure)
+	r.Post("/runs/{runId}/attention", c.monitorAcknowledge)
 	r.Get("/runs/{runId}", c.get)
 	r.Get("/runs/{runId}/evidence", c.history)
 	r.Post("/runs", c.create)
@@ -178,4 +186,65 @@ func (c *FactoryRunsController) history(w http.ResponseWriter, r *http.Request) 
 		next = records[len(records)-1].Version
 	}
 	envelope.WriteJSON(w, http.StatusOK, RunEvidencePage{Evidence: records, NextAfterVersion: next})
+}
+
+func (c *FactoryRunsController) monitorList(w http.ResponseWriter, r *http.Request) {
+	if c.Monitor == nil {
+		apispec.NotImplemented(w, r, r.Method, r.URL.Path)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	rows, err := c.Monitor.Scan(ctx, r.URL.Query().Get("projectId"))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, RunMonitoringList{Runs: rows})
+}
+func (c *FactoryRunsController) monitorStatus(w http.ResponseWriter, r *http.Request) {
+	if c.Monitor == nil {
+		apispec.NotImplemented(w, r, r.Method, r.URL.Path)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	row, err := c.Monitor.Get(ctx, chi.URLParam(r, "runId"))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, row)
+}
+func (c *FactoryRunsController) monitorConfigure(w http.ResponseWriter, r *http.Request) {
+	if c.Monitor == nil {
+		apispec.NotImplemented(w, r, r.Method, r.URL.Path)
+		return
+	}
+	var input domain.RunMonitorConfig
+	if !decodeRunInput(w, r, &input) {
+		return
+	}
+	row, err := c.Monitor.Configure(r.Context(), chi.URLParam(r, "runId"), input)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, row)
+}
+func (c *FactoryRunsController) monitorAcknowledge(w http.ResponseWriter, r *http.Request) {
+	if c.Monitor == nil {
+		apispec.NotImplemented(w, r, r.Method, r.URL.Path)
+		return
+	}
+	var input RunAttentionAck
+	if !decodeRunInput(w, r, &input) {
+		return
+	}
+	row, err := c.Monitor.Acknowledge(r.Context(), chi.URLParam(r, "runId"), input.Key)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, row)
 }

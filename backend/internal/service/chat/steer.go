@@ -388,6 +388,11 @@ func (c *Controller) Steer(ctx context.Context, msg ports.ChatUserMessage) (Stee
 }
 
 func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage) (SteerResult, error) {
+	if msg.Origin == domain.MessageOriginAutomation || msg.ReportBatchID != "" {
+		if err := domain.CheckFactoryFeedback(ctx, c.store, c.sessionID); err != nil {
+			return SteerResult{}, err
+		}
+	}
 	resolved, resolveErr := c.resolveSkillMessage(ctx, msg)
 	if resolveErr != nil {
 		return SteerResult{}, resolveErr

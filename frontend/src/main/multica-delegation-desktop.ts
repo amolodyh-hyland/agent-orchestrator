@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { createFactoryDelegationMonitor } from "./factory-delegation-monitor";
 import { createDelegationStatusFlow } from "./multica-delegation-status";
 import type { IpcMain, IpcMainInvokeEvent, WebContents } from "electron";
 import { resolveMulticaServer, type MulticaSettings } from "../shared/multica";
@@ -53,6 +54,11 @@ export function registerDesktopDelegation(options: {
 	const status = createDelegationStatusFlow({ journal, coordinator: coordinator.taskOrchestrator, human: coordinator.human,
 		prepare: async (binding) => { if (!isDeepStrictEqual((await client(binding.workspaceId)).binding, binding)) throw new Error("connection_changed"); },
 		confirmCancellation: options.confirmCancellation });
+	const monitor = createFactoryDelegationMonitor({ origin: options.daemonOrigin, fetch: options.fetch, restore: async (reference) => {
+		const record = await journal.find(reference.projectId, reference.taskId);
+		if (!record || (record.requestId !== reference.delegationId && record.remote?.delegation_id !== reference.delegationId) || record.state === "terminal" || record.state === "rejected" || disposed) return;
+		await status.status(reference.projectId, reference.taskId);
+	} });
 	const flow = createDelegationConfirmationFlow({ ...coordinator, client: async (workspaceId) => {
 		await ready;
 		if (!enabled || disposed) throw new Error("delegations_disabled");
@@ -92,7 +98,7 @@ export function registerDesktopDelegation(options: {
 	shell.on("did-start-navigation", navigation);
 	return {
 		dispose() {
-			disposed = true; enabled = false; generation++; ipc.dispose();
+			disposed = true; enabled = false; generation++; monitor.dispose(); ipc.dispose();
 			shell.removeListener("did-start-navigation", navigation);
 			options.ipcMain.removeHandler(DELEGATION_SETTINGS);
 			options.ipcMain.removeHandler(DELEGATION_ENABLE_CLICK);

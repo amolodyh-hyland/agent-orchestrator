@@ -432,6 +432,11 @@ type FactoryRunEvidence struct {
 	Document string
 }
 
+type FactoryRunMonitor struct {
+	RunID    string
+	Document string
+}
+
 type LibraryAudit struct {
 	ID        int64
 	EventJson string

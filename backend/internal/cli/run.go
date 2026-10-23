@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -46,7 +48,7 @@ func newRunCommand(ctx *commandContext) *cobra.Command {
 	}}
 	get.Flags().Int64Var(&afterVersion, "after-version", -1, "Read history after this version (exclusive)")
 	get.Flags().Int64Var(&historyLimit, "limit", 100, "History page size, 1..100")
-	cmd.AddCommand(list, get, newRunFileCommand(ctx, "create", false), newRunFileCommand(ctx, "record", true))
+	cmd.AddCommand(list, get, newRunFileCommand(ctx, "create", false), newRunFileCommand(ctx, "record", true), newRunFileCommand(ctx, "monitor", true))
 	var input advanceRunDTO
 	advance := &cobra.Command{Use: "advance <run-id>", Short: "Submit a stage claim; only native desktop confirmation advances", Args: usageArgs(cobra.ExactArgs(1)), RunE: func(cmd *cobra.Command, args []string) error {
 		if !cmd.Flags().Changed("expected-version") || input.ExpectedVersion < 0 || strings.TrimSpace(input.Actor) == "" || strings.TrimSpace(input.Decision) == "" {
@@ -61,6 +63,26 @@ func newRunCommand(ctx *commandContext) *cobra.Command {
 	advance.Flags().Int64Var(&input.ExpectedVersion, "expected-version", 0, "Latest observed run version")
 	advance.Flags().StringVar(&input.Actor, "actor", "", "Claimed decision maker (requires desktop confirmation)")
 	advance.Flags().StringVar(&input.Decision, "decision", "", "Claimed decision reference or reason")
+	status := &cobra.Command{Use: "status <run-id>", Args: usageArgs(cobra.ExactArgs(1)), Short: "Read bounded passive status without starting or steering work", RunE: func(cmd *cobra.Command, args []string) error {
+		bounded, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
+		defer cancel()
+		var response json.RawMessage
+		if err := ctx.getJSON(bounded, "runs/"+url.PathEscape(args[0])+"/status", &response); err != nil {
+			return err
+		}
+		return writeJSON(cmd.OutOrStdout(), response)
+	}}
+	attention := &cobra.Command{Use: "attention", Args: usageArgs(cobra.NoArgs), Short: "Observe approved runs and deduplicated attention", RunE: func(cmd *cobra.Command, _ []string) error {
+		bounded, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
+		defer cancel()
+		var response json.RawMessage
+		if err := ctx.getJSON(bounded, "runs/monitoring?projectId="+url.QueryEscape(project), &response); err != nil {
+			return err
+		}
+		return writeJSON(cmd.OutOrStdout(), response)
+	}}
+	attention.Flags().StringVarP(&project, "project", "p", "", "Optional project id")
+	cmd.AddCommand(status, attention)
 	cmd.AddCommand(advance)
 	return cmd
 }
@@ -90,7 +112,11 @@ func newRunFileCommand(ctx *commandContext, name string, record bool) *cobra.Com
 		}
 		path := "runs"
 		if record {
-			path += "/" + url.PathEscape(args[0]) + "/evidence"
+			suffix := "evidence"
+			if name == "monitor" {
+				suffix = "monitor"
+			}
+			path += "/" + url.PathEscape(args[0]) + "/" + suffix
 		}
 		var response json.RawMessage
 		if err := ctx.postJSON(cmd.Context(), path, json.RawMessage(data), &response); err != nil {
@@ -98,6 +124,9 @@ func newRunFileCommand(ctx *commandContext, name string, record bool) *cobra.Com
 		}
 		return writeJSON(cmd.OutOrStdout(), response)
 	}}
+	if name == "monitor" {
+		cmd.Short = "Configure passive deadlines and next owner without starting work"
+	}
 	cmd.Flags().StringVar(&file, "file", "", "Unconfirmed request JSON file")
 	return cmd
 }

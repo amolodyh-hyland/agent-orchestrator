@@ -558,6 +558,9 @@ func firstNonEmpty(values ...string) string {
 
 // TriggerAuto starts a daemon-initiated review pass.
 func (s *Service) TriggerAuto(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness) (reviewcore.TriggerResult, error) {
+	if err := domain.CheckFactoryFeedback(ctx, s.store, workerID); err != nil {
+		return reviewcore.TriggerResult{}, err
+	}
 	return s.triggerWithOptions(ctx, workerID, reviewcore.TriggerOptions{Harness: harness, Source: domain.ReviewTriggerAuto})
 }
 

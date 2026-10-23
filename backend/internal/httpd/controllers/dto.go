@@ -3750,3 +3750,13 @@ type ResolveReportDeliveryRequest struct {
 	Resolution string `json:"resolution" enum:"delivered_elsewhere"`
 	Note       string `json:"note"`
 }
+
+// RunMonitoringList contains passive observations of approved run references.
+type RunMonitoringList struct {
+	Runs []domain.RunMonitoring `json:"runs"`
+}
+
+// RunAttentionAck identifies the currently displayed condition.
+type RunAttentionAck struct {
+	Key string `json:"key"`
+}

@@ -2250,6 +2250,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{runId}/attention": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Acknowledge display attention without acknowledging reports or resuming work */
+        post: operations["acknowledgeRunAttention"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{runId}/evidence": {
         parameters: {
             query?: never;
@@ -2262,6 +2279,57 @@ export interface paths {
         put?: never;
         /** Append completion or review evidence without delivering feedback */
         post: operations["recordFactoryRunEvidence"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/{runId}/monitor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Configure display deadlines and next owner */
+        post: operations["configureRunMonitoring"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/{runId}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Bounded passive status observation */
+        get: operations["getRunStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/monitoring": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Observe approved active run references without submitting work */
+        get: operations["listRunMonitoring"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -7088,6 +7156,19 @@ export interface components {
             /** @enum {string} */
             root: "worktree" | "artifacts";
         };
+        RunAttention: {
+            /** Format: date-time */
+            acknowledgedAt?: null | string;
+            condition: string;
+            /** Format: date-time */
+            firstAt: string;
+            key: string;
+            /** Format: date-time */
+            lastAt: string;
+        };
+        RunAttentionAck: {
+            key: string;
+        };
         RunCheckReceipt: {
             environment: string;
             exitCode: number;
@@ -7141,6 +7222,49 @@ export interface components {
             /** @enum {string} */
             severity: "P0" | "P1" | "P2" | "P3" | "P4";
         };
+        RunMonitorConfig: {
+            buildSeconds: number;
+            heavy: boolean;
+            nextOwner: string;
+            silenceSeconds: number;
+            /** Format: date-time */
+            stageDeadline?: null | string;
+        };
+        RunMonitoring: {
+            attention?: components["schemas"]["RunAttention"];
+            config: components["schemas"]["RunMonitorConfig"];
+            /** Format: date-time */
+            deadline: string;
+            delegationId?: string;
+            freshness: string;
+            /** Format: date-time */
+            lastActivityAt: string;
+            /** Format: date-time */
+            observedAt: string;
+            ownership: string;
+            participants: components["schemas"]["RunParticipantSnapshot"][];
+            projectId: string;
+            reports: components["schemas"]["RunReportObservation"][];
+            runId: string;
+            stage: string;
+            /** Format: int64 */
+            stageVersion: number;
+            state: string;
+            taskId: string;
+        };
+        RunMonitoringList: {
+            runs: components["schemas"]["RunMonitoring"][];
+        };
+        RunParticipantSnapshot: {
+            autoInjectCI: boolean;
+            autoInjectReview: boolean;
+            autoReview: boolean;
+            /** Format: date-time */
+            capturedAt: string;
+            feedbackPolicies: string[];
+            reportRoute: string;
+            sessionId: string;
+        };
         RunRepoBinding: {
             baseSha: string;
             branch: string;
@@ -7159,6 +7283,13 @@ export interface components {
             unstaged: string[];
             untracked: string[];
             worktreePath: string;
+        };
+        RunReportObservation: {
+            deliveryState: string;
+            id: string;
+            nativeReceipt: string;
+            /** Format: date-time */
+            recordedAt: string;
         };
         RunReviewReceipt: {
             afterFingerprint: string;
@@ -15980,6 +16111,77 @@ export interface operations {
             };
         };
     };
+    acknowledgeRunAttention: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunAttentionAck"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunMonitoring"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     listFactoryRunEvidence: {
         parameters: {
             query?: {
@@ -16072,6 +16274,211 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunDetail"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    configureRunMonitoring: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunMonitorConfig"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunMonitoring"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getRunStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunMonitoring"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listRunMonitoring: {
+        parameters: {
+            query?: {
+                projectId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunMonitoringList"];
                 };
             };
             /** @description Bad Request */

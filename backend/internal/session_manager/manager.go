@@ -5071,6 +5071,9 @@ func (m *Manager) SendWithOptions(ctx context.Context, id domain.SessionID, mess
 // Chat callers must reconcile native acceptance separately. Supported TUIs correlate
 // the durable ID through UserPromptSubmit; a pane write alone never qualifies.
 func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message, clientMessageID string) error {
+	if err := domain.CheckFactoryFeedback(ctx, m.store, id); err != nil {
+		return err
+	}
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil {
 		return err
@@ -5162,6 +5165,11 @@ func (m *Manager) InterruptTUI(ctx context.Context, id domain.SessionID) error {
 // retries. Ordinary callers leave it empty; the outbox preserves the key across
 // restart, rollback, and even a second overlapping handoff.
 func (m *Manager) send(ctx context.Context, id domain.SessionID, message, clientMessageID string, options ports.MessageDeliveryOptions) error {
+	if !options.AuthoredByUser {
+		if err := domain.CheckFactoryFeedback(ctx, m.store, id); err != nil {
+			return err
+		}
+	}
 	// A controller transition deliberately has a short interval with no writer.
 	// Queue internal/lifecycle sends durably instead of racing either controller
 	// or dropping coordination work; the transition worker drains this outbox
@@ -5204,6 +5212,11 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 				}
 				return nil
 			}
+		}
+	}
+	if !options.AuthoredByUser {
+		if err := domain.CheckFactoryFeedback(ctx, m.store, id); err != nil {
+			return err
 		}
 	}
 	outcome, err := m.messenger.DeliverWithPostWrite(ctx, id, message, afterWrite)

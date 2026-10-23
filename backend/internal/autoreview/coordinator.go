@@ -4,6 +4,7 @@ package autoreview
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -84,6 +85,12 @@ func New(store Store, reviews Trigger, cfg Config) *Coordinator {
 // EvaluateSession evaluates one worker against the current project, activity,
 // PR, and review-run facts.
 func (c *Coordinator) EvaluateSession(ctx context.Context, id domain.SessionID) (Result, error) {
+	if err := domain.CheckFactoryFeedback(ctx, c.store, id); err != nil {
+		if errors.Is(err, domain.ErrFactoryFeedbackHeld) {
+			return Result{Reason: "factory_display_only"}, nil
+		}
+		return Result{}, err
+	}
 	session, ok, err := c.store.GetSession(ctx, id)
 	if err != nil || !ok {
 		if err == nil {
