@@ -1,4 +1,81 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
+
+async function selectVisibleText(field: Locator, start: number, end: number) {
+	await field.focus();
+	await field.evaluate(
+		(root, offsets) => {
+			const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+				acceptNode(node) {
+				const element = node.parentElement?.closest("[data-lexical-text]");
+				return element && getComputedStyle(element).display !== "none"
+						? NodeFilter.FILTER_ACCEPT
+						: NodeFilter.FILTER_REJECT;
+				},
+			});
+			const points: { node: Node; start: number; end: number }[] = [];
+			let length = 0;
+			while (walker.nextNode()) {
+				const node = walker.currentNode;
+				points.push({ node, start: length, end: length + node.textContent!.length });
+				length += node.textContent!.length;
+			}
+			const range = document.createRange();
+			for (const [index, offset] of offsets.entries()) {
+				const point = points.find((point) => offset >= point.start && offset <= point.end)!;
+				if (index === 0) range.setStart(point.node, offset - point.start);
+				else range.setEnd(point.node, offset - point.start);
+			}
+			window.getSelection()!.removeAllRanges();
+			window.getSelection()!.addRange(range);
+		},
+		[start, end],
+	);
+}
+
+test("native replacement across a code boundary keeps the remaining code and undoes in one step", async ({
+	page,
+	context,
+}) => {
+	await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+	const source = "A `abcd` Z";
+	await page.goto("/e2e/composer-code/harness.html?text=" + encodeURIComponent(source));
+	const field = page.getByRole("combobox", { name: "Message", exact: true });
+	await expect(field).toHaveJSProperty("innerText", "A abcd Z");
+	await selectVisibleText(field, 0, 4);
+	await field.pressSequentially("X");
+	await expect(page.getByTestId("wire")).toHaveText("X`cd` Z");
+	await expect(field).toHaveJSProperty("innerText", "Xcd Z");
+	await field.press("ControlOrMeta+z");
+	await expect(page.getByTestId("wire")).toHaveText(source);
+	await field.press("ControlOrMeta+Shift+z");
+	await expect(page.getByTestId("wire")).toHaveText("X`cd` Z");
+	await field.press("ControlOrMeta+z");
+	await expect(page.getByTestId("wire")).toHaveText(source);
+	await selectVisibleText(field, 0, 4);
+	await page.evaluate(() => navigator.clipboard.writeText("pasted"));
+	await field.press("ControlOrMeta+v");
+	await expect(page.getByTestId("wire")).toHaveText("pasted`cd` Z");
+	await expect(field).toHaveJSProperty("innerText", "pastedcd Z");
+	await field.press("ControlOrMeta+z");
+	await expect(page.getByTestId("wire")).toHaveText(source);
+	await selectVisibleText(field, 0, 4);
+	await field.press("ControlOrMeta+x");
+	await expect(page.getByTestId("wire")).toHaveText("`cd` Z");
+	await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("A `ab`");
+	await expect(field).toHaveJSProperty("innerText", "cd Z");
+});
+
+test("ordinary native typing in a draft with code has no presentation-only undo step", async ({ page }) => {
+	const source = "A `abcd` Z";
+	await page.goto("/e2e/composer-code/harness.html?text=" + encodeURIComponent(source));
+	const field = page.getByRole("combobox", { name: "Message", exact: true });
+	await expect(field).toHaveJSProperty("innerText", "A abcd Z");
+	await selectVisibleText(field, 1, 1);
+	await field.pressSequentially("xyz");
+	await expect(page.getByTestId("wire")).toHaveText("Axyz `abcd` Z");
+	await field.press("ControlOrMeta+z");
+	await expect(page.getByTestId("wire")).toHaveText(source);
+});
 
 test("an empty formatted block accepts native typing between its hidden fences", async ({ page }) => {
 	await page.goto("/e2e/composer-code/harness.html?text=");

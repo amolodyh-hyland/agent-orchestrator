@@ -4,6 +4,27 @@ export type ComposerMarkdownCodeRange = {
 	kind: "inline" | "fenced";
 };
 
+export function createComposerGraphemeNavigator() {
+	const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+	let cachedText: string | undefined;
+	let boundaries: number[] = [];
+	return (text: string, offset: number, direction: -1 | 1): number => {
+		if (text !== cachedText) {
+			cachedText = text;
+			boundaries = [0];
+			for (const segment of segmenter.segment(text)) boundaries.push(segment.index + segment.segment.length);
+		}
+		let low = 0;
+		let high = boundaries.length;
+		while (low < high) {
+			const middle = (low + high) >>> 1;
+			if (boundaries[middle] < offset || (direction > 0 && boundaries[middle] === offset)) low = middle + 1;
+			else high = middle;
+		}
+		return boundaries[direction < 0 ? Math.max(0, low - 1) : Math.min(low, boundaries.length - 1)];
+	};
+}
+
 type ComposerCodeFence = {
 	start: number;
 	end: number;

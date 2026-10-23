@@ -1,11 +1,31 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	composerCodeRegions,
+	createComposerGraphemeNavigator,
 	createComposerMarkdownRangeCursor,
 	isComposerCodeFenceAt,
 	isComposerOpenCodeFenceAt,
 	parseComposerMarkdown,
 } from "./composerMarkdown";
+
+describe("composer grapheme navigation", () => {
+	it("segments unchanged content once and looks up successive boundaries", () => {
+		const segment = vi.spyOn(Intl.Segmenter.prototype, "segment");
+		try {
+			const adjacent = createComposerGraphemeNavigator();
+			const text = "a👩‍💻".repeat(500);
+			let offset = text.length;
+			for (let index = 0; index < 1000; index += 1) offset = adjacent(text, offset, -1);
+			expect(offset).toBe(0);
+			expect(adjacent(text, offset, 1)).toBe(1);
+			expect(segment).toHaveBeenCalledTimes(1);
+			expect(adjacent(text + "e\u0301", text.length + 2, -1)).toBe(text.length);
+			expect(segment).toHaveBeenCalledTimes(2);
+		} finally {
+			segment.mockRestore();
+		}
+	});
+});
 
 describe("composer code content boundaries", () => {
 	it.each([

@@ -25,6 +25,7 @@ import {
 	getDOMSelectionFromTarget,
 	HISTORIC_TAG,
 	HISTORY_PUSH_TAG,
+	HISTORY_MERGE_TAG,
 	KEY_ENTER_COMMAND,
 	KEY_ESCAPE_COMMAND,
 	KEY_TAB_COMMAND,
@@ -35,6 +36,9 @@ import {
 	SELECTION_CHANGE_COMMAND,
 	CONTROLLED_TEXT_INSERTION_COMMAND,
 	DELETE_CHARACTER_COMMAND,
+	PASTE_COMMAND,
+	CUT_COMMAND,
+	CUT_TAG,
 	type EditorConfig,
 	type LexicalEditor,
 	type LexicalNode,
@@ -62,7 +66,7 @@ import { Box, Image as ImageIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { composerFileIcon } from "./composerFileIcon";
-import { composerCodeRegions, isComposerOpenCodeFenceAt } from "./composerMarkdown";
+import { composerCodeRegions, createComposerGraphemeNavigator, isComposerOpenCodeFenceAt } from "./composerMarkdown";
 import { COMPOSER_CODE_LANGUAGE_TAG, ComposerCodeNode, ComposerCodePlaceholderNode, ComposerCodePlugin } from "./ComposerCode";
 import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
 import { splitInlineImagePaths } from "./messageAttachments";
@@ -294,6 +298,7 @@ function $serializeComposer(): string {
 }
 
 const COMPOSER_MARKER_STYLE = "display: none";
+const adjacentComposerGrapheme = createComposerGraphemeNavigator();
 
 function $composerLeaves(): LexicalNode[] {
 	const leaves: LexicalNode[] = [];
@@ -305,7 +310,7 @@ function $composerLeaves(): LexicalNode[] {
 	return leaves;
 }
 
-function $selectComposerOffset(offset: number, point: RangeSelection["anchor"]): void {
+function $selectComposerOffset(offset: number, point: RangeSelection["anchor"], raw = false): void {
 	const positioned: { node: LexicalNode; start: number }[] = [];
 	let cursor = 0;
 	const visit = (node: LexicalNode) => {
@@ -328,7 +333,7 @@ function $selectComposerOffset(offset: number, point: RangeSelection["anchor"]):
 			}
 			const parent = node.getParentOrThrow();
 			const index = node.getIndexWithinParent();
-			if ($isTextNode(node) && node.getStyle() === COMPOSER_MARKER_STYLE) {
+			if (!raw && $isTextNode(node) && node.getStyle() === COMPOSER_MARKER_STYLE) {
 				const region = parent instanceof ComposerCodeNode ? parent : null;
 				if (region && ((index === 0 && offset === start) || (index > 0 && offset === end))) {
 					point.set(region.getParentOrThrow().getKey(), region.getIndexWithinParent() + (index > 0 ? 1 : 0), "element");
@@ -368,6 +373,13 @@ function $formatComposerMarkdown(): void {
 		if (index < paragraphs.length - 1) previousOffset += 1;
 	});
 	if (!regions.length && !previous.size) return;
+	const structureStable =
+		paragraphs.length === 1 &&
+		previous.size === regions.length &&
+		regions.every((region) => {
+			const block = previous.get(region.start);
+			return block?.__kind === region.kind && block.getTextContentSize() === region.end - region.start;
+		});
 
 	const leaves: LexicalNode[] = [];
 	paragraphs.forEach((paragraph, index) => {
@@ -379,10 +391,12 @@ function $formatComposerMarkdown(): void {
 		if (index < paragraphs.length - 1) leaves.push($createLineBreakNode());
 	});
 	const paragraph = $isElementNode(paragraphs[0]) ? paragraphs[0] : $createParagraphNode();
-	paragraph.append(...leaves);
-	for (const child of paragraph.getChildren()) if ($isElementNode(child)) child.remove();
-	for (const extra of paragraphs.slice(1)) extra.remove();
-	if (!paragraph.isAttached()) root.append(paragraph);
+	if (!structureStable) {
+		paragraph.append(...leaves);
+		for (const child of paragraph.getChildren()) if ($isElementNode(child)) child.remove();
+		for (const extra of paragraphs.slice(1)) extra.remove();
+		if (!paragraph.isAttached()) root.append(paragraph);
+	}
 
 	const boundaries = regions.flatMap((region) => [region.start, region.contentStart, region.contentEnd, region.end]);
 	let offset = 0;
@@ -411,7 +425,8 @@ function $formatComposerMarkdown(): void {
 		}
 		const region = regions[regionIndex];
 		const inRegion = region && part.start >= region.start && part.end <= region.end;
-		const marker = inRegion && part.end > part.start && (part.end <= region.contentStart || part.start >= region.contentEnd);
+		const marker =
+			inRegion && part.end > part.start && (part.end <= region.contentStart || part.start >= region.contentEnd);
 		let node = part.node;
 		if (node instanceof ComposerCodePlaceholderNode && (!inRegion || region.contentStart !== region.contentEnd)) {
 			node.remove();
@@ -431,12 +446,12 @@ function $formatComposerMarkdown(): void {
 			if (!wrapper) {
 				const old = previous.get(region.start);
 				wrapper = old?.__kind === region.kind ? old : new ComposerCodeNode(region.kind);
-				node.insertBefore(wrapper);
+				if (!structureStable) node.insertBefore(wrapper);
 				if (region.kind === "fenced" && region.contentStart === region.contentEnd) {
 					emptyBlocks.push({ wrapper, contentOffset: region.contentStart - region.start });
 				}
 			}
-			wrapper.append(node);
+			if (!structureStable) wrapper.append(node);
 		}
 	}
 	for (const { wrapper: block, contentOffset } of emptyBlocks) {
@@ -449,7 +464,7 @@ function $formatComposerMarkdown(): void {
 			break;
 		}
 	}
-	if ($isRangeSelection(selection) && offsets?.[0] !== undefined && offsets[1] !== undefined) {
+	if (!structureStable && $isRangeSelection(selection) && offsets?.[0] !== undefined && offsets[1] !== undefined) {
 		const restored = $createRangeSelection();
 		$setSelection(restored);
 		$selectComposerOffset(offsets[0], restored.anchor);
@@ -502,21 +517,25 @@ function $codeEdgeKey(event: globalThis.KeyboardEvent, direction: -1 | 1, remove
 		if (direction < 0) {
 			if (offset > region.contentEnd) target = region.contentEnd;
 			else if (offset <= region.contentStart) target = region.start;
-			else {
-				const content = source.slice(region.contentStart, offset);
-				const segments = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(content)];
-				target = region.contentStart + (segments.at(-1)?.index ?? 0);
-			}
+			else
+				target =
+					region.contentStart +
+					adjacentComposerGrapheme(
+						source.slice(region.contentStart, region.contentEnd),
+						offset - region.contentStart,
+						direction,
+					);
 		} else {
 			if (offset < region.contentStart) target = region.contentStart;
 			else if (offset >= region.contentEnd) target = region.end;
-			else {
-				const segment = new Intl.Segmenter(undefined, { granularity: "grapheme" })
-					.segment(source.slice(offset, region.contentEnd))
-					[Symbol.iterator]()
-					.next().value;
-				target = offset + (segment?.segment.length ?? 1);
-			}
+			else
+				target =
+					region.contentStart +
+					adjacentComposerGrapheme(
+						source.slice(region.contentStart, region.contentEnd),
+						offset - region.contentStart,
+						direction,
+					);
 		}
 		if (target === offset) return false;
 		$selectComposerOffset(target, selection.anchor);
@@ -526,16 +545,22 @@ function $codeEdgeKey(event: globalThis.KeyboardEvent, direction: -1 | 1, remove
 	return true;
 }
 
-function $normalizeCodeRangeSelection(): void {
+function $normalizeCodeRangeSelection(replacement = ""): string | undefined {
 	const selection = $getSelection();
 	if (!$isRangeSelection(selection) || selection.isCollapsed()) return;
 	const anchor = $documentOffsetForPoint(selection.anchor.getNode(), selection.anchor.offset);
 	const focus = $documentOffsetForPoint(selection.focus.getNode(), selection.focus.offset);
 	if (anchor === undefined || focus === undefined) return;
+	const source = $serializeComposer();
+	const regions = composerCodeRegions(source);
 	let start = Math.min(anchor, focus);
 	let end = Math.max(anchor, focus);
-	for (const region of composerCodeRegions($serializeComposer())) {
-		if (start <= region.contentStart && end >= region.contentEnd && (start < region.contentStart || end > region.contentEnd)) {
+	for (const region of regions) {
+		if (
+			start <= region.contentStart &&
+			end >= region.contentEnd &&
+			(start < region.contentStart || end > region.contentEnd)
+		) {
 			start = Math.min(start, region.start);
 			end = Math.max(end, region.end);
 		} else {
@@ -543,9 +568,63 @@ function $normalizeCodeRangeSelection(): void {
 			if (end > region.contentEnd && end <= region.end) end = region.contentEnd;
 		}
 	}
-	if (start === Math.min(anchor, focus) && end === Math.max(anchor, focus)) return;
-	$selectComposerOffset(anchor <= focus ? start : end, selection.anchor);
-	$selectComposerOffset(anchor <= focus ? end : start, selection.focus);
+	let copied = source.slice(start, end);
+	// Repair the unselected code before the normal replacement removes a crossing
+	// selection. The clipboard receives balanced Markdown for the selected code too.
+	const repairs: { offset: number; end?: number; text: string }[] = [];
+	const head = regions.find(
+		(region) => start > region.contentStart && start < region.contentEnd && end > region.contentEnd,
+	);
+	const tail = regions.find(
+		(region) => start < region.contentStart && end > region.contentStart && end < region.contentEnd,
+	);
+	let closing = "";
+	if (head) {
+		const opening = source.slice(head.start, head.contentStart);
+		closing = source.slice(head.contentEnd, head.end);
+		copied = opening + copied;
+		const after = replacement + source.slice(end);
+		if (head.kind === "fenced" && after && !after.startsWith("\n") && !after.startsWith("\r\n")) {
+			closing += opening.endsWith("\r\n") ? "\r\n" : "\n";
+		}
+		repairs.push({ offset: start, text: closing });
+	}
+	if (tail) {
+		let opening = source.slice(tail.start, tail.contentStart);
+		const before = source.slice(0, start) + closing + replacement;
+		if (tail.kind === "fenced" && before && !before.endsWith("\n")) {
+			opening = (opening.endsWith("\r\n") ? "\r\n" : "\n") + opening;
+		}
+		copied += source.slice(tail.contentEnd, tail.end);
+		repairs.push({ offset: end, text: opening });
+	}
+	if (head?.kind === "inline" && tail?.kind === "inline" && !replacement) {
+		// Join the survivors under one delimiter pair: adjacent closing/opening runs
+		// would coalesce into a different backtick delimiter.
+		const remaining = source.slice(head.contentStart, start) + source.slice(end, tail.contentEnd);
+		let markerLength = Math.max(head.contentStart - head.start, tail.end - tail.contentEnd);
+		for (const match of remaining.matchAll(/`+/g)) markerLength = Math.max(markerLength, match[0].length + 1);
+		const marker = "`".repeat(markerLength);
+		repairs.length = 0;
+		repairs.push({ offset: head.start, end: head.contentStart, text: marker });
+		repairs.push({ offset: tail.contentEnd, end: tail.end, text: marker });
+	}
+	if (!repairs.length && start === Math.min(anchor, focus) && end === Math.max(anchor, focus)) return;
+	for (const repair of repairs.sort((left, right) => right.offset - left.offset)) {
+		const insertion = $createRangeSelection();
+		$setSelection(insertion);
+		$selectComposerOffset(repair.offset, insertion.anchor, true);
+		$selectComposerOffset(repair.end ?? repair.offset, insertion.focus, true);
+		insertion.insertText(repair.text);
+		const delta = repair.text.length - ((repair.end ?? repair.offset) - repair.offset);
+		if (repair.offset <= start) start += delta;
+		if (repair.offset < end) end += delta;
+	}
+	const restored = $createRangeSelection();
+	$setSelection(restored);
+	$selectComposerOffset(anchor <= focus ? start : end, restored.anchor, true);
+	$selectComposerOffset(anchor <= focus ? end : start, restored.focus, true);
+	return copied;
 }
 
 function $insertComposerCodeNewline(allowClosed = false): boolean {
@@ -921,7 +1000,8 @@ const EditorBridge = forwardRef<
 				) return;
 				editor.update(() => $formatComposerMarkdown(), {
 					discrete: true,
-					tag: COMPOSER_MARKDOWN_FORMAT_TAG,
+					// Presentation belongs to the edit that triggered recognition.
+					tag: [COMPOSER_MARKDOWN_FORMAT_TAG, HISTORY_MERGE_TAG],
 				});
 			});
 		};
@@ -961,9 +1041,39 @@ const EditorBridge = forwardRef<
 		const commands = [
 			editor.registerCommand(
 				CONTROLLED_TEXT_INSERTION_COMMAND,
-				() => {
-					if (!editor.isComposing() && !compositionState.current) $normalizeCodeRangeSelection();
+				(input) => {
+					if (!editor.isComposing() && !compositionState.current) {
+						const text = typeof input === "string" ? input : (input.dataTransfer?.getData("text/plain") ?? input.data);
+						if (text !== null && text !== undefined) $normalizeCodeRangeSelection(text);
+					}
 					return false;
+				},
+				COMMAND_PRIORITY_HIGH,
+			),
+			editor.registerCommand(
+				PASTE_COMMAND,
+				(event) => {
+					if (editor.isComposing() || compositionState.current || !event || !("clipboardData" in event)) return false;
+					const clipboard = event.clipboardData;
+					const text = clipboard?.getData("text/plain") || clipboard?.getData("text/uri-list");
+					// Lexical's plain-text paste normalizes CRLF to LF; restored drafts retain their original line endings.
+					if (text) $normalizeCodeRangeSelection(text.replace(/\r\n/g, "\n"));
+					return false;
+				},
+				COMMAND_PRIORITY_HIGH,
+			),
+			editor.registerCommand(
+				CUT_COMMAND,
+				(event) => {
+					if (editor.isComposing() || compositionState.current) return false;
+					const copied = $normalizeCodeRangeSelection();
+					if (copied === undefined || !event || !("clipboardData" in event) || !event.clipboardData) return false;
+					event.clipboardData.setData("text/plain", copied);
+					event.preventDefault();
+					$addUpdateTag(CUT_TAG);
+					const selection = $getSelection();
+					if ($isRangeSelection(selection)) selection.removeText();
+					return true;
 				},
 				COMMAND_PRIORITY_HIGH,
 			),

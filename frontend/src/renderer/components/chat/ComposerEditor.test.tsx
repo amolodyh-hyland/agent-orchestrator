@@ -7,6 +7,9 @@ import {
 	$isRangeSelection,
 	$isTextNode,
 	CONTROLLED_TEXT_INSERTION_COMMAND,
+	$getNodeByKey,
+	$createRangeSelection,
+	$setSelection,
 	REDO_COMMAND,
 	UNDO_COMMAND,
 	type LexicalEditor,
@@ -69,7 +72,103 @@ function caret(editor: LexicalEditor, offset: number) {
 	);
 }
 
+function selectRange(editor: LexicalEditor, anchor: number, focus: number) {
+	act(() =>
+		editor.update(
+			() => {
+				const selection = $createRangeSelection();
+				$setSelection(selection);
+				for (const [point, offset] of [
+					[selection.anchor, anchor],
+					[selection.focus, focus],
+				] as const) {
+					let start = 0;
+					const leaves: LexicalNode[] = [];
+					const visit = (node: LexicalNode) => {
+						if ($isElementNode(node)) node.getChildren().forEach(visit);
+						else leaves.push(node);
+					};
+					visit($getRoot());
+					for (const node of leaves) {
+						const end = start + node.getTextContentSize();
+						if ($isTextNode(node) && offset >= start && offset <= end && node.getStyle() !== "display: none") {
+							point.set(node.getKey(), offset - start, "text");
+							break;
+						}
+						start = end;
+					}
+				}
+			},
+			{ discrete: true },
+		),
+	);
+}
+
 describe("composer code editing", () => {
+	it.each([
+		["A `abcd` Z", 0, 5, "X`cd` Z", "`cd` Z", "A `ab`"],
+		["A `abcd` Z", 5, 0, "X`cd` Z", "`cd` Z", "A `ab`"],
+		["A `abcd` Z", 5, 10, "A `ab`X", "A `ab`", "`cd` Z"],
+		["A `abcd` M `efgh` Z", 5, 14, "A `ab`X`gh` Z", "A `abgh` Z", "`cd` M `ef`"],
+		["A ``abcd`` M `efgh` Z", 6, 16, "A ``ab``X`gh` Z", "A ``abgh`` Z", "``cd`` M `ef`"],
+		["A\n```ts\nabcd\n```\nZ", 0, 10, "X\n```ts\ncd\n```\nZ", "```ts\ncd\n```\nZ", "A\n```ts\nab\n```"],
+		["A\n```ts\nabcd\n```\nZ", 10, 18, "A\n```ts\nab\n```\nX", "A\n```ts\nab\n```", "```ts\ncd\n```\nZ"],
+	])(
+		"keeps code boundaries balanced for typing, paste, and cut: %s [%i,%i]",
+		async (source, anchor, focus, typed, cut, copied) => {
+			const { ref, editor, field } = setup(source);
+			selectRange(editor, anchor, focus);
+			await act(async () => {
+				editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, "X");
+			});
+			await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(typed));
+			act(() => editor.dispatchCommand(UNDO_COMMAND, undefined));
+			await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(source));
+			selectRange(editor, anchor, focus);
+			fireEvent.paste(field, { clipboardData: { getData: (type: string) => (type === "text/plain" ? "X" : "") } });
+			await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(typed));
+			act(() => editor.dispatchCommand(UNDO_COMMAND, undefined));
+			await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(source));
+			selectRange(editor, anchor, focus);
+			fireEvent.keyDown(field, { key: "Backspace" });
+			await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(cut));
+			act(() => editor.dispatchCommand(UNDO_COMMAND, undefined));
+			await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(source));
+			selectRange(editor, anchor, focus);
+			const setData = vi.fn();
+			fireEvent.cut(field, { clipboardData: { setData } });
+			await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(cut));
+			expect(setData).toHaveBeenCalledWith("text/plain", copied);
+		},
+	);
+
+	it.each(["A `value` Z", "A\n```ts\nvalue\n```\nZ"])(
+		"undoes ordinary edits without a presentation-only step: %s",
+		async (source) => {
+			const { ref, editor } = setup(source);
+			caret(editor, 1);
+			await act(async () => {
+				editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, "X");
+			});
+			await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(source.slice(0, 1) + "X" + source.slice(1)));
+			act(() => editor.dispatchCommand(UNDO_COMMAND, undefined));
+			await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(source));
+			act(() => editor.dispatchCommand(REDO_COMMAND, undefined));
+			await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(source.slice(0, 1) + "X" + source.slice(1)));
+		},
+	);
+
+	it("retains the existing code node when an edit only changes surrounding prose", async () => {
+		const { editor } = setup("A `value` Z");
+		const block = editor
+			.getEditorState()
+			.read(() => $getRoot().getFirstChildOrThrow<import("lexical").ElementNode>().getChildAtIndex(1)!);
+		caret(editor, 1);
+		await act(async () => {
+			editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, "X");
+		});
+		expect(editor.getEditorState().read(() => $getNodeByKey(block.getKey()))).toBe(block);
+	});
 	it.each([
 		"before `value` after",
 		"``a ` tick``",
