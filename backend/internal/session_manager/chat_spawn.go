@@ -279,6 +279,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		DisablePermissionFallback: !agentConfig.PermissionFallbackEnabled(),
 		ControllerReady: func(started ChatStarted) (ChatControllerCommit, error) {
 			metadata := domain.SessionMetadata{
+				OuterGeneration:   in.record.Metadata.OuterGeneration,
 				Permissions:       in.record.Metadata.Permissions,
 				PermissionCeiling: in.record.Metadata.PermissionCeiling,
 				Branch:            in.workspace.Branch,

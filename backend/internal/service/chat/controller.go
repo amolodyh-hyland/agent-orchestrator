@@ -1760,6 +1760,11 @@ func (c *Controller) Settings() domain.ConversationSettings {
 // The row is written first: if that fails, the in-memory copy must not move, or a
 // restart would silently revert a choice the user watched take effect.
 func (c *Controller) SetSettings(ctx context.Context, settings domain.ConversationSettings) error {
+	if settings != c.Settings() {
+		if err := domain.CheckOuterOperation(ctx, c.store, "settings", "", c.sessionID); err != nil {
+			return err
+		}
+	}
 	if err := c.store.SetConversationSettings(ctx, c.conversation.ID, settings, c.now()); err != nil {
 		return fmt.Errorf("record conversation settings: %w", err)
 	}
@@ -2242,7 +2247,7 @@ func (c *Controller) drainLocked(ctx context.Context, allowDispatch bool) error 
 			ClientMessageID: queued.ClientMessageID,
 		}
 		if err := c.checkFactoryMessage(ctx, queuedMessage); err != nil {
-			if errors.Is(err, domain.ErrFactoryFeedbackHeld) {
+			if errors.Is(err, domain.ErrFactoryFeedbackHeld) || errors.Is(err, domain.ErrOuterHeld) {
 				if settleErr := c.store.SettleTurnByID(ctx, queued.TurnID, domain.TurnStateFailed, err.Error(), c.now()); settleErr != nil {
 					return settleErr
 				}
@@ -3993,6 +3998,9 @@ var ErrMCPReloadUnsupported = errors.New("chat driver cannot reload MCP servers"
 // the turn themselves rather than discovering afterwards from the timeline that
 // their request failed for a reason they caused.
 func (c *Controller) ReloadMCPServers(ctx context.Context) ([]domain.ConversationMCPServer, error) {
+	if err := domain.HoldOuterTarget(ctx, c.store, c.sessionID, "mcp.reload"); err != nil {
+		return nil, err
+	}
 	reloader, ok := c.conv.(ports.ChatMCPReloader)
 	if !ok {
 		return nil, ErrMCPReloadUnsupported

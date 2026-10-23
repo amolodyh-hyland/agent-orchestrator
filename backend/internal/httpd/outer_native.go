@@ -71,6 +71,7 @@ func mountOuterNative(r chi.Router, svc *outer.Service, authority *delegationaut
 	}
 	r.Post("/internal/outer/native", func(w http.ResponseWriter, req *http.Request) {
 		reject := func() {
+			_ = svc.Deny(req.Context(), "outer.native", "unbound_stale_or_unsupported_native_action", "")
 			envelope.WriteAPIError(w, req, 409, "conflict", "OUTER_HELD", "Outer action held; use the exact supported desktop control", nil)
 		}
 		if !localControlRequest(req) || authority == nil {
@@ -121,7 +122,17 @@ func mountOuterNative(r chi.Router, svc *outer.Service, authority *delegationaut
 
 func controlOuterNative(w http.ResponseWriter, req *http.Request, router chi.Router, svc *outer.Service, authority *delegationauth.Authority, in nativeOuterControl) {
 	reject := func() {
+		_ = svc.Deny(req.Context(), "outer.native.control", "unsupported_stale_or_unresolved_control", "")
 		envelope.WriteAPIError(w, req, 409, "conflict", "OUTER_HELD", "Unsupported or stale desktop control", nil)
+	}
+	if in.Action == "terminal.bind" {
+		value, err := svc.BindTerminal(domain.WithOuterNativeAction(req.Context(), domain.OuterNativeAction{Operation: "terminal.bind"}), in.TargetID)
+		if err != nil {
+			reject()
+			return
+		}
+		writeDelegationJournalResponse(w, req, authority, value)
+		return
 	}
 	route, ok := outerNativeControls[in.Action]
 	if !ok || len(in.TargetID) > 256 || len(in.PendingID) > 256 {
@@ -169,6 +180,14 @@ func controlOuterNative(w http.ResponseWriter, req *http.Request, router chi.Rou
 	}
 	a := domain.OuterNativeAction{Operation: route.Operation, ProjectID: project, SessionID: session, RequestID: in.PendingID, Generation: in.Generation}
 	ctx := domain.WithOuterNativeAction(context.WithValue(req.Context(), outerNativeRelayKey{}, true), a)
+	finish, err := svc.BeginNativeControl(ctx, a, domain.OuterDigest(in))
+	if err != nil {
+		reject()
+		return
+	}
+	completed := false
+	defer func() { _ = finish(completed) }()
+	ctx = context.WithValue(ctx, chi.RouteCtxKey, nil)
 	forward, err := http.NewRequestWithContext(ctx, route.Method, "http://127.0.0.1/api/v1"+path, bytes.NewReader(in.Body))
 	if err != nil {
 		reject()
@@ -187,6 +206,7 @@ func controlOuterNative(w http.ResponseWriter, req *http.Request, router chi.Rou
 		reject()
 		return
 	}
+	completed = true
 	writeDelegationJournalResponse(w, req, authority, value)
 }
 

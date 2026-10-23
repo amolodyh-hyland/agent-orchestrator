@@ -12,6 +12,47 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+const outerObservedReviewActivity = `-- name: OuterObservedReviewActivity :many
+SELECT session_id, reviewer_activity_state, is_archived, reviewer_handle_id, provider_conversation_id FROM review
+`
+
+type OuterObservedReviewActivityRow struct {
+	SessionID              domain.SessionID
+	ReviewerActivityState  string
+	IsArchived             bool
+	ReviewerHandleID       string
+	ProviderConversationID string
+}
+
+func (q *Queries) OuterObservedReviewActivity(ctx context.Context) ([]OuterObservedReviewActivityRow, error) {
+	rows, err := q.db.QueryContext(ctx, outerObservedReviewActivity)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []OuterObservedReviewActivityRow{}
+	for rows.Next() {
+		var i OuterObservedReviewActivityRow
+		if err := rows.Scan(
+			&i.SessionID,
+			&i.ReviewerActivityState,
+			&i.IsArchived,
+			&i.ReviewerHandleID,
+			&i.ProviderConversationID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const outerReportFacts = `-- name: OuterReportFacts :many
 SELECT id,session_id,state,substr(note,1,8000) AS note,created_at,delivery_state,delivery_batch_id
 FROM reports WHERE project_id=?1 ORDER BY created_at DESC,id LIMIT ?2
@@ -61,6 +102,25 @@ func (q *Queries) OuterReportFacts(ctx context.Context, arg OuterReportFactsPara
 		return nil, err
 	}
 	return items, nil
+}
+
+const outerRequestAuditLink = `-- name: OuterRequestAuditLink :one
+SELECT r.id FROM outer_requests r JOIN conversation_turns t ON t.id=r.turn_id
+WHERE t.conversation_id=?1 AND t.provider_turn_id=?2
+AND t.controller_generation=?3
+`
+
+type OuterRequestAuditLinkParams struct {
+	ConversationID string
+	ProviderTurnID string
+	Generation     string
+}
+
+func (q *Queries) OuterRequestAuditLink(ctx context.Context, arg OuterRequestAuditLinkParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, outerRequestAuditLink, arg.ConversationID, arg.ProviderTurnID, arg.Generation)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 const outerRequestForProvider = `-- name: OuterRequestForProvider :one

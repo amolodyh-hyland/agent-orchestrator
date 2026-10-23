@@ -138,6 +138,12 @@ func (m *Manager) SwitchAgent(ctx context.Context, id domain.SessionID, cfg Swit
 // recovery boundary. Ambiguous source restoration is retained without replay;
 // target startup is never retried.
 func (m *Manager) RecoverAgentSwitch(ctx context.Context, id domain.SessionID, switchID domain.AgentSwitchID) (domain.AgentSwitch, error) {
+	if err := domain.HoldOuterTarget(ctx, m.store, id, "switch.recover"); err != nil {
+		return domain.AgentSwitch{}, err
+	}
+	if err := domain.CheckOuterOperation(ctx, m.store, "switch.recover", "", id); err != nil {
+		return domain.AgentSwitch{}, err
+	}
 	if err := m.beginAgentSwitchAttempt(); err != nil {
 		return domain.AgentSwitch{}, err
 	}

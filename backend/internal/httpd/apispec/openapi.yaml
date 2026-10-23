@@ -19553,6 +19553,25 @@ components:
       - settledAt
       - sources
       type: object
+    OuterSessionView:
+      properties:
+        controllerGeneration:
+          type: string
+        harness:
+          type: string
+        mode:
+          type: string
+        permissions:
+          type: string
+        settings:
+          $ref: '#/components/schemas/DomainConversationSettings'
+      required:
+      - harness
+      - mode
+      - controllerGeneration
+      - settings
+      - permissions
+      type: object
     OuterSource:
       properties:
         digest:
@@ -19615,7 +19634,13 @@ components:
           items:
             $ref: '#/components/schemas/OuterCapacity'
           type: array
+        session:
+          anyOf:
+          - type: "null"
+          - $ref: '#/components/schemas/OuterSessionView'
+            type: object
       required:
+      - session
       - binding
       - requests
       - reservations

@@ -327,6 +327,9 @@ func NewWithDeps(d Deps) *Service {
 // Spawn creates a session and returns the API-facing read model plus
 // ephemeral prompt size measurements.
 func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
+	if err := domain.CheckOuterOperation(ctx, s.store, "spawn", cfg.ProjectID, ""); err != nil {
+		return domain.Session{}, 0, 0, err
+	}
 	if rec, found, err := s.replayClientRequest(ctx, cfg.ClientRequestID, cfg.ClientRequestHash); err != nil {
 		return domain.Session{}, 0, 0, err
 	} else if found {
@@ -343,6 +346,30 @@ func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		cfg.Async = true
 		unlock := s.lockOrchestratorProject(cfg.ProjectID)
 		defer unlock()
+		if cfg.OuterGeneration > 0 {
+			policy, ok := s.store.(domain.OuterPolicy)
+			if !ok {
+				return domain.Session{}, 0, 0, domain.ErrOuterHeld
+			}
+			b, found, err := policy.OuterBinding(ctx)
+			a, native := domain.OuterNativeActionFrom(ctx)
+			if err != nil || !found || !native || a.Operation != "spawn" || a.ProjectID != cfg.ProjectID || b.AnchorProjectID != string(cfg.ProjectID) || b.Generation != cfg.OuterGeneration {
+				return domain.Session{}, 0, 0, domain.ErrOuterHeld
+			}
+			// Include stopped sessions: a crash after launch but before binding must
+			// reconcile the original generation rather than launch a replacement.
+			rows, err := s.store.ListSessions(ctx, cfg.ProjectID)
+			if err != nil {
+				return domain.Session{}, 0, 0, err
+			}
+			for _, r := range rows {
+				if r.Kind == domain.KindOrchestrator && r.Metadata.OuterGeneration == cfg.OuterGeneration {
+					v, err := s.toSession(ctx, r)
+					return v, 0, 0, err
+				}
+			}
+			return s.spawn(ctx, cfg)
+		}
 
 		existing, err := s.activeOrchestrators(ctx, cfg.ProjectID)
 		if err != nil {
@@ -602,6 +629,9 @@ func (s *Service) SpawnOrchestrator(
 	requestedMode domain.SessionMode,
 	approval domain.PermissionMode,
 ) (domain.Session, error) {
+	if err := domain.CheckOuterOperation(ctx, s.store, "spawn", projectID, ""); err != nil {
+		return domain.Session{}, err
+	}
 	unlock := s.lockOrchestratorProject(projectID)
 	defer unlock()
 

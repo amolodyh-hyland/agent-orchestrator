@@ -56,6 +56,7 @@ func (s *Service) Send(ctx context.Context, text string) (domain.OuterRequestRec
 		s.mu.Unlock()
 		return domain.OuterRequestReceipt{}, err
 	}
+	sources = append(sources, domain.OuterSource{Kind: "human_input", ID: a.RequestID, Digest: domain.OuterDigest(text), SourceAt: now, ObservedAt: now, Unknown: true, Sources: append([]string{}, b.ProjectIDs...)})
 	r := domain.OuterRequest{ID: a.RequestID, HumanMessage: text, Payload: preview.Text, PayloadDigest: domain.OuterDigest(preview.Text), SessionID: b.SessionID, ConversationID: preview.ConversationID, ProviderConversationID: preview.ProviderConversationID, ControllerGeneration: preview.ControllerGeneration, BindingRevision: b.Revision, ScopeRevision: b.ScopeRevision, SettingsDigest: domain.OuterSettingsDigest(rec, conv, p), Epoch: s.epoch, IssuedAt: now, ExpiresAt: now.Add(2 * time.Minute), Sources: sources}
 	if err := s.store.CreateOuterRequest(ctx, r); err != nil {
 		s.mu.Unlock()
@@ -102,6 +103,9 @@ func (s *Service) AcquireOuterInput(ctx context.Context, id domain.SessionID, ms
 	}
 	if msg.FeedbackControllerGeneration != "" && (msg.FeedbackControllerGeneration != r.ControllerGeneration || msg.FeedbackConversationID != r.ConversationID) {
 		return fail("native_generation_changed")
+	}
+	if err := s.store.ValidateOuterRequest(ctx, r, s.now()); err != nil {
+		return fail("effective_target_or_settings_changed")
 	}
 	switch phase {
 	case "enqueue":

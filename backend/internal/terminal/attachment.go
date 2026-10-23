@@ -44,14 +44,15 @@ const (
 // onExit fires at most once, when the attach loop gives up (runtime dead,
 // attach failure cap) — never on close().
 type attachment struct {
-	id           string
-	handle       ports.RuntimeHandle
-	src          Source
-	log          *slog.Logger
-	onOpen       func()
-	onData       func(data []byte)
-	onExit       func()
-	inputAllowed func() bool
+	inputCredential string
+	id              string
+	handle          ports.RuntimeHandle
+	src             Source
+	log             *slog.Logger
+	onOpen          func()
+	onData          func(data []byte)
+	onExit          func()
+	inputAllowed    func() bool
 
 	maxReattach int
 	resetGrace  time.Duration

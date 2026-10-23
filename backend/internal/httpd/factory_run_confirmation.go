@@ -58,7 +58,15 @@ func mountFactoryRunConfirmation(r chi.Router, service controllers.FactoryRunSer
 		case "preview":
 			value, err = svc.Preview(req.Context(), in.RunID, in.Action)
 		case "confirm":
-			value, err = svc.Confirm(req.Context(), in.RunID, in.Action, in.ExpectedVersion, in.Digest)
+			// The existing exact evidence confirmation retains its own authority.
+			// It does not become an outer Send or cross-project action grant.
+			detail, readErr := service.Get(req.Context(), in.RunID)
+			if readErr != nil {
+				err = readErr
+				break
+			}
+			ctx := domain.WithOuterNativeAction(req.Context(), domain.OuterNativeAction{Operation: "run.confirm", ProjectID: domain.ProjectID(detail.Run.ProjectID), SessionID: detail.Run.SessionID})
+			value, err = svc.Confirm(ctx, in.RunID, in.Action, in.ExpectedVersion, in.Digest)
 		default:
 			reject()
 			return

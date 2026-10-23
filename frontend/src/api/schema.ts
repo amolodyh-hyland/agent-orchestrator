@@ -6888,6 +6888,13 @@ export interface components {
             submittedAt: string;
             turnId: string;
         };
+        OuterSessionView: {
+            controllerGeneration: string;
+            harness: string;
+            mode: string;
+            permissions: string;
+            settings: components["schemas"]["DomainConversationSettings"];
+        };
         OuterSource: {
             digest: string;
             id: string;
@@ -6909,6 +6916,7 @@ export interface components {
             limitations: string[];
             requests: components["schemas"]["OuterRequestView"][];
             reservations: components["schemas"]["OuterCapacity"][];
+            session: null | components["schemas"]["OuterSessionView"];
         };
         PRReviewState: {
             latestRun?: components["schemas"]["ReviewRun"];

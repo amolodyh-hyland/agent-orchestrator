@@ -163,6 +163,7 @@ func schemaName(_ reflect.Type, defaultName string) string {
 var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
 	"OuterView":                                            "OuterView",
 	"OuterRequestView":                                     "OuterRequestView",
+	"OuterSessionView":                                     "OuterSessionView",
 	"DomainOuterBinding":                                   "OuterBinding",
 	"DomainOuterSource":                                    "OuterSource",
 	"DomainOuterCapacity":                                  "OuterCapacity",

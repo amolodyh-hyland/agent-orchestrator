@@ -77,6 +77,17 @@ func (s *Store) CreateOuterRequest(ctx context.Context, r domain.OuterRequest) e
 		if err := q.InsertOuterRequest(ctx, gen.InsertOuterRequestParams{ID: r.ID, Document: string(data)}); err != nil {
 			return err
 		}
+		for _, source := range r.Sources {
+			if source.Kind == "human_input" {
+				doc, err := json.Marshal(source)
+				if err != nil {
+					return err
+				}
+				if err := q.UpsertOuterSource(ctx, gen.UpsertOuterSourceParams{ConversationID: r.ProviderConversationID, SourceKey: "unknown_human_and_native_context", Document: string(doc)}); err != nil {
+					return err
+				}
+			}
+		}
 		return appendOuterAudit(ctx, q, domain.OuterAudit{Operation: "outer.send", State: "recorded", RequestID: r.ID, SessionID: r.SessionID, Generation: r.ControllerGeneration, Digest: r.PayloadDigest, Sources: r.Sources})
 	})
 }
@@ -92,6 +103,12 @@ func validateOuterRequest(ctx context.Context, q *gen.Queries, r domain.OuterReq
 	}
 	if b.Paused || b.HistoryHeld || b.SessionID != r.SessionID || b.Revision != r.BindingRevision || b.ScopeRevision != r.ScopeRevision || !now.Before(r.ExpiresAt) {
 		return domain.ErrOuterHeld
+	}
+	for _, id := range b.ProjectIDs {
+		p, err := q.GetProject(ctx, domain.ProjectID(id))
+		if err != nil || p.ArchivedAt.Valid {
+			return domain.ErrOuterHeld
+		}
 	}
 	for _, source := range r.Sources {
 		for _, id := range append(append([]string{}, source.Sources...), source.ProjectID) {
@@ -124,6 +141,10 @@ func validateOuterRequest(ctx context.Context, q *gen.Queries, r domain.OuterReq
 		return domain.ErrOuterHeld
 	}
 	return nil
+}
+
+func (s *Store) ValidateOuterRequest(ctx context.Context, r domain.OuterRequest, now time.Time) error {
+	return validateOuterRequest(ctx, s.conversationReader(ctx), r, now)
 }
 
 func (s *Store) AttemptOuterRequest(ctx context.Context, id, epoch string, now time.Time) error {
@@ -191,6 +212,24 @@ func (s *Store) reserveOuterCapacity(ctx context.Context, q *gen.Queries, r doma
 		case domain.ActivityIdle, domain.ActivityExited:
 		default:
 			return domain.ErrOuterHeld
+		}
+	}
+	reviews, err := q.OuterObservedReviewActivity(ctx)
+	if err != nil {
+		return err
+	}
+	for _, v := range reviews {
+		if v.IsArchived && v.ReviewerHandleID == "" {
+			continue
+		}
+		switch domain.ActivityState(v.ReviewerActivityState) {
+		case domain.ActivityActive, domain.ActivityWaitingInput, domain.ActivityBlocked:
+			stations++
+		case domain.ActivityIdle, domain.ActivityExited:
+		default:
+			if v.ReviewerHandleID != "" || v.ProviderConversationID != "" {
+				return domain.ErrOuterHeld
+			}
 		}
 	}
 	if stations >= 2 || (r.Heavy && heavy >= 1) {
@@ -308,4 +347,12 @@ func (s *Store) RecordOuterSettlement(ctx context.Context, conversation, provide
 		return err
 	}
 	return appendOuterAudit(ctx, q, domain.OuterAudit{Operation: "outer.settlement", State: "settled", RequestID: row.ID, ReceiptID: providerTurn, Generation: generation})
+}
+
+func (s *Store) OuterRequestAuditLink(ctx context.Context, conv, turn, generation string) (string, error) {
+	id, err := s.conversationReader(ctx).OuterRequestAuditLink(ctx, gen.OuterRequestAuditLinkParams{ConversationID: conv, ProviderTurnID: turn, Generation: generation})
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
 }

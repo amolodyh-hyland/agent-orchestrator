@@ -29,7 +29,7 @@ INSERT INTO outer_callers(verifier,session_id,project_id,generation,outer_scope)
 -- name: GetOuterCaller :one
 SELECT * FROM outer_callers WHERE verifier=?;
 -- name: UpsertOuterSource :exec
-INSERT INTO outer_sources(conversation_id,source_key,document) VALUES(?,?,?) ON CONFLICT(conversation_id,source_key) DO NOTHING;
+INSERT INTO outer_sources(conversation_id,source_key,document) VALUES(?,?,?) ON CONFLICT(conversation_id,source_key) DO UPDATE SET document=excluded.document;
 -- name: OuterPendingInteraction :one
 SELECT count(*) FROM conversation_activities a JOIN conversation_turns t ON t.id=a.turn_id
 JOIN outer_requests r ON r.turn_id=t.id

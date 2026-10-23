@@ -34,7 +34,33 @@ type sessionInputOwnerResolver interface {
 }
 
 func (m *Manager) RevalidateSessionInput(handle domain.SessionID) bool {
+	return m.revalidateTerminalInput(context.Background(), handle)
+}
+
+func (m *Manager) terminalInputContext(handle domain.SessionID, token string) (context.Context, bool) {
 	ctx := context.Background()
+	if token == "" {
+		return ctx, true
+	}
+	st, ok := m.store.(interface {
+		AuthenticateOuterTerminal(context.Context, string, string) (domain.OuterNativeAction, error)
+	})
+	if !ok {
+		return ctx, false
+	}
+	a, err := st.AuthenticateOuterTerminal(ctx, string(handle), token)
+	if err != nil {
+		return ctx, false
+	}
+	return domain.WithOuterNativeAction(ctx, a), true
+}
+
+func (m *Manager) RevalidateTerminalInput(handle domain.SessionID, token string) bool {
+	ctx, ok := m.terminalInputContext(handle, token)
+	return ok && m.revalidateTerminalInput(ctx, handle)
+}
+
+func (m *Manager) revalidateTerminalInput(ctx context.Context, handle domain.SessionID) bool {
 	id, known := m.sessionInputOwner(ctx, handle)
 	if !known {
 		return false
@@ -58,7 +84,18 @@ func (m *Manager) sessionInputOwner(ctx context.Context, handle domain.SessionID
 // callers hold it through the underlying pane write so a later mutation can
 // close admission and wait for every already-admitted write to finish.
 func (m *Manager) AcquireSessionInput(handle domain.SessionID) (release func(), ok bool) {
-	ctx := context.Background()
+	return m.acquireTerminalInput(context.Background(), handle)
+}
+
+func (m *Manager) AcquireTerminalInput(handle domain.SessionID, token string) (func(), bool) {
+	ctx, ok := m.terminalInputContext(handle, token)
+	if !ok {
+		return nil, false
+	}
+	return m.acquireTerminalInput(ctx, handle)
+}
+
+func (m *Manager) acquireTerminalInput(ctx context.Context, handle domain.SessionID) (release func(), ok bool) {
 	id, known := m.sessionInputOwner(ctx, handle)
 	if !known {
 		return nil, false
@@ -88,6 +125,10 @@ func (m *Manager) AcquireSessionInput(handle domain.SessionID) (release func(), 
 		return nil, false
 	}
 	if err := domain.HoldOuterTarget(ctx, m.store, id, "terminal.write"); err != nil {
+		libraryRelease()
+		return nil, false
+	}
+	if err := domain.CheckOuterOperation(ctx, m.store, "terminal.write", "", id); err != nil {
 		libraryRelease()
 		return nil, false
 	}

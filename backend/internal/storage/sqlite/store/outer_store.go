@@ -111,6 +111,10 @@ func (s *Store) CheckOuterOperation(ctx context.Context, operation string, proje
 		project = r.ProjectID
 	}
 	caller, scoped := domain.OuterCallerFrom(ctx)
+	if scoped && !caller.Outer && caller.ProjectID!=project {
+		if err:=s.AppendOuterAudit(ctx,domain.OuterAudit{Operation:operation,State:"held",Reason:"wrong_project_credential",SessionID:caller.SessionID,ProjectID:string(project)});err!=nil{return err}
+		return domain.ErrOuterHeld
+	}
 	if scoped && caller.Outer {
 		if err := s.AppendOuterAudit(ctx, domain.OuterAudit{Operation: operation, State: "held", Reason: "M1 cross-project mutations disabled", SessionID: caller.SessionID, ProjectID: string(project)}); err != nil {
 			return err
@@ -124,7 +128,7 @@ func (s *Store) CheckOuterOperation(ctx context.Context, operation string, proje
 	if a, ok := domain.OuterNativeActionFrom(ctx); ok && a.Operation == operation && a.ProjectID == project && (a.SessionID == session || a.SessionID == "") {
 		return nil
 	}
-	if scoped && !caller.Outer && caller.ProjectID == project && string(project) != b.AnchorProjectID {
+	if scoped && !caller.Outer && caller.ProjectID == project && string(project) != b.AnchorProjectID && operation!="native_only" && operation!="unclassified" {
 		return nil
 	}
 	if err := s.AppendOuterAudit(ctx, domain.OuterAudit{Operation: operation, State: "held", Reason: "native_or_scoped_authority_required", ProjectID: string(project), SessionID: session}); err != nil {

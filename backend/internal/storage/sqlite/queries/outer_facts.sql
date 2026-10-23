@@ -14,3 +14,10 @@ SELECT document FROM outer_sources WHERE source_key=? ORDER BY rowid DESC LIMIT 
 SELECT r.* FROM outer_requests r JOIN conversation_turns t ON t.id=r.turn_id
 WHERE t.conversation_id=sqlc.arg(conversation_id) AND t.provider_turn_id=sqlc.arg(provider_turn_id)
 AND t.controller_generation=sqlc.arg(generation) LIMIT 1;
+-- name: OuterObservedReviewActivity :many
+SELECT session_id, reviewer_activity_state, is_archived, reviewer_handle_id, provider_conversation_id FROM review;
+
+-- name: OuterRequestAuditLink :one
+SELECT r.id FROM outer_requests r JOIN conversation_turns t ON t.id=r.turn_id
+WHERE t.conversation_id=sqlc.arg(conversation_id) AND t.provider_turn_id=sqlc.arg(provider_turn_id)
+AND t.controller_generation=sqlc.arg(generation);

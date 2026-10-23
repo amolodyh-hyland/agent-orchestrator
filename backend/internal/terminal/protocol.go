@@ -52,9 +52,10 @@ const (
 // clientMsg is one inbound frame. Fields are shared across channels; which are
 // populated depends on Ch/Type.
 type clientMsg struct {
-	Ch   string `json:"ch"`
-	ID   string `json:"id,omitempty"`
-	Type string `json:"type"`
+	Authority string `json:"authority,omitempty"`
+	Ch        string `json:"ch"`
+	ID        string `json:"id,omitempty"`
+	Type      string `json:"type"`
 	// Data is base64-encoded keystrokes for ch "terminal" / type "data".
 	Data string `json:"data,omitempty"`
 	Cols uint16 `json:"cols,omitempty"`

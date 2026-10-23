@@ -4,6 +4,7 @@ import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
 import type { ConversationActivity } from "../../types/conversation";
 import { ACCENT_ACTION_PILL, QUIET_ACTION_PILL } from "./action-pill";
+import { NativeInputActionButton, type NativeReplyTarget } from "../OuterNativeButton";
 
 type InputAction = "accept" | "decline" | "cancel";
 type InputValue = string | number | boolean | string[];
@@ -19,7 +20,9 @@ type PropertyEntry = [string, Record<string, unknown>];
 export function ElicitationDock({
 	activity,
 	onResolve,
+	nativeTarget,
 }: {
+	nativeTarget?: NativeReplyTarget;
 	activity: ConversationActivity;
 	onResolve?: (
 		requestId: string,
@@ -28,7 +31,7 @@ export function ElicitationDock({
 	) => Promise<unknown> | void;
 }) {
 	const requestId = activity.requestId;
-	const unavailable = !requestId || !onResolve;
+	const unavailable = !requestId || (!onResolve && !nativeTarget);
 	const [submitting, setSubmitting] = useState(false);
 	const [error, setError] = useState<string>();
 
@@ -53,9 +56,9 @@ export function ElicitationDock({
 			className="elicitation-dock overflow-hidden rounded-[var(--radius-chat-composer)] border border-border-strong bg-surface shadow-sm"
 		>
 			{activity.detail?.inputMode === "url" ? (
-				<URLRequest activity={activity} disabled={submitting || unavailable} onResolve={resolve} />
+				<URLRequest activity={activity} disabled={submitting || unavailable || Boolean(nativeTarget)} onResolve={resolve} />
 			) : (
-				<FormRequest activity={activity} disabled={submitting || unavailable} onResolve={resolve} />
+				<FormRequest activity={activity} nativeTarget={nativeTarget} disabled={submitting || unavailable} onResolve={resolve} />
 			)}
 
 			{error ? (
@@ -168,7 +171,9 @@ function FormRequest({
 	activity,
 	disabled,
 	onResolve,
+	nativeTarget,
 }: {
+	nativeTarget?: NativeReplyTarget;
 	activity: ConversationActivity;
 	disabled: boolean;
 	onResolve: (action: InputAction, content?: Record<string, unknown>) => Promise<void>;
@@ -212,7 +217,7 @@ function FormRequest({
 			setActiveQuestion((current) => current + 1);
 			return;
 		}
-		void onResolve("accept", values);
+		if (!nativeTarget) void onResolve("accept", values);
 	}
 
 	return (
@@ -249,12 +254,12 @@ function FormRequest({
 			</div>
 			<DockFooter>
 				<div className="flex items-center gap-1.5">
-					<button type="button" className={QUIET_ACTION_PILL} disabled={disabled} onClick={() => onResolve("cancel")}>
+					{nativeTarget ? <><NativeInputActionButton target={nativeTarget} requestId={activity.requestId!} action="cancel" variant="ghost" size="sm">Cancel</NativeInputActionButton><NativeInputActionButton target={nativeTarget} requestId={activity.requestId!} action="decline" variant="ghost" size="sm">Skip</NativeInputActionButton></> : <><button type="button" className={QUIET_ACTION_PILL} disabled={disabled} onClick={() => onResolve("cancel")}>
 						Cancel
 					</button>
 					<button type="button" className={QUIET_ACTION_PILL} disabled={disabled} onClick={() => onResolve("decline")}>
 						Skip
-					</button>
+					</button></>}
 				</div>
 				<div className="flex items-center gap-1.5">
 					{hasPreviousQuestion ? (
@@ -270,7 +275,7 @@ function FormRequest({
 							Back
 						</button>
 					) : null}
-					<button type="submit" className={cn(ACCENT_ACTION_PILL, "min-w-20 justify-center")} disabled={disabled}>
+					{nativeTarget && !hasNextQuestion ? <NativeInputActionButton target={nativeTarget} requestId={activity.requestId!} action="accept" content={values} disabled={disabled || properties.some(([name])=>required.has(name)&&isEmpty(values[name]))} size="sm">Continue</NativeInputActionButton> : <button type="submit" className={cn(ACCENT_ACTION_PILL, "min-w-20 justify-center")} disabled={disabled}>
 						{disabled ? (
 							<Loader2 aria-label="Sending answer" className="size-3.5 animate-spin" />
 						) : hasNextQuestion ? (
@@ -278,7 +283,7 @@ function FormRequest({
 						) : (
 							"Continue"
 						)}
-					</button>
+					</button>}
 				</div>
 			</DockFooter>
 		</form>

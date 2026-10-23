@@ -403,7 +403,7 @@ func (q *Queries) SubmitOuterRequest(ctx context.Context, arg SubmitOuterRequest
 }
 
 const upsertOuterSource = `-- name: UpsertOuterSource :exec
-INSERT INTO outer_sources(conversation_id,source_key,document) VALUES(?,?,?) ON CONFLICT(conversation_id,source_key) DO NOTHING
+INSERT INTO outer_sources(conversation_id,source_key,document) VALUES(?,?,?) ON CONFLICT(conversation_id,source_key) DO UPDATE SET document=excluded.document
 `
 
 type UpsertOuterSourceParams struct {

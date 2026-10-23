@@ -27,6 +27,7 @@ type Store interface {
 	GetOuterRequest(context.Context, string) (domain.OuterRequestReceipt, error)
 	ListOuterRequests(context.Context, domain.SessionID) ([]domain.OuterRequestReceipt, error)
 	AttemptOuterRequest(context.Context, string, string, time.Time) error
+	ValidateOuterRequest(context.Context, domain.OuterRequest, time.Time) error
 	OuterCapacity(context.Context) ([]domain.OuterCapacity, error)
 	OuterFacts(context.Context, string, string, int) ([]domain.OuterFact, error)
 	LabelOuterFacts(context.Context, domain.OuterBinding, string, []domain.OuterFact) ([]domain.OuterFact, error)
@@ -61,8 +62,15 @@ type Transport interface {
 
 func (s *Service) SetTransport(t Transport) { s.transport = t }
 
-func New(store Store, projects Projects, sessions Sessions) *Service {
-	return &Service{store: store, projects: projects, sessions: sessions, epoch: uuid.NewString(), now: time.Now}
+type Option func(*Service)
+
+func WithClock(clock func() time.Time) Option { return func(s *Service) { s.now = clock } }
+func New(store Store, projects Projects, sessions Sessions, options ...Option) *Service {
+	s := &Service{store: store, projects: projects, sessions: sessions, epoch: uuid.NewString(), now: time.Now}
+	for _, option := range options {
+		option(s)
+	}
+	return s
 }
 
 func (s *Service) Binding(ctx context.Context) (domain.OuterBinding, bool, error) {
@@ -112,7 +120,7 @@ func (s *Service) Ensure(ctx context.Context, config domain.AgentConfig) (domain
 		return b, nil
 	}
 	launchCtx := domain.WithOuterNativeAction(ctx, domain.OuterNativeAction{Operation: "spawn", ProjectID: domain.ProjectID(b.AnchorProjectID)})
-	created, _, _, err := s.sessions.Spawn(launchCtx, ports.SpawnConfig{ProjectID: domain.ProjectID(b.AnchorProjectID), Kind: domain.KindOrchestrator, Harness: domain.HarnessCodex, RequestedMode: domain.SessionModeChat, DisplayName: "Outer orchestrator"})
+	created, _, _, err := s.sessions.Spawn(launchCtx, ports.SpawnConfig{ProjectID: domain.ProjectID(b.AnchorProjectID), Kind: domain.KindOrchestrator, Harness: domain.HarnessCodex, RequestedMode: domain.SessionModeChat, DisplayName: "Outer orchestrator", OuterGeneration: b.Generation})
 	if err != nil {
 		return b, err
 	}
@@ -170,5 +178,8 @@ func (s *Service) SetScope(ctx context.Context, expected int64, ids []string, pa
 }
 
 func (s *Service) Audit(ctx context.Context, after int64, limit int) ([]domain.OuterAudit, error) {
+	if err := s.store.AppendOuterAudit(ctx, domain.OuterAudit{Operation: "outer.audit.read", State: "observed"}); err != nil {
+		return nil, err
+	}
 	return s.store.PageOuterAudit(ctx, after, limit)
 }

@@ -10,11 +10,20 @@ import (
 )
 
 type View struct {
+	Session      *SessionView           `json:"session"`
 	Binding      *domain.OuterBinding   `json:"binding"`
 	Requests     []RequestView          `json:"requests"`
 	Reservations []domain.OuterCapacity `json:"reservations"`
 	Incoming     []domain.OuterEvidence `json:"incoming"`
 	Limitations  []string               `json:"limitations"`
+}
+
+type SessionView struct {
+	Harness              domain.AgentHarness         `json:"harness"`
+	Mode                 domain.SessionMode          `json:"mode"`
+	ControllerGeneration string                      `json:"controllerGeneration"`
+	Settings             domain.ConversationSettings `json:"settings"`
+	Permissions          domain.PermissionMode       `json:"permissions"`
 }
 
 type RequestView struct {
@@ -40,6 +49,14 @@ func (s *Service) View(ctx context.Context) (View, error) {
 		return v, err
 	}
 	v.Binding = &b
+	if rec, ok, readErr := s.store.GetSession(ctx, b.SessionID); readErr != nil {
+		return v, readErr
+	} else if ok {
+		v.Session = &SessionView{Harness: rec.Harness, Mode: rec.Mode, ControllerGeneration: rec.Metadata.ControllerGeneration, Permissions: rec.Metadata.Permissions}
+		if conv, convErr := s.store.ConversationForSession(ctx, b.SessionID); convErr == nil {
+			v.Session.Settings = conv.Settings
+		}
+	}
 	receipts, err := s.store.ListOuterRequests(ctx, b.SessionID)
 	if err != nil {
 		return v, err
@@ -52,6 +69,9 @@ func (s *Service) View(ctx context.Context) (View, error) {
 		return v, err
 	}
 	v.Incoming, err = s.store.OuterEvidence(ctx, b.SessionID)
+	if err == nil {
+		err = s.store.AppendOuterAudit(ctx, domain.OuterAudit{Operation: "outer.view", State: "observed", SessionID: b.SessionID})
+	}
 	return v, err
 }
 
@@ -123,4 +143,48 @@ func (s *Service) ResolveTarget(ctx context.Context, kind, id string) (domain.Pr
 }
 func (s *Service) AuthorizeOperation(ctx context.Context, op string, p domain.ProjectID, id domain.SessionID) error {
 	return s.store.CheckOuterOperation(ctx, op, p, id)
+}
+
+func (s *Service) BindTerminal(ctx context.Context, handle string) (any, error) {
+	if !native(ctx, "terminal.bind") {
+		return nil, domain.ErrOuterHeld
+	}
+	p, id, err := s.ResolveTarget(ctx, "terminal", handle)
+	if err != nil {
+		return nil, err
+	}
+	issuer, ok := s.store.(interface {
+		IssueOuterTerminal(context.Context, string) (string, error)
+	})
+	if !ok {
+		return nil, domain.ErrOuterHeld
+	}
+	token, err := issuer.IssueOuterTerminal(domain.WithOuterNativeAction(ctx, domain.OuterNativeAction{Operation: "terminal.bind", ProjectID: p, SessionID: id}), handle)
+	return map[string]string{"handleId": handle, "authority": token}, err
+}
+
+// Serialize settings and lifecycle effects with the outer's actual-write gate.
+// Recording the intent is required before forwarding any native mutation.
+func (s *Service) BeginNativeControl(ctx context.Context, a domain.OuterNativeAction, digest string) (func(bool) error, error) {
+	if _, ok := domain.OuterNativeActionFrom(ctx); !ok {
+		return nil, domain.ErrOuterHeld
+	}
+	s.mu.Lock()
+	if err := s.store.CheckOuterOperation(ctx, a.Operation, a.ProjectID, a.SessionID); err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	id := fmt.Sprintf("native:%s:%d", digest, time.Now().UnixNano())
+	if err := s.store.AppendOuterAudit(ctx, domain.OuterAudit{ID: id, Operation: a.Operation, State: "attempted", SessionID: a.SessionID, ProjectID: string(a.ProjectID), Generation: a.Generation, Digest: digest}); err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	return func(ok bool) error {
+		defer s.mu.Unlock()
+		state := "held_or_unknown"
+		if ok {
+			state = "recorded"
+		}
+		return s.store.AppendOuterAudit(ctx, domain.OuterAudit{Operation: a.Operation, State: state, ReceiptID: id, SessionID: a.SessionID, ProjectID: string(a.ProjectID), Digest: digest})
+	}, nil
 }

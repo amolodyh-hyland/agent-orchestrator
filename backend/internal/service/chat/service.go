@@ -775,6 +775,32 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		}
 	}
 
+	generation := strings.TrimSpace(cfg.ControllerGeneration)
+	if generation == "" {
+		generation = s.newID()
+	}
+	issueEnv := func(ctx context.Context, env map[string]string) (map[string]string, error) {
+		if owner.Kind == domain.ConversationOwnerSession {
+			if issuer, ok := s.store.(interface {
+				IssueOuterCallerGeneration(context.Context, domain.SessionID, string, string) (string, error)
+			}); ok {
+				token, err := issuer.IssueOuterCallerGeneration(ctx, cfg.SessionID, "chat", generation)
+				if err != nil {
+					return nil, err
+				}
+				env = maps.Clone(env)
+				if env == nil {
+					env = map[string]string{}
+				}
+				env["AO_SCOPE_CREDENTIAL"] = token
+			}
+		}
+		return env, nil
+	}
+	cfg.Env, err = issueEnv(ctx, cfg.Env)
+	if err != nil {
+		return nil, err
+	}
 	var prepareEnv func(context.Context) (map[string]string, error)
 	if cfg.PrepareControllerEnv != nil {
 		prepareEnv = func(prepareCtx context.Context) (map[string]string, error) {
@@ -782,7 +808,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			if prepareErr != nil {
 				return nil, fmt.Errorf("prepare chat controller environment: %w", prepareErr)
 			}
-			return env, nil
+			return issueEnv(prepareCtx, env)
 		}
 	}
 
@@ -982,10 +1008,6 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	// pending provider boundary claims it in ControllerReady's atomic ownership
 	// commit instead, so a failed provider connect or callback cannot split the
 	// session owner from the conversation head.
-	generation := strings.TrimSpace(cfg.ControllerGeneration)
-	if generation == "" {
-		generation = s.newID()
-	}
 	if providerBoundaryID == "" {
 		if owner.Kind == domain.ConversationOwnerReview {
 			claimed, claimErr := s.store.ClaimReviewChatController(ctx, owner.ID, conv.ProviderConversationID(), generation, s.now())
@@ -2406,6 +2428,9 @@ func (s *Service) SetConfigOption(
 	configID string,
 	value ports.ChatConfigOptionValue,
 ) ([]ports.ChatConfigOption, error) {
+	if err := s.holdUnapprovedContinuation(ctx, id); err != nil {
+		return nil, err
+	}
 	record, err := s.requireChatSession(ctx, id)
 	if err != nil {
 		return nil, err
@@ -2603,6 +2628,9 @@ func (s *Service) SetTurnSettings(
 	id domain.SessionID,
 	settings domain.ConversationSettings,
 ) (domain.ConversationSettings, error) {
+	if err := domain.CheckOuterOperation(ctx, s.store, "settings", "", id); err != nil {
+		return domain.ConversationSettings{}, err
+	}
 	if _, err := s.requireChatSession(ctx, id); err != nil {
 		return domain.ConversationSettings{}, err
 	}

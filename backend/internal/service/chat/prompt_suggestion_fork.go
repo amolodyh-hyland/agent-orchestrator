@@ -14,6 +14,9 @@ import (
 // RunPromptSuggestionTask uses an unpublished native child, retaining transcript
 // reconstruction when the provider cannot safely fork this completed turn.
 func (s *Service) RunPromptSuggestionTask(ctx context.Context, id domain.SessionID, turnID string, harness domain.AgentHarness, cfg ports.ChatStartConfig, prompt string) (_ string, err error) {
+	if err := s.holdUnapprovedContinuation(ctx, id); err != nil {
+		return "", err
+	}
 	driver, err := s.drivers.Driver(harness)
 	if err != nil {
 		return "", err

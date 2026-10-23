@@ -2,8 +2,6 @@ package chat
 
 import (
 	"context"
-	"io"
-	"os"
 	"strings"
 	"time"
 
@@ -76,22 +74,10 @@ func (s *Service) PrepareOuterSend(ctx context.Context, id domain.SessionID, tex
 	if err != nil {
 		return OuterSendPreview{}, err
 	}
-	for _, skill := range msg.NativeSkills {
-		f, err := os.Open(skill.Path)
-		if err != nil {
-			return OuterSendPreview{}, err
-		}
-		data, readErr := io.ReadAll(io.LimitReader(f, 64001))
-		_ = f.Close()
-		if readErr != nil {
-			return OuterSendPreview{}, readErr
-		}
-		if len(data) > 64000 {
-			return OuterSendPreview{}, domain.ErrOuterHeld
-		}
-		msg.Text += "\n\nSelected instructions (frozen at Send):\n" + string(data)
-	}
-	if len(msg.Text) > 128000 {
+	// M1's trusted Send binds the exact visible plain text. Expansion adapters
+	// require their own pre-Send preview; never append hidden skill bytes after
+	// the trusted human gesture. Native tools within the turn remain available.
+	if len(msg.NativeSkills) > 0 || len(msg.Content) > 0 || len(msg.Excerpts) > 0 || msg.Text != text {
 		return OuterSendPreview{}, domain.ErrOuterHeld
 	}
 	return OuterSendPreview{SessionID: id, ConversationID: c.conversation.ID, ProviderConversationID: c.ProviderConversationID(), ControllerGeneration: c.generation, Settings: c.Settings(), Text: msg.Text}, nil
@@ -126,7 +112,23 @@ func (c *Controller) auditOuterEvent(ctx context.Context, event ports.ChatEvent)
 			}
 		}
 	}
-	return audit.AppendOuterAudit(ctx, domain.OuterAudit{Operation: "native." + string(event.Kind), State: "observed", SessionID: c.sessionID, Generation: c.generation, Digest: domain.OuterDigest([]any{event.Kind, event.ProviderTurnID, event.ProviderItemID}), ReceiptID: event.ProviderTurnID, Reason: "native invocation metadata only; raw output retained in transcript"})
+	turn := event.ProviderTurnID
+	if turn == "" {
+		c.mu.Lock()
+		turn = c.pendingTurnID
+		c.mu.Unlock()
+	}
+	request := ""
+	if linker, ok := c.store.(interface {
+		OuterRequestAuditLink(context.Context, string, string, string) (string, error)
+	}); ok {
+		var err error
+		request, err = linker.OuterRequestAuditLink(ctx, c.conversation.ID, turn, c.generation)
+		if err != nil {
+			return err
+		}
+	}
+	return audit.AppendOuterAudit(ctx, domain.OuterAudit{Operation: "native." + string(event.Kind), State: "observed", RequestID: request, SessionID: c.sessionID, Generation: c.generation, Digest: domain.OuterDigest([]any{event.Kind, event.ProviderTurnID, event.ProviderItemID}), ReceiptID: turn, Reason: "native invocation metadata only; raw output retained in transcript"})
 }
 
 func (c *Controller) checkOuterReply(ctx context.Context, id, kind string) error {

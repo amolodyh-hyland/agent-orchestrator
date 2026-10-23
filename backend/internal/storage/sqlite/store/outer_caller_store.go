@@ -6,8 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"fmt"
-	"strconv"
+	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
@@ -19,6 +18,27 @@ func callerVerifier(token string) string {
 }
 
 func (s *Store) IssueOuterCaller(ctx context.Context, id domain.SessionID) (string, error) {
+	r, found, err := s.GetSession(ctx, id)
+	if err != nil || !found {
+		return "", domain.ErrOuterHeld
+	}
+	kind, generation := "runtime", r.Metadata.RuntimeLaunchID
+	if r.Mode == domain.SessionModeChat {
+		kind, generation = "chat", r.Metadata.ControllerGeneration
+	}
+	return s.IssueOuterCallerGeneration(ctx, id, kind, generation)
+}
+
+func (s *Store) callerGeneration(r domain.SessionRecord, kind, generation string) string {
+	return kind + ":" + domain.OuterDigest([]any{s.outerTerminalEpoch, r.CleanupGeneration, generation})
+}
+
+// Called only from an owned launch/bootstrap, with the generation selected by
+// that launch. The verifier becomes usable only after that owner is published.
+func (s *Store) IssueOuterCallerGeneration(ctx context.Context, id domain.SessionID, kind, generation string) (string, error) {
+	if kind != "chat" && kind != "runtime" {
+		return "", domain.ErrOuterHeld
+	}
 	b, found, err := s.OuterBinding(ctx)
 	if err != nil || !found {
 		return "", err
@@ -39,7 +59,12 @@ func (s *Store) IssueOuterCaller(ctx context.Context, id domain.SessionID) (stri
 		return "", err
 	}
 	defer s.writeMu.Unlock()
-	err = s.qw.IssueOuterCaller(ctx, gen.IssueOuterCallerParams{Verifier: callerVerifier(token), SessionID: string(id), ProjectID: string(r.ProjectID), Generation: strconv.FormatInt(r.CleanupGeneration, 10), OuterScope: boolInt(string(r.ProjectID) == b.AnchorProjectID)})
+	err = s.inTx(ctx, "issue scoped caller", func(q *gen.Queries) error {
+		if err := appendOuterAudit(ctx, q, domain.OuterAudit{Operation: "caller.owned_launch", State: "issued", SessionID: id, ProjectID: string(r.ProjectID), Generation: generation}); err != nil {
+			return err
+		}
+		return q.IssueOuterCaller(ctx, gen.IssueOuterCallerParams{Verifier: callerVerifier(token), SessionID: string(id), ProjectID: string(r.ProjectID), Generation: s.callerGeneration(r, kind, generation), OuterScope: boolInt(string(r.ProjectID) == b.AnchorProjectID)})
+	})
 	return token, err
 }
 
@@ -55,7 +80,11 @@ func (s *Store) AuthenticateOuterCaller(ctx context.Context, token string) (doma
 	if err != nil {
 		return domain.OuterCaller{}, err
 	}
-	if !found || r.IsTerminated || string(r.ProjectID) != row.ProjectID || strconv.FormatInt(r.CleanupGeneration, 10) != row.Generation {
+	kind, generation := "runtime", r.Metadata.RuntimeLaunchID
+	if r.Mode == domain.SessionModeChat {
+		kind, generation = "chat", r.Metadata.ControllerGeneration
+	}
+	if !found || r.IsTerminated || string(r.ProjectID) != row.ProjectID || !strings.HasPrefix(row.Generation, kind+":") || s.callerGeneration(r, kind, generation) != row.Generation {
 		return domain.OuterCaller{}, domain.ErrOuterHeld
 	}
 	b, found, err := s.OuterBinding(ctx)
@@ -78,7 +107,11 @@ func (s *Store) OuterCallerState(ctx context.Context, id domain.SessionID) (stri
 		return "", domain.ErrOuterHeld
 	}
 	var count int
-	err = s.readDB.QueryRowContext(ctx, "SELECT count(*) FROM outer_callers WHERE session_id=? AND generation=?", string(id), fmt.Sprint(r.CleanupGeneration)).Scan(&count)
+	kind, generation := "runtime", r.Metadata.RuntimeLaunchID
+	if r.Mode == domain.SessionModeChat {
+		kind, generation = "chat", r.Metadata.ControllerGeneration
+	}
+	err = s.readDB.QueryRowContext(ctx, "SELECT count(*) FROM outer_callers WHERE session_id=? AND generation=?", string(id), s.callerGeneration(r, kind, generation)).Scan(&count)
 	if err != nil {
 		return "", err
 	}

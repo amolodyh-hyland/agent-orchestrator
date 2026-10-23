@@ -451,6 +451,9 @@ type TriggerOutcome struct {
 
 // TriggerRequested starts a client-requested review pass.
 func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionID, req TriggerRequest) (TriggerOutcome, error) {
+	if err := domain.CheckOuterOperation(ctx, s.store, "review.trigger", "", workerID); err != nil {
+		return TriggerOutcome{}, err
+	}
 	// Reject before refreshing/attaching a PR, as well as at engine admission.
 	if err := domain.CheckFactoryFeedback(ctx, s.store, workerID); err != nil {
 		return TriggerOutcome{}, err
@@ -562,6 +565,9 @@ func firstNonEmpty(values ...string) string {
 
 // TriggerAuto starts a daemon-initiated review pass.
 func (s *Service) TriggerAuto(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness) (reviewcore.TriggerResult, error) {
+	if err := domain.CheckOuterOperation(ctx, s.store, "review.trigger", "", workerID); err != nil {
+		return reviewcore.TriggerResult{}, err
+	}
 	if err := domain.CheckFactoryFeedback(ctx, s.store, workerID); err != nil {
 		return reviewcore.TriggerResult{}, err
 	}
@@ -627,6 +633,9 @@ func (s *Service) triggerWithOptions(
 
 // Cancel stops the live reviewer pane and marks running review passes as failed.
 func (s *Service) Cancel(ctx context.Context, workerID domain.SessionID) (reviewcore.CancelResult, error) {
+	if err := domain.CheckOuterOperation(ctx, s.store, "review.cancel", "", workerID); err != nil {
+		return reviewcore.CancelResult{}, err
+	}
 	result, err := s.engine.Cancel(ctx, workerID)
 	if err != nil {
 		return result, err

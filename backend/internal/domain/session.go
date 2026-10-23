@@ -237,6 +237,7 @@ type SessionMetadata struct {
 	// controller that is dying cannot mutate the session that replaced it. Not
 	// the same fence as RuntimeLaunchID, which covers terminal runtimes.
 	ControllerGeneration string `json:"controllerGeneration,omitempty"`
+	OuterGeneration      int64  `json:"outerGeneration,omitempty"`
 	// PreviewURL is the browser preview target the desktop app opens for this
 	// session. Set via `ao preview` (POST /sessions/{id}/preview); persisted so
 	// it survives a daemon restart. Empty means no preview has been requested.

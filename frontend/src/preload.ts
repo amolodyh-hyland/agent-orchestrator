@@ -1,3 +1,4 @@
+import { OUTER_STAGE, OUTER_CANCEL, OUTER_RESULT, installOuterUserAction, type OuterNativeBridge, type OuterNativeDraft, type OuterStage, type OuterResult } from "./shared/outer-native";
 import { RUN_PREVIEW, RUN_CANCEL, RUN_RESULT, installRunUserAction, type RunAction, type RunPreview, type RunResult } from "./shared/factory-run-confirmation";
 import { CHOOSE_PROJECT_CONTEXT_CHANNEL, type ProjectContextLinkRequest, type ProjectContextLinkSelection } from "./shared/project-context";
 import { installDelegationUserAction } from "./shared/multica-delegation-user-action";
@@ -776,6 +777,15 @@ const api = {
 		get: () => ipcRenderer.invoke("uiSettings:get") as Promise<UiSettings>,
 		set: (settings: Partial<UiSettings>) => ipcRenderer.invoke("uiSettings:set", settings) as Promise<UiSettings>,
 	},
+	outer: {
+		stage: (slot: string, draft: OuterNativeDraft) => ipcRenderer.invoke(OUTER_STAGE, slot, draft) as Promise<OuterStage | null>,
+		cancel: (id: string) => ipcRenderer.invoke(OUTER_CANCEL, id) as Promise<void>,
+		onResult: (listener: (result: OuterResult) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, result: OuterResult) => listener(result);
+			ipcRenderer.on(OUTER_RESULT, wrapped);
+			return () => { ipcRenderer.off(OUTER_RESULT, wrapped); };
+		},
+	} satisfies OuterNativeBridge,
 	factoryRun: {
 		preview: (runId: string, action: RunAction) => ipcRenderer.invoke(RUN_PREVIEW, runId, action) as Promise<RunPreview | null>,
 		cancel: (id: string) => ipcRenderer.invoke(RUN_CANCEL, id) as Promise<void>,
@@ -1041,3 +1051,4 @@ export type AoBridge = typeof api;
 installDelegationUserAction(document, (channel, input) => ipcRenderer.invoke(channel, input));
 
 installRunUserAction(document, (channel, input) => ipcRenderer.invoke(channel, input));
+installOuterUserAction(document, (channel, input) => ipcRenderer.invoke(channel, input));

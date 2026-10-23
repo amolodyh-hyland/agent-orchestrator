@@ -827,6 +827,9 @@ func remoteHost(remote string) string {
 // UpdateSettings atomically replaces the project's stored display name and
 // config. Both values are validated before a single database update.
 func (m *Service) UpdateSettings(ctx context.Context, id domain.ProjectID, in UpdateSettingsInput) (Project, error) {
+	if err := domain.CheckOuterOperation(ctx, m.store, "project.settings", id, ""); err != nil {
+		return Project{}, err
+	}
 	if err := validateProjectID(id); err != nil {
 		return Project{}, err
 	}
@@ -917,6 +920,9 @@ func (m *Service) modelScopeChanged(projectID string) {
 // SetConfig replaces the project's stored config. The typed config is validated
 // here so a bad value is rejected when set rather than surfacing at spawn.
 func (m *Service) SetConfig(ctx context.Context, id domain.ProjectID, in SetConfigInput) (Project, error) {
+	if err := domain.CheckOuterOperation(ctx, m.store, "project.config", id, ""); err != nil {
+		return Project{}, err
+	}
 	if err := validateProjectID(id); err != nil {
 		return Project{}, err
 	}
@@ -997,6 +1003,9 @@ func resolveDefaultBranch(ctx context.Context, path string) string {
 // archives the project registration. The original repository path and durable
 // session/history rows are preserved.
 func (m *Service) Remove(ctx context.Context, id domain.ProjectID) (RemoveResult, error) {
+	if err := domain.CheckOuterOperation(ctx, m.store, "project.remove", id, ""); err != nil {
+		return RemoveResult{}, err
+	}
 	if err := validateProjectID(id); err != nil {
 		return RemoveResult{}, err
 	}
@@ -1277,6 +1286,9 @@ func sessionPrefix(id string) string {
 
 // SetPermissions remembers the approval policy for future sessions of either role.
 func (m *Service) SetPermissions(ctx context.Context, id domain.ProjectID, in SetPermissionsInput) (Project, error) {
+	if err := domain.CheckOuterOperation(ctx, m.store, "project.permissions", id, ""); err != nil {
+		return Project{}, err
+	}
 	if err := validateProjectID(id); err != nil {
 		return Project{}, err
 	}

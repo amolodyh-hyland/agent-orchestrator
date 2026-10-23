@@ -13,6 +13,8 @@
 // The renderer connects directly to the loopback daemon (same host/port as the
 // REST API, path `/mux`); it is not proxied through the Electron main process.
 
+import { outerTerminalAuthority } from "./outer-terminal";
+
 type ServerFrame = {
 	ch: string;
 	id?: string;
@@ -42,11 +44,11 @@ export function base64ToBytes(b64: string): Uint8Array {
 }
 
 export function openFrame(id: string, cols: number, rows: number): string {
-	return JSON.stringify({ ch: "terminal", type: "open", id, cols, rows });
+	return JSON.stringify({ ch: "terminal", type: "open", id, cols, rows, authority: outerTerminalAuthority(id) });
 }
 
 export function dataFrame(id: string, bytes: Uint8Array): string {
-	return JSON.stringify({ ch: "terminal", type: "data", id, data: bytesToBase64(bytes) });
+	return JSON.stringify({ ch: "terminal", type: "data", id, data: bytesToBase64(bytes), authority: outerTerminalAuthority(id) });
 }
 
 export function resizeFrame(id: string, cols: number, rows: number, force = false): string {
@@ -149,6 +151,7 @@ export function createTerminalMux(url: string, WebSocketImpl: typeof WebSocket =
 	const socket = new WebSocketImpl(url);
 	const encoder = new TextEncoder();
 	const queue: string[] = [];
+	const openGrids = new Map<string, { cols: number; rows: number }>();
 	const dataListeners = new Map<string, Set<DataListener>>();
 	const exitListeners = new Map<string, Set<ExitListener>>();
 	const openedListeners = new Map<string, Set<OpenedListener>>();
@@ -233,6 +236,7 @@ export function createTerminalMux(url: string, WebSocketImpl: typeof WebSocket =
 		openedListeners.clear();
 		errorListeners.clear();
 		connectionListeners.clear();
+		window.removeEventListener("ao:terminal-authority", rebind);
 		try {
 			socket.close();
 		} catch {
@@ -240,8 +244,17 @@ export function createTerminalMux(url: string, WebSocketImpl: typeof WebSocket =
 		}
 	};
 
+	const rebind = (event: Event) => {
+		const id = (event as CustomEvent<string>).detail;
+		const grid = openGrids.get(id);
+		if (!grid) return;
+		// Replace the attachment, discarding every old buffered input lease.
+		send(closeFrame(id)); send(openFrame(id,grid.cols,grid.rows));
+	};
+	window.addEventListener("ao:terminal-authority", rebind);
 	return {
 		open: (id, cols, rows) => {
+			openGrids.set(id,{cols,rows});
 			send(openFrame(id, cols, rows));
 		},
 		sendInput: (id, input) => {
@@ -249,9 +262,11 @@ export function createTerminalMux(url: string, WebSocketImpl: typeof WebSocket =
 			send(dataFrame(id, bytes));
 		},
 		resize: (id, cols, rows, force) => {
+			if (openGrids.has(id)) openGrids.set(id,{cols,rows});
 			send(resizeFrame(id, cols, rows, force));
 		},
 		close: (id) => {
+			openGrids.delete(id);
 			send(closeFrame(id));
 		},
 		onData: (id, listener) => subscribeById(dataListeners, id, listener),

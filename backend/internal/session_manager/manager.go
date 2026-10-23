@@ -1584,6 +1584,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	}
 
 	metadata := domain.SessionMetadata{
+		OuterGeneration:           rec.Metadata.OuterGeneration,
 		Permissions:               rec.Metadata.Permissions,
 		Branch:                    ws.Branch,
 		WorkspacePath:             ws.Path,
@@ -3212,6 +3213,9 @@ func (m *Manager) relaunchRestoredSession(ctx context.Context, rec domain.Sessio
 // terminal identity, and provider-native conversation remain available for an
 // exact ResumeAgentWithMode call.
 func (m *Manager) ExitAgent(ctx context.Context, id domain.SessionID) (domain.SessionRecord, error) {
+	if err := domain.CheckOuterOperation(ctx, m.store, "exit", "", id); err != nil {
+		return domain.SessionRecord{}, err
+	}
 	if err := m.beginAgentOperation(ctx, id, agentOperationExit); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
 			err = ErrAgentExitInProgress
@@ -5524,6 +5528,9 @@ type CleanupResult struct {
 // whose teardown is refused (uncommitted work) is never forced; it is reported
 // in Skipped with the reason so the refusal is visible instead of silent.
 func (m *Manager) Cleanup(ctx context.Context, project domain.ProjectID) (CleanupResult, error) {
+	if err := domain.CheckOuterOperation(ctx, m.store, "cleanup", project, ""); err != nil {
+		return CleanupResult{}, err
+	}
 	recs, err := m.cleanupRecords(ctx, project)
 	if err != nil {
 		return CleanupResult{}, fmt.Errorf("cleanup %s: %w", project, err)
@@ -5772,7 +5779,7 @@ func seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now t
 		// Resolved before this point and persisted here. There is no UPDATE
 		// statement that can change it afterwards.
 		Mode:              domain.NormalizeSessionMode(cfg.RequestedMode),
-		Metadata:          domain.SessionMetadata{Permissions: permissions, PermissionCeiling: permissions},
+		Metadata:          domain.SessionMetadata{Permissions: permissions, PermissionCeiling: permissions, OuterGeneration: cfg.OuterGeneration},
 		RequestedOutput:   cfg.RequestedOutput,
 		OutputType:        domain.SessionOutputNone,
 		AutoReviewEnabled: projectConfig.AutoReview,
@@ -6345,15 +6352,7 @@ func (m *Manager) runtimeEnv(id domain.SessionID, project domain.ProjectID, issu
 func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string, accountID string) (map[string]string, error) {
 	caseInsensitive := envKeysCaseInsensitive
 	env := spawnEnvForOS(id, project, issue, m.dataDir, projectEnv, caseInsensitive)
-	if issuer, ok := m.store.(interface {
-		IssueOuterCaller(context.Context, domain.SessionID) (string, error)
-	}); ok {
-		token, err := issuer.IssueOuterCaller(context.Background(), id)
-		if err != nil {
-			return nil, err
-		}
-		setProtectedEnv(env, "AO_SCOPE_CREDENTIAL", token, caseInsensitive)
-	}
+	deleteProtectedEnv(env, "AO_SCOPE_CREDENTIAL", caseInsensitive)
 	// Project configuration must never redirect AO-owned hook callbacks to a
 	// different daemon. New receives the resolved absolute path in production;
 	// the environment fallback keeps focused embedders and tests compatible.
@@ -7222,6 +7221,15 @@ func (m *Manager) wrapAgentProcessWithLaunchID(agent ports.Agent, id domain.Sess
 	// Without this env value an old source hook can overwrite the target's
 	// native session id after an in-place switch.
 	env[EnvRuntimeLaunchID] = launchID
+	if issuer, ok := m.store.(interface {
+		IssueOuterCallerGeneration(context.Context, domain.SessionID, string, string) (string, error)
+	}); ok {
+		token, err := issuer.IssueOuterCallerGeneration(context.Background(), id, "runtime", launchID)
+		if err != nil {
+			return nil, err
+		}
+		setProtectedEnv(env, "AO_SCOPE_CREDENTIAL", token, envKeysCaseInsensitive)
+	}
 	if augmenter, ok := agent.(ports.AgentRuntimeLaunchEnv); ok {
 		augmenter.AugmentRuntimeLaunchEnv(env, m.dataDir, id, launchID)
 	}

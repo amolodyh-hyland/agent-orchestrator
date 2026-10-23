@@ -276,6 +276,9 @@ type TriggerOptions struct {
 // one session cannot change what any other session in the project runs. The
 // harness-change path below already handles the swap by respawning the pane.
 func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionID, opts TriggerOptions) (TriggerResult, error) {
+	if err := domain.CheckOuterOperation(ctx, e.store, "review.trigger", "", workerID); err != nil {
+		return TriggerResult{}, err
+	}
 	override, overrideConfig, source, mode := opts.Harness, opts.Config, opts.Source, opts.InterfaceMode
 	if source == "" {
 		source = domain.ReviewTriggerManual
@@ -981,6 +984,9 @@ func (e *Engine) resetReviewerRuntimeLocked(ctx stdctx.Context, workerID domain.
 // start a review; explicit trigger remains the only path that starts review
 // work.
 func (e *Engine) RestoreReviewer(ctx stdctx.Context, workerID domain.SessionID) (RestoreReviewerResult, error) {
+	if err := domain.CheckOuterOperation(ctx, e.store, "review.restore", "", workerID); err != nil {
+		return RestoreReviewerResult{}, err
+	}
 	if workerID == "" {
 		return RestoreReviewerResult{}, fmt.Errorf("%w: worker session id is required", ErrInvalid)
 	}

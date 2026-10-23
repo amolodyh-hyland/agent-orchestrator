@@ -1,3 +1,4 @@
+import { registerOuterNative } from "./main/outer-native";
 import { registerFactoryRunConfirmation } from "./main/factory-run-confirmation";
 import { approveLocalServerLogs, approveLocalServerMutation } from "./main/multica-local-server-approval";
 import { createMainProcessDelegationAuthority } from "./main/multica-delegation-authority";
@@ -403,6 +404,7 @@ let multicaIssueLinkService: MulticaIssueLinkService | null = null;
 let multicaStatusSync: MulticaStatusSync | null = null;
 let multicaStatusSyncIpc: { dispose: () => void } | null = null;
 let factoryRunConfirmation: ReturnType<typeof registerFactoryRunConfirmation> | null = null;
+let outerNative: ReturnType<typeof registerOuterNative> | null = null;
 let multicaDelegation: ReturnType<typeof registerDesktopDelegation> | null = null;
 let multicaLocalServer: MulticaLocalServer | null = null;
 let multicaLocalServerIpc: { dispose: () => void } | null = null;
@@ -1159,6 +1161,10 @@ async function createWindowInternal(): Promise<void> {
 			return result.response === 1;
 		},
 	});
+	outerNative = registerOuterNative({ ipcMain, shellWebContents, authority: delegationConfirmation.authority,
+		origin: () => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null,
+		fetch: (url, init) => net.fetch(url instanceof URL ? url.href : url, init),
+	});
 	multicaDelegation = registerDesktopDelegation({
 		ipcMain, shellWebContents, authority: delegationConfirmation.authority,
 		credentials: multicaCredentials,
@@ -1446,6 +1452,7 @@ async function createWindowInternal(): Promise<void> {
 		multicaStatusSyncIpc?.dispose();
 		multicaStatusSyncIpc = null;
 		factoryRunConfirmation?.dispose();
+		outerNative?.dispose();
 		multicaDelegation?.dispose();
 		multicaDelegation = null;
 		multicaLocalServerIpc?.dispose();

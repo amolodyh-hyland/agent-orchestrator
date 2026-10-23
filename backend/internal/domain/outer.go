@@ -195,6 +195,27 @@ func CheckOuterOperation(ctx context.Context, store any, operation string, proje
 	return nil
 }
 
+func CheckOuterResource(ctx context.Context, store any, operation, kind, id string) error {
+	policy, ok := store.(OuterPolicy)
+	if !ok {
+		return nil
+	}
+	if _, found, err := policy.OuterBinding(ctx); err != nil || !found {
+		return err
+	}
+	resolver, ok := store.(interface {
+		ResolveOuterTarget(context.Context, string, string) (ProjectID, SessionID, error)
+	})
+	if !ok {
+		return ErrOuterHeld
+	}
+	p, s, err := resolver.ResolveOuterTarget(ctx, kind, id)
+	if err != nil {
+		return ErrOuterHeld
+	}
+	return policy.CheckOuterOperation(ctx, operation, p, s)
+}
+
 type outerNativeKey struct{}
 type OuterNativeAction struct {
 	Generation string
