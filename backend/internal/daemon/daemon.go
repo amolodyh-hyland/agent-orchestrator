@@ -643,6 +643,24 @@ func Run() error {
 		Delivery: reportSemanticDelivery{chat: chatSvc, sessions: reportSessions, store: store},
 	})
 	chatSvc.SetReportCoordinator(reportCoordinator)
+	monitor := factoryrun.NewMonitor(store)
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			scanCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			_, scanErr := monitor.Scan(scanCtx, "")
+			cancel()
+			if scanErr != nil && ctx.Err() == nil {
+				log.Warn("run monitoring scan failed", "err", scanErr)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
 	reportDeliveryDone := reportCoordinator.Start(ctx)
 	defer func() {
 		stop()
@@ -996,6 +1014,7 @@ func Run() error {
 		Notifications:      notifier,
 		Reports:            reportSvc,
 		FactoryRuns:        factoryrun.New(store, runrepo.Reader{}, cfg.DataDir),
+		RunMonitor:         monitor,
 		NotificationStream: notificationHub,
 		Push:               pushRegistry,
 		Presence:           presenceTracker,
@@ -1275,6 +1294,9 @@ type reportSemanticDelivery struct {
 }
 
 func (d reportSemanticDelivery) Submit(ctx context.Context, id domain.SessionID, message string, batch reportsvc.PreparedBatch) (domain.ReportDeliveryReceipt, error) {
+	if err := domain.CheckFactoryFeedback(ctx, d.store, id); err != nil {
+		return domain.ReportDeliveryReceipt{State: domain.ReportReceiptHeld}, err
+	}
 	unknown := domain.ReportDeliveryReceipt{State: domain.ReportReceiptUnknown}
 	if d.store == nil {
 		return unknown, reportsvc.ErrReportDeliveryModeUnsupported
@@ -1310,6 +1332,9 @@ func (d reportSemanticDelivery) Submit(ctx context.Context, id domain.SessionID,
 }
 
 func (d reportSemanticDelivery) Interrupt(ctx context.Context, id domain.SessionID) error {
+	if err := domain.CheckFactoryFeedback(ctx, d.store, id); err != nil {
+		return err
+	}
 	if d.store == nil {
 		return reportsvc.ErrReportDeliveryModeUnsupported
 	}

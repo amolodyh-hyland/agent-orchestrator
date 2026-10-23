@@ -194,3 +194,72 @@ branch, index and exclusion snapshots are checked again after observation, and
 the private view is removed afterwards. Unsupported metadata layouts (including
 split indexes or reftable refs) hold readiness rather than falling back to reading
 unvalidated configuration. Packed refs and ordinary linked worktrees are supported.
+
+## Passive monitoring and attention
+
+Approved run references are scanned at daemon startup and every 30 seconds. The
+scan reads existing sessions, reports, persisted feedback policies and native
+report receipts. It starts no worker and submits no continuation. The desktop
+restores read-only delegation polling for the same approved project/task and
+exact request or remote delegation ID, including when new admissions are off.
+Offline, authentication and rate-limit failures retain the original reference.
+No replacement admission, cancellation or retry-as-new execution is inferred.
+
+`ao run status <id>` performs a five-second bounded GET. `ao run attention
+--project <id>` lists monitoring projections. The cockpit and session run dialog
+show these same deadlines, next owner, observation/activity timestamps, report
+acknowledgement and native receipt facts. Report acknowledgement is distinct from
+native acceptance; neither is verified work completion. Idle and unavailable
+ownership always retain work in progress.
+
+`ao run monitor <id> --file monitor.json` changes display settings only:
+
+```json
+{"silenceSeconds":300,"buildSeconds":1800,"heavy":false,"nextOwner":"operator"}
+```
+
+The default silence deadline is five minutes; a heavy/build stage uses thirty
+minutes. Set `heavy` for an approved build, or set an explicit `stageDeadline`
+(UTC timestamp) for a tighter stage limit. Each confirmed stage change clears the
+previous explicit deadline. Silence is measured from stage entry, worker activity
+and worker reports, never from a view refresh. Attention coalesces by immutable
+project/run/stage-version/condition. First/last occurrence and deliberate display
+acknowledgement survive restart. `POST /runs/{runId}/attention` with the current
+`key` acknowledges display only: the cause remains until fresh evidence, report
+outbox acknowledgement is unchanged, and work never resumes.
+
+Decision 6(b) holds execution-producing feedback for confirmed run workers and
+their project's report-recipient coordinators. Effective inherited automatic
+review, CI/review injection, persisted PR/comment/review policies and report routes
+are snapshotted without editing session settings or project defaults. Gates cover
+automatic review, lifecycle nudges, scheduled reports, stuck-report interrupts,
+piggyback, semantic sends, queued Chat dispatch and deferred starts. Delayed or
+queued feedback remains held across restart; toggles, elapsed deadlines, a pause
+or an old/revoked approval cannot make it executable. This release issues no
+continuation grants and offers no automatic resume or steer. Unrelated workers
+and projects keep their existing behavior. Direct human conversation remains a
+separate action; these monitoring controls confer no authority on it.
+
+There is no terminal run status or resource-release operation in this ledger.
+Handoff remains an active human release gate. Approved references remain monitored
+and feedback held; unknown ownership never frees a workspace. This consumes the
+PR #48 report coordinator and PR #57 native receipt distinction, preserving their
+cross-project deferral and recovery behavior. It does not implement the later
+factory admission, isolation or continuation-approval workflow.
+
+Monitoring sweeps advance at most 25 references per pass and persist an exclusive
+cursor before each observation. A timeout, restart or failed observation advances
+the next pass beyond that reference; the cursor wraps at the end. Each run has its
+own observation lock. Listing never waits for a complete sweep: it returns saved
+snapshots and explicit `unobserved` references in pages of 1–100 rows, using
+`afterId`/`nextCursor`. `ao run attention --after-id <cursor> --limit 100` reads the
+next page. The desktop follows every page when restoring delegation observation.
+SQL limits report observations to the newest 100 metadata rows before hydration;
+no report bodies or output attachments are loaded. Participant queries read only
+the run worker and active report recipients. Feedback policy metadata is bounded
+to 1,000 entries, with an explicit held marker for additional entries.
+
+All review trigger sources recheck the factory hold after admission waits and
+before invoking the shared review engine. A source label cannot authorize a new
+factory review. Reviewer Chat messages from the daemon pass the same hold at
+queue drain, dispatch, provider submission and deferred transport admission.

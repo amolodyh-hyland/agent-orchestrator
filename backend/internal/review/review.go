@@ -671,6 +671,11 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		if selectedMode == domain.ReviewerInterfaceChat && !hasConfigOverride {
 			launchSpec.ProviderConversationID = reviewRow.ProviderConversationID
 		}
+		// Enrollment can change while recovery, the worker lock, or preflight
+		// is waiting. Check at the execution boundary for every interface.
+		if err := domain.CheckFactoryFeedback(ctx, e.store, workerID); err != nil {
+			return TriggerResult{}, rollbackReplacement(err)
+		}
 		launch, err := e.launcher.Spawn(ctx, launchSpec)
 		if err != nil {
 			return TriggerResult{}, rollbackReplacement(fmt.Errorf("launch reviewer: %w", err))
@@ -685,6 +690,9 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	} else {
 		launchSpec := reviewLaunchSpec(worker, harness, config, launchRun, queue, 0, reviewRow.AgentSessionID, reviewRow.ReviewerLaunchID)
 		launchSpec.InterfaceMode = selectedMode
+		if err := domain.CheckFactoryFeedback(ctx, e.store, workerID); err != nil {
+			return TriggerResult{}, failRuns(0, err)
+		}
 		if err := e.launcher.Notify(ctx, handleID, launchSpec); err != nil {
 			return TriggerResult{}, failRuns(0, fmt.Errorf("notify reviewer: %w", err))
 		}
@@ -740,6 +748,9 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		if deferInitialMessage {
 			launchSpec := reviewLaunchSpec(worker, harness, config, launchRun, queue, 0, persistedAgentSessionID, reviewRow.ReviewerLaunchID)
 			launchSpec.InterfaceMode = selectedMode
+			if err := domain.CheckFactoryFeedback(ctx, e.store, workerID); err != nil {
+				return TriggerResult{}, rollbackReplacement(err)
+			}
 			if err := e.launcher.Notify(ctx, handleID, launchSpec); err != nil {
 				return TriggerResult{}, rollbackReplacement(fmt.Errorf("notify replacement reviewer: %w", err))
 			}

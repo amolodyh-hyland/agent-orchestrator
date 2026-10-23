@@ -109,3 +109,60 @@ func TestFactoryRunCLIValidationAndErrorEnvelope(t *testing.T) {
 		t.Fatalf("lost error envelope: %v", err)
 	}
 }
+
+func TestRunStatusAndAttentionOnlyGet(t *testing.T) {
+	cfg := setConfigEnv(t)
+	methods := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/internal/telemetry/") {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		methods = append(methods, r.Method+" "+r.URL.Path)
+		if r.URL.Path == "/api/v1/runs/r/status" {
+			_, _ = w.Write([]byte(`{"runId":"r","state":"in_progress","freshness":"unknown"}`))
+			return
+		}
+		if r.URL.Path == "/api/v1/runs/monitoring" {
+			_, _ = w.Write([]byte(`{"runs":[]}`))
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	writeRunFileFor(t, cfg, server)
+	for _, args := range [][]string{{"run", "status", "r"}, {"run", "attention", "--project", "p"}} {
+		if _, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, method := range methods {
+		if !strings.HasPrefix(method, "GET ") {
+			t.Fatalf("status mutates: %s", method)
+		}
+	}
+}
+
+func TestRunAttentionCursorPage(t *testing.T) {
+	cfg := setConfigEnv(t)
+	seen := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/internal/telemetry/") {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/runs/monitoring" || r.URL.Query().Get("afterId") != "run-099" || r.URL.Query().Get("limit") != "25" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+		}
+		seen = true
+		_, _ = w.Write([]byte(`{"runs":[],"nextCursor":"run-124"}`))
+	}))
+	defer server.Close()
+	writeRunFileFor(t, cfg, server)
+	if _, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "run", "attention", "--project", "p", "--after-id", "run-099", "--limit", "25"); err != nil {
+		t.Fatal(err)
+	}
+	if !seen {
+		t.Fatal("monitoring page was not read")
+	}
+}

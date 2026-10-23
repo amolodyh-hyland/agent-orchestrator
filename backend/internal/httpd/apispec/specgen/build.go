@@ -161,6 +161,14 @@ func schemaName(_ reflect.Type, defaultName string) string {
 // by projectOperations(). Add an entry when a new contract type is introduced;
 // the drift test fails until the spec is regenerated, which flags the gap.
 var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
+	"DomainRunMonitoring":                                  "RunMonitoring",
+	"DomainRunMonitorConfig":                               "RunMonitorConfig",
+	"DomainRunParticipantSnapshot":                         "RunParticipantSnapshot",
+	"DomainRunAttention":                                   "RunAttention",
+	"DomainRunReportObservation":                           "RunReportObservation",
+	"ControllersRunMonitoringQuery":                        "RunMonitoringQuery",
+	"ControllersRunMonitoringList":                         "RunMonitoringList",
+	"ControllersRunAttentionAck":                           "RunAttentionAck",
 	"DomainFactoryRun":                                     "FactoryRun",
 	"DomainRunRepoBinding":                                 "RunRepoBinding",
 	"DomainRunSource":                                      "RunSource",
@@ -3781,6 +3789,10 @@ func awakeOperations() []operation {
 func factoryRunOperations() []operation {
 	errorResponses := []respUnit{{http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}}
 	return []operation{
+		{method: http.MethodGet, path: "/api/v1/runs/monitoring", id: "listRunMonitoring", tag: "runs", summary: "Read a bounded page of available run observations", pathParams: []any{controllers.RunMonitoringQuery{}}, resps: append([]respUnit{{http.StatusOK, controllers.RunMonitoringList{}}}, errorResponses...)},
+		{method: http.MethodGet, path: "/api/v1/runs/{runId}/status", id: "getRunStatus", tag: "runs", summary: "Bounded passive status observation", pathParams: []any{controllers.FactoryRunIDParam{}}, resps: append([]respUnit{{http.StatusOK, domain.RunMonitoring{}}}, errorResponses...)},
+		{method: http.MethodPost, path: "/api/v1/runs/{runId}/monitor", id: "configureRunMonitoring", tag: "runs", summary: "Configure display deadlines and next owner", pathParams: []any{controllers.FactoryRunIDParam{}}, reqBody: domain.RunMonitorConfig{}, resps: append([]respUnit{{http.StatusOK, domain.RunMonitoring{}}}, errorResponses...)},
+		{method: http.MethodPost, path: "/api/v1/runs/{runId}/attention", id: "acknowledgeRunAttention", tag: "runs", summary: "Acknowledge display attention without acknowledging reports or resuming work", pathParams: []any{controllers.FactoryRunIDParam{}}, reqBody: controllers.RunAttentionAck{}, resps: append([]respUnit{{http.StatusOK, domain.RunMonitoring{}}}, errorResponses...)},
 		{method: http.MethodGet, path: "/api/v1/runs", id: "listFactoryRuns", tag: "runs", summary: "List manually created project runs", pathParams: []any{controllers.ListFactoryRunsQuery{}}, resps: append([]respUnit{{http.StatusOK, controllers.ListFactoryRunsResponse{}}}, errorResponses...)},
 		{method: http.MethodGet, path: "/api/v1/runs/{runId}", id: "getFactoryRun", tag: "runs", summary: "Read run history and current evidence blockers", pathParams: []any{controllers.FactoryRunIDParam{}}, resps: append([]respUnit{{http.StatusOK, domain.RunDetail{}}}, errorResponses...)},
 		{method: http.MethodGet, path: "/api/v1/runs/{runId}/evidence", id: "listFactoryRunEvidence", tag: "runs", summary: "Read a bounded exclusive-version history page", pathParams: []any{controllers.FactoryRunIDParam{}, controllers.RunEvidencePageQuery{}}, resps: append([]respUnit{{http.StatusOK, controllers.RunEvidencePage{}}}, errorResponses...)},

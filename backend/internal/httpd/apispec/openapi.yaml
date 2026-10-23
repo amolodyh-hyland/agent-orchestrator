@@ -5789,6 +5789,62 @@ paths:
       summary: Submit an unconfirmed stage claim; desktop native confirmation is required
       tags:
       - runs
+  /api/v1/runs/{runId}/attention:
+    post:
+      operationId: acknowledgeRunAttention
+      parameters:
+      - in: path
+        name: runId
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunAttentionAck'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunMonitoring'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Acknowledge display attention without acknowledging reports or resuming
+        work
+      tags:
+      - runs
   /api/v1/runs/{runId}/evidence:
     get:
       operationId: listFactoryRunEvidence
@@ -5902,6 +5958,167 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Append completion or review evidence without delivering feedback
+      tags:
+      - runs
+  /api/v1/runs/{runId}/monitor:
+    post:
+      operationId: configureRunMonitoring
+      parameters:
+      - in: path
+        name: runId
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunMonitorConfig'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunMonitoring'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Configure display deadlines and next owner
+      tags:
+      - runs
+  /api/v1/runs/{runId}/status:
+    get:
+      operationId: getRunStatus
+      parameters:
+      - in: path
+        name: runId
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunMonitoring'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Bounded passive status observation
+      tags:
+      - runs
+  /api/v1/runs/monitoring:
+    get:
+      operationId: listRunMonitoring
+      parameters:
+      - in: query
+        name: projectId
+        schema:
+          type: string
+      - in: query
+        name: afterId
+        schema:
+          type: string
+      - in: query
+        name: limit
+        schema:
+          format: int64
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunMonitoringList'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read a bounded page of available run observations
       tags:
       - runs
   /api/v1/sessions:
@@ -20015,6 +20232,36 @@ components:
       - path
       - digest
       type: object
+    RunAttention:
+      properties:
+        acknowledgedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        condition:
+          type: string
+        firstAt:
+          format: date-time
+          type: string
+        key:
+          type: string
+        lastAt:
+          format: date-time
+          type: string
+      required:
+      - key
+      - condition
+      - firstAt
+      - lastAt
+      type: object
+    RunAttentionAck:
+      properties:
+        key:
+          type: string
+      required:
+      - key
+      type: object
     RunCheckReceipt:
       properties:
         environment:
@@ -20177,6 +20424,126 @@ components:
       - id
       - severity
       type: object
+    RunMonitorConfig:
+      properties:
+        buildSeconds:
+          type: integer
+        heavy:
+          type: boolean
+        nextOwner:
+          type: string
+        silenceSeconds:
+          type: integer
+        stageDeadline:
+          format: date-time
+          type:
+          - "null"
+          - string
+      required:
+      - silenceSeconds
+      - buildSeconds
+      - nextOwner
+      - heavy
+      type: object
+    RunMonitoring:
+      properties:
+        attention:
+          $ref: '#/components/schemas/RunAttention'
+        config:
+          $ref: '#/components/schemas/RunMonitorConfig'
+        deadline:
+          format: date-time
+          type: string
+        delegationId:
+          type: string
+        freshness:
+          type: string
+        lastActivityAt:
+          format: date-time
+          type: string
+        observedAt:
+          format: date-time
+          type: string
+        ownership:
+          type: string
+        participants:
+          items:
+            $ref: '#/components/schemas/RunParticipantSnapshot'
+          type: array
+        projectId:
+          type: string
+        reports:
+          items:
+            $ref: '#/components/schemas/RunReportObservation'
+          type: array
+        runId:
+          type: string
+        sessionId:
+          type: string
+        stage:
+          type: string
+        stageVersion:
+          format: int64
+          type: integer
+        state:
+          type: string
+        taskId:
+          type: string
+      required:
+      - runId
+      - projectId
+      - taskId
+      - stage
+      - stageVersion
+      - config
+      - participants
+      - observedAt
+      - lastActivityAt
+      - deadline
+      - freshness
+      - ownership
+      - state
+      - reports
+      type: object
+    RunMonitoringList:
+      properties:
+        nextCursor:
+          type: string
+        runs:
+          items:
+            $ref: '#/components/schemas/RunMonitoring'
+          type: array
+      required:
+      - runs
+      type: object
+    RunParticipantSnapshot:
+      properties:
+        autoInjectCI:
+          type: boolean
+        autoInjectReview:
+          type: boolean
+        autoReview:
+          type: boolean
+        capturedAt:
+          format: date-time
+          type: string
+        feedbackPolicies:
+          items:
+            type: string
+          type: array
+        reportRoute:
+          type: string
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - autoReview
+      - autoInjectReview
+      - autoInjectCI
+      - feedbackPolicies
+      - reportRoute
+      - capturedAt
+      type: object
     RunRepoBinding:
       properties:
         baseSha:
@@ -20237,6 +20604,23 @@ components:
       - unstaged
       - untracked
       - fingerprint
+      type: object
+    RunReportObservation:
+      properties:
+        deliveryState:
+          type: string
+        id:
+          type: string
+        nativeReceipt:
+          type: string
+        recordedAt:
+          format: date-time
+          type: string
+      required:
+      - id
+      - recordedAt
+      - deliveryState
+      - nativeReceipt
       type: object
     RunReviewReceipt:
       properties:

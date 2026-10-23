@@ -295,3 +295,18 @@ func TestCoordinatorPeriodicallyEvaluatesPersistedFacts(t *testing.T) {
 	cancel()
 	<-done
 }
+
+type heldFactoryStore struct{ *fakeStore }
+
+func (*heldFactoryStore) FactoryFeedbackHeld(context.Context, domain.SessionID) (bool, error) {
+	return true, nil
+}
+func TestFactoryParticipantInheritedAutoReviewIsDisplayOnly(t *testing.T) {
+	now := time.Now()
+	store := &heldFactoryStore{&fakeStore{session: domain.SessionRecord{ID: "s1", ProjectID: "p1", Kind: domain.KindWorker, Harness: domain.HarnessCodex, AutoReviewEnabled: true, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: now.Add(-time.Hour)}}}}
+	trigger := &fakeTrigger{}
+	result, err := New(store, trigger, Config{Clock: func() time.Time { return now }}).EvaluateSession(context.Background(), "s1")
+	if err != nil || result.Reason != "factory_display_only" || trigger.calls != 0 || !store.session.AutoReviewEnabled {
+		t.Fatalf("factory settings/dispatch: %+v %v", result, err)
+	}
+}

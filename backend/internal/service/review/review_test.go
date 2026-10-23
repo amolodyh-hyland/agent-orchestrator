@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1073,5 +1074,94 @@ func TestTriggerRequestedNamedPRAttachesItAndTargetsIt(t *testing.T) {
 	refresher.err = map[string]error{url: fmt.Errorf("%w: owned", reviewcore.ErrPROwnedElsewhere)}
 	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{PRURL: url}); !errors.Is(err, ErrPROwnedElsewhere) {
 		t.Fatalf("err = %v, want the attach failure for an untracked PR", err)
+	}
+}
+
+type factoryTriggerStore struct {
+	*fakeStore
+	held atomic.Bool
+}
+
+func (s *factoryTriggerStore) FactoryFeedbackHeld(context.Context, domain.SessionID) (bool, error) {
+	return s.held.Load(), nil
+}
+
+type factoryTriggerWait struct {
+	ports.CodexOperationGate
+	waiting  chan struct{}
+	proceed  chan struct{}
+	released atomic.Bool
+}
+
+func (g *factoryTriggerWait) AcquireSharedWait(ctx context.Context) (func(), error) {
+	close(g.waiting)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-g.proceed:
+	}
+	return func() { g.released.Store(true) }, nil
+}
+
+func TestFactoryReviewRequestsHoldEveryTriggerSource(t *testing.T) {
+	for _, source := range []domain.ReviewTriggerSource{domain.ReviewTriggerAgent, domain.ReviewTriggerManual, domain.ReviewTriggerAuto} {
+		t.Run(string(source), func(t *testing.T) {
+			st := &factoryTriggerStore{fakeStore: &fakeStore{}}
+			st.held.Store(true)
+			svc := New(nil, st)
+			called := false
+			svc.engineTrigger = func(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+				called = true
+				return reviewcore.TriggerResult{}, nil
+			}
+			var err error
+			if source == domain.ReviewTriggerAuto {
+				_, err = svc.TriggerAuto(context.Background(), "worker", domain.ReviewerCodex)
+			} else {
+				_, err = svc.TriggerRequested(context.Background(), "worker", TriggerRequest{Source: source, EnableAutoInject: true})
+			}
+			if !errors.Is(err, domain.ErrFactoryFeedbackHeld) || called || len(st.autoInjectSets) != 0 {
+				t.Fatalf("held trigger reached execution or policy writes: %v %v", called, err)
+			}
+		})
+	}
+}
+func TestFactoryReviewEnrollmentDuringAdmissionWait(t *testing.T) {
+	for _, source := range []domain.ReviewTriggerSource{domain.ReviewTriggerAuto, domain.ReviewTriggerAgent, domain.ReviewTriggerManual} {
+		t.Run(string(source), func(t *testing.T) {
+			st := &factoryTriggerStore{fakeStore: &fakeStore{}}
+			gate := &factoryTriggerWait{waiting: make(chan struct{}), proceed: make(chan struct{})}
+			svc := New(nil, st, WithCodexAccountOperationGate(gate))
+			var calls atomic.Int32
+			svc.engineTrigger = func(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+				calls.Add(1)
+				return reviewcore.TriggerResult{}, nil
+			}
+			result := make(chan error, 1)
+			go func() {
+				var err error
+				if source == domain.ReviewTriggerAuto {
+					_, err = svc.TriggerAuto(context.Background(), "worker", domain.ReviewerCodex)
+				} else {
+					_, err = svc.TriggerRequested(context.Background(), "worker", TriggerRequest{Source: source, Harness: domain.ReviewerCodex, EnableAutoInject: true})
+				}
+				result <- err
+			}()
+			select {
+			case <-gate.waiting:
+			case <-time.After(5 * time.Second):
+				t.Fatal("trigger did not wait")
+			}
+			st.held.Store(true)
+			close(gate.proceed)
+			select {
+			case err := <-result:
+				if !errors.Is(err, domain.ErrFactoryFeedbackHeld) || calls.Load() != 0 || !gate.released.Load() || len(st.autoInjectSets) != 0 {
+					t.Fatalf("wait bypassed hold: %v calls=%d", err, calls.Load())
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("trigger remained blocked")
+			}
+		})
 	}
 }

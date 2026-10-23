@@ -431,3 +431,19 @@ describe("optional managed delegation policy", () => {
 		} finally { vi.useRealTimers(); }
 	});
 });
+
+it.each(["offline", "unauthorized", "rate_limited", "restart"])("monitor reconciliation after %s keeps the original request and sends zero admission POSTs", async (failure) => {
+	const record = await coordinator().taskOrchestrator.confirm(intent, approved);
+	rows.set(record.requestId, { ...record, attempted: true, state: "submission_unknown" }); await flush();
+	if (failure !== "restart") Object.assign(client, { listDelegations: vi.fn(async () => ({ ok: false, code: failure, retryAfterMs: failure === "rate_limited" ? 30_000 : undefined })) });
+	let service = await restart();
+	await service.taskOrchestrator.reconcile(record.requestId);
+	accepted = structuredClone(remote);
+	Object.assign(client, { listDelegations: vi.fn(async () => ({ ok: true, data: { delegations: [accepted] } })) });
+	service = await restart();
+	const recovered = await service.taskOrchestrator.reconcile(record.requestId);
+	expect(recovered.record.requestId).toBe(record.requestId);
+	expect(recovered.record.remote?.delegation_id).toBe(remote.delegation_id);
+	expect(client.delegate).not.toHaveBeenCalled(); expect(client.cancelDelegation).not.toHaveBeenCalled();
+	expect(rows.size).toBe(1);
+});
