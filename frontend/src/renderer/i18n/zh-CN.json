@@ -1,4 +1,7 @@
 {
+	"library.bindingState": "当前绑定：{{id}} · {{state}} · {{hash}}",
+	"library.bindingEnabled": "已启用",
+	"library.bindingDisabled": "已停用",
 	"library.automaticSelection": "提供方可能会自动选择已配置的技能。批准仅适用于已查看的确切文件。",
 	"library.approved": "已批准的修订",
 	"library.nativeUnverified": "原生 · 来源未经验证",

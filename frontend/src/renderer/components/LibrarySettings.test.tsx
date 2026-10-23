@@ -79,3 +79,17 @@ it("reviews revocation separately from Project binding", async () => {
 	fireEvent.click(screen.getByRole("button", { name: "Confirm selection" }));
 	await waitFor(() => expect(mocks.POST).toHaveBeenCalledWith("/api/v1/library/operations", { body: { operation: "revoke", approvalId: "approval-one", expectedRevision: 3 } }));
 });
+
+it.each(["content-hash", "new-content-hash"])("updates the existing binding without allocating another ID for %s", async (hash) => {
+	const binding = { bindingId: "existing-binding", projectId: "no-repo-project", sourceId: "source-one", entryId: "entry-one", ownerId: "local_user", approvedContentHash: "content-hash", roles: ["chat"], position: 9, required: false, enabled: false, revision: 4 };
+	mocks.GET.mockResolvedValue({ data: { ...catalog, entries: [{ ...entry, contentHash: hash }], bindings: [binding] } });
+	mocks.POST.mockResolvedValue({ data: { ...catalog, bindings: [{ ...binding, enabled: true, approvedContentHash: hash, revision: 5 }], revision: 4 } });
+	setup();
+	fireEvent.click(screen.getByRole("button", { name: "Review library sources" }));
+	expect(await screen.findByText(/Current binding: existing-binding/)).toHaveTextContent("Disabled");
+	fireEvent.click(screen.getByRole("button", { name: "Bind revision to project chat" }));
+	fireEvent.click(screen.getByRole("button", { name: "Confirm selection" }));
+	await waitFor(() => expect(mocks.POST).toHaveBeenCalledOnce());
+	expect(mocks.POST.mock.calls[0]?.[1].body.binding).toMatchObject({ ...binding, enabled: true, approvedContentHash: hash });
+	expect(await screen.findByText(/Current binding: existing-binding/)).toHaveTextContent("Enabled");
+});

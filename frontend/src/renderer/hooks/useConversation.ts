@@ -1408,12 +1408,21 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
  * opening an empty menu.
  */
 export function useConversationSkills(sessionId: string | undefined, enabled: boolean, hostId?: string, providerId?: string) {
+	const queryClient = useQueryClient();
 	const readiness = useRef({ enabled, generation: 0 });
 	if (readiness.current.enabled !== enabled) {
 		readiness.current = { enabled, generation: readiness.current.generation + 1 };
 	}
+	const queryKey = [...conversationSkillsQueryKey(sessionId ?? "", hostId), providerId ?? "", readiness.current.generation];
+	const validationScope = JSON.stringify([enabled, queryKey]);
+	const currentScope = useRef(validationScope);
+	currentScope.current = validationScope;
+	useEffect(() => {
+		currentScope.current = validationScope;
+		return () => { if (currentScope.current === validationScope) currentScope.current = ""; };
+	}, [validationScope]);
 	const query = useQuery<ChatSkillCatalog>({
-		queryKey: [...conversationSkillsQueryKey(sessionId ?? "", hostId), providerId ?? "", readiness.current.generation],
+		queryKey,
 		enabled: Boolean(sessionId) && enabled,
 		// ACP agents publish this catalog asynchronously and may replace it later.
 		// Polling also keeps Codex project skills current without introducing a
@@ -1453,7 +1462,27 @@ export function useConversationSkills(sessionId: string | undefined, enabled: bo
 		...skill, catalogIdentity: identity,
 		canInvoke: Boolean(catalog?.canList && catalog.status !== "controller_not_ready" && skill.canInvoke),
 	}));
-	return { skills, catalog, isLoading: query.isLoading };
+	const resolveSkills = async (): Promise<ChatSkill[]> => {
+		if (!enabled || !sessionId) return [];
+		const observed = queryClient.getQueryCache().find<ChatSkillCatalog>({ queryKey, exact: true });
+		if (!observed) return [];
+		try {
+			// Join the active fetch, including interval refreshes. Read the cache after
+			// it settles: structural sharing may replace the fetch result object.
+			while (observed.state.fetchStatus === "fetching") {
+				if (currentScope.current !== validationScope || queryClient.getQueryCache().find({ queryKey, exact: true }) !== observed) return [];
+				await queryClient.fetchQuery<ChatSkillCatalog>({ queryKey, staleTime: 0 });
+			}
+		} catch { return []; }
+		const current = queryClient.getQueryCache().find<ChatSkillCatalog>({ queryKey, exact: true });
+		const validated = current?.state.status === "success" ? current.state.data : undefined;
+		if (currentScope.current !== validationScope || current !== observed || !validated
+			|| (providerId && validated.providerId !== providerId)) return [];
+		const identity = skillCatalogIdentity(validated, hostId);
+		return validated.skills.map((skill) => ({ ...skill, catalogIdentity: identity,
+			canInvoke: Boolean(validated.canList && validated.status !== "controller_not_ready" && skill.canInvoke) }));
+	};
+	return { skills, catalog, resolveSkills, isLoading: query.isLoading };
 }
 
 /**

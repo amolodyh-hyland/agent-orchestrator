@@ -1,4 +1,7 @@
 {
+	"library.bindingState": "現在の紐付け: {{id}} · {{state}} · {{hash}}",
+	"library.bindingEnabled": "有効",
+	"library.bindingDisabled": "無効",
 	"library.automaticSelection": "配置されたスキルはプロバイダーによって自動選択される場合があります。承認は確認した正確なファイルにのみ適用されます。",
 	"library.approved": "承認済みのリビジョン",
 	"library.nativeUnverified": "ネイティブ · 出所未検証",

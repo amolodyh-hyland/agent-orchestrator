@@ -58,10 +58,14 @@ export function LibrarySettings({ projectId, hostId, disabled }: { projectId: st
 	function bind(entry: Entry) {
 		const source = visibleResult?.sources.find((source) => source.sourceId === entry.sourceId);
 		if (!source) return;
+		const existing = visibleResult?.bindings.find((binding) => binding.projectId === projectId && binding.sourceId === entry.sourceId && binding.entryId === entry.entryId);
 		request({ operation: "bind", binding: {
-			bindingId: `bind_${crypto.randomUUID().replaceAll("-", "")}`, ownerId: source.ownerId,
+			...existing,
+			bindingId: existing?.bindingId ?? `bind_${crypto.randomUUID().replaceAll("-", "")}`, ownerId: source.ownerId,
 			projectId, sourceId: source.sourceId, entryId: entry.entryId, approvedContentHash: entry.contentHash,
-			roles: ["chat"], position: visibleResult?.bindings.length ?? 0, required: false, enabled: true, revision: 0,
+			roles: existing?.roles.includes("chat") ? existing.roles : [...(existing?.roles ?? []), "chat"],
+			position: existing?.position ?? Math.max(-1, ...(visibleResult?.bindings.filter((binding) => binding.projectId === projectId).map((binding) => binding.position) ?? [])) + 1,
+			required: existing?.required ?? false, enabled: true, revision: existing?.revision ?? 0,
 		} });
 	}
 
@@ -83,6 +87,7 @@ export function LibrarySettings({ projectId, hostId, disabled }: { projectId: st
 								{entry.files.map((file) => <details key={file.path}><summary className="text-xs">{file.path} · {file.sizeBytes} · {file.sha256}</summary><pre className="max-h-64 overflow-auto whitespace-pre-wrap text-xs">{staged.content?.[file.path]}</pre></details>)}
 								{["rule", "skill", "prompt_command"].includes(entry.kind) ? <Button type="button" variant="ghost" size="sm" disabled={locked} onClick={() => request({ operation: "approve", sourceId: source.sourceId, rootIdentity: staged.rootIdentity, entries: [{ entryId: entry.entryId, contentHash: entry.contentHash }], purposes: [entry.kind === "rule" ? "load_context" : entry.kind === "prompt_command" ? "invoke_prompt_command" : "materialize_skill"] })}>{t("library.approve")}</Button> : null}
 							</div>)}
+							{visibleResult.bindings.filter((binding) => binding.projectId === projectId && binding.sourceId === entry.sourceId && binding.entryId === entry.entryId).map((binding) => <p key={binding.bindingId} className="break-all text-xs text-muted-foreground">{t("library.bindingState", { id: binding.bindingId, state: t(binding.enabled ? "library.bindingEnabled" : "library.bindingDisabled"), hash: binding.approvedContentHash })}</p>)}
 							<Button type="button" variant="ghost" size="sm" disabled={locked} onClick={() => bind(entry)}>{t("library.bind")}</Button>
 						</div>)}
 					</div>)}

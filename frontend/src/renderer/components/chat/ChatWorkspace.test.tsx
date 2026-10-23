@@ -5241,6 +5241,43 @@ describe("durable queued edits", () => {
 		};
 	}
 
+	it.each(["replace", "clear"])("persists same-token selection intent across queued-edit recovery (%s)", async (intent) => {
+		const snapshot = queuedSnapshot();
+		snapshot.items[0] = { ...snapshot.items[0], text: "$review original" } as ConversationMessage;
+		const skills = ["a", "b"].map((id) => ({ name: "review", displayName: "Review", token: "$review", canInvoke: true, status: "ready", transport: "native_skill", trustState: "native_unverified", bindingRef: id, observationId: id, catalogRevision: "catalog", controllerGeneration: "controller", snapshotId: "snapshot", entryId: id, catalogIdentity: "catalog-identity" }));
+		const save = vi.fn().mockRejectedValueOnce(new Error("Response lost")).mockResolvedValue(undefined);
+		const send = vi.fn();
+		const props = { snapshot, onSend: send, onEditQueuedTurn: save, skills };
+		const first = render(<ChatWorkspace {...props} />);
+		await userEvent.click(screen.getByRole("button", { name: "Edit queued message" }));
+		const field = screen.getByLabelText("Message the agent");
+		const lexical = (field as HTMLElement & { __lexicalEditor: import("lexical").LexicalEditor }).__lexicalEditor;
+		const { $getRoot, $createParagraphNode, $createTextNode } = await import("lexical");
+		act(() => lexical.update(() => { const root = $getRoot(); root.clear().append($createParagraphNode().append($createTextNode("/rev"))); root.selectEnd(); }, { discrete: true }));
+		await userEvent.click(screen.getAllByRole("option")[1]!);
+		expect(readChatSessionDraft(snapshot.sessionId).queuedEdit?.skillSelection?.selection.bindingRef).toBe("b");
+		if (intent === "clear") {
+			for (const text of ["ordinary", "$review changed"]) {
+				act(() => lexical.update(() => { const root = $getRoot(); root.clear().append($createParagraphNode().append($createTextNode(text))); root.selectEnd(); }, { discrete: true }));
+			}
+			expect(readChatSessionDraft(snapshot.sessionId).queuedEdit?.skillSelection).toBeNull();
+		}
+		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+		await screen.findByRole("alert");
+		const request = save.mock.calls[0];
+		expect(request?.[2]).toMatchObject(intent === "replace"
+			? { skillSelection: { bindingRef: "b", entryId: "b", snapshotId: "snapshot", token: "$review" } }
+			: { clearSkillSelection: true });
+		if (intent === "clear") expect(request?.[2].skillSelection).toBeUndefined();
+		first.unmount();
+		render(<ChatWorkspace {...props} skills={[]} />);
+		await userEvent.click(screen.getByRole("button", { name: /Retry|Send message/ }));
+		await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+		expect(save.mock.calls[1]).toEqual(request);
+		expect(send).not.toHaveBeenCalled();
+	});
+
 	it("restores the queue target across remount and keeps the independent composer after accepted save", async () => {
 		const snapshot = queuedSnapshot();
 		const save = vi.fn().mockResolvedValue(undefined);
@@ -5256,7 +5293,7 @@ describe("durable queued edits", () => {
 		const second = render(<ChatWorkspace {...props} />);
 		expect(screen.getByLabelText("Message the agent")).toHaveTextContent("queued text updated");
 		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
-		await waitFor(() => expect(save).toHaveBeenCalledWith("queued", "queued text updated", { clientMessageId: expect.any(String), expectedRevision: 0, retainedContent: [] }));
+		await waitFor(() => expect(save).toHaveBeenCalledWith("queued", "queued text updated", { clientMessageId: expect.any(String), expectedRevision: 0, retainedContent: [], clearSkillSelection: true }));
 		await waitFor(() => expect(readChatSessionDraft(snapshot.sessionId).queuedEdit).toBeUndefined());
 		expect(send).not.toHaveBeenCalled();
 		expect(screen.getByLabelText("Message the agent")).toHaveTextContent("independent prompt");

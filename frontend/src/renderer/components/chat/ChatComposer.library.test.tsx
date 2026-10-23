@@ -89,9 +89,9 @@ it("retains the opaque binding through draft remount and delivery", async () => 
 it("submits exact text and identity to a fake conversation and rejects a stale selection", async () => {
 	let generation = "controller-one";
 	const received: { text: string; selection?: ChatSkillSelection }[] = [];
-	const fakeSend = vi.fn(async (text: string, _attachments?: unknown, _messageId?: string, _retained?: number[], _excerpts?: unknown, selection?: ChatSkillSelection) => {
+	const fakeSend = vi.fn(async (text: string, _attachments?: unknown, _messageId?: string, _retained?: number[], _excerpts?: unknown, selection?: ChatSkillSelection | null) => {
 		if (selection?.controllerGeneration !== generation) throw { code: "CHAT_SKILL_UNAVAILABLE", message: "stale_selection" };
-		received.push({ text, selection });
+		received.push({ text, selection: selection ?? undefined });
 	});
 	const { field } = setup([row()], { onSend: fakeSend });
 	await typeAndPressInLexicalEditor(field, "$rev", "Tab");

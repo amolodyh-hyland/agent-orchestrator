@@ -376,7 +376,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		hostId,
 	);
 	const { models, configOptions: offeredConfigOptions } = useChatModelChoices(snapshot?.harness, controllerModels, configOptions.options, snapshot?.settings?.model, hostId);
-	const { skills, catalog: skillCatalog } = useConversationSkills(
+	const { skills, catalog: skillCatalog, resolveSkills } = useConversationSkills(
 		session.id,
 		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot),
 		hostId,
@@ -721,6 +721,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				activateBranchPending={commands.activateBranchPending}
 				activateBranchError={commands.activateBranchError}
 				skillCatalog={skillCatalog}
+				onResolveSkills={resolveSkills}
 				skills={sideCreationEnabled ? [...(["btw", "side"].map((name) => ({ name, displayName: name, description: "Open a new side chat", source: "AO" }))), ...skills.filter((skill) => !["/btw", "/side"].includes(skillToken(skill)))] : skills}
 				filePaths={paths}
 				filePathsTruncated={truncated}

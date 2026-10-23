@@ -16557,6 +16557,8 @@ components:
           items:
             $ref: '#/components/schemas/ConversationImageContentRequest'
           type: array
+        clearSkillSelection:
+          type: boolean
         clientMessageId:
           type: string
         expectedRevision:
@@ -16569,6 +16571,8 @@ components:
           type:
           - "null"
           - array
+        skillSelection:
+          $ref: '#/components/schemas/ConversationSkillSelectionRequest'
         text:
           type: string
       required:

@@ -1,3 +1,6 @@
+import userEvent from "@testing-library/user-event";
+import { lexicalEditorText, typeInLexicalEditor } from "../test/lexical";
+import { ChatComposer } from "../components/chat/ChatComposer";
 import { render, renderHook, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
@@ -1444,4 +1447,45 @@ describe("library catalog isolation", () => {
 		postMock.mockResolvedValueOnce({ error: refusal });
 		await act(async () => { await expect(hook.result.current.send({ text: "$review second", skillSelection })).rejects.toBe(refusal); });
 	});
+});
+
+
+it.each(["unchanged", "changed", "failed"])("waits for an unresolved catalog refresh before submitting a selected draft (%s)", async (outcome) => {
+	const catalog = { status: "ready", canList: true, canReloadSameSnapshot: true, projectRevision: 1, trustEpoch: 1,
+		providerId: "codex", sessionId: "refresh-session", snapshotId: "snapshot", controllerGeneration: "controller", catalogRevision: "catalog",
+		skills: [{ name: "review", displayName: "Review", token: "$review", canInvoke: true, status: "native_passthrough", transport: "native_skill", trustState: "native_unverified", bindingRef: "binding", controllerGeneration: "controller", catalogRevision: "catalog", entryId: "entry", snapshotId: "snapshot" }] };
+	getMock.mockResolvedValue({ data: catalog });
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const send = vi.fn();
+	function Surface() {
+		const { skills, resolveSkills } = useConversationSkills("refresh-session", true, undefined, "codex");
+		return <ChatComposer skills={skills} onResolveSkills={resolveSkills} onSend={send} />;
+	}
+	render(<QueryClientProvider client={queryClient}><TooltipProvider><Surface /></TooltipProvider></QueryClientProvider>);
+	const field = screen.getByLabelText("Message the agent");
+	await waitFor(() => expect(queryClient.getQueryData([...conversationSkillsQueryKey("refresh-session"), "codex", 0])).toBeDefined());
+	await typeInLexicalEditor(field, "$rev");
+	await screen.findByRole("option");
+	await userEvent.keyboard("{Tab}");
+	expect(lexicalEditorText(field)).toBe("$review ");
+	await typeInLexicalEditor(field, "argument");
+	const refresh = deferred<{ data?: typeof catalog; error?: { code: string } }>();
+	getMock.mockReturnValue(refresh.promise);
+	let refreshing!: Promise<void>;
+	act(() => { refreshing = queryClient.invalidateQueries({ queryKey: conversationSkillsQueryKey("refresh-session") }); });
+	await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+	await userEvent.keyboard("{Enter}");
+	expect(send).not.toHaveBeenCalled();
+	expect(screen.queryByRole("alert")).toBeNull();
+	await act(async () => {
+		refresh.resolve(outcome === "failed" ? { error: { code: "CHAT_CONTROLLER_NOT_READY" } } : { data: outcome === "changed" ? { ...catalog, trustEpoch: 2 } : { ...catalog, skills: catalog.skills.map((skill) => ({ ...skill })) } });
+		await refreshing;
+	});
+	if (outcome === "unchanged") {
+		await waitFor(() => expect(send).toHaveBeenCalledWith("$review argument", undefined, undefined, undefined, undefined, expect.objectContaining({ entryId: "entry", snapshotId: "snapshot" })));
+	} else {
+		await screen.findByRole("alert");
+		expect(send).not.toHaveBeenCalled();
+		expect(field).toHaveTextContent("$review argument");
+	}
 });

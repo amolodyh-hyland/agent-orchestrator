@@ -5,7 +5,7 @@ import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { purgeFileAttachmentsForSession, useFileAttachments } from "../../hooks/useFileAttachments";
-import { readChatSessionDraft } from "../../lib/chat-drafts";
+import { readChatSessionDraft, writeChatQueuedEdit } from "../../lib/chat-drafts";
 import { chatFixture } from "../../lib/chat-fixture";
 import { typeInLexicalEditor } from "../../test/lexical";
 import { TooltipProvider } from "../ui/tooltip";
@@ -148,6 +148,16 @@ describe("queued message attachments", () => {
 		expect(readChatSessionDraft(chatFixture.sessionId).queuedEdit).toBeUndefined();
 	});
 
+	it("retries a legacy queued receipt without adding selection intent", async () => {
+		const saved = writeChatQueuedEdit(chatFixture.sessionId, { turnId: "q1", text: "inspect this", attachments: [], clientMessageId: "legacy-receipt", expectedRevision: 0, saving: true });
+		expect(saved.ok).toBe(true);
+		const recovered = setup();
+		await userEvent.click(screen.getByRole("button", { name: "Retry edit safely" }));
+		await waitFor(() => expect(recovered.edit).toHaveBeenCalledWith("q1", "inspect this", {
+			clientMessageId: "legacy-receipt", expectedRevision: 0, retainedContent: [],
+		}));
+	});
+
 	it.each(["cancel", "escape", "replace", "delete"])("preserves an unresolved queued receipt through %s and remount", async (exit) => {
 		const { edit, cancel, unmount } = setup();
 		edit.mockRejectedValue(new Error("response lost"));
@@ -181,7 +191,7 @@ describe("queued message attachments", () => {
 			expect(edit).toHaveBeenCalledWith("q1", `inspect this ${path}\n\n${suffix}`, {
 				attachments: [{ mimeType: "image/png", data: expect.any(String) }],
 				retainedContent: [],
-				clientMessageId: expect.any(String), expectedRevision: 0,
+				clearSkillSelection: true, clientMessageId: expect.any(String), expectedRevision: 0,
 			}),
 		);
 		expect(stage).toHaveBeenCalledOnce();
@@ -195,7 +205,7 @@ describe("queued message attachments", () => {
 		await pasteImage(screen.getByRole("combobox"));
 		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
 		await waitFor(() => expect(edit).toHaveBeenCalledWith("q1", `inspect this ${path}\n\n${suffix}`, {
-			retainedContent: [0], clientMessageId: expect.any(String), expectedRevision: 0,
+			retainedContent: [0], clearSkillSelection: true, clientMessageId: expect.any(String), expectedRevision: 0,
 		}));
 		expect(stage).toHaveBeenCalledOnce();
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -211,7 +221,7 @@ describe("queued message attachments", () => {
 		await waitFor(() =>
 			expect(edit).toHaveBeenCalledWith("q1", `inspect this carefully\n\n${suffix}`, {
 				retainedContent: [0],
-				clientMessageId: expect.any(String), expectedRevision: 0,
+				clearSkillSelection: true, clientMessageId: expect.any(String), expectedRevision: 0,
 			}),
 		);
 	});
@@ -224,7 +234,7 @@ describe("queued message attachments", () => {
 		await waitFor(() =>
 			expect(edit).toHaveBeenCalledWith("q1", selected === "path" ? "inspect this" : `inspect this\n\n${suffix}`, {
 				retainedContent: selected === "path" ? [0] : [],
-				clientMessageId: expect.any(String), expectedRevision: 0,
+				clearSkillSelection: true, clientMessageId: expect.any(String), expectedRevision: 0,
 			}),
 		);
 	});
@@ -241,7 +251,7 @@ describe("queued message attachments", () => {
 		await waitFor(() => expect(edit).toHaveBeenCalledWith(
 			"q1", count === 8 ? `inspect this carefully ${path}\n\n${suffix}` : "inspect this carefully",
 			{
-				retainedContent: resources.map((_, index) => index), clientMessageId: expect.any(String), expectedRevision: 0,
+				retainedContent: resources.map((_, index) => index), clearSkillSelection: true, clientMessageId: expect.any(String), expectedRevision: 0,
 				...(count === 8 ? { attachments: [{ mimeType: "image/png", data: expect.any(String) }] } : {}),
 			},
 		));
@@ -255,7 +265,7 @@ describe("queued message attachments", () => {
 		await screen.findByLabelText("Remove new-file");
 		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
 		await waitFor(() => expect(edit).toHaveBeenCalledWith("q1", "inspect this\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-context.txt", {
-			retainedContent: [0, 1, 2, 3, 4, 5, 6, 7], clientMessageId: expect.any(String), expectedRevision: 0,
+			retainedContent: [0, 1, 2, 3, 4, 5, 6, 7], clearSkillSelection: true, clientMessageId: expect.any(String), expectedRevision: 0,
 		}));
 	});
 
@@ -359,7 +369,7 @@ describe("queued message attachments", () => {
 		await waitFor(() =>
 			expect(edit).toHaveBeenCalledWith("q1", "newer edit", {
 				retainedContent: [],
-				clientMessageId: expect.any(String), expectedRevision: 1,
+				clearSkillSelection: true, clientMessageId: expect.any(String), expectedRevision: 1,
 			}),
 		);
 	});
@@ -395,7 +405,7 @@ describe("queued message attachments", () => {
 		await waitFor(() => expect(stage).toHaveBeenCalledOnce());
 		fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
 		await act(async () => settle([path]));
-		await waitFor(() => expect(edit).toHaveBeenCalledWith("q1", `inspect this\n\n${suffix}`, { retainedContent: [], clientMessageId: expect.any(String), expectedRevision: 0 }));
+		await waitFor(() => expect(edit).toHaveBeenCalledWith("q1", `inspect this\n\n${suffix}`, { retainedContent: [], clearSkillSelection: true, clientMessageId: expect.any(String), expectedRevision: 0 }));
 		expect(send).not.toHaveBeenCalled();
 	});
 
@@ -421,7 +431,7 @@ describe("queued message attachments", () => {
 			await userEvent.click(screen.getByRole("button", { name: "Send message" }));
 			await waitFor(() => expect(second.edit).toHaveBeenCalledOnce());
 			expect(second.edit.mock.calls[0]?.[2]).toEqual({
-				retainedContent: [], clientMessageId: expect.any(String), expectedRevision: 0,
+				retainedContent: [], clearSkillSelection: true, clientMessageId: expect.any(String), expectedRevision: 0,
 				attachments: [{ mimeType: "image/png", data: btoa("restored-first") }, { mimeType: "image/png", data: "iVBORw==" }],
 			});
 			expect(fetch).toHaveBeenCalledOnce();

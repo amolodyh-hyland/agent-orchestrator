@@ -161,6 +161,8 @@ export interface ConversationContentSummary {
 }
 
 export interface QueuedMessageEditOptions {
+	skillSelection?: ChatSkillSelection;
+	clearSkillSelection?: boolean;
 	clientMessageId?: string;
 	attachments?: { mimeType: string; data: string }[];
 	retainedContent?: number[];

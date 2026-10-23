@@ -1,4 +1,7 @@
 {
+	"library.bindingState": "Aktuelle Bindung: {{id}} · {{state}} · {{hash}}",
+	"library.bindingEnabled": "Aktiviert",
+	"library.bindingDisabled": "Deaktiviert",
 	"library.automaticSelection": "Materialisierte Skills können vom Anbieter automatisch ausgewählt werden. Die Genehmigung gilt nur für die exakt geprüften Dateien.",
 	"library.approved": "Genehmigte Revision",
 	"library.nativeUnverified": "Nativ · Herkunft ungeprüft",

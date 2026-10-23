@@ -1,4 +1,7 @@
 {
+	"library.bindingState": "Liaison actuelle : {{id}} · {{state}} · {{hash}}",
+	"library.bindingEnabled": "Activée",
+	"library.bindingDisabled": "Désactivée",
 	"library.automaticSelection": "Le fournisseur peut sélectionner automatiquement les compétences matérialisées. L’approbation porte uniquement sur les fichiers exacts examinés.",
 	"library.approved": "Révision approuvée",
 	"library.nativeUnverified": "Natif · provenance non vérifiée",

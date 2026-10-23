@@ -1201,7 +1201,7 @@ describe("queued message edit", () => {
 		);
 		await waitFor(() => expect(screen.getByLabelText("Message the agent")).toHaveTextContent("hi"));
 		await userEvent.keyboard("{Enter}");
-			await waitFor(() => expect(onSend).toHaveBeenCalledWith("hi", undefined, undefined, []));
+			await waitFor(() => expect(onSend).toHaveBeenCalledWith("hi", undefined, undefined, [], undefined, null));
 	});
 });
 
@@ -3105,7 +3105,7 @@ it("saves /compact as literal queued text without running the command", async ()
 	const onCompact = vi.fn();
 	render(<ChatComposer onSend={onSend} onCompact={onCompact} editingQueuedTurnId="queued-command" draftSeed={{ id: "queued-command", text: "/compact" }} />);
 	await userEvent.click(screen.getByRole("button", { name: "Send message" }));
-	await waitFor(() => expect(onSend).toHaveBeenCalledWith("/compact", undefined, undefined, []));
+	await waitFor(() => expect(onSend).toHaveBeenCalledWith("/compact", undefined, undefined, [], undefined, null));
 	expect(onCompact).not.toHaveBeenCalled();
 });
 

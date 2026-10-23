@@ -5823,9 +5823,11 @@ export interface components {
         };
         EditQueuedConversationMessageRequest: {
             attachments?: components["schemas"]["ConversationImageContentRequest"][];
+            clearSkillSelection?: boolean;
             clientMessageId?: string;
             expectedRevision?: null | number;
             retainedContent?: null | number[];
+            skillSelection?: components["schemas"]["ConversationSkillSelectionRequest"];
             text: string;
         };
         EndpointsResponse: {

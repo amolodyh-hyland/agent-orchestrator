@@ -139,8 +139,8 @@ The ordinary message endpoint accepts optional `skillSelection` with `entryId`,
 There is no client path field or execution endpoint. The opaque selection is
 persisted with delivery content, revalidated on queue drain/retry, and removed
 from the native payload. Altering/removing the selected token clears its binding;
-queue edits also discard the stored binding. Current trust admission is checked
-at transport dispatch. Library rows remain non-invocable with explicit reasons
+queue edits carry explicit replacement or clearing intent for the stored binding.
+Current trust admission is checked at transport dispatch. Library rows remain non-invocable with explicit reasons
 until exact-byte projection and version-specific native resolution evidence are
 available. An advertised native command never supplies approval evidence, and
 unproved native/library name collisions disable that invocation.
@@ -181,3 +181,20 @@ without repositories, while existing snapshots remain pinned.
 Interaction coverage lives in `ChatComposer.library.test.tsx`,
 `LibrarySettings.test.tsx` and the catalog isolation cases in
 `useConversation.test.tsx`, alongside existing composer/editor/draft suites.
+
+Queued-edit requests accept `skillSelection` to replace the stored opaque binding
+or `clearSkillSelection: true` to remove it even when the visible token is
+unchanged. Supplying both is invalid. Legacy requests omitting both retain the
+old binding only while its exact token remains present. The edit receipt hashes
+replacement and clearing intent, so a retry cannot change identity under the
+same receipt. The renderer retains this intent across queued-editor remounts and
+uncertain-save recovery; a fresh edit without a picker selection explicitly clears
+old hidden state. Recovery of a legacy receipt preserves omitted intent fields. Queue dispatch still revalidates the selected controller,
+catalog, snapshot and trust before producing native input.
+
+An explicit selection submitted during background catalog refresh waits for that
+refresh. An unchanged verified identity resumes the original submission; changed,
+failed or superseded catalog responses refuse it while preserving the draft.
+Project rebinding updates the existing Project/source/entry binding, preserving
+its ID and other role settings when adopting a new revision. The current binding's
+enabled state and pinned hash are displayed before reviewing the update.

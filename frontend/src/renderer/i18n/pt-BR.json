@@ -1,4 +1,7 @@
 {
+	"library.bindingState": "Vínculo atual: {{id}} · {{state}} · {{hash}}",
+	"library.bindingEnabled": "Ativado",
+	"library.bindingDisabled": "Desativado",
 	"library.automaticSelection": "O provedor pode selecionar automaticamente as habilidades materializadas. A aprovação vale apenas para os arquivos exatos revisados.",
 	"library.approved": "Revisão aprovada",
 	"library.nativeUnverified": "Nativo · procedência não verificada",

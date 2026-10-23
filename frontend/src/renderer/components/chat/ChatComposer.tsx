@@ -222,6 +222,7 @@ export const ChatComposer = memo(function ChatComposer({
 	elicitation,
 	skills = [],
 	skillCatalog,
+	onResolveSkills,
 	filePaths = [],
 	filePathsTruncated,
 	onStageAttachments,
@@ -278,7 +279,7 @@ export const ChatComposer = memo(function ChatComposer({
 		clientMessageId?: string,
 		retainedContent?: number[],
 		excerpts?: ChatDraftExcerptReference[],
-		skillSelection?: ChatSkillSelection,
+		skillSelection?: ChatSkillSelection | null,
 	) => void | Promise<unknown>;
 	settings?: ReactNode;
 	/** A provider decision that temporarily replaces ordinary message entry. */
@@ -302,6 +303,7 @@ export const ChatComposer = memo(function ChatComposer({
 	/** The provider's skills. Empty leaves `/` an ordinary character. */
 	skills?: ChatSkill[];
 	skillCatalog?: ChatSkillCatalog;
+	onResolveSkills?: () => Promise<ChatSkill[]>;
 	/** Worktree-relative paths offered for `@`. Empty leaves `@` ordinary. */
 	filePaths?: string[];
 	/** The path list was capped, so the menu says so rather than implying it is all. */
@@ -339,11 +341,11 @@ export const ChatComposer = memo(function ChatComposer({
 	/** Why the last steer was refused. */
 	steerRefusal?: string;
 	/** A selected history message to load into the composer as a new draft. */
-	draftSeed?: { id: string; text: string; attachments?: StoredComposerAttachment[]; stagedAttachments?: ChatDraftAttachment[] };
+	draftSeed?: { id: string; text: string; attachments?: StoredComposerAttachment[]; stagedAttachments?: ChatDraftAttachment[]; skillSelection?: ComposerSkillSelection | null };
 	/** A queued turn being edited in the composer instead of the dock. */
 	editingQueuedTurnId?: string;
 	onCancelQueuedEdit?: () => void;
-	onQueuedDraftChange?: (text: string) => void;
+	onQueuedDraftChange?: (text: string, skillSelection?: ComposerSkillSelection | null) => void;
 	/** Called when the draft turns empty or non-empty, including after a restore. */
 	onDraftEmptyChange?: (empty: boolean) => void;
 	queuedDraftScope?: ChatDraftScope;
@@ -1032,7 +1034,7 @@ export const ChatComposer = memo(function ChatComposer({
 		const seedKey = editingQueuedTurnId ? draftSeedId : JSON.stringify([draftSeedId, committedSeedText]);
 		if (restoredSeedKey.current === seedKey) return;
 		restoredSeedKey.current = seedKey;
-		if (draftSeed) selectedSkill.current = undefined;
+		if (draftSeed) selectedSkill.current = draftSeed.skillSelection ?? undefined;
 		textRef.current = committedSeedText;
 		hasTextRef.current = committedSeedText.trim().length > 0;
 		setHasText(hasTextRef.current);
@@ -1141,7 +1143,7 @@ export const ChatComposer = memo(function ChatComposer({
 		const previousText = textRef.current;
 		textRef.current = snapshot.text;
 		if (selectedSkill.current && !selectedTokenPresent(snapshot.text, selectedSkill.current.selection.token)) selectedSkill.current = undefined;
-		onQueuedDraftChange?.(snapshot.text);
+		onQueuedDraftChange?.(snapshot.text, selectedSkill.current ?? null);
 		if (snapshot.text !== previousText && !historyBrowse.current) persistComposerText(snapshot.text);
 		if (hasTextRef.current !== snapshot.hasText) {
 			hasTextRef.current = snapshot.hasText;
@@ -1379,12 +1381,16 @@ export const ChatComposer = memo(function ChatComposer({
 			return;
 		}
 		const selection = recoveringDelivery?.skillSelection ?? selectedSkill.current;
-		if (!recoveringDelivery && selection && selectedTokenPresent(body, selection.selection.token) && !selectionIsCurrent(selection, skills)) {
-			setSendError(t("library.staleSelection"));
-			return;
+		let availableSkills = skills;
+		if (!recoveringDelivery && !queuedEditRecovery && selection && selectedTokenPresent(body, selection.selection.token)) {
+			availableSkills = onResolveSkills ? await onResolveSkills() : skills;
+			if (!selectionIsCurrent(selection, availableSkills)) {
+				setSendError(t("library.staleSelection"));
+				return;
+			}
 		}
 		const skillSelection = selection && selectedTokenPresent(body, selection.selection.token) ? selection.selection : undefined;
-		const requiresStructuredSend = skillSelection && skills.some((skill) => skill.bindingRef === skillSelection.bindingRef && skill.transport === "native_skill");
+		const requiresStructuredSend = skillSelection && availableSkills.some((skill) => skill.bindingRef === skillSelection.bindingRef && skill.transport === "native_skill");
 		const shouldSteer = Boolean(forceSteer && !requiresStructuredSend && !savingQueuedEdit && contextReferences.length === 0);
 		const message = withAttachmentReferences(body, attachedPaths) || (contextReferences.length > 0 ? `Use the attached ${contextReferences.length} chat excerpt(s) as context` : "");
 		// Ordinary delivery reserves its exact draft before these staged reads await.
@@ -1461,7 +1467,7 @@ export const ChatComposer = memo(function ChatComposer({
 					}
 				} else if (savingQueuedEdit) {
 					await onSend(message, nativePayloads.length ? nativePayloads : undefined, undefined,
-						visibleRetainedAttachments.flatMap((item) => item.contentIndex === undefined ? [] : [item.contentIndex]));
+						visibleRetainedAttachments.flatMap((item) => item.contentIndex === undefined ? [] : [item.contentIndex]), undefined, skillSelection ?? null);
 					// The parent leaves this editor only after proving durable cleanup.
 					return;
 				} else if (skillSelection) {
