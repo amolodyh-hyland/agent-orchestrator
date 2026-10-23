@@ -3,6 +3,7 @@ package terminal
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -72,12 +73,32 @@ type Manager struct {
 	inputLeaseMu sync.RWMutex
 	inputLease   sessionguard.InputLease
 
-	// inputMu makes BeginInputDrain atomic with pane writes. Once a drain returns,
-	// every write that began before it has finished and every later write is
-	// refused until the matching release runs.
-	inputMu      sync.Mutex
-	inputBlocked map[string]int
-	lastInputAt  map[string]time.Time
+	inputMu             sync.Mutex
+	inputLanes          map[string]*terminalInputLane
+	libraryInputMu      sync.Mutex
+	libraryInputBlocked map[string]int
+}
+
+// Each terminal serializes its writes independently. The channel also lets a
+// revocation abandon its drain on cancellation without leaving a waiter behind.
+type terminalInputLane struct {
+	gate        chan struct{}
+	blocked     int
+	lastInputAt time.Time
+}
+
+func (m *Manager) inputLane(id string) *terminalInputLane {
+	m.inputMu.Lock()
+	defer m.inputMu.Unlock()
+	if m.inputLanes == nil {
+		m.inputLanes = map[string]*terminalInputLane{}
+	}
+	lane := m.inputLanes[id]
+	if lane == nil {
+		lane = &terminalInputLane{gate: make(chan struct{}, 1)}
+		m.inputLanes[id] = lane
+	}
+	return lane
 }
 
 // sharedTerm tracks every client currently viewing one terminal id (one PTY) so
@@ -132,16 +153,16 @@ func NewManager(src Source, events EventSource, log *slog.Logger, opts ...Option
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
-		src:          src,
-		events:       events,
-		log:          log,
-		heartbeat:    defaultHeartbeat,
-		ctx:          ctx,
-		cancel:       cancel,
-		attachments:  map[*attachment]struct{}{},
-		shared:       map[string]*sharedTerm{},
-		inputBlocked: map[string]int{},
-		lastInputAt:  map[string]time.Time{},
+		src:                 src,
+		events:              events,
+		log:                 log,
+		heartbeat:           defaultHeartbeat,
+		ctx:                 ctx,
+		cancel:              cancel,
+		attachments:         map[*attachment]struct{}{},
+		shared:              map[string]*sharedTerm{},
+		inputLanes:          map[string]*terminalInputLane{},
+		libraryInputBlocked: map[string]int{},
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -152,21 +173,18 @@ func NewManager(src Source, events EventSource, log *slog.Logger, opts ...Option
 // BeginInputDrain blocks new user input for one terminal while Session Manager
 // hands its controller to another interface. The returned release is idempotent.
 func (m *Manager) BeginInputDrain(terminalID string) (lastInputAt time.Time, release func()) {
-	m.inputMu.Lock()
-	m.inputBlocked[terminalID]++
-	lastInputAt = m.lastInputAt[terminalID]
-	m.inputMu.Unlock()
+	lane := m.inputLane(terminalID)
+	lane.gate <- struct{}{}
+	lane.blocked++
+	lastInputAt = lane.lastInputAt
+	<-lane.gate
 
 	var once sync.Once
 	return lastInputAt, func() {
 		once.Do(func() {
-			m.inputMu.Lock()
-			defer m.inputMu.Unlock()
-			if m.inputBlocked[terminalID] <= 1 {
-				delete(m.inputBlocked, terminalID)
-				return
-			}
-			m.inputBlocked[terminalID]--
+			lane.gate <- struct{}{}
+			lane.blocked--
+			<-lane.gate
 		})
 	}
 }
@@ -187,13 +205,17 @@ func (m *Manager) TerminalOnScreen(terminalID string) bool {
 }
 
 func (m *Manager) writeInput(terminalID string, a *attachment, raw []byte, release func()) {
-	m.inputMu.Lock()
-	defer m.inputMu.Unlock()
-	if m.inputBlocked[terminalID] > 0 {
+	lane := m.inputLane(terminalID)
+	lane.gate <- struct{}{}
+	defer func() { <-lane.gate }()
+	m.libraryInputMu.Lock()
+	libraryBlocked := m.libraryInputBlocked[terminalID] > 0
+	m.libraryInputMu.Unlock()
+	if lane.blocked > 0 || libraryBlocked {
 		release()
 		return
 	}
-	m.lastInputAt[terminalID] = time.Now()
+	lane.lastInputAt = time.Now()
 	_ = a.writeLeased(raw, release)
 }
 
@@ -222,6 +244,11 @@ func (m *Manager) Close() {
 // track registers a live attachment so Close can tear it down; it refuses new
 // attachments once the manager is closed.
 func (m *Manager) track(a *attachment) error {
+	m.libraryInputMu.Lock()
+	defer m.libraryInputMu.Unlock()
+	if m.libraryInputBlocked[a.id] > 0 {
+		return errors.New("terminal: library input fenced")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
@@ -242,6 +269,9 @@ func (m *Manager) forget(a *attachment) {
 func (m *Manager) joinTerminal(id string, c *connState, att *attachment, cols, rows uint16, primary bool) {
 	m.sharedMu.Lock()
 	defer m.sharedMu.Unlock()
+	if att.isClosed() {
+		return
+	}
 	s := m.shared[id]
 	if s == nil {
 		s = &sharedTerm{members: map[*connState]*termMember{}}
@@ -455,8 +485,7 @@ func (c *connState) openTerminal(id string, rows, cols uint16, role string) {
 	}
 	c.mu.Unlock()
 
-	// a is captured by onExit before assignment; safe because the attach loop —
-	// the only thing that fires onExit — starts after the registration below.
+	// Publish the connection entry before tracking, so a concurrent fence can unregister it.
 	var a *attachment
 	a = newAttachment(id, ports.RuntimeHandle{ID: id}, c.mgr.src,
 		func() {
@@ -480,13 +509,17 @@ func (c *connState) openTerminal(id string, rows, cols uint16, role string) {
 			c.enqueue(serverMsg{Ch: chTerminal, ID: id, Type: msgExited})
 		},
 		c.mgr.log)
-	if err := c.mgr.track(a); err != nil {
-		c.enqueue(serverMsg{Ch: chTerminal, ID: id, Type: msgError, Error: err.Error()})
-		return
-	}
 	c.mu.Lock()
 	c.terms[id] = a
 	c.mu.Unlock()
+	if err := c.mgr.track(a); err != nil {
+		c.mu.Lock()
+		delete(c.terms, id)
+		c.mu.Unlock()
+		a.close()
+		c.enqueue(serverMsg{Ch: chTerminal, ID: id, Type: msgError, Error: err.Error()})
+		return
+	}
 
 	// Register with the shared-terminal arbiter, which sizes the attach Stream to
 	// the authoritative grid (the open frame's rows/cols become this client's
@@ -733,4 +766,51 @@ func (c *connState) cleanup() {
 		unsubEvts()
 	}
 	_ = c.conn.Close("server: connection closed")
+}
+
+func (m *Manager) FenceLibraryInput(ctx context.Context, terminalID string) (func(), error) {
+	if terminalID == "" {
+		return func() {}, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	m.libraryInputMu.Lock()
+	if m.libraryInputBlocked == nil {
+		m.libraryInputBlocked = map[string]int{}
+	}
+	m.libraryInputBlocked[terminalID]++
+	m.libraryInputMu.Unlock()
+	m.mu.Lock()
+	var attachments []*attachment
+	for a := range m.attachments {
+		if a.id == terminalID {
+			attachments = append(attachments, a)
+		}
+	}
+	m.mu.Unlock()
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			m.libraryInputMu.Lock()
+			defer m.libraryInputMu.Unlock()
+			if m.libraryInputBlocked[terminalID] <= 1 {
+				delete(m.libraryInputBlocked, terminalID)
+			} else {
+				m.libraryInputBlocked[terminalID]--
+			}
+		})
+	}
+	for _, a := range attachments {
+		a.close()
+		a.markExited()
+		m.forget(a)
+	}
+	lane := m.inputLane(terminalID)
+	select {
+	case lane.gate <- struct{}{}:
+		<-lane.gate
+		return release, nil
+	case <-ctx.Done():
+		return release, ctx.Err()
+	}
 }

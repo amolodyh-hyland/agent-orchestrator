@@ -11,6 +11,9 @@ Start with [architecture.md](architecture.md) for the current backend model and
 See [project-context.md](project-context.md) for repository-free Projects, local
 context links, revision conflicts, and pinned session context.
 
+See [task library projection](task-library-projection.md) for startup binding,
+the native conformance release gate, and runtime revocation.
+
 See [confirmed Multica delegation](multica-delegation-coordinator.md), its
 [operator checklist](multica-delegation-operator-checklist.md) and
 [contract verification](multica-delegation-contract.md).

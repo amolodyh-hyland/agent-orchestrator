@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // LibrarySelection pins child snapshots and guards task launch and terminal admission.
@@ -31,6 +32,11 @@ func (m *Manager) SetLibrarySelection(library LibrarySelection) {
 	m.libraryMu.Lock()
 	m.librarySelection = library
 	m.libraryMu.Unlock()
+	if setter, ok := library.(interface {
+		SetTaskLibraryLifecycle(ports.TaskLibraryLifecycle)
+	}); ok {
+		setter.SetTaskLibraryLifecycle(m)
+	}
 }
 func (m *Manager) librarySelectionValue() LibrarySelection {
 	m.libraryMu.RLock()

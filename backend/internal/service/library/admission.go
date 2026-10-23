@@ -131,9 +131,17 @@ func (s *Service) validateRetainedBudget(ctx context.Context, snapshot domain.Li
 
 // CheckLaunch rechecks retained trust and refuses unproved required runtime bindings.
 func (s *Service) CheckLaunch(ctx context.Context, id domain.SessionID) error {
-	s.admission.RLock()
-	defer s.admission.RUnlock()
+	if s.sessionRevoking(ctx, id) {
+		return fail("revocation_in_progress")
+	}
+	if _, leased := s.activeTaskLease(ctx, id); !leased {
+		s.admission.RLock()
+		defer s.admission.RUnlock()
+	}
 	snapshot, admission, err := s.retained(ctx, id)
+	if err == nil && s.selectionRevoking(snapshot) {
+		err = fail("revocation_in_progress")
+	}
 	if err != nil {
 		return err
 	}
@@ -168,11 +176,14 @@ func (s *Service) CheckLaunch(ctx context.Context, id domain.SessionID) error {
 
 // AcquireTaskInput leases session-wide admission for raw terminal bytes.
 func (s *Service) AcquireTaskInput(id domain.SessionID) (func(), bool) {
-	s.admission.RLock()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, admission, err := s.retained(ctx, id)
-	if err != nil || !admission.InputAllowed {
+	if s.sessionRevoking(ctx, id) {
+		return nil, false
+	}
+	s.admission.RLock()
+	snapshot, admission, err := s.retained(ctx, id)
+	if err != nil || !admission.InputAllowed || s.selectionRevoking(snapshot) {
 		s.admission.RUnlock()
 		return nil, false
 	}
@@ -182,8 +193,14 @@ func (s *Service) AcquireTaskInput(id domain.SessionID) (func(), bool) {
 
 // AcquireChatInput validates controlled dispatch and holds trust stable through submission.
 func (s *Service) AcquireChatInput(ctx context.Context, id domain.SessionID, text string) (func(), error) {
+	if s.sessionRevoking(ctx, id) {
+		return nil, fail("revocation_in_progress")
+	}
 	s.admission.RLock()
 	snapshot, admission, err := s.retained(ctx, id)
+	if err == nil && s.selectionRevoking(snapshot) {
+		err = fail("revocation_in_progress")
+	}
 	if err == nil && !admission.InputAllowed {
 		err = fail(admission.ReasonCode)
 	}
