@@ -3,6 +3,7 @@ package terminal
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -228,6 +229,11 @@ func (m *Manager) Close() {
 // track registers a live attachment so Close can tear it down; it refuses new
 // attachments once the manager is closed.
 func (m *Manager) track(a *attachment) error {
+	m.libraryInputMu.Lock()
+	defer m.libraryInputMu.Unlock()
+	if m.libraryInputBlocked[a.id] > 0 {
+		return errors.New("terminal: library input fenced")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
@@ -248,6 +254,9 @@ func (m *Manager) forget(a *attachment) {
 func (m *Manager) joinTerminal(id string, c *connState, att *attachment, cols, rows uint16, primary bool) {
 	m.sharedMu.Lock()
 	defer m.sharedMu.Unlock()
+	if att.isClosed() {
+		return
+	}
 	s := m.shared[id]
 	if s == nil {
 		s = &sharedTerm{members: map[*connState]*termMember{}}
@@ -461,8 +470,7 @@ func (c *connState) openTerminal(id string, rows, cols uint16, role string) {
 	}
 	c.mu.Unlock()
 
-	// a is captured by onExit before assignment; safe because the attach loop —
-	// the only thing that fires onExit — starts after the registration below.
+	// Publish the connection entry before tracking, so a concurrent fence can unregister it.
 	var a *attachment
 	a = newAttachment(id, ports.RuntimeHandle{ID: id}, c.mgr.src,
 		func() {
@@ -486,13 +494,17 @@ func (c *connState) openTerminal(id string, rows, cols uint16, role string) {
 			c.enqueue(serverMsg{Ch: chTerminal, ID: id, Type: msgExited})
 		},
 		c.mgr.log)
-	if err := c.mgr.track(a); err != nil {
-		c.enqueue(serverMsg{Ch: chTerminal, ID: id, Type: msgError, Error: err.Error()})
-		return
-	}
 	c.mu.Lock()
 	c.terms[id] = a
 	c.mu.Unlock()
+	if err := c.mgr.track(a); err != nil {
+		c.mu.Lock()
+		delete(c.terms, id)
+		c.mu.Unlock()
+		a.close()
+		c.enqueue(serverMsg{Ch: chTerminal, ID: id, Type: msgError, Error: err.Error()})
+		return
+	}
 
 	// Register with the shared-terminal arbiter, which sizes the attach Stream to
 	// the authoritative grid (the open frame's rows/cols become this client's
@@ -770,6 +782,8 @@ func (m *Manager) FenceLibraryInput(ctx context.Context, terminalID string) (fun
 			go func() {
 				defer closing.Done()
 				a.close()
+				a.markExited()
+				m.forget(a)
 			}()
 		}
 		closing.Wait()

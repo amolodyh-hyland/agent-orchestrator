@@ -53,9 +53,14 @@ explicitly unsupported.
 Revocation fences admission for the affected approval before waiting for input
 leases. The terminal mux closes affected attachments and discards pending bytes,
 releasing their leases; reconnects cannot reopen that runtime's input lane.
-Already executing writes drain before the ledger mutation commits. Unrelated
-selections retain admission.
+Closing each attachment interrupts its outstanding stream writes before a bounded
+drain; a failed drain refuses the mutation. Closed attachments send `exited` and
+unregister, so a denied mutation can reopen on the same connection after its fence
+is released. Unrelated selections retain admission.
 
+Ledger commitment is tracked separately from response assembly. Response read
+failures or request cancellation after commit retain the input fences and still
+complete shutdown under a detached context with a 30-second deadline.
 After commit, the service enumerates retained affected snapshots again and asks
 session manager to stop each live runtime, even without any new input. Session
 manager destroys the runtime and records termination while retaining the workspace
