@@ -48,25 +48,28 @@ func (s *Service) acquireFeedbackInput(ctx context.Context, id domain.SessionID,
 	return a.AcquireFeedbackInput(ctx, id, msg, action)
 }
 func (c *Controller) acquireFeedbackInput(ctx context.Context, msg ports.ChatUserMessage, action string) (func(), error) {
-	outerRelease, outerErr := c.acquireOuterInput(ctx, msg, action)
-	if outerErr != nil {
-		return nil, outerErr
-	}
+	// Outer authority must be the last admission: other guards may wait long
+	// enough for its exact request deadline to pass.
+	feedbackRelease := func() {}
 	if c.reviewID != "" || c.feedbackInput == nil {
 		if err := domain.CheckFactoryFeedback(ctx, c.store, c.sessionID); err != nil {
-			outerRelease()
 			return nil, err
 		}
-		return outerRelease, nil
+	} else {
+		msg.FeedbackControllerGeneration = c.generation
+		msg.FeedbackConversationID = c.conversation.ID
+		var err error
+		feedbackRelease, err = c.feedbackInput(ctx, c.sessionID, msg, action)
+		if err != nil {
+			return nil, err
+		}
 	}
-	msg.FeedbackControllerGeneration = c.generation
-	msg.FeedbackConversationID = c.conversation.ID
-	feedbackRelease, err := c.feedbackInput(ctx, c.sessionID, msg, action)
+	outerRelease, err := c.acquireOuterInput(ctx, msg, action)
 	if err != nil {
-		outerRelease()
+		feedbackRelease()
 		return nil, err
 	}
-	return func() { feedbackRelease(); outerRelease() }, nil
+	return func() { outerRelease(); feedbackRelease() }, nil
 }
 
 // DeliverFactoryFeedback queues exact findings without waking or replacing a controller.

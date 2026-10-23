@@ -131,6 +131,11 @@ func (s *Service) AcquireOuterInput(ctx context.Context, id domain.SessionID, ms
 		if err := s.store.AttemptOuterRequest(ctx, r.ID, s.epoch, s.now().UTC()); err != nil {
 			return fail("final_submission_or_capacity_held")
 		}
+		// Recording the attempt can itself wait for the database. Keep that
+		// receipt single-use, but never write if the deadline passed meanwhile.
+		if ctx.Err() != nil || !s.now().Before(r.ExpiresAt) {
+			return fail("expired_or_cancelled_before_write")
+		}
 		return release, nil
 	}
 	release()

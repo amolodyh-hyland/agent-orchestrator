@@ -2,6 +2,7 @@ package chat_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -63,6 +64,34 @@ type outerDeferredConversation struct {
 	acquire func(context.Context) (func(), error)
 }
 
+type delayedOuterAttemptStore struct {
+	*store.Store
+	afterAttempt func()
+}
+
+func (s delayedOuterAttemptStore) AttemptOuterRequest(ctx context.Context, id, epoch string, now time.Time) error {
+	if err := s.Store.AttemptOuterRequest(ctx, id, epoch, now); err != nil {
+		return err
+	}
+	s.afterAttempt()
+	return nil
+}
+
+type delayedOuterFeedbackAdmission struct {
+	onSubmission func()
+}
+
+func (a delayedOuterFeedbackAdmission) HoldUnapprovedContinuation(context.Context, domain.SessionID) error {
+	return nil
+}
+
+func (a delayedOuterFeedbackAdmission) AcquireFeedbackInput(_ context.Context, _ domain.SessionID, _ ports.ChatUserMessage, phase string) (func(), error) {
+	if phase == "next_turn" {
+		a.onSubmission()
+	}
+	return func() {}, nil
+}
+
 func (c *outerDeferredConversation) StartDeferredTurnWithAdmission(_ string, acquire func(context.Context) (func(), error)) error {
 	c.acquire = acquire
 	return nil
@@ -121,6 +150,92 @@ func TestOuterEagerActualWriteRechecksAfterProviderWait(t *testing.T) {
 	}
 	if h.conv.sendCallCount() != 0 {
 		t.Fatal("expired eager request reached provider")
+	}
+}
+
+func TestOuterFinalWriteRechecksExpiryAfterAdmissionWork(t *testing.T) {
+	for _, wait := range []string{"other admission", "durable journal"} {
+		t.Run(wait, func(t *testing.T) {
+			h, service := outerHarness(t)
+			expire := func() { h.advance(3 * time.Minute) }
+			if wait == "durable journal" {
+				service = outer.New(delayedOuterAttemptStore{Store: h.st, afterAttempt: expire}, nil, nil, outer.WithClock(h.now))
+				service.SetTransport(h.svc)
+				h.svc.SetOuterAdmission(service)
+			} else {
+				h.svc.SetFeedbackAdmission(delayedOuterFeedbackAdmission{onSubmission: expire})
+			}
+			receipt, err := service.Send(outerSendContext(t, h, service, "admission-wait"), "Exact expiring request")
+			if err == nil || h.conv.sendCallCount() != 0 {
+				t.Fatal("expired admission reached the provider", receipt, err)
+			}
+			if wait == "durable journal" {
+				if receipt.AttemptedAt.IsZero() || receipt.State != "unknown" {
+					t.Fatal("journaled attempt became reusable", receipt)
+				}
+				if release, err := service.AcquireOuterInput(context.Background(), testSession, ports.ChatUserMessage{Text: receipt.Request.Payload, ClientMessageID: receipt.Request.ID, Origin: domain.MessageOriginHuman}, "next_turn"); err == nil {
+					release()
+					t.Fatal("expired journaled attempt was reused")
+				}
+			} else if !receipt.AttemptedAt.IsZero() {
+				t.Fatal("another admission consumed outer request authority before expiry was checked", receipt)
+			}
+		})
+	}
+}
+
+func TestOuterAmbiguousWriteKeepsSingleUseReceiptAcrossRestart(t *testing.T) {
+	h, service := outerHarness(t)
+	ctx := context.Background()
+	h.conv.mu.Lock()
+	h.conv.sendErr = errors.New("provider response lost after possible acceptance")
+	h.conv.mu.Unlock()
+	approved := outerSendContext(t, h, service, "uncertain-request")
+	receipt, err := service.Send(approved, "Exact human request")
+	if err == nil || receipt.State != "unknown" || receipt.AttemptedAt.IsZero() || h.conv.sendCallCount() != 1 {
+		t.Fatal("ambiguous delivery lost its attempt receipt", receipt, err)
+	}
+	h.conv.mu.Lock()
+	h.conv.sendErr = nil
+	h.conv.mu.Unlock()
+	replacement := outer.New(h.st, nil, nil, outer.WithClock(h.now))
+	replacement.SetTransport(h.svc)
+	h.svc.SetOuterAdmission(replacement)
+	for _, current := range []*outer.Service{service, replacement} {
+		got, err := current.Send(approved, "Exact human request")
+		if err != nil || got.Request.ID != receipt.Request.ID || got.State != "unknown" || h.conv.sendCallCount() != 1 {
+			t.Fatal("ambiguous request was replayed", got, err)
+		}
+		msg := ports.ChatUserMessage{Text: receipt.Request.Payload, ClientMessageID: receipt.Request.ID, Origin: domain.MessageOriginHuman}
+		if release, err := current.AcquireOuterInput(ctx, testSession, msg, "next_turn"); err == nil {
+			release()
+			t.Fatal("an uncertain attempt was reusable")
+		}
+	}
+	if capacity, err := h.st.OuterCapacity(ctx); err != nil || len(capacity) != 1 {
+		t.Fatal("uncertain delivery released reserved capacity", capacity, err)
+	}
+}
+
+func TestOuterPromptSuggestionsDoNotStartBackgroundTurns(t *testing.T) {
+	h := newHarness(t)
+	turnID := settledSuggestionTurn(t, h)
+	bindOuterHarness(t, h)
+	called := false
+	h.svc.SetPromptSuggestionRunner(func(context.Context, domain.SessionID, string, string, string) (string, error) {
+		called = true
+		return `{"prompt":"Unapproved background turn"}`, nil
+	})
+	for _, ctx := range []context.Context{
+		context.Background(),
+		domain.WithOuterNativeAction(context.Background(), domain.OuterNativeAction{Operation: "outer.send", SessionID: testSession, RequestID: "unrelated-human-request"}),
+	} {
+		if prompt, err := h.svc.PromptSuggestion(ctx, testSession, turnID); prompt != "" || !errors.Is(err, domain.ErrOuterHeld) {
+			t.Fatal("outer prompt suggestion was not held", prompt, err)
+		}
+	}
+	if called || h.conv.sendCallCount() != 1 {
+		t.Fatal("prompt suggestion started a new model turn")
 	}
 }
 
