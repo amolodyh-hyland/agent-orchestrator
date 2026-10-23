@@ -1,3 +1,5 @@
+import type { ComposerSkillSelection } from "../../lib/chat-skill-selection";
+import type { ChatSkillSelection, ChatSkillCatalog } from "../../types/conversation";
 import { TurnWorkSummary } from "./TurnWorkSummary";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
@@ -405,6 +407,7 @@ export interface ChatWorkspaceProps {
 		attachments?: { mimeType: string; data: string }[],
 		clientMessageId?: string,
 		excerpts?: ChatDraftExcerptReference[],
+		skillSelection?: ChatSkillSelection,
 	) => void | Promise<unknown>;
 	onDecide?: (requestId: string, decisionId: string) => void;
 	onResolveInput?: (
@@ -504,6 +507,8 @@ export interface ChatWorkspaceProps {
 	activateBranchError?: string;
 	/** The provider's skills. Empty leaves `/` an ordinary character. */
 	skills?: ChatSkill[];
+	skillCatalog?: ChatSkillCatalog;
+	onResolveSkills?: () => Promise<ChatSkill[]>;
 	/** Worktree paths offered for `@`. */
 	filePaths?: string[];
 	/** The path list was capped by the daemon rather than being all of them. */
@@ -716,6 +721,8 @@ function ChatWorkspaceContent({
 	activateBranchPending,
 	activateBranchError,
 	skills,
+	skillCatalog,
+	onResolveSkills,
 	filePaths,
 	filePathsTruncated,
 	localEchos,
@@ -1004,12 +1011,12 @@ function ChatWorkspaceContent({
 	}, [queueDraftError, draftScope.sessionId]);
 	// Text equality cannot prove an attachment-only edit was accepted. Keep an
 	// uncertain edit and its original daemon revision until a save is acknowledged.
-	const changeQueuedDraft = useCallback((text: string) => {
+	const changeQueuedDraft = useCallback((text: string, skillSelection?: ComposerSkillSelection | null) => {
 		const current = queueEditRef.current;
-		if (!current || current.clientMessageId || current.turnId !== queueEdit?.turnId || current.ownerId !== queueEdit.ownerId || current.text === text) return;
-		const result = updateQueueDraft({ ...current, text, saving: undefined, clientMessageId: undefined }, current.revision);
+		if (!current || current.clientMessageId || current.turnId !== queueEdit?.turnId || current.ownerId !== queueEdit.ownerId || (current.text === text && JSON.stringify(current.skillSelection) === JSON.stringify(skillSelection))) return;
+		const result = updateQueueDraft({ ...current, text, skillSelection, saving: undefined, clientMessageId: undefined }, current.revision);
 		if (!result.ok) {
-			queueEditRef.current = { ...current, text };
+			queueEditRef.current = { ...current, text, skillSelection };
 			setQueueEdit(queueEditRef.current);
 		}
 	}, [queueEdit?.turnId, queueEdit?.ownerId, updateQueueDraft]);
@@ -1043,7 +1050,7 @@ function ChatWorkspaceContent({
 	// Keep the dispatch target with this composer instance while attachment staging
 	// awaits. A newer queue editor must not redirect an older ordinary send.
 	const handleComposerSend = useCallback(
-		async (text: string, attachments?: Parameters<NonNullable<typeof onSend>>[1], clientMessageId?: string, retainedContent?: number[], excerpts?: ChatDraftExcerptReference[]) => {
+		async (text: string, attachments?: Parameters<NonNullable<typeof onSend>>[1], clientMessageId?: string, retainedContent?: number[], excerpts?: ChatDraftExcerptReference[], skillSelection?: ChatSkillSelection | null) => {
 			if (queueEdit) {
 				if (!onEditQueuedTurn) {
 					throw new Error("chat.draft.queueUnavailable");
@@ -1057,6 +1064,8 @@ function ChatWorkspaceContent({
 				}
 				const prepared = updateQueueDraft({
 					...currentEdit,
+					// A retry must preserve the saved envelope, including legacy omission.
+					skillSelection: currentEdit.clientMessageId || skillSelection === undefined ? currentEdit.skillSelection : skillSelection === null ? null : { catalogIdentity: currentEdit.skillSelection?.catalogIdentity, selection: skillSelection },
 					saving: true,
 					clientMessageId: currentEdit.clientMessageId ?? crypto.randomUUID(),
 					nativeImages: currentEdit.nativeImages ?? Boolean(nativeImages),
@@ -1065,6 +1074,7 @@ function ChatWorkspaceContent({
 				try {
 					await onEditQueuedTurn(queueEdit.turnId, text, {
 						clientMessageId: prepared.draft.queuedEdit.clientMessageId,
+						...(prepared.draft.queuedEdit.skillSelection ? { skillSelection: prepared.draft.queuedEdit.skillSelection.selection } : prepared.draft.queuedEdit.skillSelection === null ? { clearSkillSelection: true } : {}),
 						...(attachments?.length ? { attachments } : {}),
 						retainedContent: queueEdit.attachments === undefined ? undefined : retainedContent,
 						expectedRevision: queueEdit.expectedRevision,
@@ -1090,7 +1100,7 @@ function ChatWorkspaceContent({
 				}
 				return;
 			}
-			return onSend?.(text, attachments, clientMessageId, excerpts);
+			return skillSelection ? onSend?.(text, attachments, clientMessageId, excerpts, skillSelection) : onSend?.(text, attachments, clientMessageId, excerpts);
 		},
 		[draftScope, onEditQueuedTurn, onSend, nativeImages, queueEdit, queuedMessages, updateQueueDraft],
 	);
@@ -1111,7 +1121,7 @@ function ChatWorkspaceContent({
 				attachments.push({ id: `content-${index}`, contentIndex: index, contentType: item.type,
 					name: item.name || (item.type === "image" ? `Image ${index + 1}` : item.uri || "Attachment") });
 			});
-			updateQueueDraft({ turnId, ownerId: crypto.randomUUID(), text: parts.body, expectedRevision: message.revision, attachments, stagedAttachments: [] });
+			updateQueueDraft({ turnId, ownerId: crypto.randomUUID(), text: parts.body, preservedSkillToken: message.skillSelectionToken, expectedRevision: message.revision, attachments, stagedAttachments: [] });
 		},
 		[newWorkDisabled, queuedMessages, updateQueueDraft],
 	);
@@ -1465,7 +1475,7 @@ function ChatWorkspaceContent({
 		],
 	);
 	const composerDraftSeed = useMemo(
-		() => (queueEdit ? { id: `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}`, text: queueEdit.text, attachments: queueEdit.attachments, stagedAttachments: queueEdit.stagedAttachments } : undefined),
+		() => (queueEdit ? { id: `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}`, text: queueEdit.text, attachments: queueEdit.attachments, stagedAttachments: queueEdit.stagedAttachments, skillSelection: queueEdit.skillSelection, preservedSkillToken: queueEdit.preservedSkillToken } : undefined),
 		[queueEdit],
 	);
 	const sentMessageList = useMemo(
@@ -1853,6 +1863,8 @@ function ChatWorkspaceContent({
 										// look like a regression.
 										emptyPlaceholder={conversationEmpty ? (artifactSession ? t("chat.welcome.artifactPlaceholder") : emptyChatPlaceholder) : undefined}
 										skills={skills}
+										skillCatalog={skillCatalog}
+										onResolveSkills={onResolveSkills}
 										filePaths={filePaths}
 										filePathsTruncated={filePathsTruncated}
 										onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}

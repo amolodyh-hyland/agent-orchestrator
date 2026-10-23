@@ -256,3 +256,22 @@ func TestReorderQueuedTurnsRouteRejectsUnavailableTurn(t *testing.T) {
 		t.Fatalf("status = %d, want %d", status, http.StatusConflict)
 	}
 }
+
+func TestEditQueuedTurnRouteForwardsSelectionIntent(t *testing.T) {
+	for _, clear := range []bool{false, true} {
+		svc := &editQueuedStub{fakeConversationService: &fakeConversationService{}}
+		request := map[string]any{"text": "$review args", "clearSkillSelection": clear}
+		if !clear {
+			request["skillSelection"] = map[string]any{"token": "$review", "bindingRef": "binding-b", "controllerGeneration": "generation", "catalogRevision": "catalog", "entryId": "entry-b", "snapshotId": "snapshot", "path": "/forged/SKILL.md"}
+		}
+		if status := postEditQueuedTurn(t, svc, "queued", request); status != http.StatusNoContent {
+			t.Fatalf("status=%d", status)
+		}
+		if svc.edit.ClearSkillSelection != clear {
+			t.Fatalf("clear lost: %+v", svc.edit)
+		}
+		if !clear && (svc.edit.SkillSelection == nil || svc.edit.SkillSelection.BindingRef != "binding-b" || svc.edit.SkillSelection.EntryID != "entry-b" || svc.edit.SkillSelection.SnapshotID != "snapshot") {
+			t.Fatalf("replacement lost: %+v", svc.edit)
+		}
+	}
+}

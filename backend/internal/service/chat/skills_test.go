@@ -114,3 +114,92 @@ func TestSkillSelectionSurvivesQueueAndTokenEditsClearIt(t *testing.T) {
 		t.Fatalf("hidden invocation on queue drain: %+v", messages)
 	}
 }
+
+func TestQueuedEditReplacesOrClearsSameTokenSelection(t *testing.T) {
+	for _, action := range []string{"replace", "clear", "preserve", "contradictory"} {
+		t.Run(action, func(t *testing.T) {
+			ctx := context.Background()
+			provider := &skillfulConversation{fakeConversation: newFakeConversation(), skills: []ports.ChatSkill{
+				{Name: "review", Transport: "native_skill", Token: "$review", CanInvoke: true, NativePath: "/owned/a/SKILL.md"},
+				{Name: "review", Transport: "native_skill", Token: "$review", CanInvoke: true, NativePath: "/owned/b/SKILL.md"},
+			}}
+			h := newHarnessWithConversation(t, provider)
+			first, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "first", ClientMessageID: "first"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			catalog, err := h.svc.SkillCatalog(ctx, testSession, false, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			selection := func(index int) *ports.ChatSkillSelection {
+				row := catalog.Skills[index]
+				return &ports.ChatSkillSelection{Token: row.Token, EntryID: row.EntryID, SnapshotID: row.SnapshotID, BindingRef: row.BindingRef, CatalogRevision: row.CatalogRevision, ControllerGeneration: row.ControllerGeneration}
+			}
+			queued, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "$review original", ClientMessageID: "queued", Content: []ports.ChatContent{{Type: "skill_selection", Internal: true, SkillSelection: selection(0)}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			zero := int64(0)
+			edit := chatsvc.QueuedMessageEdit{Text: "$review edited", ClientMessageID: "edit-receipt", ExpectedRevision: &zero, RetainedContent: &[]int{}}
+			if action == "replace" || action == "contradictory" {
+				edit.SkillSelection = selection(1)
+			}
+			if action == "clear" || action == "contradictory" {
+				edit.ClearSkillSelection = true
+			}
+			err = h.svc.EditQueuedTurn(ctx, testSession, queued.ID, edit)
+			if action == "contradictory" {
+				if !errorsIs(err, chatsvc.ErrQueuedContentInvalid) {
+					t.Fatalf("contradictory update: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := h.svc.EditQueuedTurn(ctx, testSession, queued.ID, edit); err != nil {
+				t.Fatalf("exact retry: %v", err)
+			}
+			changed := edit
+			changed.SkillSelection, changed.ClearSkillSelection = selection(0), false
+			if action == "preserve" {
+				changed.ClearSkillSelection, changed.SkillSelection = true, nil
+			}
+			if err := h.svc.EditQueuedTurn(ctx, testSession, queued.ID, changed); !errorsIs(err, store.ErrQueuedEditDeliveryConflict) {
+				t.Fatalf("selection changed under same receipt: %v", err)
+			}
+			conversation, err := h.st.ConversationForSession(ctx, testSession)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stored, err := h.st.QueuedTurnMessage(ctx, conversation.ID, queued.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if action == "clear" && strings.Contains(stored.DeliveryContentJSON, "skillSelection") {
+				t.Fatalf("clear retained binding: %s", stored.DeliveryContentJSON)
+			}
+			provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: first.ProviderTurnID, TurnState: domain.TurnStateCompleted})
+			wantState := domain.TurnStateRunning
+			if action == "clear" {
+				wantState = domain.TurnStateFailed
+			}
+			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return turnStateByText(t, s)[edit.Text] == wantState })
+			messages := provider.sentMessages()
+			if action == "clear" {
+				if len(messages) != 1 {
+					t.Fatalf("ambiguous cleared token reached provider: %+v", messages)
+				}
+				return
+			}
+			wantPath := "/owned/a/SKILL.md"
+			if action == "replace" {
+				wantPath = "/owned/b/SKILL.md"
+			}
+			if len(messages) != 2 || messages[1].Text != edit.Text || len(messages[1].NativeSkills) != 1 || messages[1].NativeSkills[0].Path != wantPath {
+				t.Fatalf("dispatch: %+v, want %s", messages, wantPath)
+			}
+		})
+	}
+}

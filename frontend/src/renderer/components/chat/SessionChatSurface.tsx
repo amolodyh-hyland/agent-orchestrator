@@ -1,3 +1,4 @@
+import { skillToken } from "../../lib/chat-skill-selection";
 import { createPortal } from "react-dom";
 import { useIndependentSideChats } from "./IndependentSideChats";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
@@ -375,10 +376,11 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		hostId,
 	);
 	const { models, configOptions: offeredConfigOptions } = useChatModelChoices(snapshot?.harness, controllerModels, configOptions.options, snapshot?.settings?.model, hostId);
-	const { skills } = useConversationSkills(
+	const { skills, catalog: skillCatalog, resolveSkills } = useConversationSkills(
 		session.id,
 		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot),
 		hostId,
+		snapshot?.harness,
 	);
 	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot), hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
@@ -641,7 +643,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onLoadOlder={loadOlder}
 				busy={commands.busy}
 				excerptsEnabled
-				onSend={async (text, attachments, clientMessageId, excerpts) => {
+				onSend={async (text, attachments, clientMessageId, excerpts, skillSelection) => {
 					// Only claim /btw and /side where side chats can open. Elsewhere the
 					// text goes to the agent as typed (it may be the harness's own skill),
 					// so a failed side launch can never strand the main draft.
@@ -658,6 +660,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					}
 					return commands.send({
 						text,
+						skillSelection,
 						attachments,
 						clientMessageId,
 						excerpts: excerpts?.map((excerpt) => ({
@@ -717,7 +720,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onActivateBranch={commands.activateBranch}
 				activateBranchPending={commands.activateBranchPending}
 				activateBranchError={commands.activateBranchError}
-				skills={sideCreationEnabled ? [...(["btw", "side"].map((name) => ({ name, displayName: name, description: "Open a new side chat", source: "AO" }))), ...skills.filter((skill) => skill.name !== "btw" && skill.name !== "side")] : skills}
+				skillCatalog={skillCatalog}
+				onResolveSkills={resolveSkills}
+				skills={sideCreationEnabled ? [...(["btw", "side"].map((name) => ({ name, displayName: name, description: "Open a new side chat", source: "AO" }))), ...skills.filter((skill) => !["/btw", "/side"].includes(skillToken(skill)))] : skills}
 				filePaths={paths}
 				filePathsTruncated={truncated}
 				localEchos={localEchos}

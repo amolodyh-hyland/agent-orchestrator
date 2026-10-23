@@ -1,3 +1,4 @@
+import { LibrarySettings } from "./LibrarySettings";
 import { ProjectContextSettings } from "./ProjectContextSettings";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -338,7 +339,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 		reviewerWarning={reviewerTrustWarning} save={save} saveUnchanged onSaveState={onSaveState}
 		modelHostId={hostId}
 		additionalSave={section === "general" ? { state: contextSaveState, submit: () => contextSubmitRef.current?.() ?? Promise.resolve(false) } : undefined}
-		generalExtra={<ProjectContextSettings key={project.id} project={project} hostId={hostId} disabled={!hostConnected} onSaveState={setContextSaveState} submitRef={contextSubmitRef} onSaved={() => { void queryClient.invalidateQueries({ queryKey: projectQueryKey(projectId, hostId) }); void onSaved(); }} />}
+		generalExtra={<><ProjectContextSettings key={project.id} project={project} hostId={hostId} disabled={!hostConnected} onSaveState={setContextSaveState} submitRef={contextSubmitRef} onSaved={() => { void queryClient.invalidateQueries({ queryKey: projectQueryKey(projectId, hostId) }); void onSaved(); }} /><LibrarySettings key={`${hostId ?? "local"}:${project.id}`} projectId={project.id} hostId={hostId} disabled={!hostConnected} /></>}
 		renderAgent={(props) => <LocalAgentPicker {...props} projectId={projectId} hostId={hostId} agentsQuery={agentsQuery} />} />;
 }
 

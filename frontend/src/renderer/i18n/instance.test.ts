@@ -247,3 +247,11 @@ describe("lazy locale catalogs", () => {
 		expect(instance.t("settings.general")).toBe(jaMessages["settings.general"]);
 	});
 });
+
+it("provides every library review and composer label in every locale", () => {
+	const keys = Object.keys(enMessages).filter((key) => key.startsWith("library."));
+	for (const locale of APP_LOCALES) {
+		const catalog = allCatalogs[locale] as unknown as Record<string, string>;
+		for (const key of keys) expect(catalog[key], `${locale} is missing ${key}`).toBeTruthy();
+	}
+});

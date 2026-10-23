@@ -1,3 +1,6 @@
+import userEvent from "@testing-library/user-event";
+import { lexicalEditorText, typeInLexicalEditor } from "../test/lexical";
+import { ChatComposer } from "../components/chat/ChatComposer";
 import { render, renderHook, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
@@ -47,6 +50,7 @@ import {
 	useConversationCommands,
 	useConversationConfigOptions,
 	useConversationSkills,
+	conversationSkillsQueryKey,
 	toSnapshot,
 } from "./useConversation";
 import { workspaceQueryKey } from "./useWorkspaceQuery";
@@ -1383,4 +1387,105 @@ describe("toSnapshot", () => {
 		const message = snapshot.items.find((item) => item.kind === "message");
 		expect(message).toMatchObject({ id: "m1", clientMessageId: "client-1" });
 	});
+});
+
+
+describe("library catalog isolation", () => {
+	const catalog = (overrides = {}) => ({ status: "ready", canList: true, canReloadSameSnapshot: true,
+		sessionId: "catalog-session", snapshotId: "snapshot-one", providerId: "codex", adapterVersion: "v1",
+		controllerGeneration: "controller-one", catalogRevision: "catalog-one", projectRevision: 1, trustEpoch: 1,
+		skills: [{ name: "review", displayName: "Review", token: "$review", transport: "native_skill", canInvoke: true,
+			status: "native_passthrough", trustState: "native_unverified", bindingRef: "binding-one" }], ...overrides });
+
+	it("hides the old catalog while disabled and discards an old provider response", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const wrap = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+		let resolveOld!: (value: unknown) => void;
+		getMock.mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }))
+			.mockResolvedValue({ data: catalog({ providerId: "claude-code", controllerGeneration: "controller-two" }) });
+		const hook = renderHook(({ provider, enabled }) => useConversationSkills("catalog-session", enabled, undefined, provider), {
+			wrapper: wrap, initialProps: { provider: "codex", enabled: true },
+		});
+		hook.rerender({ provider: "claude-code", enabled: true });
+		await waitFor(() => expect(hook.result.current.catalog?.providerId).toBe("claude-code"));
+		await act(async () => { resolveOld({ data: catalog() }); });
+		expect(hook.result.current.catalog?.controllerGeneration).toBe("controller-two");
+		hook.rerender({ provider: "claude-code", enabled: false });
+		expect(hook.result.current.skills).toEqual([]);
+		getMock.mockResolvedValue({ data: catalog({ providerId: "claude-code", controllerGeneration: "controller-three" }) });
+		hook.rerender({ provider: "claude-code", enabled: true });
+		expect(hook.result.current.skills).toEqual([]);
+		await waitFor(() => expect(hook.result.current.catalog?.controllerGeneration).toBe("controller-three"));
+	});
+
+	it("replaces ready identity after controller, snapshot or trust changes and clears rows on error", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const wrap = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+		getMock.mockResolvedValue({ data: catalog() });
+		const hook = renderHook(() => useConversationSkills("catalog-session", true, undefined, "codex"), { wrapper: wrap });
+		await waitFor(() => expect(hook.result.current.skills).toHaveLength(1));
+		let previous = hook.result.current.skills[0]!.catalogIdentity;
+		for (const change of [{ controllerGeneration: "controller-two" }, { snapshotId: "snapshot-two" }, { trustEpoch: 2 }]) {
+			getMock.mockResolvedValue({ data: catalog(change) });
+			await act(async () => { await queryClient.invalidateQueries({ queryKey: conversationSkillsQueryKey("catalog-session") }); });
+			await waitFor(() => expect(hook.result.current.skills[0]?.catalogIdentity).not.toBe(previous));
+			previous = hook.result.current.skills[0]!.catalogIdentity;
+		}
+		getMock.mockResolvedValue({ error: { code: "CHAT_CONTROLLER_NOT_READY" } });
+		await act(async () => { await queryClient.invalidateQueries({ queryKey: conversationSkillsQueryKey("catalog-session") }); });
+		await waitFor(() => expect(hook.result.current.skills).toEqual([]));
+		expect(conversationSkillsQueryKey("catalog-session", "remote-a")).not.toEqual(conversationSkillsQueryKey("catalog-session", "remote-b"));
+	});
+
+	it("forwards opaque selection metadata unchanged and preserves a stale-selection refusal", async () => {
+		const skillSelection = { entryId: "entry-one", snapshotId: "snapshot-one", bindingRef: "binding-one", controllerGeneration: "controller-one", catalogRevision: "catalog-one", token: "$review" };
+		postMock.mockResolvedValueOnce({ data: { turnId: "turn-new", state: "queued" } });
+		const hook = renderHook(() => useConversationCommands("selection-session"), { wrapper });
+		await act(async () => { await hook.result.current.send({ text: "$review file.ts --all", skillSelection }); });
+		expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/conversation/messages", expect.objectContaining({ body: expect.objectContaining({ text: "$review file.ts --all", skillSelection }) }));
+		const refusal = { code: "CHAT_SKILL_UNAVAILABLE", message: "stale_selection" };
+		postMock.mockResolvedValueOnce({ error: refusal });
+		await act(async () => { await expect(hook.result.current.send({ text: "$review second", skillSelection })).rejects.toBe(refusal); });
+	});
+});
+
+
+it.each(["unchanged", "changed", "failed"])("waits for an unresolved catalog refresh before submitting a selected draft (%s)", async (outcome) => {
+	const catalog = { status: "ready", canList: true, canReloadSameSnapshot: true, projectRevision: 1, trustEpoch: 1,
+		providerId: "codex", sessionId: "refresh-session", snapshotId: "snapshot", controllerGeneration: "controller", catalogRevision: "catalog",
+		skills: [{ name: "review", displayName: "Review", token: "$review", canInvoke: true, status: "native_passthrough", transport: "native_skill", trustState: "native_unverified", bindingRef: "binding", controllerGeneration: "controller", catalogRevision: "catalog", entryId: "entry", snapshotId: "snapshot" }] };
+	getMock.mockResolvedValue({ data: catalog });
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const send = vi.fn();
+	function Surface() {
+		const { skills, resolveSkills } = useConversationSkills("refresh-session", true, undefined, "codex");
+		return <ChatComposer skills={skills} onResolveSkills={resolveSkills} onSend={send} />;
+	}
+	render(<QueryClientProvider client={queryClient}><TooltipProvider><Surface /></TooltipProvider></QueryClientProvider>);
+	const field = screen.getByLabelText("Message the agent");
+	await waitFor(() => expect(queryClient.getQueryData([...conversationSkillsQueryKey("refresh-session"), "codex", 0])).toBeDefined());
+	await typeInLexicalEditor(field, "$rev");
+	await screen.findByRole("option");
+	await userEvent.keyboard("{Tab}");
+	expect(lexicalEditorText(field)).toBe("$review ");
+	await typeInLexicalEditor(field, "argument");
+	const refresh = deferred<{ data?: typeof catalog; error?: { code: string } }>();
+	getMock.mockReturnValue(refresh.promise);
+	let refreshing!: Promise<void>;
+	act(() => { refreshing = queryClient.invalidateQueries({ queryKey: conversationSkillsQueryKey("refresh-session") }); });
+	await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+	await userEvent.keyboard("{Enter}");
+	expect(send).not.toHaveBeenCalled();
+	expect(screen.queryByRole("alert")).toBeNull();
+	await act(async () => {
+		refresh.resolve(outcome === "failed" ? { error: { code: "CHAT_CONTROLLER_NOT_READY" } } : { data: outcome === "changed" ? { ...catalog, trustEpoch: 2 } : { ...catalog, skills: catalog.skills.map((skill) => ({ ...skill })) } });
+		await refreshing;
+	});
+	if (outcome === "unchanged") {
+		await waitFor(() => expect(send).toHaveBeenCalledWith("$review argument", undefined, undefined, undefined, undefined, expect.objectContaining({ entryId: "entry", snapshotId: "snapshot" })));
+	} else {
+		await screen.findByRole("alert");
+		expect(send).not.toHaveBeenCalled();
+		expect(field).toHaveTextContent("$review argument");
+	}
 });

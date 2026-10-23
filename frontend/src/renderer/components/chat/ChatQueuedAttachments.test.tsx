@@ -5,7 +5,7 @@ import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { purgeFileAttachmentsForSession, useFileAttachments } from "../../hooks/useFileAttachments";
-import { readChatSessionDraft } from "../../lib/chat-drafts";
+import { readChatSessionDraft, writeChatQueuedEdit } from "../../lib/chat-drafts";
 import { chatFixture } from "../../lib/chat-fixture";
 import { typeInLexicalEditor } from "../../test/lexical";
 import { TooltipProvider } from "../ui/tooltip";
@@ -146,6 +146,16 @@ describe("queued message attachments", () => {
 		expect(screen.getByRole("button", { name: "Cancel edit" })).toBeEnabled();
 		await userEvent.click(screen.getByRole("button", { name: "Cancel edit" }));
 		expect(readChatSessionDraft(chatFixture.sessionId).queuedEdit).toBeUndefined();
+	});
+
+	it("retries a legacy queued receipt without adding selection intent", async () => {
+		const saved = writeChatQueuedEdit(chatFixture.sessionId, { turnId: "q1", text: "inspect this", attachments: [], clientMessageId: "legacy-receipt", expectedRevision: 0, saving: true });
+		expect(saved.ok).toBe(true);
+		const recovered = setup();
+		await userEvent.click(screen.getByRole("button", { name: "Retry edit safely" }));
+		await waitFor(() => expect(recovered.edit).toHaveBeenCalledWith("q1", "inspect this", {
+			clientMessageId: "legacy-receipt", expectedRevision: 0, retainedContent: [],
+		}));
 	});
 
 	it.each(["cancel", "escape", "replace", "delete"])("preserves an unresolved queued receipt through %s and remount", async (exit) => {

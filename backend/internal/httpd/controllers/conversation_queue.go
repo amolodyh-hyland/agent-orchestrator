@@ -9,6 +9,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
@@ -54,12 +55,17 @@ func (c *ConversationsController) editQueuedTurn(w http.ResponseWriter, r *http.
 			attachmentErr.code, attachmentErr.message, nil)
 		return
 	}
+	var selection *ports.ChatSkillSelection
+	if req.SkillSelection != nil {
+		converted := ports.ChatSkillSelection(*req.SkillSelection)
+		selection = &converted
+	}
 	err := c.Svc.EditQueuedTurn(
 		r.Context(),
 		domain.SessionID(chi.URLParam(r, "sessionId")),
 		chi.URLParam(r, "turnId"),
 		chatsvc.QueuedMessageEdit{Text: req.Text, Content: content, ClientMessageID: req.ClientMessageID,
-			RetainedContent: req.RetainedContent, ExpectedRevision: req.ExpectedRevision},
+			RetainedContent: req.RetainedContent, ExpectedRevision: req.ExpectedRevision, SkillSelection: selection, ClearSkillSelection: req.ClearSkillSelection},
 	)
 	if err != nil {
 		writeQueuedTurnMutationError(w, r, err)

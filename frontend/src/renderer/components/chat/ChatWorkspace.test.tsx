@@ -5241,6 +5241,108 @@ describe("durable queued edits", () => {
 		};
 	}
 
+
+	it.each(["arguments", "remove_retype"])("preserves queued selection intent across remount (%s)", async (edit) => {
+		const snapshot = queuedSnapshot();
+		snapshot.items[0] = { ...snapshot.items[0], text: "$review original.ts", skillSelectionToken: "$review" } as ConversationMessage;
+		const save = vi.fn().mockResolvedValue(undefined);
+		const props = { snapshot, onSend: vi.fn(), onEditQueuedTurn: save };
+		const first = render(<ChatWorkspace {...props} />);
+		await userEvent.click(screen.getByRole("button", { name: "Edit queued message" }));
+		const field = screen.getByLabelText("Message the agent");
+		if (edit === "arguments") await typeInLexicalEditor(field, " --focus edited");
+		else {
+			const lexical = (field as HTMLElement & { __lexicalEditor: import("lexical").LexicalEditor }).__lexicalEditor;
+			const { $getRoot, $createParagraphNode, $createTextNode } = await import("lexical");
+			for (const text of ["ordinary", "$review original.ts --focus edited"]) {
+				act(() => lexical.update(() => { const root = $getRoot(); root.clear().append($createParagraphNode().append($createTextNode(text))); root.selectEnd(); }, { discrete: true }));
+			}
+		}
+		first.unmount();
+		render(<ChatWorkspace {...props} />);
+		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await waitFor(() => expect(save).toHaveBeenCalledOnce());
+		expect(save.mock.calls[0]?.[1]).toBe("$review original.ts --focus edited");
+		const options = save.mock.calls[0]?.[2];
+		expect(options).not.toHaveProperty("skillSelection");
+		if (edit === "arguments") expect(options).not.toHaveProperty("clearSkillSelection");
+		else expect(options).toHaveProperty("clearSkillSelection", true);
+	});
+
+	it.skipIf(!process.env.AO_QUEUED_SELECTION_TEST_BINARY)("preserves row A through a frontend to backend argument-only queued edit", async () => {
+		const { spawn } = await import("node:child_process");
+		const { toSnapshot } = await import("../../hooks/useConversation");
+		const child = spawn(process.env.AO_QUEUED_SELECTION_TEST_BINARY!, ["-test.run=^TestQueuedSelectionFrontendRegression$", "-test.timeout=30s"], { env: { ...process.env, AO_QUEUED_SELECTION_FRONTEND: "1" }, stdio: ["pipe", "pipe", "pipe"] });
+		let output = "";
+		let resolveSnapshot!: (wire: Parameters<typeof toSnapshot>[0]) => void;
+		let rejectSnapshot!: (reason: Error) => void;
+		const snapshotReady = new Promise<Parameters<typeof toSnapshot>[0]>((resolve, reject) => { resolveSnapshot = resolve; rejectSnapshot = reject; });
+		child.stdout.setEncoding("utf8");
+		child.stdout.on("data", (chunk: string) => {
+			output += chunk;
+			const line = output.split("\n").find((line) => line.startsWith("QUEUED_SELECTION_SNAPSHOT:"));
+			if (line) { try { resolveSnapshot(JSON.parse(line.slice("QUEUED_SELECTION_SNAPSHOT:".length))); } catch { /* Wait for the complete line. */ } }
+		});
+		child.stderr.on("data", (chunk) => { output += String(chunk); });
+		const finished = new Promise<void>((resolve, reject) => {
+			child.once("error", (error) => { rejectSnapshot(error); reject(error); });
+			child.once("exit", (code) => {
+				if (code === 0) resolve();
+				else { const error = new Error(`Queue integration exited ${code}: ${output}`); rejectSnapshot(error); reject(error); }
+			});
+		});
+		void finished.catch(() => {});
+		try {
+			const snapshot = toSnapshot(await snapshotReady);
+			expect(snapshot.items.find((item) => item.kind === "message" && item.text === "$review original.ts")).toHaveProperty("skillSelectionToken", "$review");
+			const save = vi.fn(async (_turnId: string, text: string, options?: object) => { child.stdin.end(JSON.stringify({ text, ...options }) + "\n"); });
+			render(<ChatWorkspace snapshot={snapshot} onSend={vi.fn()} onEditQueuedTurn={save} />);
+			await userEvent.click(screen.getByRole("button", { name: "Edit queued message" }));
+			await typeInLexicalEditor(screen.getByLabelText("Message the agent"), " --focus edited");
+			await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+			await waitFor(() => expect(save).toHaveBeenCalledOnce());
+			expect(save.mock.calls[0]?.[2]).not.toHaveProperty("clearSkillSelection");
+			await finished;
+		} finally { child.kill(); }
+	});
+
+	it.each(["replace", "clear"])("persists same-token selection intent across queued-edit recovery (%s)", async (intent) => {
+		const snapshot = queuedSnapshot();
+		snapshot.items[0] = { ...snapshot.items[0], text: "$review original", skillSelectionToken: "$review" } as ConversationMessage;
+		const skills = ["a", "b"].map((id) => ({ name: "review", displayName: "Review", token: "$review", canInvoke: true, status: "ready", transport: "native_skill", trustState: "native_unverified", bindingRef: id, observationId: id, catalogRevision: "catalog", controllerGeneration: "controller", snapshotId: "snapshot", entryId: id, catalogIdentity: "catalog-identity" }));
+		const save = vi.fn().mockRejectedValueOnce(new Error("Response lost")).mockResolvedValue(undefined);
+		const send = vi.fn();
+		const props = { snapshot, onSend: send, onEditQueuedTurn: save, skills };
+		const first = render(<ChatWorkspace {...props} />);
+		await userEvent.click(screen.getByRole("button", { name: "Edit queued message" }));
+		const field = screen.getByLabelText("Message the agent");
+		const lexical = (field as HTMLElement & { __lexicalEditor: import("lexical").LexicalEditor }).__lexicalEditor;
+		const { $getRoot, $createParagraphNode, $createTextNode } = await import("lexical");
+		act(() => lexical.update(() => { const root = $getRoot(); root.clear().append($createParagraphNode().append($createTextNode("/rev"))); root.selectEnd(); }, { discrete: true }));
+		await userEvent.click(screen.getAllByRole("option")[1]!);
+		expect(readChatSessionDraft(snapshot.sessionId).queuedEdit?.skillSelection?.selection.bindingRef).toBe("b");
+		if (intent === "clear") {
+			for (const text of ["ordinary", "$review changed"]) {
+				act(() => lexical.update(() => { const root = $getRoot(); root.clear().append($createParagraphNode().append($createTextNode(text))); root.selectEnd(); }, { discrete: true }));
+			}
+			expect(readChatSessionDraft(snapshot.sessionId).queuedEdit?.skillSelection).toBeNull();
+		}
+		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+		await screen.findByRole("alert");
+		const request = save.mock.calls[0];
+		expect(request?.[2]).toMatchObject(intent === "replace"
+			? { skillSelection: { bindingRef: "b", entryId: "b", snapshotId: "snapshot", token: "$review" } }
+			: { clearSkillSelection: true });
+		if (intent === "clear") expect(request?.[2].skillSelection).toBeUndefined();
+		first.unmount();
+		render(<ChatWorkspace {...props} skills={[]} />);
+		await userEvent.click(screen.getByRole("button", { name: /Retry|Send message/ }));
+		await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+		expect(save.mock.calls[1]).toEqual(request);
+		expect(send).not.toHaveBeenCalled();
+	});
+
 	it("restores the queue target across remount and keeps the independent composer after accepted save", async () => {
 		const snapshot = queuedSnapshot();
 		const save = vi.fn().mockResolvedValue(undefined);

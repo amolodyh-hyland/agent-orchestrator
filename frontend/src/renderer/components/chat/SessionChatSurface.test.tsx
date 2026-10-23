@@ -1335,13 +1335,13 @@ describe("controller catalogs during an interface handoff", () => {
 		const client = new QueryClient();
 		const { rerender } = render(<Wrapper client={client}><SessionChatSurface session={session} controllerTransitioning /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
+			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined, ...(hook === useConversationSkills ? ["codex"] : []));
 		}
 
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "ready" } };
 		rerender(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, true, undefined);
+			expect(hook).toHaveBeenLastCalledWith(session.id, true, undefined, ...(hook === useConversationSkills ? ["codex"] : []));
 		}
 	});
 
@@ -1349,7 +1349,7 @@ describe("controller catalogs during an interface handoff", () => {
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "stopped" } };
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
+			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined, ...(hook === useConversationSkills ? ["codex"] : []));
 		}
 	});
 });

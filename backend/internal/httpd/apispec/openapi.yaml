@@ -15619,6 +15619,8 @@ components:
         sequence:
           format: int64
           type: integer
+        skillSelectionToken:
+          type: string
         streaming:
           type: boolean
         text:
@@ -16557,6 +16559,8 @@ components:
           items:
             $ref: '#/components/schemas/ConversationImageContentRequest'
           type: array
+        clearSkillSelection:
+          type: boolean
         clientMessageId:
           type: string
         expectedRevision:
@@ -16569,6 +16573,8 @@ components:
           type:
           - "null"
           - array
+        skillSelection:
+          $ref: '#/components/schemas/ConversationSkillSelectionRequest'
         text:
           type: string
       required:

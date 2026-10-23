@@ -25,12 +25,16 @@ var ErrQueuedEditConflict = errors.New("queued message changed during editing")
 
 // QueuedMessageEdit retains server-owned content by public summary index and
 // appends newly uploaded blocks. Nil RetainedContent preserves existing content.
+// SkillSelection replaces the stored binding; ClearSkillSelection removes it.
+// Omitting both retains a stored binding only while its token remains in Text.
 type QueuedMessageEdit struct {
-	ClientMessageID  string
-	Text             string
-	Content          []ports.ChatContent
-	RetainedContent  *[]int
-	ExpectedRevision *int64
+	ClientMessageID     string
+	Text                string
+	Content             []ports.ChatContent
+	RetainedContent     *[]int
+	ExpectedRevision    *int64
+	SkillSelection      *ports.ChatSkillSelection `json:",omitempty"`
+	ClearSkillSelection bool                      `json:",omitempty"`
 }
 
 // ErrInvalidQueuedTurnOrder refuses a queue reorder that does not match the
@@ -179,14 +183,20 @@ func (c *Controller) EditQueuedTurn(ctx context.Context, turnID string, edit Que
 		}
 		content = selected
 	}
+	if edit.ClearSkillSelection && edit.SkillSelection != nil {
+		return ErrQueuedContentInvalid
+	}
 	filtered := content[:0]
 	for _, block := range content {
-		if block.Type == "skill_selection" && (block.SkillSelection == nil || !skillTokenPresent(edit.Text, block.SkillSelection.Token)) {
+		if block.Type == "skill_selection" && (edit.ClearSkillSelection || edit.SkillSelection != nil || block.SkillSelection == nil || !skillTokenPresent(edit.Text, block.SkillSelection.Token)) {
 			continue
 		}
 		filtered = append(filtered, block)
 	}
 	content = filtered
+	if edit.SkillSelection != nil && skillTokenPresent(edit.Text, edit.SkillSelection.Token) {
+		content = append(content, ports.ChatContent{Type: "skill_selection", Internal: true, SkillSelection: edit.SkillSelection})
+	}
 	content = append(content, edit.Content...)
 	// Match the native chat upload limits across repeated edits as well as a single request.
 	images, imageBytes := 0, 0

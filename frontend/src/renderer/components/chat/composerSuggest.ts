@@ -11,6 +11,7 @@
  * ordinary text for the agent.
  */
 
+import { skillKey, skillSelectable, skillToken } from "../../lib/chat-skill-selection";
 import type { ChatSkill } from "../../types/conversation";
 
 /** What kind of thing the caret is currently completing. */
@@ -24,7 +25,8 @@ export type TriggerKind = "skill" | "file";
  */
 export interface ActiveTrigger {
 	kind: TriggerKind;
-	/** Index of the `/` or `@`. */
+	sigil?: "$";
+	/** Index of the `/`, `$` or `@`. */
 	start: number;
 	/** Text typed after the sigil, up to the caret. */
 	query: string;
@@ -49,14 +51,15 @@ export function findActiveTrigger(text: string, caret: number): ActiveTrigger | 
 	for (let i = caret - 1; i >= 0; i -= 1) {
 		const char = text[i]!;
 		if (TRIGGER_BOUNDARY.test(char)) return undefined;
-		if (char !== "/" && char !== "@") continue;
+		if (char !== "/" && char !== "$" && char !== "@") continue;
 
 		const preceding = i > 0 ? text[i - 1]! : undefined;
 		const atBoundary = preceding === undefined || TRIGGER_BOUNDARY.test(preceding);
 		if (!atBoundary) return undefined;
 
 		return {
-			kind: char === "/" ? "skill" : "file",
+			kind: char === "@" ? "file" : "skill",
+			...(char === "$" ? { sigil: "$" as const } : {}),
 			start: i,
 			query: text.slice(i + 1, caret),
 		};
@@ -89,7 +92,7 @@ function score(value: string, query: string, base: number): number | null {
 
 /** One row in the suggestion menu. */
 export interface Suggestion {
-	/** Stable key, and the value a selection inserts. */
+	/** Stable row key; skill insertion uses the backend token. */
 	value: string;
 	/** The label shown. */
 	label: string;
@@ -97,6 +100,9 @@ export interface Suggestion {
 	detail?: string;
 	/** Right-aligned provenance, e.g. a skill's scope. */
 	badge?: string;
+	skill?: ChatSkill;
+	token?: string;
+	disabled?: boolean;
 }
 
 /**
@@ -136,10 +142,13 @@ export function rankSkills(skills: readonly ChatSkill[], query: string): Suggest
 			score: Math.min(...candidates),
 			name: skill.name,
 			suggestion: {
-				value: skill.name,
+				value: skillKey(skill),
 				label: skill.displayName || skill.name,
 				detail: skillDetail(skill),
-				badge: skill.source,
+				badge: skill.scope || skill.source,
+				skill,
+				token: skill.token || (!skill.status && !skill.entryId ? skillToken(skill) : undefined),
+				disabled: !skillSelectable(skill),
 			},
 		});
 	}

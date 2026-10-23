@@ -76,6 +76,7 @@ import {
 	type ComposerPromptSuggestion,
 	type ComposerTrigger,
 } from "./ComposerEditor";
+import { selectSkill, selectedTokenPresent, selectionIsCurrent, skillKey, skillSelectable, skillToken, type ComposerSkillSelection } from "../../lib/chat-skill-selection";
 import { moveHighlight, rankFiles, rankSkills, type Suggestion } from "./composerSuggest";
 import {
 	isSupportedImageAttachment,
@@ -91,7 +92,7 @@ import { effectiveShortcutBindings, shortcutBindingLabel, type AppShortcutId } f
 import { useAppShortcut } from "../../hooks/useAppShortcut";
 import { isMacPlatform } from "../../lib/platform";
 import { useKeybindingsStore } from "../../stores/keybindings-store";
-import type { ChatSkill, ChatSteerOutcome } from "../../types/conversation";
+import type { ChatSkill, ChatSkillCatalog, ChatSkillSelection, ChatSteerOutcome } from "../../types/conversation";
 import {
 	acknowledgeChatComposerMutation,
 	beginChatComposerMutation,
@@ -140,6 +141,7 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 	"SESSION_NOT_FOUND",
 	"SESSION_MODE_MISMATCH",
 	"CHAT_CONTROLLER_NOT_READY",
+	"CHAT_SKILL_UNAVAILABLE",
 	"CHAT_RESUME_FAILED",
 	"CHAT_INTERFACE_TRANSITION",
 	// Excerpts are verified before AppendUserMessage, so retrying the same
@@ -219,6 +221,8 @@ export const ChatComposer = memo(function ChatComposer({
 	approval,
 	elicitation,
 	skills = [],
+	skillCatalog,
+	onResolveSkills,
 	filePaths = [],
 	filePathsTruncated,
 	onStageAttachments,
@@ -275,6 +279,7 @@ export const ChatComposer = memo(function ChatComposer({
 		clientMessageId?: string,
 		retainedContent?: number[],
 		excerpts?: ChatDraftExcerptReference[],
+		skillSelection?: ChatSkillSelection | null,
 	) => void | Promise<unknown>;
 	settings?: ReactNode;
 	/** A provider decision that temporarily replaces ordinary message entry. */
@@ -297,6 +302,8 @@ export const ChatComposer = memo(function ChatComposer({
 	promptSuggestion?: ComposerPromptSuggestion;
 	/** The provider's skills. Empty leaves `/` an ordinary character. */
 	skills?: ChatSkill[];
+	skillCatalog?: ChatSkillCatalog;
+	onResolveSkills?: () => Promise<ChatSkill[]>;
 	/** Worktree-relative paths offered for `@`. Empty leaves `@` ordinary. */
 	filePaths?: string[];
 	/** The path list was capped, so the menu says so rather than implying it is all. */
@@ -334,11 +341,11 @@ export const ChatComposer = memo(function ChatComposer({
 	/** Why the last steer was refused. */
 	steerRefusal?: string;
 	/** A selected history message to load into the composer as a new draft. */
-	draftSeed?: { id: string; text: string; attachments?: StoredComposerAttachment[]; stagedAttachments?: ChatDraftAttachment[] };
+	draftSeed?: { id: string; text: string; attachments?: StoredComposerAttachment[]; stagedAttachments?: ChatDraftAttachment[]; skillSelection?: ComposerSkillSelection | null; preservedSkillToken?: string };
 	/** A queued turn being edited in the composer instead of the dock. */
 	editingQueuedTurnId?: string;
 	onCancelQueuedEdit?: () => void;
-	onQueuedDraftChange?: (text: string) => void;
+	onQueuedDraftChange?: (text: string, skillSelection?: ComposerSkillSelection | null) => void;
 	/** Called when the draft turns empty or non-empty, including after a restore. */
 	onDraftEmptyChange?: (empty: boolean) => void;
 	queuedDraftScope?: ChatDraftScope;
@@ -442,6 +449,9 @@ export const ChatComposer = memo(function ChatComposer({
 	// The DOM event is the source of truth while React catches up with the draft
 	// transition. This keeps Enter-after-fast-typing from observing stale state.
 	const textRef = useRef("");
+	const queuedSelectionCleared = useRef(false);
+	const preservedSkillToken = useRef<string | undefined>(undefined);
+	const selectedSkill = useRef<ComposerSkillSelection | undefined>(draftScope ? readChatSessionDraft(draftScope).composer.skillSelection : undefined);
 	/**
 	 * What Enter does while the agent is working.
 	 *
@@ -469,7 +479,7 @@ export const ChatComposer = memo(function ChatComposer({
 	 * message is never saved as the draft until it is edited: leaving mid-browse keeps
 	 * the user's own text.
 	 */
-	const historyBrowse = useRef<{ entries: string[]; index: number; draft: string; shown: string } | null>(null);
+	const historyBrowse = useRef<{ entries: string[]; index: number; draft: string; shown: string; skillSelection?: ComposerSkillSelection } | null>(null);
 	// Code selected in a file or diff view ("Ask in chat") arrives here as a
 	// reference chip. Only the session's ordinary prompt accepts it; a queued-turn
 	// edit has no draftSessionId and stays out of the way.
@@ -569,6 +579,7 @@ export const ChatComposer = memo(function ChatComposer({
 		synchronouslyClearedDeliveryRevision.current = undefined;
 		const currentDraft = draftScope ? readChatSessionDraft(draftScope) : undefined;
 		composerRevision.current = currentDraft?.composer.revision ?? 0;
+		selectedSkill.current = currentDraft?.composer.skillSelection;
 		unsavedText.current = undefined;
 		setDurableDelivery(currentDraft?.composer.delivery);
 		setAppliedAcceptanceSequence(0);
@@ -600,7 +611,7 @@ export const ChatComposer = memo(function ChatComposer({
 				description: "Summarize earlier history to reclaim context",
 				source: "AO",
 			},
-			...skills.filter((skill) => skill.name !== "compact"),
+			...skills.filter((skill) => skillToken(skill) !== "/compact"),
 		];
 	}, [compactUnavailable, onCompact, skills]);
 
@@ -609,7 +620,7 @@ export const ChatComposer = memo(function ChatComposer({
 		// An empty candidate list is the whole reason the sigil stays ordinary: with
 		// no commands or skills there is nothing to open, so `/` types a slash.
 		if (currentTrigger.kind === "skill") {
-			return rankSkills(slashCommands, currentTrigger.query);
+			return rankSkills(currentTrigger.sigil === "$" ? slashCommands.filter((skill) => skillToken(skill).startsWith("$")) : slashCommands, currentTrigger.query);
 		}
 		return rankFiles(filePaths, currentTrigger.query);
 	}, [slashCommands, filePaths]);
@@ -707,8 +718,10 @@ export const ChatComposer = memo(function ChatComposer({
 	// turn; the send button only shows it while the modifier is held.
 	// Steering has no excerpt payload, so attached excerpts would be cleared with
 	// the accepted draft without reaching the agent. Queue those drafts instead.
+	const structuredSkillSelected = selectedSkill.current && skills.some((skill) =>
+		skill.bindingRef === selectedSkill.current?.selection.bindingRef && skill.transport === "native_skill");
 	const canSteerDraft =
-		Boolean(canSteer && onSteer) && !savingQueuedEdit && contextReferences.length === 0;
+		Boolean(canSteer && onSteer) && !structuredSkillSelected && !savingQueuedEdit && contextReferences.length === 0;
 	const steersDraft = modifierHeld && canSteerDraft;
 	const showsSteer = steersDraft && !durableDelivery && !queuedEditRecovery;
 	const sendActionLabel = translateDraft(durableDelivery && !submitting
@@ -829,6 +842,7 @@ export const ChatComposer = memo(function ChatComposer({
 	}, [autoFocus, focusEditor]);
 
 	const clearEditorView = useCallback(() => {
+		selectedSkill.current = undefined;
 		historyBrowse.current = null;
 		textRef.current = "";
 		hasTextRef.current = false;
@@ -861,6 +875,7 @@ export const ChatComposer = memo(function ChatComposer({
 			setDeliveryRecoveryNotice(null);
 			// A receipt from the old surface must not clear this surface's unsaved draft.
 			if (!unsavedText.current && !result.cleared) {
+				selectedSkill.current = result.draft.composer.skillSelection;
 				textRef.current = result.draft.composer.text;
 				hasTextRef.current = textRef.current.trim().length > 0;
 				setHasText(hasTextRef.current);
@@ -893,7 +908,7 @@ export const ChatComposer = memo(function ChatComposer({
 				return true;
 			}
 			const saved = unsavedText.current
-				? writeChatComposerText(draftScope, unsavedText.current.text, undefined, unsavedText.current.revision)
+				? writeChatComposerText(draftScope, unsavedText.current.text, undefined, unsavedText.current.revision, selectedSkill.current ?? null)
 				: undefined;
 			if (saved?.ok && saved.draft.composer.text === unsavedText.current?.text) unsavedText.current = undefined;
 			const result: DraftClearResult = saved?.ok === false
@@ -1021,6 +1036,11 @@ export const ChatComposer = memo(function ChatComposer({
 		const seedKey = editingQueuedTurnId ? draftSeedId : JSON.stringify([draftSeedId, committedSeedText]);
 		if (restoredSeedKey.current === seedKey) return;
 		restoredSeedKey.current = seedKey;
+		if (draftSeed) {
+			selectedSkill.current = draftSeed.skillSelection ?? undefined;
+			queuedSelectionCleared.current = draftSeed.skillSelection === null;
+			preservedSkillToken.current = draftSeed.preservedSkillToken;
+		}
 		textRef.current = committedSeedText;
 		hasTextRef.current = committedSeedText.trim().length > 0;
 		setHasText(hasTextRef.current);
@@ -1040,7 +1060,7 @@ export const ChatComposer = memo(function ChatComposer({
 		// A session restore is already durable; writing it again here needlessly
 		// changes the accepted-send revision during mount.
 		if (draftScope && draftSeed) {
-			const result = writeChatComposerText(draftScope, committedSeedText);
+			const result = writeChatComposerText(draftScope, committedSeedText, undefined, undefined, null);
 			if (result.ok) composerRevision.current = result.draft.composer.revision;
 			setTextDraftPersistenceError(
 				result.ok
@@ -1106,7 +1126,7 @@ export const ChatComposer = memo(function ChatComposer({
 
 	const persistComposerText = useCallback((text: string) => {
 		if (!draftScope) return;
-		const result = writeChatComposerText(draftScope, text);
+		const result = writeChatComposerText(draftScope, text, undefined, undefined, selectedSkill.current ?? null);
 		if (result.ok) composerRevision.current = result.draft.composer.revision;
 		unsavedText.current = result.ok ? undefined : { text, revision: composerRevision.current };
 		// A disabled Lexical editor can still publish an internal state update
@@ -1128,7 +1148,12 @@ export const ChatComposer = memo(function ChatComposer({
 		if (historyBrowse.current && snapshot.text !== historyBrowse.current.shown) historyBrowse.current = null;
 		const previousText = textRef.current;
 		textRef.current = snapshot.text;
-		onQueuedDraftChange?.(snapshot.text);
+		if (selectedSkill.current && !selectedTokenPresent(snapshot.text, selectedSkill.current.selection.token)) {
+			selectedSkill.current = undefined;
+			queuedSelectionCleared.current = true;
+		}
+		if (preservedSkillToken.current && !selectedTokenPresent(snapshot.text, preservedSkillToken.current)) queuedSelectionCleared.current = true;
+		onQueuedDraftChange?.(snapshot.text, selectedSkill.current ?? (queuedSelectionCleared.current ? null : undefined));
 		if (snapshot.text !== previousText && !historyBrowse.current) persistComposerText(snapshot.text);
 		if (hasTextRef.current !== snapshot.hasText) {
 			hasTextRef.current = snapshot.hasText;
@@ -1163,6 +1188,7 @@ export const ChatComposer = memo(function ChatComposer({
 		const browse = historyBrowse.current;
 		if (!browse) return;
 		historyBrowse.current = null;
+		selectedSkill.current = browse.skillSelection;
 		editor.current?.setText(browse.draft, "start");
 		const snapshot = editor.current?.getSnapshot();
 		if (snapshot) onEditorChange(snapshot);
@@ -1173,19 +1199,27 @@ export const ChatComposer = memo(function ChatComposer({
 			focus: focusEditor,
 			isEmpty: () => !hasDraft,
 			setDraft: (text: string) => {
+				if (selectedSkill.current) queuedSelectionCleared.current = true;
+				selectedSkill.current = undefined;
 				editor.current?.setText(text);
 				const snapshot = editor.current?.getSnapshot();
-				if (snapshot) onEditorChange(snapshot);
+				if (snapshot) { onEditorChange(snapshot); persistComposerText(snapshot.text); }
 				editor.current?.focus();
 			},
 		}),
-		[focusEditor, hasDraft, onEditorChange],
+		[focusEditor, hasDraft, onEditorChange, persistComposerText],
 	);
 
 	const pick = useCallback((value: string) => {
 		const currentTrigger = triggerRef.current;
 		if (!currentTrigger) return;
-		editor.current?.insertToken(currentTrigger, value);
+		const chosen = suggestionsFor(currentTrigger).find((item) => item.value === value);
+		if (!chosen || chosen.disabled) return;
+		if (chosen.skill) {
+			selectedSkill.current = selectSkill(chosen.skill);
+			queuedSelectionCleared.current = !selectedSkill.current;
+		}
+		editor.current?.insertToken(currentTrigger, chosen.token ?? value);
 		triggerRef.current = undefined;
 		previousTrigger.current = undefined;
 		setTrigger(undefined);
@@ -1193,7 +1227,7 @@ export const ChatComposer = memo(function ChatComposer({
 		setHighlighted(0);
 		dismissedKeyRef.current = null;
 		setDismissedKey(null);
-	}, []);
+	}, [suggestionsFor]);
 
 	useEffect(() => {
 		if (isComposing || !trigger || trigger.kind !== "skill" || trigger.key === dismissedKey) return;
@@ -1202,7 +1236,8 @@ export const ChatComposer = memo(function ChatComposer({
 		if (historyBrowse.current) return;
 		const query = trigger.query.toLowerCase();
 		if (!query) return;
-		const exact = slashCommands.find((skill) => skill.name.toLowerCase() === query);
+		const exactMatches = slashCommands.filter((skill) => skill.name.toLowerCase() === query && skillSelectable(skill));
+		const exact = exactMatches.length === 1 ? exactMatches[0] : undefined;
 		if (!exact) return;
 
 		// Do not eagerly accept a skill whose full name is also the start of another
@@ -1212,7 +1247,7 @@ export const ChatComposer = memo(function ChatComposer({
 			const name = skill.name.toLowerCase();
 			return name.length > query.length && name.startsWith(query);
 		});
-		if (!hasLongerPrefix) pick(exact.name);
+		if (!hasLongerPrefix) pick(skillKey(exact));
 	}, [dismissedKey, isComposing, pick, slashCommands, trigger]);
 
 	useLayoutEffect(() => {
@@ -1235,11 +1270,15 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 			const matches = suggestionsFor(currentTrigger);
 			const chosen = matches[Math.min(highlightedRef.current, matches.length - 1)];
-			if (!chosen) return undefined;
+			if (!chosen || chosen.disabled) return undefined;
+			if (chosen.skill) {
+				selectedSkill.current = selectSkill(chosen.skill);
+				queuedSelectionCleared.current = !selectedSkill.current;
+			}
 			triggerRef.current = currentTrigger;
 			highlightedRef.current = 0;
 			dismissedKeyRef.current = null;
-			return chosen.value;
+			return chosen.token ?? chosen.value;
 		},
 		[onCompact, skills, suggestionsFor],
 	);
@@ -1358,7 +1397,18 @@ export const ChatComposer = memo(function ChatComposer({
 			setSendError("chat.draft.filesUnavailable");
 			return;
 		}
-		const shouldSteer = Boolean(forceSteer && !savingQueuedEdit && contextReferences.length === 0);
+		const selection = recoveringDelivery?.skillSelection ?? selectedSkill.current;
+		let availableSkills = skills;
+		if (!recoveringDelivery && !queuedEditRecovery && selection && selectedTokenPresent(body, selection.selection.token)) {
+			availableSkills = onResolveSkills ? await onResolveSkills() : skills;
+			if (!selectionIsCurrent(selection, availableSkills)) {
+				setSendError(t("library.staleSelection"));
+				return;
+			}
+		}
+		const skillSelection = selection && selectedTokenPresent(body, selection.selection.token) ? selection.selection : undefined;
+		const requiresStructuredSend = skillSelection && availableSkills.some((skill) => skill.bindingRef === skillSelection.bindingRef && skill.transport === "native_skill");
+		const shouldSteer = Boolean(forceSteer && !requiresStructuredSend && !savingQueuedEdit && contextReferences.length === 0);
 		const message = withAttachmentReferences(body, attachedPaths) || (contextReferences.length > 0 ? `Use the attached ${contextReferences.length} chat excerpt(s) as context` : "");
 		// Ordinary delivery reserves its exact draft before these staged reads await.
 		// Queue editors use their existing owner/revision CAS before mutation.
@@ -1434,9 +1484,11 @@ export const ChatComposer = memo(function ChatComposer({
 					}
 				} else if (savingQueuedEdit) {
 					await onSend(message, nativePayloads.length ? nativePayloads : undefined, undefined,
-						visibleRetainedAttachments.flatMap((item) => item.contentIndex === undefined ? [] : [item.contentIndex]));
+						visibleRetainedAttachments.flatMap((item) => item.contentIndex === undefined ? [] : [item.contentIndex]), undefined, skillSelection ?? (queuedSelectionCleared.current ? null : undefined));
 					// The parent leaves this editor only after proving durable cleanup.
 					return;
+				} else if (skillSelection) {
+					await onSend(message, nativePayloads.length ? nativePayloads : undefined, undefined, undefined, undefined, skillSelection);
 				} else if (nativePayloads.length > 0) {
 					await onSend(message, nativePayloads);
 				} else {
@@ -1446,6 +1498,7 @@ export const ChatComposer = memo(function ChatComposer({
 				fileAttachments.clear();
 			} catch (error) {
 				if (clearForLocalEcho && !textRef.current) {
+					selectedSkill.current = selection;
 					textRef.current = currentText;
 					hasTextRef.current = currentText.trim().length > 0;
 					setHasText(hasTextRef.current);
@@ -1472,6 +1525,7 @@ export const ChatComposer = memo(function ChatComposer({
 			optimistic: !shouldSteer,
 			nativeImages: sendNativeImages,
 			composerText: currentText,
+			skillSelection: skillSelection ? selection : undefined,
 			attachments: settledAttachments.flatMap((attachment) =>
 				attachment.stagedPath
 					? [{
@@ -1546,13 +1600,14 @@ export const ChatComposer = memo(function ChatComposer({
 			} else {
 				const deliveryAttachments =
 					sendNativeImages && nativePayloads.length > 0 ? nativePayloads : undefined;
-				if (delivery.excerpts?.length) {
+				if (delivery.excerpts?.length || delivery.skillSelection) {
 					await onSend(
 						delivery.requestText,
 						deliveryAttachments,
 						delivery.clientMessageId,
 						undefined,
 						delivery.excerpts,
+						...(delivery.skillSelection ? [delivery.skillSelection.selection] as const : []),
 					);
 				} else {
 					await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId);
@@ -1562,6 +1617,7 @@ export const ChatComposer = memo(function ChatComposer({
 			mutationFinished = true;
 		} catch (error) {
 			if (delivery.kind === "send" && !textRef.current) {
+				selectedSkill.current = delivery.skillSelection;
 				textRef.current = delivery.draft?.text ?? currentText;
 				hasTextRef.current = textRef.current.trim().length > 0;
 				setHasText(hasTextRef.current);
@@ -1710,11 +1766,12 @@ export const ChatComposer = memo(function ChatComposer({
 		const browsing = historyBrowse.current;
 		if (!caret || !(caret.atStart || (browsing && !older && caret.atEnd))) return false;
 		const browse = browsing ?? (older && sentMessages?.length
-			? { entries: [...sentMessages].reverse(), index: -1, draft: textRef.current, shown: textRef.current }
+			? { entries: [...sentMessages].reverse(), index: -1, draft: textRef.current, shown: textRef.current, skillSelection: selectedSkill.current }
 			: null);
 		if (!browse) return false;
 		const index = browse.index + (older ? 1 : -1);
 		if (index >= browse.entries.length) return false;
+		selectedSkill.current = index < 0 ? browse.skillSelection : undefined;
 		editor.current?.setText(index < 0 ? browse.draft : browse.entries[index]!, "start");
 		const snapshot = editor.current?.getSnapshot();
 		historyBrowse.current = index < 0 || !snapshot ? null : { ...browse, index, shown: snapshot.text };
@@ -1887,6 +1944,7 @@ export const ChatComposer = memo(function ChatComposer({
 				className="cursor-chat-composer relative flex cursor-text flex-col gap-1.5 px-3 pt-3 pb-3"
 			>
 				<span aria-hidden="true" className="chat-composer-startup-shimmer" />
+				{skillCatalog && skillCatalog.status !== "ready" ? <p role="status" className="px-1.5 text-xs text-muted-foreground">{t(skillCatalog.nextAction === "start_successor_session" ? "library.pendingRevision" : "library.unavailable", { reason: skillCatalog.reasonCode || skillCatalog.status })}</p> : null}
 				{menuOpen && trigger ? (
 					<ComposerSuggestMenu
 						id={menuId}

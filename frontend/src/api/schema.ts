@@ -5472,6 +5472,7 @@ export interface components {
             senderSessionId?: string;
             /** Format: int64 */
             sequence: number;
+            skillSelectionToken?: string;
             streaming: boolean;
             text: string;
             turnId?: string;
@@ -5823,9 +5824,11 @@ export interface components {
         };
         EditQueuedConversationMessageRequest: {
             attachments?: components["schemas"]["ConversationImageContentRequest"][];
+            clearSkillSelection?: boolean;
             clientMessageId?: string;
             expectedRevision?: null | number;
             retainedContent?: null | number[];
+            skillSelection?: components["schemas"]["ConversationSkillSelectionRequest"];
             text: string;
         };
         EndpointsResponse: {

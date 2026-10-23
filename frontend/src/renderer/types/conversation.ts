@@ -1,3 +1,5 @@
+import type { components } from "../../api/schema";
+
 /**
  * Chat conversation view model.
  *
@@ -159,6 +161,8 @@ export interface ConversationContentSummary {
 }
 
 export interface QueuedMessageEditOptions {
+	skillSelection?: ChatSkillSelection;
+	clearSkillSelection?: boolean;
 	clientMessageId?: string;
 	attachments?: { mimeType: string; data: string }[];
 	retainedContent?: number[];
@@ -166,6 +170,7 @@ export interface QueuedMessageEditOptions {
 }
 
 export interface ConversationMessage {
+	skillSelectionToken?: string;
 	kind: "message";
 	id: string;
 	turnId?: string;
@@ -673,15 +678,10 @@ export type ChatConfigOptionValue = { value: string } | { enabled: boolean };
  * `name` is the invocable identifier and the only part the agent resolves;
  * `displayName` is a label and must never be what gets sent.
  */
-export interface ChatSkill {
-	name: string;
-	displayName: string;
-	description?: string;
-	/** Short provider-authored placeholder for command arguments. */
-	inputHint?: string;
-	/** The provider's scope: user, repo, system, admin. */
-	source?: string;
-}
+export type ChatSkillSelection = components["schemas"]["ConversationSkillSelectionRequest"];
+export type ChatSkillCatalog = components["schemas"]["ConversationSkillsResponse"];
+export type ChatSkill = Pick<components["schemas"]["ConversationSkillResponse"], "name" | "displayName"> &
+	Partial<components["schemas"]["ConversationSkillResponse"]> & { catalogIdentity?: string };
 
 /** State of the daemon's connection to the provider. */
 export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "stopped" | "hibernated";

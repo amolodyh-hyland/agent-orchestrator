@@ -139,8 +139,8 @@ The ordinary message endpoint accepts optional `skillSelection` with `entryId`,
 There is no client path field or execution endpoint. The opaque selection is
 persisted with delivery content, revalidated on queue drain/retry, and removed
 from the native payload. Altering/removing the selected token clears its binding;
-queue edits also discard the stored binding. Current trust admission is checked
-at transport dispatch. Library rows remain non-invocable with explicit reasons
+queue edits carry explicit replacement or clearing intent for the stored binding.
+Current trust admission is checked at transport dispatch. Library rows remain non-invocable with explicit reasons
 until exact-byte projection and version-specific native resolution evidence are
 available. An advertised native command never supplies approval evidence, and
 unproved native/library name collisions disable that invocation.
@@ -153,3 +153,56 @@ Requesting a different snapshot or observing a pending selection returns
 `restart_required`, `snapshot_change_requires_successor`, and
 `nextAction: start_successor_session`. It does not create a successor automatically
 or change the active snapshot, transcript, or trust permissions.
+
+## Composer selection and library review
+
+The composer consumes the live catalog without resolving files or deriving trust.
+It shows the backend source/scope, approval status and unavailable reason, retains
+rows with matching names as distinct opaque identities, and inserts the exact
+returned native marker. Selection never submits a message. Editing away the token
+clears its binding; arguments remain ordinary text. Drafts and the delivery journal
+retain the selection envelope, including its catalog identity. Fresh sends refuse
+an outdated selection; journal recovery keeps its original receipt and envelope
+for backend revalidation. Structured selections are queued instead of steered.
+Catalog availability is isolated by host and provider, hidden during readiness
+loss/refetch/errors, and fingerprinted by the full backend snapshot, controller,
+revision and trust identity. Pending content is shown as requiring a successor;
+refresh never changes the active snapshot.
+
+Project settings provide explicit source inspection, exact staged-byte review,
+approval, revocation and optional chat binding through the existing library API.
+Each mutation requires reviewing the host, Project and exact revision-sensitive
+request before confirmation. Approval uses backend entry hashes, root identity
+and purposes; the renderer does not hash or inspect the filesystem. Personal
+sources need no managed-policy setup. Backend policy refusals and optional-policy
+warnings remain visible. Bindings affect future sessions, including Projects
+without repositories, while existing snapshots remain pinned.
+
+Interaction coverage lives in `ChatComposer.library.test.tsx`,
+`LibrarySettings.test.tsx` and the catalog isolation cases in
+`useConversation.test.tsx`, alongside existing composer/editor/draft suites.
+
+Queued-edit requests accept `skillSelection` to replace the stored opaque binding
+or `clearSkillSelection: true` to remove it even when the visible token is
+unchanged. Supplying both is invalid. Requests omitting both retain the
+old binding only while its exact token remains present. The edit receipt hashes
+replacement and clearing intent, so a retry cannot change identity under the
+same receipt. The renderer retains this intent across queued-editor remounts and
+uncertain-save recovery. Argument-only edits omit selection intent and retain the
+server-owned binding. Conversation messages expose only `skillSelectionToken` so
+removing the original token records explicit clearing, including after retyping
+and queued-editor remounts. A new picker choice records explicit replacement.
+Recovery preserves the exact saved intent fields. Queue dispatch still revalidates
+the selected controller, catalog, snapshot and trust before producing native input.
+
+An explicit selection submitted during background catalog refresh waits for that
+refresh. An unchanged verified identity resumes the original submission; changed,
+failed or superseded catalog responses refuse it while preserving the draft.
+Project rebinding updates the existing Project/source/entry binding, preserving
+its ID and other role settings when adopting a new revision. The current binding's
+enabled state and pinned hash are displayed before reviewing the update.
+
+Run `npm --prefix frontend run test:queued-selection-integration` for the component
+to HTTP controller and queue-drain regression. It queues one of two native rows
+with the same token, edits only the arguments in the actual composer, and verifies
+that the original row dispatches. It uses temporary storage and a test process.

@@ -2600,6 +2600,8 @@ type ConversationImageContentRequest struct {
 // EditQueuedConversationMessageRequest changes an undispatched prompt. Omitted
 // retainedContent preserves the stored blocks; an empty list removes attachments.
 type EditQueuedConversationMessageRequest struct {
+	SkillSelection      *ConversationSkillSelectionRequest `json:"skillSelection,omitempty"`
+	ClearSkillSelection bool                               `json:"clearSkillSelection,omitempty"`
 	// Stable retry key for this exact edit, including its attachments.
 	ClientMessageID string                            `json:"clientMessageId,omitempty"`
 	Text            string                            `json:"text"`
@@ -2976,6 +2978,8 @@ type ConversationMessageResponse struct {
 	// shown as a marker instead of a message bubble.
 	Continuation bool   `json:"continuation,omitempty"`
 	CreatedAt    string `json:"createdAt"`
+
+	SkillSelectionToken string `json:"skillSelectionToken,omitempty"`
 }
 
 // ConversationActivityResponse is one non-message timeline entry.

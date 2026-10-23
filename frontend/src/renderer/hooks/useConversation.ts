@@ -1,3 +1,4 @@
+import { skillCatalogIdentity } from "../lib/chat-skill-selection";
 /**
  * Live conversation data for a Chat session.
  *
@@ -19,7 +20,7 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { components } from "../../api/schema";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
@@ -47,6 +48,8 @@ import type {
 	ChatConfigOptionValue,
 	ChatModel,
 	ChatSkill,
+	ChatSkillCatalog,
+	ChatSkillSelection,
 	ChatEditOutcome,
 	ChatSteerOutcome,
 	PlanStep,
@@ -66,6 +69,7 @@ type WireResourceContent = components["schemas"]["ConversationResourceContentReq
 type WireExcerptReference = components["schemas"]["ConversationExcerptReferenceRequest"];
 
 export interface ConversationSendInput {
+	skillSelection?: ChatSkillSelection;
 	text: string;
 	attachments?: WireImageContent[];
 	resources?: WireResourceContent[];
@@ -1403,9 +1407,22 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
  * from a failure — with no skills, `/` has to stay an ordinary character rather than
  * opening an empty menu.
  */
-export function useConversationSkills(sessionId: string | undefined, enabled: boolean, hostId?: string) {
-	const query = useQuery({
-		queryKey: conversationSkillsQueryKey(sessionId ?? "", hostId),
+export function useConversationSkills(sessionId: string | undefined, enabled: boolean, hostId?: string, providerId?: string) {
+	const queryClient = useQueryClient();
+	const readiness = useRef({ enabled, generation: 0 });
+	if (readiness.current.enabled !== enabled) {
+		readiness.current = { enabled, generation: readiness.current.generation + 1 };
+	}
+	const queryKey = [...conversationSkillsQueryKey(sessionId ?? "", hostId), providerId ?? "", readiness.current.generation];
+	const validationScope = JSON.stringify([enabled, queryKey]);
+	const currentScope = useRef(validationScope);
+	currentScope.current = validationScope;
+	useEffect(() => {
+		currentScope.current = validationScope;
+		return () => { if (currentScope.current === validationScope) currentScope.current = ""; };
+	}, [validationScope]);
+	const query = useQuery<ChatSkillCatalog>({
+		queryKey,
 		enabled: Boolean(sessionId) && enabled,
 		// ACP agents publish this catalog asynchronously and may replace it later.
 		// Polling also keeps Codex project skills current without introducing a
@@ -1426,18 +1443,46 @@ export function useConversationSkills(sessionId: string | undefined, enabled: bo
 				? false
 				: SKILLS_POLL_INTERVAL_MS,
 		retry: false,
-		queryFn: async () => {
+		refetchOnMount: "always",
+		queryFn: async ({ signal }) => {
 			const { data, error } = await clientForSessionHost(hostId).GET(
 				"/api/v1/sessions/{sessionId}/conversation/skills",
 				{
 					params: { path: { sessionId: sessionId as string } },
+					signal,
 				},
 			);
 			if (error) throw error;
-			return (data?.skills ?? []) as ChatSkill[];
+			return data as ChatSkillCatalog;
 		},
 	});
-	return { skills: query.data ?? [], isLoading: query.isLoading };
+	const catalog = enabled && !query.isError && !query.isFetching && (!providerId || query.data?.providerId === providerId) ? query.data : undefined;
+	const identity = catalog ? skillCatalogIdentity(catalog, hostId) : undefined;
+	const skills: ChatSkill[] = (catalog?.skills ?? []).map((skill) => ({
+		...skill, catalogIdentity: identity,
+		canInvoke: Boolean(catalog?.canList && catalog.status !== "controller_not_ready" && skill.canInvoke),
+	}));
+	const resolveSkills = async (): Promise<ChatSkill[]> => {
+		if (!enabled || !sessionId) return [];
+		const observed = queryClient.getQueryCache().find<ChatSkillCatalog>({ queryKey, exact: true });
+		if (!observed) return [];
+		try {
+			// Join the active fetch, including interval refreshes. Read the cache after
+			// it settles: structural sharing may replace the fetch result object.
+			while (observed.state.fetchStatus === "fetching") {
+				if (currentScope.current !== validationScope || queryClient.getQueryCache().find({ queryKey, exact: true }) !== observed) return [];
+				await queryClient.fetchQuery<ChatSkillCatalog>({ queryKey, staleTime: 0 });
+			}
+		} catch { return []; }
+		const current = queryClient.getQueryCache().find<ChatSkillCatalog>({ queryKey, exact: true });
+		const validated = current?.state.status === "success" ? current.state.data : undefined;
+		if (currentScope.current !== validationScope || current !== observed || !validated
+			|| (providerId && validated.providerId !== providerId)) return [];
+		const identity = skillCatalogIdentity(validated, hostId);
+		return validated.skills.map((skill) => ({ ...skill, catalogIdentity: identity,
+			canInvoke: Boolean(validated.canList && validated.status !== "controller_not_ready" && skill.canInvoke) }));
+	};
+	return { skills, catalog, resolveSkills, isLoading: query.isLoading };
 }
 
 /**
@@ -1729,6 +1774,7 @@ function toMessage(wire: WireMessage): ConversationMessage {
 		role: wire.role as MessageRole,
 		origin: wire.origin as MessageOrigin,
 		text: wire.text,
+		skillSelectionToken: wire.skillSelectionToken || undefined,
 		content: (wire.content ?? []).map((item) => ({
 			type: item.type,
 			mimeType: item.mimeType || undefined,
