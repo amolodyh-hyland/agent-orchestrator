@@ -5086,6 +5086,60 @@ paths:
       summary: Persist a worker report for later orchestrator delivery
       tags:
       - reports
+  /api/v1/reports/{reportId}/resolve:
+    post:
+      operationId: resolveReportDelivery
+      parameters:
+      - description: Durable report identifier.
+        in: path
+        name: reportId
+        required: true
+        schema:
+          description: Durable report identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveReportDeliveryRequest'
+        required: true
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Explicitly resolve an uncertain report as delivered elsewhere without
+        native acknowledgement or resend
+      tags:
+      - reports
   /api/v1/reviews/{reviewId}/conversation:
     get:
       operationId: getReviewerConversation
@@ -19678,7 +19732,15 @@ components:
         createdAt:
           format: date-time
           type: string
+        deliveryBatchId:
+          type: string
+        deliveryState:
+          type: string
+        deliveryStatus:
+          type: string
         id:
+          type: string
+        lastError:
           type: string
         message:
           type: string
@@ -19693,6 +19755,8 @@ components:
         repeatCount:
           format: int64
           type: integer
+        resolutionNote:
+          type: string
         sessionId:
           type: string
         state:
@@ -19734,6 +19798,18 @@ components:
           type: object
       required:
       - action
+      type: object
+    ResolveReportDeliveryRequest:
+      properties:
+        note:
+          type: string
+        resolution:
+          enum:
+          - delivered_elsewhere
+          type: string
+      required:
+      - resolution
+      - note
       type: object
     RestoreArtifactVersionRequest:
       properties:

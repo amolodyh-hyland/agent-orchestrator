@@ -441,6 +441,8 @@ func IsInternalReplayContent(content ChatContent) bool {
 
 // ChatUserMessage is one inbound request to the agent.
 type ChatUserMessage struct {
+	ReportBatchID    string
+	ReportClaimToken string
 	// InteractionAt preserves initial acceptance across transition outbox replay.
 	InteractionAt time.Time
 	Text          string
@@ -855,9 +857,12 @@ type (
 	}
 )
 
-// ChatTurnRef identifies a turn the provider accepted.
+// ChatTurnRef identifies a prepared or submitted native turn.
 type ChatTurnRef struct {
-	ProviderTurnID string
+	// ProviderSubmitted requires driver-specific evidence of the request crossing
+	// the native transport. Preparation and deferred scheduling do not qualify.
+	ProviderSubmitted bool
+	ProviderTurnID    string
 }
 
 // ChatDeferredTurnStarter is implemented by protocols whose prompt call is the
@@ -1110,7 +1115,10 @@ func (f *chatProviderFailure) Unwrap() error { return f.cause }
 // Assistant message text is portable Markdown. Adapters convert native citation
 // annotations to links before emitting events or returning history.
 type ChatEvent struct {
-	Kind ChatEventKind
+	// NativeAcceptance marks driver-proven receipt of this exact native turn.
+	// Locally scheduled or synthetic turn-started events must leave it false.
+	NativeAcceptance bool
+	Kind             ChatEventKind
 	// NativeUserMessageID is an adapter-proven native user record identity.
 	// Unlike ProviderItemID, it is never synthesized or namespaced by AO.
 	NativeUserMessageID string

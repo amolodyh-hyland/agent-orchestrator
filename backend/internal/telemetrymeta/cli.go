@@ -80,6 +80,8 @@ var legacyActorlessSystemCLICommands = map[string]struct{}{
 }
 
 var legacyActorlessUserCLICommands = map[string]struct{}{
+	"ao report status":            {},
+	"ao report resolve":           {},
 	"ao run":                      {},
 	"ao run list":                 {},
 	"ao run get":                  {},

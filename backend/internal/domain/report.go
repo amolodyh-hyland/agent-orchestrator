@@ -134,6 +134,8 @@ type ReportRecord struct {
 	AcknowledgedAt     time.Time
 	LastError          string
 	DeliveryBatchID    string
+	DeliveryStatus     string
+	ResolutionNote     string
 }
 
 // ErrInvalidReport reports an invalid report or delivery transition input.
@@ -216,4 +218,32 @@ func CoordinationDeliveryID(message string) (string, bool) {
 		return id, true
 	}
 	return deliveryID(message, `<ao-session-delivery id="`)
+}
+
+// ReportDeliveryReceipt distinguishes durable intake from native acceptance.
+type ReportDeliveryReceipt struct {
+	State                  ReportReceiptState
+	ErrorMessage           string
+	MessageID              string
+	ClientMessageID        string
+	TurnID                 string
+	ProviderTurnID         string
+	ProviderConversationID string
+	SubmittedAt            time.Time
+	AcceptedAt             time.Time
+}
+
+type ReportReceiptState string
+
+const (
+	ReportReceiptQueued            ReportReceiptState = "ao_queued"
+	ReportReceiptUnknown           ReportReceiptState = "unknown"
+	ReportReceiptHeld              ReportReceiptState = "held"
+	ReportReceiptProviderSubmitted ReportReceiptState = "provider_submitted"
+	ReportReceiptNativeAccepted    ReportReceiptState = "native_accepted"
+	ReportReceiptPromptSubmitted   ReportReceiptState = "prompt_submitted"
+)
+
+func (r ReportDeliveryReceipt) Accepted() bool {
+	return r.State == ReportReceiptNativeAccepted || r.State == ReportReceiptPromptSubmitted
 }

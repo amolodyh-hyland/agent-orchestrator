@@ -39,7 +39,7 @@ func normalizeNone(t *testing.T, method, params string) {
 func TestNormalizeTurnLifecycle(t *testing.T) {
 	started := normalizeOne(t, "turn/started", `{"threadId":"th1","turn":{"id":"tu1","status":"inProgress","items":[]}}`)
 	if started.Kind != ports.ChatEventTurnStarted || started.ProviderTurnID != "tu1" ||
-		started.ProviderConversationID != "th1" {
+		started.ProviderConversationID != "th1" || !started.NativeAcceptance {
 		t.Fatalf("turn/started -> %+v", started)
 	}
 

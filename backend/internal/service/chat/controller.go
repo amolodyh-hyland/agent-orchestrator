@@ -49,6 +49,8 @@ var errNativeHistoryLoadAttemptTimeout = errors.New("native history load attempt
 // Store is the durable conversation surface the controller needs. Implemented by
 // the SQLite store.
 type Store interface {
+	RecordReportChatSubmission(context.Context, string, time.Time) error
+	RecordReportChatAcceptance(context.Context, string, string, string, time.Time) error
 	CreateConversation(ctx context.Context, id string, scope domain.ConversationScope, project domain.ProjectID, session domain.SessionID, now time.Time) (domain.ConversationRecord, error)
 	CreateReviewConversation(ctx context.Context, id, reviewID string, project domain.ProjectID, session domain.SessionID, now time.Time) (domain.ConversationRecord, error)
 	OpenNativeConversation(ctx context.Context, id string, scope domain.ConversationScope, project domain.ProjectID, session domain.SessionID, now time.Time) (domain.ConversationRecord, error)
@@ -1348,6 +1350,9 @@ func reconcileNativeHistory(
 			reconciled = append(reconciled, event)
 			continue
 		}
+		if event.ProviderTurnID != candidate.providerTurnID {
+			event.NativeAcceptance = false
+		}
 		event.ProviderTurnID = candidate.providerTurnID
 		// A replay may have no portable turn-outcome field. Preserve AO's stronger
 		// known result only when the adapter reports recovered. Conversely, a known
@@ -1506,6 +1511,8 @@ func (c *Controller) sendLocked(
 		Text:                msg.Text,
 		Origin:              normalizeOrigin(msg.Origin),
 		ClientMessageID:     msg.ClientMessageID,
+		ReportBatchID:       msg.ReportBatchID,
+		ReportClaimToken:    msg.ReportClaimToken,
 		ClientPayloadHash:   msg.ClientPayloadHash,
 		DeliveryContentJSON: deliveryContent,
 		SenderSessionID:     msg.SenderSessionID,
@@ -2000,6 +2007,12 @@ func (c *Controller) dispatch(
 	// provider's own turn-started notification is the one an interrupt needs.
 	c.ackedTurnID = ""
 	c.mu.Unlock()
+
+	if !hasDeferredStart && ref.ProviderSubmitted {
+		if err := c.store.RecordReportChatSubmission(ctx, turnID, c.now()); err != nil {
+			return domain.ConversationTurn{}, fmt.Errorf("record report submission: %w", err)
+		}
+	}
 
 	// ACP's session/prompt request stays open until the turn finishes, so an ACP
 	// driver prepares the request in SendTurn and starts it here. The durable
@@ -3041,6 +3054,9 @@ func (c *Controller) projectEvent(ctx context.Context, event ports.ChatEvent) (b
 			record["rateLimits"] = nil
 		}
 	}
+	if event.NativeAcceptance {
+		record["nativeAcceptance"] = true
+	}
 	record["diff"] = event.Diff
 	dropEmptyArchiveFields(record)
 	if event.Input != nil {
@@ -3146,6 +3162,9 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 					return fmt.Errorf("adopt provider-started turn %s: %w", event.ProviderTurnID, adoptErr)
 				}
 			}
+		}
+		if event.NativeAcceptance && event.ProviderTurnID != "" && (event.ProviderConversationID == "" || event.ProviderConversationID == c.conv.ProviderConversationID()) {
+			return c.store.RecordReportChatAcceptance(ctx, c.conversation.ID, c.conv.ProviderConversationID(), event.ProviderTurnID, now)
 		}
 		return nil
 

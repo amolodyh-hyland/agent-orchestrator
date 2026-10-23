@@ -1242,6 +1242,22 @@ func (s *Store) appendUserMessage(
 				existing.DeliveryContentJson != msg.DeliveryContentJSON {
 				return false, domain.ErrClientMessageConflict
 			}
+			if msg.ReportBatchID != "" {
+				err := s.inTx(ctx, "link existing report message", func(q *gen.Queries) error {
+					count, err := q.LinkReportChatDelivery(ctx, gen.LinkReportChatDeliveryParams{
+						BatchID: msg.ReportBatchID, MessageID: existing.ID, ClientMessageID: existing.ClientMessageID,
+						ConversationID: existing.ConversationID, TurnID: existing.TurnID.String, ClaimToken: msg.ReportClaimToken, SessionID: session,
+					})
+					if err != nil {
+						return err
+					}
+					if count != 1 {
+						return domain.ErrInvalidReport
+					}
+					return q.RecoverReportChatAcceptance(ctx, msg.ReportBatchID)
+				})
+				return false, err
+			}
 			return false, nil
 		}
 		if !errors.Is(lookupErr, sql.ErrNoRows) {
@@ -1286,6 +1302,18 @@ func (s *Store) appendUserMessage(
 			UpdatedAt:           now,
 		}); err != nil {
 			return err
+		}
+		if msg.ReportBatchID != "" {
+			count, err := q.LinkReportChatDelivery(ctx, gen.LinkReportChatDeliveryParams{
+				BatchID: msg.ReportBatchID, MessageID: msg.ID, ClaimToken: msg.ReportClaimToken, SessionID: session,
+				ClientMessageID: msg.ClientMessageID, ConversationID: conversationID, TurnID: turnID,
+			})
+			if err != nil {
+				return err
+			}
+			if count != 1 {
+				return domain.ErrInvalidReport
+			}
 		}
 		interactionAt := msg.InteractionAt
 		if interactionAt.IsZero() {

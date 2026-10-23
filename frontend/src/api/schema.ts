@@ -2045,6 +2045,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/reports/{reportId}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Explicitly resolve an uncertain report as delivered elsewhere without native acknowledgement or resend */
+        post: operations["resolveReportDelivery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/reviews/{reviewId}/conversation": {
         parameters: {
             query?: never;
@@ -6958,13 +6975,18 @@ export interface components {
         ReportResponse: {
             /** Format: date-time */
             createdAt: string;
+            deliveryBatchId?: string;
+            deliveryState?: string;
+            deliveryStatus?: string;
             id: string;
+            lastError?: string;
             message?: string;
             note?: string;
             outputs?: components["schemas"]["ReportOutputResponse"][];
             projectId: string;
             /** Format: int64 */
             repeatCount: number;
+            resolutionNote?: string;
             sessionId: string;
             state?: string;
         };
@@ -6981,6 +7003,11 @@ export interface components {
             content?: {
                 [key: string]: unknown;
             };
+        };
+        ResolveReportDeliveryRequest: {
+            note: string;
+            /** @enum {string} */
+            resolution: "delivered_elsewhere";
         };
         RestoreArtifactVersionRequest: {
             /** @description Artifact-directory-relative file path, as listed in the session's artifactFiles. */
@@ -15042,6 +15069,76 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    resolveReportDelivery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Durable report identifier. */
+                reportId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveReportDeliveryRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

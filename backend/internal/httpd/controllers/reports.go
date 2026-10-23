@@ -29,6 +29,7 @@ type ReportsController struct{ Svc ReportService }
 func (c *ReportsController) Register(r chi.Router) {
 	r.Post("/reports", c.create)
 	r.Get("/reports", c.list)
+	r.Post("/reports/{reportId}/resolve", c.resolve)
 }
 
 func (c *ReportsController) list(w http.ResponseWriter, r *http.Request) {
@@ -58,6 +59,7 @@ func (c *ReportsController) list(w http.ResponseWriter, r *http.Request) {
 			outputs[j] = ReportOutputResponse{Kind: string(output.Kind), Reference: output.Reference, Label: output.Label}
 		}
 		response.Reports[i] = ReportResponse{
+			DeliveryState: string(record.DeliveryState), DeliveryStatus: record.DeliveryStatus, DeliveryBatchID: record.DeliveryBatchID, LastError: record.LastError, ResolutionNote: record.ResolutionNote,
 			ID: record.ID, SessionID: string(record.SessionID), ProjectID: string(record.ProjectID),
 			State: string(record.State), Note: record.Note, Message: record.Message,
 			Outputs: outputs, CreatedAt: record.CreatedAt, RepeatCount: record.RepeatCount,
@@ -91,4 +93,26 @@ func (c *ReportsController) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	envelope.WriteJSON(w, http.StatusCreated, CreateReportResponse{ID: rec.ID})
+}
+
+func (c *ReportsController) resolve(w http.ResponseWriter, r *http.Request) {
+	resolver, ok := c.Svc.(interface {
+		ResolveDelivery(context.Context, string, string, string) error
+	})
+	if !ok {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/reports/{reportId}/resolve")
+		return
+	}
+	var req ResolveReportDeliveryRequest
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	if err := resolver.ResolveDelivery(r.Context(), chi.URLParam(r, "reportId"), req.Resolution, req.Note); err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

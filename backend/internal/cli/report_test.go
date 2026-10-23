@@ -99,3 +99,59 @@ func TestReportPreservesAPIEnvelopeAsRuntimeError(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+func TestReportDeliveryStatusAndExplicitResolution(t *testing.T) {
+	cfg := setConfigEnv(t)
+	reads, writes := 0, 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/internal/") {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		switch r.Method {
+		case "GET":
+			reads++
+			if r.URL.Query().Get("projectId") != "project" {
+				t.Error(r.URL.String())
+			}
+			_, _ = io.WriteString(w, `{"reports":[{"id":"rpt","deliveryStatus":"unknown","lastError":"receipt missing"}]}`)
+		case "POST":
+			writes++
+			if r.URL.Path != "/api/v1/reports/rpt/resolve" {
+				t.Error(r.URL.Path)
+			}
+			var req struct {
+				Resolution string
+				Note       string
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if req.Resolution != "delivered_elsewhere" || req.Note != "read manually" {
+				t.Errorf("request=%+v", req)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Error("unexpected request")
+		}
+	}))
+	defer srv.Close()
+	writeRunFileFor(t, cfg, srv)
+	deps := Deps{ProcessAlive: func(int) bool { return true }}
+	out, _, err := executeCLI(t, deps, "report", "status", "--project", "project")
+	if err != nil || !strings.Contains(out, "unknown receipt missing") {
+		t.Fatalf("out=%s err=%v", out, err)
+	}
+	if _, _, err := executeCLI(t, deps, "report", "status", "--project", "project", "--json"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := executeCLI(t, deps, "report", "resolve", "rpt", "--delivered-elsewhere", "--note", "read manually"); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"report", "resolve"}, {"report", "resolve", "one", "two"}, {"report", "status"}, {"report", "resolve", "rpt", "--note", "reason"}, {"report", "resolve", "rpt", "--delivered-elsewhere"}} {
+		if _, _, err := executeCLI(t, deps, args...); err == nil || ExitCode(err) != 2 {
+			t.Fatalf("args=%v err=%v", args, err)
+		}
+	}
+	if reads != 2 || writes != 1 {
+		t.Fatalf("reads=%d writes=%d", reads, writes)
+	}
+}

@@ -4652,7 +4652,7 @@ func TestACPCompactionEmitsBusyBeforeCompactReturns(t *testing.T) {
 
 	// Immediately after Compact returns, turn-started and controller-busy must already be queued
 	ev1 := nextEvent(t, opened.Events())
-	if ev1.Kind != ports.ChatEventTurnStarted {
+	if ev1.Kind != ports.ChatEventTurnStarted || ev1.NativeAcceptance {
 		t.Fatalf("first event = %v, want ChatEventTurnStarted", ev1.Kind)
 	}
 	ev2 := nextEvent(t, opened.Events())

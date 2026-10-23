@@ -449,7 +449,7 @@ func TestSendTurnCarriesIdempotencyKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendTurn: %v", err)
 	}
-	if ref.ProviderTurnID != "turn-1" {
+	if ref.ProviderTurnID != "turn-1" || !ref.ProviderSubmitted {
 		t.Fatalf("turn id = %q", ref.ProviderTurnID)
 	}
 

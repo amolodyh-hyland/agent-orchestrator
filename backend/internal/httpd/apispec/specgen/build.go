@@ -552,6 +552,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersMarkAllNotificationsReadResponse": "MarkAllNotificationsReadResponse",
 	"ControllersCreateReportRequest":              "CreateReportRequest",
 	"ControllersReportOutputRequest":              "ReportOutputRequest",
+	"ControllersResolveReportDeliveryRequest":     "ResolveReportDeliveryRequest",
 	"ControllersCreateReportResponse":             "CreateReportResponse",
 	"ControllersReportOutputResponse":             "ReportOutputResponse",
 	"ControllersReportResponse":                   "ReportResponse",
@@ -865,6 +866,11 @@ func identityOperations() []operation {
 
 func reportOperations() []operation {
 	return []operation{{
+		method: http.MethodPost, path: "/api/v1/reports/{reportId}/resolve", id: "resolveReportDelivery", tag: "reports",
+		summary:    "Explicitly resolve an uncertain report as delivered elsewhere without native acknowledgement or resend",
+		pathParams: []any{controllers.ReportPathParams{}}, reqBody: controllers.ResolveReportDeliveryRequest{},
+		resps: []respUnit{{http.StatusNoContent, nil}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+	}, {
 		method: http.MethodGet, path: "/api/v1/reports", id: "listReports", tag: "reports",
 		summary:    "List persisted project reports without changing delivery state",
 		pathParams: []any{controllers.ListReportsQuery{}},

@@ -390,7 +390,7 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 	c.activeTurn = resp.Turn.ID
 	c.mu.Unlock()
 
-	return ports.ChatTurnRef{ProviderTurnID: c.scopedID(resp.Turn.ID)}, nil
+	return ports.ChatTurnRef{ProviderTurnID: c.scopedID(resp.Turn.ID), ProviderSubmitted: true}, nil
 }
 
 // applyTurnSettings folds the caller's per-turn choices into a turn/start payload.

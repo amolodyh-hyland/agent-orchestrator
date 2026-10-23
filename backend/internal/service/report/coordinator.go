@@ -25,6 +25,7 @@ var ErrReportDeliveryModeUnsupported = errors.New("report delivery requires a se
 
 // DeliveryStore is the durable report scheduling and routing boundary.
 type DeliveryStore interface {
+	ReportChatReceipt(context.Context, string) (domain.ReportDeliveryReceipt, bool, error)
 	ListSessions(context.Context, domain.ProjectID) ([]domain.SessionRecord, error)
 	GetSession(context.Context, domain.SessionID) (domain.SessionRecord, bool, error)
 	ListPendingReportSchedule(context.Context, int64) ([]domain.ReportRecord, error)
@@ -35,9 +36,9 @@ type DeliveryStore interface {
 	AcquireReportInterrupt(context.Context, domain.SessionID, time.Time, time.Duration) (bool, time.Time, error)
 }
 
-// Delivery submits accepted semantic context and interrupts active work.
+// Delivery submits semantic context, reports receipt evidence and interrupts active work.
 type Delivery interface {
-	Submit(context.Context, domain.SessionID, string, string) error
+	Submit(context.Context, domain.SessionID, string, PreparedBatch) (domain.ReportDeliveryReceipt, error)
 	Interrupt(context.Context, domain.SessionID) error
 }
 
@@ -153,6 +154,11 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 	if err != nil || len(batch.Reports) == 0 {
 		return err
 	}
+	if receipt, linked, err := c.store.ReportChatReceipt(ctx, batch.ID); err != nil {
+		return c.release(ctx, batch, err)
+	} else if linked {
+		return c.finishChatDelivery(ctx, batch, receipt)
+	}
 	if !ok {
 		_, err := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(c.retryDelay), fmt.Sprintf("project %s has no active orchestrator", projectID))
 		return err
@@ -179,9 +185,14 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 			return deferErr
 		}
 	}
-	if err := c.delivery.Submit(ctx, target.ID, batch.Render(), batch.IdempotencyKey()); err != nil {
-		_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(c.retryDelay), err.Error())
-		return deferErr
+	receipt, submitErr := c.delivery.Submit(ctx, target.ID, batch.Render(), batch)
+	if submitErr != nil || !receipt.Accepted() {
+		reason := "native acceptance pending or unknown"
+		if submitErr != nil {
+			reason = submitErr.Error()
+		}
+		_, err := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(c.retryDelay), reason)
+		return err
 	}
 	_, err = c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
 	return err
@@ -229,7 +240,7 @@ func (c *Coordinator) claim(ctx context.Context, projectID domain.ProjectID) (Pr
 }
 
 // PreparePiggyback claims pending reports for the active Chat orchestrator.
-// The caller must acknowledge only after its user message is durably accepted.
+// The caller reconciles the linked native receipt after recording its user message.
 func (c *Coordinator) PreparePiggyback(ctx context.Context, target domain.SessionID) (PreparedBatch, error) {
 	if c == nil || c.store == nil {
 		return PreparedBatch{}, nil
@@ -241,22 +252,57 @@ func (c *Coordinator) PreparePiggyback(ctx context.Context, target domain.Sessio
 	if rec.Kind != domain.KindOrchestrator || rec.IsTerminated || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat {
 		return PreparedBatch{}, nil
 	}
-	return c.claim(ctx, rec.ProjectID)
+	batch, err := c.claim(ctx, rec.ProjectID)
+	if err != nil || len(batch.Reports) == 0 {
+		return batch, err
+	}
+	receipt, linked, err := c.store.ReportChatReceipt(ctx, batch.ID)
+	if err != nil {
+		return PreparedBatch{}, c.release(ctx, batch, err)
+	}
+	if linked {
+		return PreparedBatch{}, c.finishChatDelivery(ctx, batch, receipt)
+	}
+	return batch, nil
 }
 
-// AcceptPiggyback acknowledges reports after the combined user turn is accepted.
+// AcceptPiggyback reconciles the durable message receipt without submitting work.
 func (c *Coordinator) AcceptPiggyback(ctx context.Context, batch PreparedBatch) error {
+	defer c.Wake()
 	if len(batch.Reports) == 0 {
 		return nil
 	}
-	_, err := c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
+	receipt, linked, err := c.store.ReportChatReceipt(ctx, batch.ID)
+	if err != nil {
+		return err
+	}
+	if !linked {
+		return c.ReleasePiggyback(ctx, batch, errors.New("chat message was not recorded"))
+	}
+	return c.finishChatDelivery(ctx, batch, receipt)
+}
+
+func (c *Coordinator) finishChatDelivery(ctx context.Context, batch PreparedBatch, receipt domain.ReportDeliveryReceipt) error {
+	if receipt.State == domain.ReportReceiptNativeAccepted {
+		_, err := c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
+		return err
+	}
+	_, err := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(c.retryDelay), "native acceptance "+string(receipt.State)+": "+receipt.ErrorMessage)
 	return err
 }
 
 // ReleasePiggyback makes a batch retryable when the combined turn was refused.
 func (c *Coordinator) ReleasePiggyback(ctx context.Context, batch PreparedBatch, cause error) error {
+	defer c.Wake()
 	if len(batch.Reports) == 0 {
 		return nil
+	}
+	receipt, linked, err := c.store.ReportChatReceipt(ctx, batch.ID)
+	if err != nil {
+		return err
+	}
+	if linked {
+		return c.finishChatDelivery(ctx, batch, receipt)
 	}
 	return c.release(ctx, batch, cause)
 }
