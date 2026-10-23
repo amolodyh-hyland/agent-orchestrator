@@ -3,6 +3,8 @@ package terminal
 import (
 	"context"
 	"encoding/base64"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -11,6 +13,93 @@ import (
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
+
+type pendingWriterLibrary struct {
+	sessionmanager.LibrarySelection
+	admission    sync.RWMutex
+	acquisitions atomic.Int32
+}
+
+func (l *pendingWriterLibrary) AcquireTaskInput(domain.SessionID) (func(), bool) {
+	l.acquisitions.Add(1)
+	l.admission.RLock()
+	var once sync.Once
+	return func() { once.Do(l.admission.RUnlock) }, true
+}
+
+func TestOuterTerminalFinalCheckDoesNotReacquireLibraryAdmission(t *testing.T) {
+	ctx := context.Background()
+	st := sqlitetest.MustOpen(t)
+	now := time.Now()
+	if err := st.UpsertProject(ctx, domain.ProjectRecord{ID: "ordinary", Kind: domain.ProjectKindScratch, RegisteredAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := st.CreateSession(ctx, domain.SessionRecord{ProjectID: "ordinary", Kind: domain.KindWorker, Mode: domain.SessionModeTUI, Harness: domain.HarnessCodex, CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions := sessionmanager.New(sessionmanager.Deps{Store: st, DataDir: t.TempDir()})
+	library := &pendingWriterLibrary{}
+	sessions.SetLibrarySelection(library)
+	mgr := NewManager(nil, nil, testLogger())
+	defer mgr.Close()
+	mgr.SetSessionInputLease(sessions)
+	release, ok := mgr.acquireTerminalInput(string(rec.ID), "")
+	if !ok {
+		t.Fatal("ordinary session input was held")
+	}
+	defer release()
+	writerAcquired := make(chan struct{})
+	writerRelease := make(chan struct{})
+	var writerOnce sync.Once
+	unblockWriter := func() { writerOnce.Do(func() { close(writerRelease) }) }
+	defer unblockWriter()
+	go func() {
+		library.admission.Lock()
+		close(writerAcquired)
+		<-writerRelease
+		library.admission.Unlock()
+	}()
+	// TryRLock fails only after the writer is waiting, since the first lease
+	// prevents it from acquiring the lock. This makes the deadlock deterministic.
+	eventually(t, time.Second, func() bool {
+		if library.admission.TryRLock() {
+			library.admission.RUnlock()
+			return false
+		}
+		return true
+	})
+	pty := newFakePTY()
+	a := newAttachment(string(rec.ID), ports.RuntimeHandle{ID: string(rec.ID)}, nil, nil, nil, nil, testLogger())
+	a.pty, a.inputReady = pty, true
+	a.inputAllowed = func() bool { return mgr.revalidateTerminalInput(string(rec.ID), "") }
+	done := make(chan struct{})
+	go func() {
+		mgr.writeInput(string(rec.ID), a, []byte("ordinary input\r"), release)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		// Free both locks before failing, including on the old recursive path.
+		release()
+		unblockWriter()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("terminal write remained blocked after releasing admission")
+		}
+		t.Fatal("final authorization recursively acquired library admission")
+	}
+	if got := string(pty.writtenBytes()); got != "ordinary input\r" || library.acquisitions.Load() != 1 {
+		t.Fatal("ordinary write did not use its single original lease", got, library.acquisitions.Load())
+	}
+	select {
+	case <-writerAcquired:
+	case <-time.After(time.Second):
+		t.Fatal("completed write did not release the original lease")
+	}
+}
 
 func TestOuterMuxRejectsInputOnPreexistingAndReconnectedAttachments(t *testing.T) {
 	for _, handle := range []string{"p-1", "opaque-runtime", "ptyhost-v1:opaque-runtime"} {

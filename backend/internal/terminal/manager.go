@@ -249,6 +249,8 @@ func (m *Manager) writeInput(terminalID string, a *attachment, raw []byte, relea
 		release()
 		return
 	}
+	// The original lease already holds library admission. Revalidate ownership
+	// without taking a second read lock, which can deadlock behind a writer.
 	if (a.inputAllowed != nil && !a.inputAllowed()) || (a.inputAllowed == nil && !m.revalidateInput(terminalID)) {
 		release()
 		return
