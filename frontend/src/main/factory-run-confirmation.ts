@@ -38,7 +38,7 @@ export function registerFactoryRunConfirmation(options: {
 		return (JSON.parse(raw) as { record: unknown }).record;
 	}
 	options.ipcMain.handle(RUN_PREVIEW, async (event, runId: unknown, action: unknown) => {
-		if (!trusted(event) || typeof runId !== "string" || runId.length > 128 || (action !== "evidence" && action !== "advance")) return null;
+		if (!trusted(event) || typeof runId !== "string" || runId.length > 128 || (action !== "evidence" && action !== "advance" && action !== "feedback" && action !== "pause_feedback" && action !== "resume_feedback")) return null;
 		invalidate(); const version = generation;
 		try {
 			const origin = options.origin();
@@ -64,9 +64,10 @@ export function registerFactoryRunConfirmation(options: {
 			const before = await request("preview", p.detail.run.id, p.action) as RunPreview;
 			if (!current() || before.digest !== p.digest) return;
 			const claim = [...p.detail.evidence].reverse().find((value) => { const e = value as { confirmed?: boolean; kind?: string }; return !e.confirmed && ["created", "completion", "review"].includes(e.kind ?? ""); });
-			const detail = [`Run: ${p.detail.run.id}`, `Project: ${p.detail.run.projectId}`, `Session: ${p.detail.run.sessionId}`,
+			const feedback = p.action === "feedback" ? `Approve ONE continuation of the existing implementer, within the original usage scope. No new station will start. Approval expires two minutes after confirmation unless actual provider submission begins. Queueing does not consume approval; native acceptance is recorded separately. Unknown delivery is held without resubmission.\n\nExact target and payload:\n${JSON.stringify(p.feedback, null, 2)}` : "";
+			const detail = [feedback,`Run: ${p.detail.run.id}`, `Project: ${p.detail.run.projectId}`, `Session: ${p.detail.run.sessionId}`,
 				`Version: ${p.detail.run.version}; stage: ${p.detail.run.stage}; action: ${p.action}`, `Evidence digest: ${p.digest}`, `Run intent:\n${JSON.stringify(p.detail.run, null, 2)}`,
-				p.action === "evidence" ? "Confirm this run intent and exact claim. Verify the applicable design digest, source revision, policy and required checks, check output and execution environment, and attributed reviewer independence. Labels supplied by the submitter are claims." : "Record this stage decision only. No execution will start or resume.",
+				p.action === "evidence" ? "Confirm this run intent and exact claim. Verify the applicable design digest, source revision, policy and required checks, check output and execution environment, and attributed reviewer independence. Labels supplied by the submitter are claims." : p.action === "advance" ? "Record this stage decision only. No execution will start or resume." : p.action === "feedback" ? "Authorize the exact next turn shown above." : "Change feedback admission only. Pending authority is revoked; allowing new approvals never replays old deliveries.",
 				`Evidence:\n${JSON.stringify(p.action === "advance" ? p.detail.evidence : claim, null, 2)}`, `Current owned source:\n${JSON.stringify(p.detail.observed, null, 2)}`, `Blockers: ${p.detail.blockers.join(", ")}`].join("\n\n");
 			if (detail.length > 24_000 || !await options.confirm(detail) || !current()) return;
 			const token = tokens.mint(p.digest, p.expiresAt);

@@ -435,7 +435,10 @@ func Run() error {
 		Activity:           lcStack.LCM,
 		Log:                log,
 	})
+	factoryRunSvc := factoryrun.New(store, runrepo.Reader{}, cfg.DataDir)
 	chatSvc := chatsvc.New(chatOptions)
+	chatSvc.SetFeedbackAdmission(factoryRunSvc)
+	factoryRunSvc.SetFeedbackTransport(chatSvc)
 	chatSvc.SetRenderCheck(renderViaDesktop(browserBroker, "__render-check"))
 	chatSvc.SetRenderMeasure(renderViaDesktop(browserBroker, "__render-measure"))
 
@@ -1013,7 +1016,7 @@ func Run() error {
 		Reviews:            reviewSvc,
 		Notifications:      notifier,
 		Reports:            reportSvc,
-		FactoryRuns:        factoryrun.New(store, runrepo.Reader{}, cfg.DataDir),
+		FactoryRuns:        factoryRunSvc,
 		RunMonitor:         monitor,
 		NotificationStream: notificationHub,
 		Push:               pushRegistry,

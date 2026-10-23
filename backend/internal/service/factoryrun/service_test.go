@@ -44,7 +44,9 @@ func git(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(output))
 }
 
-func setup(t *testing.T) *fixture {
+func setup(t *testing.T) *fixture { return setupMode(t, domain.SessionModeTUI) }
+
+func setupMode(t *testing.T, mode domain.SessionMode) *fixture {
 	t.Helper()
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
@@ -73,7 +75,7 @@ func setup(t *testing.T) *fixture {
 	if err := f.db.UpsertProject(f.ctx, domain.ProjectRecord{ID: "p", Path: f.repo, RegisteredAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	f.session, err = f.db.CreateSession(f.ctx, domain.SessionRecord{ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCodex, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: now}, CreatedAt: now, UpdatedAt: now, Metadata: domain.SessionMetadata{WorkspacePath: f.worktree, Branch: "worker", DiffBaseSHA: f.base}})
+	f.session, err = f.db.CreateSession(f.ctx, domain.SessionRecord{Mode: mode, ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCodex, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: now}, CreatedAt: now, UpdatedAt: now, Metadata: domain.SessionMetadata{WorkspacePath: f.worktree, Branch: "worker", DiffBaseSHA: f.base}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +149,7 @@ func TestFactoryRunManualProgressionAndRestart(t *testing.T) {
 	}
 	detail = f.advance(detail)
 	blocked(t, detail, "review_missing")
-	review := &domain.RunReviewReceipt{RepoName: claim.RepoName, ReviewerID: "independent-reviewer", Independent: true, SHA: claim.Facts.HeadSHA, BeforeFingerprint: claim.Facts.Fingerprint, AfterFingerprint: claim.Facts.Fingerprint, Verdict: "approved", Round: 1, Artifact: f.artifact}
+	review := &domain.RunReviewReceipt{RepoName: claim.RepoName, ReviewerID: "independent-reviewer", Independent: true, ReadOnly: true, SHA: claim.Facts.HeadSHA, BeforeFingerprint: claim.Facts.Fingerprint, AfterFingerprint: claim.Facts.Fingerprint, Verdict: "approved", Round: 1, Artifact: f.artifact}
 	detail, err := f.recordInput(f.ctx, detail.Run.ID, factoryrun.RecordInput{ExpectedVersion: detail.Run.Version, Actor: "human", Decision: "accept local review", Review: review})
 	if err != nil {
 		t.Fatal(err)
@@ -344,14 +346,14 @@ func TestFactoryRunCrashRollsBackAndRestartRetainsHistory(t *testing.T) {
 }
 
 func TestFactoryRunReviewCannotMaskFindingsOrMutation(t *testing.T) {
-	for _, mode := range []string{"self", "mutated", "stale", "findings", "native missing", "exhausted"} {
+	for _, mode := range []string{"self", "mutated", "stale", "findings", "findings_p1", "native missing", "exhausted", "missing verdict", "writable"} {
 		t.Run(mode, func(t *testing.T) {
 			f := setup(t)
 			detail := f.advance(f.create())
 			claim := f.claim()
 			detail = f.record(detail, claim)
 			detail = f.advance(detail)
-			receipt := &domain.RunReviewReceipt{RepoName: claim.RepoName, ReviewerID: "reviewer", Independent: true, SHA: claim.Facts.HeadSHA, BeforeFingerprint: claim.Facts.Fingerprint, AfterFingerprint: claim.Facts.Fingerprint, Verdict: "approved", Round: 1, Artifact: f.artifact}
+			receipt := &domain.RunReviewReceipt{RepoName: claim.RepoName, ReviewerID: "reviewer", Independent: true, ReadOnly: true, SHA: claim.Facts.HeadSHA, BeforeFingerprint: claim.Facts.Fingerprint, AfterFingerprint: claim.Facts.Fingerprint, Verdict: "approved", Round: 1, Artifact: f.artifact}
 			switch mode {
 			case "self":
 				receipt.ReviewerID = string(f.session.ID)
@@ -359,14 +361,28 @@ func TestFactoryRunReviewCannotMaskFindingsOrMutation(t *testing.T) {
 				receipt.AfterFingerprint = strings.Repeat("0", 64)
 			case "stale":
 				receipt.SHA = f.base
-			case "findings":
-				receipt.Findings = []domain.RunFinding{{ID: "F1", Severity: "P2"}}
+			case "findings", "findings_p1":
+				severity := "P2"
+				if mode == "findings_p1" {
+					severity = "P1"
+				}
+				receipt.Findings = []domain.RunFinding{{ID: "F1", Severity: severity}}
 			case "native missing":
 				receipt.ReviewRunID = "missing"
 			case "exhausted":
 				receipt.Round = 4
+			case "missing verdict":
+				receipt.Verdict = ""
+			case "writable":
+				receipt.ReadOnly = false
 			}
 			got, err := f.recordInput(f.ctx, detail.Run.ID, factoryrun.RecordInput{ExpectedVersion: detail.Run.Version, Actor: "human", Decision: "review receipt", Review: receipt})
+			if mode == "exhausted" {
+				if err == nil {
+					t.Fatal("fourth pass admitted")
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -423,7 +439,7 @@ func TestFactoryRunReferencesNativePerSHAReviewWithoutDelivery(t *testing.T) {
 	if err := f.db.InsertReviewRun(f.ctx, domain.ReviewRun{ID: "native-pass", ReviewID: native.ID, SessionID: f.session.ID, Harness: domain.ReviewerCodex, TargetSHA: claim.Facts.HeadSHA, Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	receipt := &domain.RunReviewReceipt{RepoName: claim.RepoName, ReviewRunID: "native-pass", ReviewerID: native.ID, Independent: true, SHA: claim.Facts.HeadSHA, BeforeFingerprint: claim.Facts.Fingerprint, AfterFingerprint: claim.Facts.Fingerprint, Verdict: "approved", Round: 1, Artifact: f.artifact}
+	receipt := &domain.RunReviewReceipt{RepoName: claim.RepoName, ReviewRunID: "native-pass", ReviewerID: native.ID, Independent: true, ReadOnly: true, SHA: claim.Facts.HeadSHA, BeforeFingerprint: claim.Facts.Fingerprint, AfterFingerprint: claim.Facts.Fingerprint, Verdict: "approved", Round: 1, Artifact: f.artifact}
 	detail, err := f.recordInput(f.ctx, detail.Run.ID, factoryrun.RecordInput{ExpectedVersion: detail.Run.Version, Actor: "human", Decision: "record existing native review", Review: receipt})
 	if err != nil || len(detail.Blockers) > 0 {
 		t.Fatalf("native receipt: %v %v", detail.Blockers, err)
@@ -433,6 +449,7 @@ func TestFactoryRunReferencesNativePerSHAReviewWithoutDelivery(t *testing.T) {
 		t.Fatalf("record changed native delivery: %+v %v", pass, err)
 	}
 	receipt.ReviewerID = "another-reviewer"
+	receipt.Round = 2
 	detail, err = f.recordInput(f.ctx, detail.Run.ID, factoryrun.RecordInput{ExpectedVersion: detail.Run.Version, Actor: "human", Decision: "mismatched reviewer", Review: receipt})
 	if err != nil {
 		t.Fatal(err)
@@ -528,7 +545,7 @@ func TestFactoryRunChangedCandidateRequiresNewHandoffDecision(t *testing.T) {
 	detail := f.advance(f.create())
 	approve := func(detail domain.RunDetail, claim *domain.RunCompletion) domain.RunDetail {
 		t.Helper()
-		receipt := &domain.RunReviewReceipt{RepoName: claim.RepoName, ReviewerID: "independent-reviewer", Independent: true, SHA: claim.Facts.HeadSHA, BeforeFingerprint: claim.Facts.Fingerprint, AfterFingerprint: claim.Facts.Fingerprint, Verdict: "approved", Round: 1, Artifact: f.artifact}
+		receipt := &domain.RunReviewReceipt{RepoName: claim.RepoName, ReviewerID: "independent-reviewer", Independent: true, ReadOnly: true, SHA: claim.Facts.HeadSHA, BeforeFingerprint: claim.Facts.Fingerprint, AfterFingerprint: claim.Facts.Fingerprint, Verdict: "approved", Round: claim.Attempt, Artifact: f.artifact}
 		result, err := f.recordInput(f.ctx, detail.Run.ID, factoryrun.RecordInput{ExpectedVersion: detail.Run.Version, Actor: "human", Decision: "accept exact source review", Review: receipt})
 		if err != nil {
 			t.Fatal(err)
@@ -612,7 +629,7 @@ func TestPublicClaimsCannotForgeHumanApproval(t *testing.T) {
 	}
 	d = f.confirm(d, "evidence")
 	d = f.advance(d)
-	receipt := &domain.RunReviewReceipt{RepoName: claim.RepoName, ReviewerID: "independent-human", Independent: true, SHA: claim.Facts.HeadSHA, BeforeFingerprint: claim.Facts.Fingerprint, AfterFingerprint: claim.Facts.Fingerprint, Verdict: "approved", Round: 1, Artifact: f.artifact}
+	receipt := &domain.RunReviewReceipt{RepoName: claim.RepoName, ReviewerID: "independent-human", Independent: true, ReadOnly: true, SHA: claim.Facts.HeadSHA, BeforeFingerprint: claim.Facts.Fingerprint, AfterFingerprint: claim.Facts.Fingerprint, Verdict: "approved", Round: 1, Artifact: f.artifact}
 	d, err = f.svc.Record(f.ctx, d.Run.ID, factoryrun.RecordInput{ExpectedVersion: d.Run.Version, Actor: "desktop-user", Decision: "independent review", Review: receipt})
 	if err != nil {
 		t.Fatal(err)

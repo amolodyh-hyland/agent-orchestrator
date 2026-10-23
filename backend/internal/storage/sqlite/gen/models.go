@@ -417,9 +417,30 @@ type Cue struct {
 	UpdatedAt time.Time
 }
 
+type FactoryFeedbackControl struct {
+	RunID    string
+	Revision int64
+	Paused   int64
+}
+
 type FactoryMonitorCursor struct {
 	Scope   string
 	AfterID string
+}
+
+type FactoryReviewFeedback struct {
+	ID                     string
+	RunID                  string
+	RepoName               string
+	Round                  int64
+	Document               string
+	Active                 int64
+	DeliveryError          string
+	AttemptedAt            sql.NullTime
+	SubmittedAt            sql.NullTime
+	AcceptedAt             sql.NullTime
+	ProviderTurnID         string
+	ProviderConversationID string
 }
 
 type FactoryRun struct {

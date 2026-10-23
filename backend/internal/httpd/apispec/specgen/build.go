@@ -179,6 +179,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"DomainRunFinding":                                     "RunFinding",
 	"DomainRunReviewReceipt":                               "RunReviewReceipt",
 	"DomainRunEvidence":                                    "RunEvidence",
+	"DomainRunFeedbackBinding":                             "RunFeedbackBinding",
+	"DomainRunFeedbackReceipt":                             "RunFeedbackReceipt",
 	"DomainRunDetail":                                      "RunDetail",
 	"FactoryrunCreateInput":                                "CreateFactoryRunRequest",
 	"FactoryrunRecordInput":                                "RecordFactoryRunRequest",

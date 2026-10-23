@@ -441,8 +441,10 @@ func IsInternalReplayContent(content ChatContent) bool {
 
 // ChatUserMessage is one inbound request to the agent.
 type ChatUserMessage struct {
-	ReportBatchID    string
-	ReportClaimToken string
+	FeedbackControllerGeneration string
+	FeedbackConversationID       string
+	ReportBatchID                string
+	ReportClaimToken             string
 	// InteractionAt preserves initial acceptance across transition outbox replay.
 	InteractionAt time.Time
 	Text          string

@@ -17123,6 +17123,17 @@ components:
       - state
       - lastActivityAt
       type: object
+    DomainConversationSettings:
+      properties:
+        approvalMode:
+          type: string
+        model:
+          type: string
+        openCodeMode:
+          type: string
+        reasoningEffort:
+          type: string
+      type: object
     DomainReviewerConfig:
       properties:
         agentConfig:
@@ -20325,6 +20336,15 @@ components:
           items:
             $ref: '#/components/schemas/RunEvidence'
           type: array
+        feedback:
+          items:
+            $ref: '#/components/schemas/RunFeedbackReceipt'
+          type: array
+        feedbackPaused:
+          type: boolean
+        feedbackRevision:
+          format: int64
+          type: integer
         nextAction:
           type: string
         observed:
@@ -20337,6 +20357,9 @@ components:
       - run
       - evidence
       - observed
+      - feedbackPaused
+      - feedbackRevision
+      - feedback
       - nextAction
       - blockers
       type: object
@@ -20408,8 +20431,97 @@ components:
       - evidence
       - nextAfterVersion
       type: object
+    RunFeedbackBinding:
+      properties:
+        controlRevision:
+          format: int64
+          type: integer
+        conversationId:
+          type: string
+        epoch:
+          type: string
+        expiresAt:
+          format: date-time
+          type: string
+        id:
+          type: string
+        payload:
+          type: string
+        repoName:
+          type: string
+        reviewEvidenceId:
+          type: string
+        round:
+          type: integer
+        runId:
+          type: string
+        runVersion:
+          format: int64
+          type: integer
+        sessionId:
+          type: string
+        settings:
+          $ref: '#/components/schemas/DomainConversationSettings'
+        sha:
+          type: string
+        source:
+          items:
+            $ref: '#/components/schemas/RunRepoFacts'
+          type: array
+        targetDigest:
+          type: string
+      required:
+      - id
+      - runId
+      - runVersion
+      - controlRevision
+      - repoName
+      - reviewEvidenceId
+      - round
+      - sha
+      - sessionId
+      - targetDigest
+      - conversationId
+      - settings
+      - payload
+      - source
+      - epoch
+      - expiresAt
+      type: object
+    RunFeedbackReceipt:
+      properties:
+        acceptedAt:
+          format: date-time
+          type: string
+        active:
+          type: boolean
+        attemptedAt:
+          format: date-time
+          type: string
+        binding:
+          $ref: '#/components/schemas/RunFeedbackBinding'
+        holdReason:
+          type: string
+        providerConversationId:
+          type: string
+        providerTurnId:
+          type: string
+        state:
+          type: string
+        submittedAt:
+          format: date-time
+          type: string
+        turnId:
+          type: string
+      required:
+      - active
+      - binding
+      - state
+      type: object
     RunFinding:
       properties:
+        description:
+          type: string
         id:
           type: string
         severity:
@@ -20636,6 +20748,8 @@ components:
           type: array
         independent:
           type: boolean
+        readOnly:
+          type: boolean
         repoName:
           type: string
         reviewRunId:
@@ -20655,6 +20769,7 @@ components:
       - repoName
       - reviewerId
       - independent
+      - readOnly
       - sha
       - beforeFingerprint
       - afterFingerprint

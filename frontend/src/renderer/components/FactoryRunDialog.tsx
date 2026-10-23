@@ -46,12 +46,15 @@ export function FactoryRunDialog({ projectId, sessionId }: { projectId: string; 
 		<Dialog open={open} onOpenChange={(value) => { clear(); setOpen(value); }}>
 			<DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>{copy("title", "Review run evidence")}</DialogTitle></DialogHeader>
 				<RunMonitoring projectId={projectId} sessionId={sessionId} />
-				<p>{copy("help", "Submissions are unconfirmed claims. Each receipt and stage decision requires a separate native confirmation. This records evidence only.")}</p>
+				<p>{copy("help", "Submissions are unconfirmed claims. Each receipt and stage decision requires a separate native confirmation. Findings delivery requires its own confirmation for one continuation of the existing implementer.")}</p>
 				<Input aria-label={copy("id", "Run ID")} value={runId} onChange={(event) => { clear(); setRunId(event.target.value); }} />
 				<Button onClick={() => void load("evidence")}>{copy("receipt", "Preview pending claim")}</Button>
+				<Button onClick={() => void load("pause_feedback")}>{copy("pause", "Pause findings delivery")}</Button>
+				<Button onClick={() => void load("resume_feedback")}>{copy("resume", "Allow new findings approvals")}</Button>
+				<Button onClick={() => void load("feedback")}>{copy("feedback", "Preview findings delivery")}</Button>
 				<Button onClick={() => void load("advance")}>{copy("stage", "Preview stage decision")}</Button>
 				{preview ? <>
-					<pre className="max-h-80 overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(preview.detail, null, 2)}</pre>
+					<pre className="max-h-80 overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify({ ...preview.detail, feedback: preview.feedback }, null, 2)}</pre>
 					<p className="break-all text-xs">{preview.digest}</p>
 					<Button data-run-preview-id={preview.id} data-run-preview-digest={preview.digest}>{copy("confirm", "Review native confirmation")}</Button>
 				</> : null}

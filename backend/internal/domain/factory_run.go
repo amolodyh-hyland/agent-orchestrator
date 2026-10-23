@@ -98,8 +98,9 @@ type RunCompletion struct {
 
 // RunFinding preserves an exact finding identity and severity.
 type RunFinding struct {
-	ID       string `json:"id"`
-	Severity string `json:"severity" enum:"P0,P1,P2,P3,P4"`
+	ID          string `json:"id"`
+	Description string `json:"description,omitempty"`
+	Severity    string `json:"severity" enum:"P0,P1,P2,P3,P4"`
 }
 
 // RunReviewReceipt records an independently attributed review of one immutable candidate.
@@ -108,6 +109,7 @@ type RunReviewReceipt struct {
 	ReviewRunID       string       `json:"reviewRunId,omitempty"`
 	ReviewerID        string       `json:"reviewerId"`
 	Independent       bool         `json:"independent"`
+	ReadOnly          bool         `json:"readOnly"`
 	SHA               string       `json:"sha"`
 	BeforeFingerprint string       `json:"beforeFingerprint"`
 	AfterFingerprint  string       `json:"afterFingerprint"`
@@ -137,9 +139,46 @@ type RunEvidence struct {
 
 // RunDetail combines durable history with freshly derived evidence blockers.
 type RunDetail struct {
-	Run        FactoryRun     `json:"run"`
-	Evidence   []RunEvidence  `json:"evidence"`
-	Observed   []RunRepoFacts `json:"observed"`
-	NextAction string         `json:"nextAction"`
-	Blockers   []string       `json:"blockers"`
+	Run              FactoryRun           `json:"run"`
+	Evidence         []RunEvidence        `json:"evidence"`
+	Observed         []RunRepoFacts       `json:"observed"`
+	FeedbackPaused   bool                 `json:"feedbackPaused"`
+	FeedbackRevision int64                `json:"feedbackRevision"`
+	Feedback         []RunFeedbackReceipt `json:"feedback"`
+	NextAction       string               `json:"nextAction"`
+	Blockers         []string             `json:"blockers"`
+}
+
+// RunFeedbackBinding seals one native-confirmed next turn; it never authorizes a station start.
+type RunFeedbackBinding struct {
+	ID               string               `json:"id"`
+	RunID            string               `json:"runId"`
+	RunVersion       int64                `json:"runVersion"`
+	ControlRevision  int64                `json:"controlRevision"`
+	RepoName         string               `json:"repoName"`
+	ReviewEvidenceID string               `json:"reviewEvidenceId"`
+	Round            int                  `json:"round"`
+	SHA              string               `json:"sha"`
+	SessionID        SessionID            `json:"sessionId"`
+	TargetDigest     string               `json:"targetDigest"`
+	ConversationID   string               `json:"conversationId"`
+	Settings         ConversationSettings `json:"settings"`
+	Payload          string               `json:"payload"`
+	Source           []RunRepoFacts       `json:"source"`
+	Epoch            string               `json:"epoch"`
+	ExpiresAt        time.Time            `json:"expiresAt"`
+}
+
+// RunFeedbackReceipt retains uncertain submissions and native acceptance independently of display.
+type RunFeedbackReceipt struct {
+	Active                 bool               `json:"active"`
+	Binding                RunFeedbackBinding `json:"binding"`
+	HoldReason             string             `json:"holdReason,omitempty"`
+	State                  string             `json:"state"`
+	TurnID                 string             `json:"turnId,omitempty"`
+	AttemptedAt            time.Time          `json:"attemptedAt,omitempty"`
+	SubmittedAt            time.Time          `json:"submittedAt,omitempty"`
+	AcceptedAt             time.Time          `json:"acceptedAt,omitempty"`
+	ProviderTurnID         string             `json:"providerTurnId,omitempty"`
+	ProviderConversationID string             `json:"providerConversationId,omitempty"`
 }

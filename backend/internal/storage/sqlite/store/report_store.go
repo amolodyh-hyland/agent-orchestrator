@@ -392,6 +392,9 @@ func (s *Store) ReportChatReceipt(ctx context.Context, batchID string) (domain.R
 func (s *Store) RecordReportChatAcceptance(ctx context.Context, conversationID, providerConversationID, providerTurnID string, at time.Time) error {
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
+	if err := q.AcceptFactoryFeedback(ctx, gen.AcceptFactoryFeedbackParams{ConversationID: conversationID, ProviderConversationID: providerConversationID, ProviderTurnID: providerTurnID, AcceptedAt: nullTime(at)}); err != nil {
+		return err
+	}
 	return q.RecordReportChatAcceptance(ctx, gen.RecordReportChatAcceptanceParams{
 		ConversationID: conversationID, ProviderConversationID: providerConversationID, ProviderTurnID: providerTurnID, AcceptedAt: nullTime(at),
 	})
@@ -400,6 +403,9 @@ func (s *Store) RecordReportChatAcceptance(ctx context.Context, conversationID, 
 func (s *Store) RecordReportChatSubmission(ctx context.Context, turnID string, at time.Time) error {
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
+	if err := q.SubmitFactoryFeedback(ctx, gen.SubmitFactoryFeedbackParams{TurnID: nullableString(turnID), SubmittedAt: nullTime(at)}); err != nil {
+		return err
+	}
 	return q.RecordReportChatSubmission(ctx, gen.RecordReportChatSubmissionParams{TurnID: turnID, SubmittedAt: nullTime(at)})
 }
 

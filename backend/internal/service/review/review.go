@@ -451,6 +451,10 @@ type TriggerOutcome struct {
 
 // TriggerRequested starts a client-requested review pass.
 func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionID, req TriggerRequest) (TriggerOutcome, error) {
+	// Reject before refreshing/attaching a PR, as well as at engine admission.
+	if err := domain.CheckFactoryFeedback(ctx, s.store, workerID); err != nil {
+		return TriggerOutcome{}, err
+	}
 	source := req.Source
 	if source == "" {
 		source = domain.ReviewTriggerManual

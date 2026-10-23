@@ -2,8 +2,8 @@ export const RUN_PREVIEW = "factoryRun:preview";
 export const RUN_CANCEL = "factoryRun:cancel";
 export const RUN_CONFIRM_CLICK = "factoryRun:confirmClick";
 export const RUN_RESULT = "factoryRun:result";
-export type RunAction = "evidence" | "advance";
-export type RunPreview = { id: string; digest: string; action: RunAction; expiresAt: number; detail: {
+export type RunAction = "evidence" | "advance" | "feedback" | "pause_feedback" | "resume_feedback";
+export type RunPreview = { id: string; digest: string; action: RunAction; expiresAt: number; feedback?: { payload: string; sessionId: string; sha: string; round: number; targetDigest: string }; detail: {
 	run: { id: string; projectId: string; sessionId: string; version: number; stage: string };
 	evidence: unknown[]; observed: unknown[]; blockers: string[]; nextAction: string;
 } };
