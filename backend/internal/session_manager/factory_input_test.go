@@ -18,13 +18,19 @@ func (s *factoryInputStore) FactoryFeedbackHeld(_ context.Context, id domain.Ses
 	return s.held[id], s.err
 }
 
+func (s *factoryInputStore) ResolveSessionInput(_ context.Context, handle string) (domain.SessionID, bool, error) {
+	return domain.SessionID(handle), true, s.err
+}
+
 type factoryInputLibrary struct {
 	LibrarySelection
 	admit    func()
 	releases int
+	ids      []domain.SessionID
 }
 
-func (l *factoryInputLibrary) AcquireTaskInput(domain.SessionID) (func(), bool) {
+func (l *factoryInputLibrary) AcquireTaskInput(id domain.SessionID) (func(), bool) {
+	l.ids = append(l.ids, id)
 	l.admit()
 	return func() { l.releases++ }, true
 }

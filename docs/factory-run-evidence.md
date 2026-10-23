@@ -324,3 +324,9 @@ review request, or queued message grants no authority. Reviewer starts remain he
 at the shared review engine boundary. Raw terminal input and side conversations
 have no native approval transport and remain held for enrolled participants;
 this includes opening, restoration, retries, queued sends and deferred submission.
+
+Raw terminal input resolves its persisted owner before any policy or input lease:
+main session/runtime handles, reviewer handles (including native runtime wrappers),
+and session-scoped shell handles all use their owning session. Project-only shells
+remain held for enrolled projects. Unknown or conflicting mappings fail closed;
+admission rechecks both the mapping and policy after any library wait.

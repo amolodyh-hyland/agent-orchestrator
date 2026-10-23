@@ -29,15 +29,34 @@ var errAgentOperationInProgress = errors.New("session: another exclusive operati
 
 var _ sessionguard.InputLease = (*Manager)(nil)
 
+type sessionInputOwnerResolver interface {
+	ResolveSessionInput(context.Context, string) (domain.SessionID, bool, error)
+}
+
+func (m *Manager) sessionInputOwner(ctx context.Context, handle domain.SessionID) (domain.SessionID, bool) {
+	if resolver, ok := m.store.(sessionInputOwnerResolver); ok {
+		owner, known, err := resolver.ResolveSessionInput(ctx, string(handle))
+		return owner, known && err == nil && owner != ""
+	}
+	if _, guarded := m.store.(domain.FactoryFeedbackPolicy); guarded {
+		return "", false
+	}
+	return handle, true
+}
+
 // AcquireSessionInput atomically admits one pane write unless an exclusive
 // operation already owns the AO session. The returned release is idempotent;
 // callers hold it through the underlying pane write so a later mutation can
 // close admission and wait for every already-admitted write to finish.
-func (m *Manager) AcquireSessionInput(id domain.SessionID) (release func(), ok bool) {
-	id = domain.SessionID(strings.TrimSpace(string(id)))
+func (m *Manager) AcquireSessionInput(handle domain.SessionID) (release func(), ok bool) {
+	ctx := context.Background()
+	id, known := m.sessionInputOwner(ctx, handle)
+	if !known {
+		return nil, false
+	}
 	// Raw bytes cannot carry a native continuation receipt. This transport stays
 	// closed for factory participants, including Enter and escape sequences.
-	if err := domain.CheckFactoryFeedback(context.Background(), m.store, id); err != nil {
+	if err := domain.CheckFactoryFeedback(ctx, m.store, id); err != nil {
 		return nil, false
 	}
 	libraryRelease := func() {}
@@ -48,7 +67,12 @@ func (m *Manager) AcquireSessionInput(id domain.SessionID) (release func(), ok b
 			return nil, false
 		}
 	}
-	if err := domain.CheckFactoryFeedback(context.Background(), m.store, id); err != nil {
+	currentOwner, known := m.sessionInputOwner(ctx, handle)
+	if !known || currentOwner != id {
+		libraryRelease()
+		return nil, false
+	}
+	if err := domain.CheckFactoryFeedback(ctx, m.store, id); err != nil {
 		libraryRelease()
 		return nil, false
 	}
