@@ -9,26 +9,28 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/delegationauth"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/outer"
-	"github.com/go-chi/chi/v5"
 )
 
 type nativeOuterInput struct {
-	Operation         string              `json:"operation"`
-	ID                string              `json:"id"`
-	SessionID         domain.SessionID    `json:"sessionId"`
-	Text              string              `json:"text"`
-	Config            domain.AgentConfig  `json:"config"`
-	Revision          int64               `json:"revision"`
-	ProjectIDs        []string            `json:"projectIds"`
-	Paused            bool                `json:"paused"`
-	ForegroundReserve bool                `json:"foregroundReserve"`
-	Control           *nativeOuterControl `json:"control"`
-	Nonce             string              `json:"nonce"`
-	Expires           int64               `json:"expires"`
+	Operation         string                       `json:"operation"`
+	ID                string                       `json:"id"`
+	SessionID         domain.SessionID             `json:"sessionId"`
+	Text              string                       `json:"text"`
+	Expected          *domain.OuterSendExpectation `json:"expected"`
+	Config            domain.AgentConfig           `json:"config"`
+	Revision          int64                        `json:"revision"`
+	ProjectIDs        []string                     `json:"projectIds"`
+	Paused            bool                         `json:"paused"`
+	ForegroundReserve bool                         `json:"foregroundReserve"`
+	Control           *nativeOuterControl          `json:"control"`
+	Nonce             string                       `json:"nonce"`
+	Expires           int64                        `json:"expires"`
 }
 type nativeOuterControl struct {
 	Action     string          `json:"action"`
@@ -94,11 +96,9 @@ func mountOuterNative(r chi.Router, svc *outer.Service, authority *delegationaut
 			return
 		}
 		req = req.WithContext(domain.WithOuterNativeAction(req.Context(), domain.OuterNativeAction{Operation: "outer.native", ActionID: in.ID}))
-		if in.Operation != "send" {
-			if err := svc.RecordNativeAction(req.Context(), in.ID, raw); err != nil {
-				reject()
-				return
-			}
+		if err := svc.RecordNativeAction(req.Context(), in.ID, raw); err != nil {
+			reject()
+			return
 		}
 		var value any
 		switch in.Operation {
@@ -111,7 +111,7 @@ func mountOuterNative(r chi.Router, svc *outer.Service, authority *delegationaut
 				reject()
 				return
 			}
-			value, err = svc.Send(domain.WithOuterNativeAction(req.Context(), domain.OuterNativeAction{Operation: "outer.send", RequestID: in.ID, SessionID: in.SessionID}), in.Text)
+			value, err = svc.Send(domain.WithOuterNativeAction(req.Context(), domain.OuterNativeAction{Operation: "outer.send", RequestID: in.ID, SessionID: in.SessionID, Expected: in.Expected}), in.Text)
 		case "control":
 			if in.Control == nil {
 				reject()
@@ -154,9 +154,7 @@ func controlOuterNative(w http.ResponseWriter, req *http.Request, router chi.Rou
 	if strings.Count(path, "%s") > 0 {
 		path = strings.Replace(path, "%s", url.PathEscape(in.TargetID), 1)
 	}
-	if strings.Contains(path, "%s") {
-		path = strings.Replace(path, "%s", url.PathEscape(in.PendingID), 1)
-	}
+	path = strings.Replace(path, "%s", url.PathEscape(in.PendingID), 1)
 	var project domain.ProjectID
 	var session domain.SessionID
 	var err error

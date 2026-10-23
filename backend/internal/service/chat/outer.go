@@ -9,10 +9,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+// OuterAdmission guards exact outer requests at the final transport boundary.
 type OuterAdmission interface {
 	AcquireOuterInput(context.Context, domain.SessionID, ports.ChatUserMessage, string) (func(), error)
 }
 
+// SetOuterAdmission installs the exact-request predicate used at final transport writes.
 func (s *Service) SetOuterAdmission(a OuterAdmission) {
 	s.mu.Lock()
 	s.outerAdmission = a
@@ -50,6 +52,7 @@ func (c *Controller) acquireOuterInput(ctx context.Context, msg ports.ChatUserMe
 	return c.outerInput(ctx, c.sessionID, msg, action)
 }
 
+// OuterSendPreview freezes supported text and native conversation identities before issuance.
 type OuterSendPreview struct {
 	SessionID              domain.SessionID
 	ConversationID         string
@@ -59,6 +62,7 @@ type OuterSendPreview struct {
 	Text                   string
 }
 
+// PrepareOuterSend freezes supported visible text and the current native identities.
 func (s *Service) PrepareOuterSend(ctx context.Context, id domain.SessionID, text string) (OuterSendPreview, error) {
 	if a, ok := domain.OuterNativeActionFrom(ctx); !ok || a.Operation != "outer.send" || a.SessionID != id {
 		return OuterSendPreview{}, domain.ErrOuterHeld
@@ -82,6 +86,8 @@ func (s *Service) PrepareOuterSend(ctx context.Context, id domain.SessionID, tex
 	}
 	return OuterSendPreview{SessionID: id, ConversationID: c.conversation.ID, ProviderConversationID: c.ProviderConversationID(), ControllerGeneration: c.generation, Settings: c.Settings(), Text: msg.Text}, nil
 }
+
+// DeliverOuterSend queues one previously issued native request through the existing Chat controller.
 func (s *Service) DeliverOuterSend(ctx context.Context, id domain.SessionID, text, key string) (domain.ConversationTurn, error) {
 	c, err := s.Controller(id)
 	if err != nil {

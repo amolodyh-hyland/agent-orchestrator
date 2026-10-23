@@ -58,6 +58,7 @@ func (s *Store) withOuterSessionGeneration(ctx context.Context, rec domain.Sessi
 	return rec, err
 }
 
+// RecordOuterNativeAction journals one exact immutable native action with its audit record.
 func (s *Store) RecordOuterNativeAction(ctx context.Context, id string, document []byte) error {
 	a, ok := domain.OuterNativeActionFrom(ctx)
 	if !ok || a.ActionID != id || len(id) < 16 || len(id) > 128 || !json.Valid(document) || len(document) > 256<<10 {
@@ -75,6 +76,7 @@ func (s *Store) RecordOuterNativeAction(ctx context.Context, id string, document
 	})
 }
 
+// ListOuterHostRequests retains receipt visibility across outer conversation generations.
 func (s *Store) ListOuterHostRequests(ctx context.Context) ([]domain.OuterRequestReceipt, error) {
 	rows, err := s.qr.ListOuterHostRequests(ctx)
 	if err != nil {

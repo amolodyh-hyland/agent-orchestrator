@@ -65,6 +65,12 @@ function fixture() {
 	const stage = async (
 		draft: unknown = {
 			operation: "send",
+			expected: {
+				bindingRevision: 1,
+				scopeRevision: 1,
+				controllerGeneration: "generation-1",
+				settingsDigest: "a".repeat(64),
+			},
 			sessionId: "outer-session",
 			text: "Inspect selected reports",
 		}
@@ -93,11 +99,18 @@ describe("outer native human issuance", () => {
 		const f = fixture();
 		const draft = {
 			operation: "send",
+			expected: {
+				bindingRevision: 1,
+				scopeRevision: 1,
+				controllerGeneration: "generation-1",
+				settingsDigest: "a".repeat(64),
+			},
 			sessionId: "outer-session",
 			text: "Original human request",
 		};
 		const s = await f.stage(draft);
 		draft.text = "changed";
+		draft.expected.scopeRevision = 99;
 		expect(f.submitted).toEqual([]);
 		const click = { id: s.id, digest: s.digest };
 		await f.handlers.get(OUTER_USER_ACTION)!(
@@ -121,6 +134,12 @@ describe("outer native human issuance", () => {
 		expect(f.submitted).toHaveLength(1);
 		expect(f.submitted[0]).toMatchObject({
 			operation: "send",
+			expected: {
+				bindingRevision: 1,
+				scopeRevision: 1,
+				controllerGeneration: "generation-1",
+				settingsDigest: "a".repeat(64),
+			},
 			sessionId: "outer-session",
 			text: "Original human request",
 			id: s.id,
@@ -142,6 +161,12 @@ describe("outer native human issuance", () => {
 				if (mode === "replacement")
 					await f.stage({
 						operation: "send",
+						expected: {
+							bindingRevision: 1,
+							scopeRevision: 1,
+							controllerGeneration: "generation-1",
+							settingsDigest: "a".repeat(64),
+						},
 						sessionId: "outer-session",
 						text: "New request",
 					});
@@ -185,6 +210,12 @@ describe("outer native human issuance", () => {
 			{ operation: "sign", body: "anything" },
 			{
 				operation: "send",
+				expected: {
+					bindingRevision: 1,
+					scopeRevision: 1,
+					controllerGeneration: "generation-1",
+					settingsDigest: "a".repeat(64),
+				},
 				sessionId: "s",
 				text: "x",
 				userAuthored: true,

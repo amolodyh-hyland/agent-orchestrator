@@ -42,9 +42,27 @@ function validDraft(value: unknown): value is OuterNativeDraft {
 	const v = value as Record<string, unknown>;
 	const keys = Object.keys(v).sort().join(",");
 	switch (v.operation) {
-		case "send":
+		case "send": {
+			if (
+				!v.expected ||
+				typeof v.expected !== "object" ||
+				Array.isArray(v.expected)
+			)
+				return false;
+			const expected = v.expected as Record<string, unknown>;
 			return (
-				keys === "operation,sessionId,text" &&
+				keys === "expected,operation,sessionId,text" &&
+				Object.keys(expected).sort().join(",") ===
+					"bindingRevision,controllerGeneration,scopeRevision,settingsDigest" &&
+				Number.isSafeInteger(expected.bindingRevision) &&
+				(expected.bindingRevision as number) > 0 &&
+				Number.isSafeInteger(expected.scopeRevision) &&
+				(expected.scopeRevision as number) > 0 &&
+				typeof expected.controllerGeneration === "string" &&
+				expected.controllerGeneration.length > 0 &&
+				expected.controllerGeneration.length < 256 &&
+				typeof expected.settingsDigest === "string" &&
+				/^[a-f0-9]{64}$/.test(expected.settingsDigest) &&
 				typeof v.sessionId === "string" &&
 				v.sessionId.length > 0 &&
 				v.sessionId.length < 256 &&
@@ -52,6 +70,7 @@ function validDraft(value: unknown): value is OuterNativeDraft {
 				v.text.trim().length > 0 &&
 				Buffer.byteLength(v.text) <= 64 << 10
 			);
+		}
 		case "setup":
 			return (
 				keys === "config,operation" &&

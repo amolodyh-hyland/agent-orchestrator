@@ -7,8 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/go-chi/chi/v5"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 )
 
 func TestOuterMutationRouteInventory(t *testing.T) {

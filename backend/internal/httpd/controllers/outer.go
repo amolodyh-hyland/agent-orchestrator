@@ -4,30 +4,41 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/outer"
-	"github.com/go-chi/chi/v5"
 )
 
+// OuterController serves passive outer state, facts and audit projections.
 type OuterController struct{ Svc *outer.Service }
+
+// OuterFactsResponse contains bounded labeled Project evidence.
 type OuterFactsResponse struct {
 	Facts []domain.OuterFact `json:"facts"`
 }
+
+// OuterAuditResponse contains a bounded append-only timeline page.
 type OuterAuditResponse struct {
 	Events []domain.OuterAudit `json:"events"`
 }
+
+// OuterFactsQuery selects one allowed Project projection and page bound.
 type OuterFactsQuery struct {
 	ProjectID string `query:"projectId" json:"projectId"`
 	Kind      string `query:"kind" json:"kind"`
 	Limit     int    `query:"limit" json:"limit"`
 }
+
+// OuterAuditQuery selects an exclusive timeline cursor and page bound.
 type OuterAuditQuery struct {
 	After int64 `query:"after" json:"after"`
 	Limit int   `query:"limit" json:"limit"`
 }
 
+// Register mounts the passive outer projections.
 func (c *OuterController) Register(r chi.Router) {
 	r.Get("/outer", c.view)
 	r.Get("/outer/facts", c.facts)

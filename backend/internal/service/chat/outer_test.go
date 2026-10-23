@@ -76,7 +76,7 @@ func TestOuterDeferredActualWriteRechecksAuthority(t *testing.T) {
 			h.conv = provider.fakeConversation
 			s := bindOuterHarness(t, h)
 			ctx := context.Background()
-			r, err := s.Send(outerSendContext("deferred"), "Exact delayed question")
+			r, err := s.Send(outerSendContext(t, h, s, "deferred"), "Exact delayed question")
 			if err != nil || provider.acquire == nil {
 				t.Fatal("deferred preparation", r, err)
 			}
@@ -116,11 +116,44 @@ func TestOuterEagerActualWriteRechecksAfterProviderWait(t *testing.T) {
 	h.conv = provider.fakeConversation
 	s := bindOuterHarness(t, h)
 	provider.beforeWrite = func() { h.advance(3 * time.Minute) }
-	if _, err := s.Send(outerSendContext("eager"), "Exact delayed question"); err == nil {
+	if _, err := s.Send(outerSendContext(t, h, s, "eager"), "Exact delayed question"); err == nil {
 		t.Fatal("expired eager submission admitted")
 	}
 	if h.conv.sendCallCount() != 0 {
 		t.Fatal("expired eager request reached provider")
+	}
+}
+
+func TestOuterSendHoldsChangedPreGestureSnapshot(t *testing.T) {
+	for _, mode := range []string{"scope", "settings", "generation"} {
+		t.Run(mode, func(t *testing.T) {
+			h, service := outerHarness(t)
+			ctx := context.Background()
+			approved := outerSendContext(t, h, service, "pre-gesture")
+			switch mode {
+			case "scope":
+				binding, _, _ := service.Binding(ctx)
+				if _, err := service.SetScope(domain.WithOuterNativeAction(ctx, domain.OuterNativeAction{Operation: "outer.scope"}), binding.Revision, binding.ProjectIDs, false, true); err != nil {
+					t.Fatal(err)
+				}
+			case "settings":
+				if err := h.st.SetConversationSettings(ctx, h.ctrl.ConversationID(), domain.ConversationSettings{Model: "changed-after-display"}, h.now()); err != nil {
+					t.Fatal(err)
+				}
+			case "generation":
+				record, _, _ := h.st.GetSession(ctx, testSession)
+				record.Metadata.ControllerGeneration = "replacement"
+				if err := h.st.UpdateSession(ctx, record); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := service.Send(approved, "Exact visible request"); err == nil {
+				t.Fatal("stale visible settings were approved after the gesture")
+			}
+			if h.conv.sendCallCount() != 0 {
+				t.Fatal("stale snapshot reached the provider")
+			}
+		})
 	}
 }
 
@@ -129,11 +162,11 @@ func TestOuterQueuedAuthorityIsRecheckedAtDrain(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			h, s := outerHarness(t)
 			ctx := context.Background()
-			first, err := s.Send(outerSendContext("first"), "First question")
+			first, err := s.Send(outerSendContext(t, h, s, "first"), "First question")
 			if err != nil {
 				t.Fatal(err)
 			}
-			second, err := s.Send(outerSendContext("second"), "Second exact question")
+			second, err := s.Send(outerSendContext(t, h, s, "second"), "Second exact question")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -191,7 +224,7 @@ func TestOuterQueuedAuthorityIsRecheckedAtDrain(t *testing.T) {
 func TestOuterNativePendingReplyAndSettlementNeedExactOriginalTurn(t *testing.T) {
 	h, s := outerHarness(t)
 	ctx := context.Background()
-	r, err := s.Send(outerSendContext("native-request"), "Inspect the report")
+	r, err := s.Send(outerSendContext(t, h, s, "native-request"), "Inspect the report")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,8 +267,14 @@ func TestOuterNativePendingReplyAndSettlementNeedExactOriginalTurn(t *testing.T)
 		t.Fatal("native activity lacks request link", events)
 	}
 }
-func outerSendContext(key string) context.Context {
-	return domain.WithOuterNativeAction(context.Background(), domain.OuterNativeAction{Operation: "outer.send", SessionID: testSession, RequestID: key})
+func outerSendContext(t *testing.T, h *harness, service *outer.Service, key string) context.Context {
+	t.Helper()
+	view, err := service.View(context.Background())
+	if err != nil || view.Binding == nil || view.Session == nil {
+		t.Fatal("pre-Send snapshot unavailable", err)
+	}
+	expected := &domain.OuterSendExpectation{BindingRevision: view.Binding.Revision, ScopeRevision: view.Binding.ScopeRevision, ControllerGeneration: view.Session.ControllerGeneration, SettingsDigest: view.Session.SettingsDigest}
+	return domain.WithOuterNativeAction(context.Background(), domain.OuterNativeAction{Operation: "outer.send", SessionID: testSession, RequestID: key, Expected: expected})
 }
 
 func TestOuterOnlyNativeSendCanQueueAndSubmitOnce(t *testing.T) {
@@ -252,23 +291,23 @@ func TestOuterOnlyNativeSendCanQueueAndSubmitOnce(t *testing.T) {
 			t.Fatal("unbound controller send")
 		}
 	}
-	r, err := s.Send(outerSendContext("request-1"), "What is the status?")
+	r, err := s.Send(outerSendContext(t, h, s, "request-1"), "What is the status?")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r.TurnID == "" || r.AttemptedAt.IsZero() || len(h.conv.sentTexts()) != 1 {
 		t.Fatalf("receipt %+v writes %v", r, h.conv.sentTexts())
 	}
-	if _, err := s.Send(outerSendContext("request-1"), "What is the status?"); err != nil {
+	if _, err := s.Send(outerSendContext(t, h, s, "request-1"), "What is the status?"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Send(outerSendContext("request-1"), "changed text"); err == nil {
+	if _, err := s.Send(outerSendContext(t, h, s, "request-1"), "changed text"); err == nil {
 		t.Fatal("changed request reused")
 	}
 	if len(h.conv.sentTexts()) != 1 {
 		t.Fatal("request replayed")
 	}
-	r2, err := s.Send(outerSendContext("request-2"), "Now show the reports")
+	r2, err := s.Send(outerSendContext(t, h, s, "request-2"), "Now show the reports")
 	if err != nil {
 		t.Fatal(err)
 	}

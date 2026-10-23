@@ -8,11 +8,13 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
-	"github.com/google/uuid"
 )
 
+// OuterBinding reads the singleton host anchor and allowlist binding.
 func (s *Store) OuterBinding(ctx context.Context) (domain.OuterBinding, bool, error) {
 	doc, err := s.conversationReader(ctx).GetOuterBinding(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -26,6 +28,7 @@ func (s *Store) OuterBinding(ctx context.Context) (domain.OuterBinding, bool, er
 	return b, err == nil, err
 }
 
+// SaveOuterBinding atomically compares the binding revision and appends its audit event.
 func (s *Store) SaveOuterBinding(ctx context.Context, b domain.OuterBinding, expected int64, event domain.OuterAudit) error {
 	data, err := json.Marshal(b)
 	if err != nil {
@@ -65,12 +68,14 @@ func appendOuterAudit(ctx context.Context, q *gen.Queries, e domain.OuterAudit) 
 	return q.AppendOuterAudit(ctx, gen.AppendOuterAuditParams{ID: e.ID, Document: string(data)})
 }
 
+// AppendOuterAudit appends a safe logical event without replacing prior evidence.
 func (s *Store) AppendOuterAudit(ctx context.Context, e domain.OuterAudit) error {
 	q, release := s.conversationWriter(ctx)
 	defer release()
 	return appendOuterAudit(ctx, q, e)
 }
 
+// PageOuterAudit reads a bounded sequence cursor from the retained timeline.
 func (s *Store) PageOuterAudit(ctx context.Context, after int64, limit int) ([]domain.OuterAudit, error) {
 	limit = min(max(limit, 1), 100)
 	rows, err := s.conversationReader(ctx).PageOuterAudit(ctx, gen.PageOuterAuditParams{AfterSequence: after, PageSize: int64(limit)})
@@ -89,6 +94,7 @@ func (s *Store) PageOuterAudit(ctx context.Context, after int64, limit int) ([]d
 	return out, nil
 }
 
+// IsOuterSession keeps every session owned by the anchor behind the outer target guard.
 func (s *Store) IsOuterSession(ctx context.Context, id domain.SessionID) (bool, error) {
 	b, found, err := s.OuterBinding(ctx)
 	if err != nil || !found {
@@ -98,6 +104,7 @@ func (s *Store) IsOuterSession(ctx context.Context, id domain.SessionID) (bool, 
 	return found && string(r.ProjectID) == b.AnchorProjectID, err
 }
 
+// CheckOuterOperation applies the common target-side mutation predicate.
 func (s *Store) CheckOuterOperation(ctx context.Context, operation string, project domain.ProjectID, session domain.SessionID) error {
 	b, found, err := s.OuterBinding(ctx)
 	if err != nil || !found {

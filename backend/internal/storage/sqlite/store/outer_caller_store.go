@@ -17,6 +17,7 @@ func callerVerifier(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// IssueOuterCaller issues a credential for the session’s currently owned launch.
 func (s *Store) IssueOuterCaller(ctx context.Context, id domain.SessionID) (string, error) {
 	r, found, err := s.GetSession(ctx, id)
 	if err != nil || !found {
@@ -33,10 +34,11 @@ func (s *Store) callerGeneration(r domain.SessionRecord, kind, generation string
 	return kind + ":" + domain.OuterDigest([]any{s.outerTerminalEpoch, r.CleanupGeneration, generation})
 }
 
+// IssueOuterCallerGeneration prepares a verifier for one explicitly owned launch generation.
 // Called only from an owned launch/bootstrap, with the generation selected by
 // that launch. The verifier becomes usable only after that owner is published.
 func (s *Store) IssueOuterCallerGeneration(ctx context.Context, id domain.SessionID, kind, generation string) (string, error) {
-	if kind != "chat" && kind != "runtime" {
+	if (kind != "chat" && kind != "runtime") || generation == "" {
 		return "", domain.ErrOuterHeld
 	}
 	b, found, err := s.OuterBinding(ctx)
@@ -68,6 +70,27 @@ func (s *Store) IssueOuterCallerGeneration(ctx context.Context, id domain.Sessio
 	return token, err
 }
 
+// CheckOuterReadCaller admits only the current outer owner to cross-project read projections.
+func (s *Store) CheckOuterReadCaller(ctx context.Context, caller domain.OuterCaller) error {
+	b, found, err := s.OuterBinding(ctx)
+	if err != nil || !found || !caller.Outer || b.HistoryHeld || b.SessionID != caller.SessionID {
+		return domain.ErrOuterHeld
+	}
+	r, found, err := s.GetSession(ctx, caller.SessionID)
+	if err != nil || !found || r.IsTerminated || r.ProjectID != caller.ProjectID || string(r.ProjectID) != b.AnchorProjectID {
+		return domain.ErrOuterHeld
+	}
+	kind, generation := "runtime", r.Metadata.RuntimeLaunchID
+	if r.Mode == domain.SessionModeChat {
+		kind, generation = "chat", r.Metadata.ControllerGeneration
+	}
+	if s.callerGeneration(r, kind, generation) != caller.Generation {
+		return domain.ErrOuterHeld
+	}
+	return nil
+}
+
+// AuthenticateOuterCaller rejects stale, purpose-mismatched or incorrectly owned credentials.
 func (s *Store) AuthenticateOuterCaller(ctx context.Context, token string) (domain.OuterCaller, error) {
 	if len(token) != 43 {
 		return domain.OuterCaller{}, domain.ErrOuterHeld
@@ -98,6 +121,7 @@ func (s *Store) AuthenticateOuterCaller(ctx context.Context, token string) (doma
 	return domain.OuterCaller{ProjectID: r.ProjectID, SessionID: r.ID, Generation: row.Generation, Outer: outer}, nil
 }
 
+// OuterCallerState reports whether project-local commands need an owned relaunch.
 func (s *Store) OuterCallerState(ctx context.Context, id domain.SessionID) (string, error) {
 	r, found, err := s.GetSession(ctx, id)
 	if err != nil {

@@ -454,7 +454,11 @@ export function OuterConsole() {
 											)
 											.join("; ")}
 									</p>
-									{(r.state === "ao_queued" || r.state === "held") && r.sessionId === binding.sessionId && !binding.historyHeld && r.turnId ? (
+									{(r.state === "ao_queued" ||
+										r.state === "held") &&
+									r.sessionId === binding.sessionId &&
+									!binding.historyHeld &&
+									r.turnId ? (
 										<>
 											{selectedRequest === r.id ? (
 												<OuterNativeButton
@@ -545,7 +549,9 @@ export function OuterConsole() {
 										{e.source.projectId ||
 											t("outer.unknown")}{" "}
 										· {e.id} · {t("outer.inert")}
-										{e.source.unknown ? ` · ${t("outer.unknown")}` : ""}
+										{e.source.unknown
+											? ` · ${t("outer.unknown")}`
+											: ""}
 									</summary>
 									<pre className="whitespace-pre-wrap text-xs">
 										{e.content}

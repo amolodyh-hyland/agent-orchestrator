@@ -37,6 +37,17 @@ launch and rechecks it before work begins. Project-local service contexts rechec
 their caller generation. Queued requests hold if a labeled session revision,
 report projection or run version changes before submission.
 
+Project-local credentials cannot read the outer's cross-project projections.
+Outer reads require the current native owner and hold retained/replaced history;
+the desktop's passive projections keep the existing local read trust. An incoming
+sender's known identity does not establish its content provenance: it remains
+labeled unknown and inert. These credentials do not isolate same-account clients.
+
+Send stages include the visible scope revision, native generation and settings
+digest. A change before native issuance holds the request, as does a later change
+at queue drain or final write. Rejected native Sends retain their exact private
+payload and audit link without creating executable queue entries.
+
 The journal covers logical operations and observable native invocation events.
 It does not claim syscall coverage, same-account process isolation, a spending
 cap, or a hard host-wide concurrency cap. Native permissions remain authoritative.

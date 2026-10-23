@@ -28,6 +28,12 @@ export type OuterControlAction =
 	| "pr.merge"
 	| "pr.resolve"
 	| "terminal.bind";
+export type OuterSendExpectation = {
+	bindingRevision: number;
+	scopeRevision: number;
+	controllerGeneration: string;
+	settingsDigest: string;
+};
 export type OuterNativeDraft =
 	| { operation: "setup"; config: Record<string, unknown> }
 	| {
@@ -37,7 +43,12 @@ export type OuterNativeDraft =
 			paused: boolean;
 			foregroundReserve: boolean;
 	  }
-	| { operation: "send"; sessionId: string; text: string }
+	| {
+			operation: "send";
+			sessionId: string;
+			text: string;
+			expected: OuterSendExpectation;
+	  }
 	| {
 			operation: "control";
 			control: {

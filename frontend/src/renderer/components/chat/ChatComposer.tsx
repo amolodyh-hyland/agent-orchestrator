@@ -1,5 +1,6 @@
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { useOuterNativeAction } from "../../hooks/useOuter";
+import type { OuterSendExpectation } from "../../../shared/outer-native";
 /**
  * The Chat composer.
  *
@@ -269,7 +270,7 @@ export const ChatComposer = memo(function ChatComposer({
 	sentMessages,
 	sentMessagesScope,
 }: {
-	nativeSession?: { sessionId: string; outer: boolean };
+	nativeSession?: { sessionId: string; outer: boolean; expected?: OuterSendExpectation };
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 	/** This conversation's sent human messages, oldest first, recalled with Up and Down. */
 	sentMessages?: readonly string[];
@@ -946,9 +947,9 @@ export const ChatComposer = memo(function ChatComposer({
 			fileAttachments,
 		],
 	);
-	const nativeAction = useOuterNativeAction(nativeSession && nativeText.trim() && !disabled && !staged && contextReferences.length === 0 && !editingQueuedTurnId
+	const nativeAction = useOuterNativeAction(nativeSession && (!nativeSession.outer || nativeSession.expected) && nativeText.trim() && !disabled && !staged && contextReferences.length === 0 && !editingQueuedTurnId
 		? nativeSession.outer
-			? { operation: "send", sessionId: nativeSession.sessionId, text: nativeText.trim() }
+			? { operation: "send", sessionId: nativeSession.sessionId, text: nativeText.trim(), expected:nativeSession.expected! }
 			: { operation: "control", control: { action: "chat.send", targetId: nativeSession.sessionId, body: { text: nativeText.trim() } } }
 		: undefined, (result) => {
 		if (result.ok && textRef.current === nativeText) clearAcceptedDraft(composerRevision.current);

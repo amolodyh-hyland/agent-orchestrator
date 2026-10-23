@@ -7,10 +7,11 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/outer"
-	"github.com/go-chi/chi/v5"
 )
 
 func outerGuard(router chi.Router, svc *outer.Service) func(http.Handler) http.Handler {
@@ -91,16 +92,17 @@ func outerGuard(router chi.Router, svc *outer.Service) func(http.Handler) http.H
 					_ = json.Unmarshal(raw, &body)
 				}
 				for _, entry := range []struct{ Key, Kind string }{{"sessionId", "session"}, {"projectId", "project"}} {
-					if value := body[entry.Key]; len(value) > 0 {
-						var id string
-						if json.Unmarshal(value, &id) != nil {
-							err = domain.ErrOuterHeld
-							break
-						}
-						project, session, err = svc.ResolveTarget(ctx, entry.Kind, id)
-						resolved = true
+					value := body[entry.Key]
+					if len(value) == 0 {
+						continue
+					}
+					var id string
+					if json.Unmarshal(value, &id) != nil {
+						err = domain.ErrOuterHeld
 						break
 					}
+					project, session, err = svc.ResolveTarget(ctx, entry.Kind, id)
+					break
 				}
 			}
 			if a, ok := domain.OuterNativeActionFrom(ctx); ok && ctx.Value(outerNativeRelayKey{}) == true {

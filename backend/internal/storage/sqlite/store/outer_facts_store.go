@@ -7,11 +7,13 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
-	"github.com/google/uuid"
 )
 
+// OuterFacts reads bounded existing report, session or run projections.
 func (s *Store) OuterFacts(ctx context.Context, project, kind string, limit int) ([]domain.OuterFact, error) {
 	limit = min(max(limit, 1), 50)
 	out := []domain.OuterFact{}
@@ -25,7 +27,7 @@ func (s *Store) OuterFacts(ctx context.Context, project, kind string, limit int)
 			return nil, err
 		}
 		for _, r := range rows {
-			out = append(out, domain.OuterFact{Source: source(r.ID, r.CreatedAt, 0), Summary: fmt.Sprint(r.Note), State: r.State, Receipt: r.DeliveryState + ":" + r.DeliveryBatchID})
+			out = append(out, domain.OuterFact{Source: source(r.ID, r.CreatedAt, 0), Summary: r.Note, State: r.State, Receipt: r.DeliveryState + ":" + r.DeliveryBatchID})
 		}
 	case "sessions":
 		projectID := domain.ProjectID(project)
@@ -54,6 +56,7 @@ func (s *Store) OuterFacts(ctx context.Context, project, kind string, limit int)
 	return out, nil
 }
 
+// OuterSources reads the conservative source history of one native conversation.
 func (s *Store) OuterSources(ctx context.Context, conversation string) ([]domain.OuterSource, error) {
 	docs, err := s.conversationReader(ctx).ListOuterSources(ctx, conversation)
 	if err != nil {
@@ -70,6 +73,7 @@ func (s *Store) OuterSources(ctx context.Context, conversation string) ([]domain
 	return out, nil
 }
 
+// LabelOuterFacts derives labels and transitive known sources under the current scope revision.
 func (s *Store) LabelOuterFacts(ctx context.Context, b domain.OuterBinding, conversation string, facts []domain.OuterFact) ([]domain.OuterFact, error) {
 	if err := s.writeMu.LockContext(ctx); err != nil {
 		return nil, err
@@ -156,6 +160,7 @@ func (s *Store) LabelOuterFacts(ctx context.Context, b domain.OuterBinding, conv
 	return facts, err
 }
 
+// RecordOuterEvidence appends inert incoming content and its correlated audit event atomically.
 func (s *Store) RecordOuterEvidence(ctx context.Context, id domain.SessionID, content string, source domain.OuterSource) error {
 	if len(content) > 65536 {
 		content = content[:65536]
@@ -177,6 +182,8 @@ func (s *Store) RecordOuterEvidence(ctx context.Context, id domain.SessionID, co
 		return appendOuterAudit(ctx, q, domain.OuterAudit{Operation: "outer.incoming", State: "inert", SessionID: id, ReceiptID: key, Digest: domain.OuterDigest(content), Sources: []domain.OuterSource{source}})
 	})
 }
+
+// OuterEvidence reads bounded incoming evidence without acknowledging or delivering it.
 func (s *Store) OuterEvidence(ctx context.Context, id domain.SessionID) ([]domain.OuterEvidence, error) {
 	rows, err := s.qr.ListOuterEvidence(ctx, string(id))
 	if err != nil {

@@ -7,13 +7,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
-	"github.com/google/uuid"
 )
 
+// Store provides the durable outer policy, journal and bounded evidence contracts.
 type Store interface {
 	domain.OuterPolicy
 	SaveOuterBinding(context.Context, domain.OuterBinding, int64, domain.OuterAudit) error
@@ -38,16 +40,21 @@ type Store interface {
 	RecordOuterEvidence(context.Context, domain.SessionID, string, domain.OuterSource) error
 	OuterEvidence(context.Context, domain.SessionID) ([]domain.OuterEvidence, error)
 	AuthenticateOuterCaller(context.Context, string) (domain.OuterCaller, error)
+	CheckOuterReadCaller(context.Context, domain.OuterCaller) error
 	ResolveOuterTarget(context.Context, string, string) (domain.ProjectID, domain.SessionID, error)
 }
 
+// Projects creates the repository-free anchor through the existing Project service.
 type Projects interface {
 	CreateContainer(context.Context, projectsvc.CreateContainerInput) (projectsvc.Project, error)
 }
+
+// Sessions launches the ordinary orchestrator through the existing owned lifecycle.
 type Sessions interface {
 	Spawn(context.Context, ports.SpawnConfig) (domain.Session, int, int, error)
 }
 
+// Service owns explicit outer setup, request binding and passive observation.
 type Service struct {
 	store     Store
 	projects  Projects
@@ -58,16 +65,22 @@ type Service struct {
 	now       func() time.Time
 }
 
+// Transport reuses the existing main Chat preparation and delivery path.
 type Transport interface {
 	PrepareOuterSend(context.Context, domain.SessionID, string) (chatsvc.OuterSendPreview, error)
 	DeliverOuterSend(context.Context, domain.SessionID, string, string) (domain.ConversationTurn, error)
 }
 
+// SetTransport connects issuance to the existing main Chat controller.
 func (s *Service) SetTransport(t Transport) { s.transport = t }
 
+// Option configures an outer service without performing setup or computation.
 type Option func(*Service)
 
+// WithClock sets the request clock for deterministic expiry checks.
 func WithClock(clock func() time.Time) Option { return func(s *Service) { s.now = clock } }
+
+// New constructs the outer service without creating an anchor or submitting a turn.
 func New(store Store, projects Projects, sessions Sessions, options ...Option) *Service {
 	s := &Service{store: store, projects: projects, sessions: sessions, epoch: uuid.NewString(), now: time.Now}
 	for _, option := range options {
@@ -76,6 +89,7 @@ func New(store Store, projects Projects, sessions Sessions, options ...Option) *
 	return s
 }
 
+// Binding reads the host binding without ensuring a runtime.
 func (s *Service) Binding(ctx context.Context) (domain.OuterBinding, bool, error) {
 	return s.store.OuterBinding(ctx)
 }
@@ -85,6 +99,7 @@ func native(ctx context.Context, op string) bool {
 	return ok && a.Operation == op
 }
 
+// Ensure creates or reconciles the explicitly requested repository-free anchor generation.
 func (s *Service) Ensure(ctx context.Context, config domain.AgentConfig) (domain.OuterBinding, error) {
 	if !native(ctx, "outer.setup") {
 		return domain.OuterBinding{}, domain.ErrOuterHeld
@@ -137,6 +152,7 @@ func (s *Service) Ensure(ctx context.Context, config domain.AgentConfig) (domain
 	return b, nil
 }
 
+// SetScope records a human allowlist change and fences removed native history.
 func (s *Service) SetScope(ctx context.Context, expected int64, ids []string, paused, foreground bool) (domain.OuterBinding, error) {
 	if !native(ctx, "outer.scope") {
 		return domain.OuterBinding{}, domain.ErrOuterHeld
@@ -180,7 +196,11 @@ func (s *Service) SetScope(ctx context.Context, expected int64, ids []string, pa
 	return b, err
 }
 
+// Audit reads a bounded page of the append-only action timeline.
 func (s *Service) Audit(ctx context.Context, after int64, limit int) ([]domain.OuterAudit, error) {
+	if err := s.checkReader(ctx); err != nil {
+		return nil, err
+	}
 	if err := s.store.AppendOuterAudit(ctx, domain.OuterAudit{Operation: "outer.audit.read", State: "observed"}); err != nil {
 		return nil, err
 	}

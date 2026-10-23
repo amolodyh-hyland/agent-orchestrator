@@ -8,6 +8,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+// Send issues and queues one exact human request without granting later continuations.
 func (s *Service) Send(ctx context.Context, text string) (domain.OuterRequestReceipt, error) {
 	a, ok := domain.OuterNativeActionFrom(ctx)
 	if !ok || a.Operation != "outer.send" || a.RequestID == "" || s.transport == nil {
@@ -19,7 +20,7 @@ func (s *Service) Send(ctx context.Context, text string) (domain.OuterRequestRec
 		s.mu.Unlock()
 		return domain.OuterRequestReceipt{}, err
 	}
-	if !found || b.Paused || b.HistoryHeld || b.SessionID != a.SessionID {
+	if !found || b.Paused || b.HistoryHeld || b.SessionID != a.SessionID || a.Expected == nil || a.Expected.BindingRevision != b.Revision || a.Expected.ScopeRevision != b.ScopeRevision {
 		s.mu.Unlock()
 		return domain.OuterRequestReceipt{}, domain.ErrOuterHeld
 	}
@@ -51,6 +52,11 @@ func (s *Service) Send(ctx context.Context, text string) (domain.OuterRequestRec
 		return domain.OuterRequestReceipt{}, domain.ErrOuterHeld
 	}
 	now := s.now().UTC()
+	settingsDigest := domain.OuterSettingsDigest(rec, conv, p)
+	if a.Expected.ControllerGeneration != preview.ControllerGeneration || a.Expected.SettingsDigest != settingsDigest {
+		s.mu.Unlock()
+		return domain.OuterRequestReceipt{}, domain.ErrOuterHeld
+	}
 	sources, err := s.store.OuterSources(ctx, preview.ProviderConversationID)
 	if err != nil {
 		s.mu.Unlock()
@@ -75,6 +81,7 @@ func (s *Service) Send(ctx context.Context, text string) (domain.OuterRequestRec
 	return receipt, nil
 }
 
+// AcquireOuterInput rechecks exact authority and reserves capacity immediately before submission.
 func (s *Service) AcquireOuterInput(ctx context.Context, id domain.SessionID, msg ports.ChatUserMessage, phase string) (func(), error) {
 	s.mu.Lock()
 	release := s.mu.Unlock

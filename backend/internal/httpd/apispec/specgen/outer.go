@@ -1,10 +1,11 @@
 package specgen
 
 import (
+	"net/http"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/outer"
-	"net/http"
 )
 
 func outerOperations() []operation {

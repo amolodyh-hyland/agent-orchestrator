@@ -6907,6 +6907,7 @@ export interface components {
             mode: string;
             permissions: string;
             settings: components["schemas"]["DomainConversationSettings"];
+            settingsDigest: string;
         };
         OuterSource: {
             digest: string;

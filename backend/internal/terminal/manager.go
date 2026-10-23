@@ -517,10 +517,6 @@ func (c *connState) handleTerminal(msg clientMsg) {
 // are the client's grid from the open frame; the manager arbitrates the shared
 // PTY size from it (see joinTerminal) and applies it to the Stream. role marks
 // the client primary/secondary for that arbitration (empty = primary).
-func (c *connState) openTerminal(id string, rows, cols uint16, role string) {
-	c.openTerminalAuthorized(id, rows, cols, role, "")
-}
-
 func (c *connState) openTerminalAuthorized(id string, rows, cols uint16, role, credential string) {
 	if id == "" {
 		c.enqueue(serverMsg{Ch: chTerminal, Type: msgError, Error: "missing terminal id"})

@@ -111,6 +111,7 @@ func (a *Authority) AuthorizeRun(body []byte, proof string) bool {
 	return a.matches(append([]byte("factory-run-v1:"), body...), proof)
 }
 
+// AuthorizeOuter verifies the purpose-separated private native request MAC.
 func (a *Authority) AuthorizeOuter(body []byte, proof string) bool {
 	return a.matches(append([]byte("outer-native-v1:"), body...), proof)
 }

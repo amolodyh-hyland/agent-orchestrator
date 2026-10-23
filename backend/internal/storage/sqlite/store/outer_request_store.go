@@ -34,6 +34,8 @@ func outerReceipt(row gen.OuterRequest) (domain.OuterRequestReceipt, error) {
 	}
 	return r, nil
 }
+
+// GetOuterRequest reads the original immutable request and its delivery observations.
 func (s *Store) GetOuterRequest(ctx context.Context, id string) (domain.OuterRequestReceipt, error) {
 	r, err := s.conversationReader(ctx).GetOuterRequest(ctx, id)
 	if err != nil {
@@ -42,6 +44,8 @@ func (s *Store) GetOuterRequest(ctx context.Context, id string) (domain.OuterReq
 	receipt, err := outerReceipt(r)
 	return s.decorateOuterReceipt(ctx, receipt), err
 }
+
+// ListOuterRequests reads bounded request receipts for one outer session.
 func (s *Store) ListOuterRequests(ctx context.Context, id domain.SessionID) ([]domain.OuterRequestReceipt, error) {
 	rows, err := s.qr.ListOuterRequests(ctx, string(id))
 	if err != nil {
@@ -58,6 +62,7 @@ func (s *Store) ListOuterRequests(ctx context.Context, id domain.SessionID) ([]d
 	return out, nil
 }
 
+// CreateOuterRequest persists an exact native-issued request before queue insertion.
 func (s *Store) CreateOuterRequest(ctx context.Context, r domain.OuterRequest) error {
 	a, ok := domain.OuterNativeActionFrom(ctx)
 	if !ok || a.Operation != "outer.send" || a.SessionID != r.SessionID || a.RequestID != r.ID {
@@ -167,17 +172,19 @@ func validateOuterFactSource(ctx context.Context, q *gen.Queries, source domain.
 	case "runs":
 		document, err := q.GetFactoryRun(ctx, source.ID)
 		var run domain.FactoryRun
-		if err != nil || json.Unmarshal([]byte(document), &run) != nil || string(run.ProjectID) != source.ProjectID || run.Version != source.Revision || source.Digest == "" {
+		if err != nil || json.Unmarshal([]byte(document), &run) != nil || run.ProjectID != source.ProjectID || run.Version != source.Revision || source.Digest == "" {
 			return domain.ErrOuterHeld
 		}
 	}
 	return nil
 }
 
+// ValidateOuterRequest checks current scope, settings, native identity and labeled source revisions.
 func (s *Store) ValidateOuterRequest(ctx context.Context, r domain.OuterRequest, now time.Time) error {
 	return validateOuterRequest(ctx, s.conversationReader(ctx), r, now)
 }
 
+// AttemptOuterRequest earmarks one submission and its capacity before any provider bytes.
 func (s *Store) AttemptOuterRequest(ctx context.Context, id, epoch string, now time.Time) error {
 	if err := s.writeMu.LockContext(ctx); err != nil {
 		return err
@@ -292,10 +299,12 @@ func (s *Store) observeOuterCapacity(ctx context.Context, q *gen.Queries, target
 	return c, nil
 }
 
+// ObserveOuterCapacity reports the same outside and unknown counts used by admission.
 func (s *Store) ObserveOuterCapacity(ctx context.Context) (domain.OuterCapacityObservation, error) {
 	return s.observeOuterCapacity(ctx, s.qr, "")
 }
 
+// ReserveOuterCapacity transactionally enforces station, heavy and foreground limits.
 func (s *Store) ReserveOuterCapacity(ctx context.Context, r domain.OuterCapacity) error {
 	if err := s.writeMu.LockContext(ctx); err != nil {
 		return err
@@ -303,6 +312,8 @@ func (s *Store) ReserveOuterCapacity(ctx context.Context, r domain.OuterCapacity
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "reserve outer station", func(q *gen.Queries) error { return s.reserveOuterCapacity(ctx, q, r) })
 }
+
+// OuterCapacity reads retained reservations without releasing uncertain execution.
 func (s *Store) OuterCapacity(ctx context.Context) ([]domain.OuterCapacity, error) {
 	rows, err := s.qr.ListOuterCapacity(ctx)
 	if err != nil {
@@ -363,6 +374,7 @@ func linkOuterRequest(ctx context.Context, q *gen.Queries, session domain.Sessio
 	return appendOuterAudit(ctx, q, domain.OuterAudit{Operation: "outer.enqueue", State: "ao_queued", RequestID: r.ID, SessionID: session, ReceiptID: turn, Digest: r.PayloadDigest})
 }
 
+// CheckOuterPendingReply binds a native reply to the original authorized turn and interaction.
 func (s *Store) CheckOuterPendingReply(ctx context.Context, id domain.SessionID, conv, generation, turn, request string) error {
 	row, err := s.qr.OuterRequestForProvider(ctx, gen.OuterRequestForProviderParams{ConversationID: conv, ProviderTurnID: turn, Generation: generation})
 	if err != nil {
@@ -390,6 +402,7 @@ func (s *Store) CheckOuterPendingReply(ctx context.Context, id domain.SessionID,
 	return s.AppendOuterAudit(ctx, domain.OuterAudit{Operation: "outer.pending_reply", State: "attempted", SessionID: id, Generation: generation, ReceiptID: request})
 }
 
+// RecordOuterSettlement releases a reservation only for matching accepted native settlement.
 func (s *Store) RecordOuterSettlement(ctx context.Context, conversation, providerTurn, generation string, at time.Time) error {
 	q, release := s.conversationWriter(ctx)
 	defer release()
@@ -412,6 +425,7 @@ func (s *Store) RecordOuterSettlement(ctx context.Context, conversation, provide
 	return appendOuterAudit(ctx, q, domain.OuterAudit{Operation: "outer.settlement", State: "settled", RequestID: row.ID, ReceiptID: providerTurn, Generation: generation})
 }
 
+// OuterRequestAuditLink correlates native activity with its original exact request.
 func (s *Store) OuterRequestAuditLink(ctx context.Context, conv, turn, generation string) (string, error) {
 	id, err := s.conversationReader(ctx).OuterRequestAuditLink(ctx, gen.OuterRequestAuditLinkParams{ConversationID: conv, ProviderTurnID: turn, Generation: generation})
 	if errors.Is(err, sql.ErrNoRows) {

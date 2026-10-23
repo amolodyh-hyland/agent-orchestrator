@@ -759,7 +759,8 @@ function ChatWorkspaceContent({
 	const outerSession = Boolean(binding && (binding.sessionId === snapshot.sessionId || session?.workspaceId === binding.anchorProjectId));
 	const scopedSession = outerSession || Boolean(binding && session?.workspaceId && binding.projectIds.includes(session.workspaceId));
 	const activeRemoteHostId = remoteHostId ?? session?.hostId;
-	const nativeSession = scopedSession && !activeRemoteHostId && !session?.cloud ? { sessionId: snapshot.sessionId, outer: outerSession } : undefined;
+	const nativeExpectation = binding && outerView.data?.session ? {bindingRevision:binding.revision,scopeRevision:binding.scopeRevision,controllerGeneration:outerView.data.session.controllerGeneration,settingsDigest:outerView.data.session.settingsDigest} : undefined;
+	const nativeSession = scopedSession && !activeRemoteHostId && !session?.cloud ? { sessionId: snapshot.sessionId, outer: outerSession, expected:outerSession?nativeExpectation:undefined } : undefined;
 	const nativeReplyTarget = nativeSession ? {sessionId:snapshot.sessionId,generation:outerSession?outerView.data?.session?.controllerGeneration ?? "":""} : undefined;
 	const [nativeSettings,setNativeSettings] = useState<TurnSettings>();
 	const remoteCreateMux = useMemo(

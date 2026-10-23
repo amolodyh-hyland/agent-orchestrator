@@ -33,6 +33,7 @@ type sessionInputOwnerResolver interface {
 	ResolveSessionInput(context.Context, string) (domain.SessionID, bool, error)
 }
 
+// RevalidateSessionInput checks durable ownership again at the final raw-input write.
 func (m *Manager) RevalidateSessionInput(handle domain.SessionID) bool {
 	return m.revalidateTerminalInput(context.Background(), handle)
 }
@@ -55,6 +56,7 @@ func (m *Manager) terminalInputContext(handle domain.SessionID, token string) (c
 	return domain.WithOuterNativeAction(ctx, a), true
 }
 
+// RevalidateTerminalInput rechecks a terminal grant, its owner and the final input barriers.
 func (m *Manager) RevalidateTerminalInput(handle domain.SessionID, token string) bool {
 	ctx, ok := m.terminalInputContext(handle, token)
 	return ok && m.revalidateTerminalInput(ctx, handle)
@@ -87,6 +89,7 @@ func (m *Manager) AcquireSessionInput(handle domain.SessionID) (release func(), 
 	return m.acquireTerminalInput(context.Background(), handle)
 }
 
+// AcquireTerminalInput leases one supported terminal write under its native grant.
 func (m *Manager) AcquireTerminalInput(handle domain.SessionID, token string) (func(), bool) {
 	ctx, ok := m.terminalInputContext(handle, token)
 	if !ok {

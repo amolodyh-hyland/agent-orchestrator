@@ -419,7 +419,10 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		if !ok || (a.Operation != "spawn" && a.Operation != "resume" && a.Operation != "restore") {
 			return nil, domain.ErrOuterHeld
 		}
-		policy := s.store.(domain.OuterPolicy)
+		policy, ok := s.store.(domain.OuterPolicy)
+		if !ok {
+			return nil, domain.ErrOuterHeld
+		}
 		b, found, err := policy.OuterBinding(ctx)
 		if err != nil || !found || cfg.Harness != domain.HarnessCodex || conversationOwner(cfg).Kind != domain.ConversationOwnerSession {
 			return nil, domain.ErrOuterHeld

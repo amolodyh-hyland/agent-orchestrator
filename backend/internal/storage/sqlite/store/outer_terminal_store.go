@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
@@ -38,6 +39,7 @@ func (s *Store) outerTerminalOwner(ctx context.Context, handle string) (domain.S
 	return r, b, nil
 }
 
+// IssueOuterTerminal grants input only to the exact supported project-local runtime launch.
 func (s *Store) IssueOuterTerminal(ctx context.Context, handle string) (string, error) {
 	a, ok := domain.OuterNativeActionFrom(ctx)
 	if !ok || a.Operation != "terminal.bind" {
@@ -65,6 +67,7 @@ func (s *Store) IssueOuterTerminal(ctx context.Context, handle string) (string, 
 	return token, err
 }
 
+// AuthenticateOuterTerminal rejects terminal grants after ownership, scope or epoch changes.
 func (s *Store) AuthenticateOuterTerminal(ctx context.Context, handle, token string) (domain.OuterNativeAction, error) {
 	if len(token) != 43 {
 		return domain.OuterNativeAction{}, domain.ErrOuterHeld

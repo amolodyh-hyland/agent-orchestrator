@@ -104,18 +104,19 @@ func TestOuterFinalWriteHoldsChangedSourceRevisions(t *testing.T) {
 			if err := f.st.ValidateOuterRequest(ctx, r, f.now); err != nil {
 				t.Fatal("unchanged source held", err)
 			}
-			if kind == "sessions" {
+			switch kind {
+			case "sessions":
 				worker.DisplayName = "changed source"
 				if err := f.st.UpdateSession(ctx, worker); err != nil {
 					t.Fatal(err)
 				}
-			} else if kind == "runs" {
+			case "runs":
 				run.Version++
 				run.Stage = "implementation"
 				if err := f.st.SaveFactoryRun(ctx, run, domain.RunEvidence{ID: "source-advanced", RunID: run.ID, Version: run.Version, Kind: "advance", RecordedAt: f.now}, false); err != nil {
 					t.Fatal(err)
 				}
-			} else {
+			default:
 				db, err := sql.Open("sqlite", filepath.Join(f.dir, "ao.db"))
 				if err != nil {
 					t.Fatal(err)

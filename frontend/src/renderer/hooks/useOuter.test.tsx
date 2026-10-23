@@ -7,6 +7,7 @@ import { useOuterNativeAction } from "./useOuter";
 describe("exact native action staging", () => {
 	let listeners: Set<(result: OuterResult) => void>;
 	beforeEach(() => {
+		vi.clearAllMocks();
 		listeners = new Set();
 		vi.mocked(aoBridge.outer.onResult).mockImplementation((listener) => {
 			listeners.add(listener);
@@ -33,7 +34,17 @@ describe("exact native action staging", () => {
 		const hook = renderHook(
 			({ text }) =>
 				useOuterNativeAction(
-					{ operation: "send", sessionId: "outer", text },
+					{
+						operation: "send",
+						expected: {
+							bindingRevision: 1,
+							scopeRevision: 1,
+							controllerGeneration: "generation-1",
+							settingsDigest: "a".repeat(64),
+						},
+						sessionId: "outer",
+						text,
+					},
 					completed
 				),
 			{ initialProps: { text: "first" } }
@@ -79,7 +90,17 @@ describe("exact native action staging", () => {
 		const completed = vi.fn();
 		const hook = renderHook(() =>
 			useOuterNativeAction(
-				{ operation: "send", sessionId: "outer", text: "exact" },
+				{
+					operation: "send",
+					expected: {
+						bindingRevision: 1,
+						scopeRevision: 1,
+						controllerGeneration: "generation-1",
+						settingsDigest: "a".repeat(64),
+					},
+					sessionId: "outer",
+					text: "exact",
+				},
 				completed
 			)
 		);
@@ -91,5 +112,53 @@ describe("exact native action staging", () => {
 			"result",
 		]);
 		expect(completed).not.toHaveBeenCalled();
+	});
+
+	it("renews an idle draft without submitting and retains a result arriving across renewal", async () => {
+		vi.useFakeTimers();
+		try {
+			let sequence = 0;
+			vi.mocked(aoBridge.outer.stage).mockImplementation(async () => ({
+				id: `stage-${++sequence}`,
+				digest: "exact",
+				expiresAt: Date.now() + 120_000,
+			}));
+			const completed = vi.fn();
+			const hook = renderHook(() =>
+				useOuterNativeAction(
+					{
+						operation: "send",
+						sessionId: "outer",
+						text: "long-lived draft",
+						expected: {
+							bindingRevision: 1,
+							scopeRevision: 1,
+							controllerGeneration: "generation-1",
+							settingsDigest: "a".repeat(64),
+						},
+					},
+					completed
+				)
+			);
+			await act(async () => {});
+			expect(hook.result.current.attributes["data-outer-stage-id"]).toBe(
+				"stage-1"
+			);
+			await act(async () => {
+				vi.advanceTimersByTime(120_001);
+			});
+			expect(hook.result.current.attributes["data-outer-stage-id"]).toBe(
+				"stage-2"
+			);
+			expect(completed).not.toHaveBeenCalled();
+			act(() => {
+				for (const listener of listeners)
+					listener({ id: "stage-1", ok: true, uncertain: false });
+			});
+			expect(completed).toHaveBeenCalledOnce();
+			hook.unmount();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

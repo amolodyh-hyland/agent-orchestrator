@@ -7,6 +7,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+// ResolveOuterTarget resolves sessions, Projects, runs, reviews, PRs and runtime aliases durably.
 func (s *Store) ResolveOuterTarget(ctx context.Context, kind, id string) (domain.ProjectID, domain.SessionID, error) {
 	switch kind {
 	case "project":

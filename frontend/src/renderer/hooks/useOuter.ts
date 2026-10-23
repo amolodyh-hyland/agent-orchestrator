@@ -28,6 +28,17 @@ export function useOuterNativeAction(
 ) {
 	const slot = useId();
 	const raw = draft ? JSON.stringify(draft) : "";
+	const draftVersion = useRef({ raw, revision: 0 });
+	if (draftVersion.current.raw !== raw) {
+		draftVersion.current = {
+			raw,
+			revision: draftVersion.current.revision + 1,
+		};
+	}
+	const knownStages = useRef(
+		new Map<string, { raw: string; revision: number }>()
+	);
+	const [refresh, setRefresh] = useState(0);
 	const [entry, setEntry] = useState<{ raw: string; stage: OuterStage }>();
 	const [result, setResult] = useState<OuterResult>();
 	const resultRef = useRef(onResult);
@@ -37,6 +48,8 @@ export function useOuterNativeAction(
 		if (!raw || !bridge) return;
 		let cancelled = false;
 		let id: string | undefined;
+		let expiry: ReturnType<typeof setTimeout> | undefined;
+		const revision = draftVersion.current.revision;
 		void bridge
 			.stage(slot, JSON.parse(raw) as OuterNativeDraft)
 			.catch(() => null)
@@ -49,22 +62,44 @@ export function useOuterNativeAction(
 				}
 				setEntry({ raw, stage });
 				setResult(undefined);
+				knownStages.current.set(stage.id, { raw, revision });
+				if (knownStages.current.size > 64) {
+					const oldest = knownStages.current.keys().next().value;
+					if (oldest) knownStages.current.delete(oldest);
+				}
+				// Renew inert UI data only. Human authority and its two-minute
+				// submission deadline begin at the later trusted Send gesture.
+				expiry = setTimeout(
+					() => setRefresh((value) => value + 1),
+					Math.max(1, stage.expiresAt - Date.now() + 1)
+				);
 			});
 		return () => {
 			cancelled = true;
+			if (expiry) clearTimeout(expiry);
 			if (id) void bridge.cancel(id);
 		};
-	}, [raw, slot]);
+	}, [raw, slot, refresh]);
 	useEffect(
 		() =>
 			aoBridge.outer?.onResult((value) => {
-				if (value.id !== entry?.stage.id) return;
-				setEntry(undefined);
-				setResult(value);
-				if (entry?.raw === raw) resultRef.current?.(value);
+				const known = knownStages.current.get(value.id);
+				if (!known) return;
+				knownStages.current.delete(value.id);
+				setEntry((current) =>
+					current?.stage.id === value.id ? undefined : current
+				);
+				if (
+					known.raw === raw &&
+					known.revision === draftVersion.current.revision
+				) {
+					setResult(value);
+					resultRef.current?.(value);
+					setRefresh((current) => current + 1);
+				}
 				window.dispatchEvent(new Event("ao:outer-changed"));
 			}),
-		[entry, raw]
+		[raw]
 	);
 	const ready = entry?.raw === raw && entry.stage.expiresAt > Date.now();
 	return {

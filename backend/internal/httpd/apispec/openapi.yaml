@@ -19599,7 +19599,10 @@ components:
           type: string
         settings:
           $ref: '#/components/schemas/DomainConversationSettings'
+        settingsDigest:
+          type: string
       required:
+      - settingsDigest
       - harness
       - mode
       - controllerGeneration
