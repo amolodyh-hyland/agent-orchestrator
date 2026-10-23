@@ -32,6 +32,11 @@ Admission and its passive capacity view share the same observed counts. Outside
 workers and reviewers consume capacity; unknown activity holds new admission.
 The view shows foreground-reserve overage without stopping unrelated work.
 
+Owned asynchronous setup retains its exact native identity across the background
+launch and rechecks it before work begins. Project-local service contexts recheck
+their caller generation. Queued requests hold if a labeled session revision,
+report projection or run version changes before submission.
+
 The journal covers logical operations and observable native invocation events.
 It does not claim syscall coverage, same-account process isolation, a spending
 cap, or a hard host-wide concurrency cap. Native permissions remain authoritative.

@@ -114,6 +114,22 @@ func (s *Store) CheckOuterOperation(ctx context.Context, operation string, proje
 		project = r.ProjectID
 	}
 	caller, scoped := domain.OuterCallerFrom(ctx)
+	if scoped && !caller.Outer {
+		owner, ok, err := s.GetSession(ctx, caller.SessionID)
+		if err != nil {
+			return err
+		}
+		kind, generation := "runtime", owner.Metadata.RuntimeLaunchID
+		if owner.Mode == domain.SessionModeChat {
+			kind, generation = "chat", owner.Metadata.ControllerGeneration
+		}
+		if !ok || owner.IsTerminated || owner.ProjectID != caller.ProjectID || s.callerGeneration(owner, kind, generation) != caller.Generation {
+			if err := s.AppendOuterAudit(ctx, domain.OuterAudit{Operation: operation, State: "held", Reason: "stale_scoped_caller", SessionID: caller.SessionID, ProjectID: string(project)}); err != nil {
+				return err
+			}
+			return domain.ErrOuterHeld
+		}
+	}
 	if scoped && !caller.Outer && caller.ProjectID != project {
 		if err := s.AppendOuterAudit(ctx, domain.OuterAudit{Operation: operation, State: "held", Reason: "wrong_project_credential", SessionID: caller.SessionID, ProjectID: string(project)}); err != nil {
 			return err

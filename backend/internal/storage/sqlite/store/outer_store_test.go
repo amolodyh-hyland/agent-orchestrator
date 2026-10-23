@@ -57,7 +57,7 @@ func newOuterJournal(t *testing.T) outerJournal {
 	}
 	return outerJournal{st, dir, b, r, c, now}
 }
-func (f outerJournal) request(t *testing.T, id string) domain.OuterRequest {
+func (f outerJournal) request(t *testing.T, id string, sources ...domain.OuterSource) domain.OuterRequest {
 	t.Helper()
 	ctx := context.Background()
 	p, _, err := f.st.GetProject(ctx, "anchor")
@@ -65,6 +65,7 @@ func (f outerJournal) request(t *testing.T, id string) domain.OuterRequest {
 		t.Fatal(err)
 	}
 	r := domain.OuterRequest{ID: id, HumanMessage: "Show facts", Payload: "Show facts", PayloadDigest: domain.OuterDigest("Show facts"), SessionID: f.session.ID, ConversationID: f.conv.ID, ProviderConversationID: f.session.Metadata.ProviderConversationID, ControllerGeneration: f.session.Metadata.ControllerGeneration, BindingRevision: f.binding.Revision, ScopeRevision: f.binding.ScopeRevision, SettingsDigest: domain.OuterSettingsDigest(f.session, f.conv, p), Epoch: "boot-1", IssuedAt: f.now, ExpiresAt: f.now.Add(2 * time.Minute)}
+	r.Sources = sources
 	ctx = domain.WithOuterNativeAction(ctx, domain.OuterNativeAction{Operation: "outer.send", SessionID: r.SessionID, RequestID: id})
 	if err := f.st.CreateOuterRequest(ctx, r); err != nil {
 		t.Fatal(err)
@@ -73,6 +74,62 @@ func (f outerJournal) request(t *testing.T, id string) domain.OuterRequest {
 		t.Fatalf("queue %t %v", created, err)
 	}
 	return r
+}
+
+func TestOuterFinalWriteHoldsChangedSourceRevisions(t *testing.T) {
+	for _, kind := range []string{"sessions", "reports", "runs"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newOuterJournal(t)
+			ctx := context.Background()
+			worker, err := f.st.CreateSession(ctx, sampleRecord("a"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.st.CreateReport(ctx, domain.ReportRecord{ID: "source-report", SessionID: worker.ID, ProjectID: "a", State: domain.ReportNeedsInput, Note: "frozen evidence", CreatedAt: f.now, AvailableAt: f.now, RepeatCount: 1, DeliveryState: domain.ReportPending}); err != nil {
+				t.Fatal(err)
+			}
+			run := domain.FactoryRun{ID: "source-run", ProjectID: "a", SessionID: worker.ID, TaskID: "source-task", Stage: "design", CreatedAt: f.now}
+			if err := f.st.SaveFactoryRun(ctx, run, domain.RunEvidence{ID: "source-created", RunID: run.ID, Kind: "created", RecordedAt: f.now}, true); err != nil {
+				t.Fatal(err)
+			}
+			facts, err := f.st.OuterFacts(ctx, "a", kind, 20)
+			if err != nil || len(facts) != 1 {
+				t.Fatal(facts, err)
+			}
+			facts, err = f.st.LabelOuterFacts(ctx, f.binding, "native-1", facts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := f.request(t, "source-bound-request", facts[0].Source)
+			if err := f.st.ValidateOuterRequest(ctx, r, f.now); err != nil {
+				t.Fatal("unchanged source held", err)
+			}
+			if kind == "sessions" {
+				worker.DisplayName = "changed source"
+				if err := f.st.UpdateSession(ctx, worker); err != nil {
+					t.Fatal(err)
+				}
+			} else if kind == "runs" {
+				run.Version++
+				run.Stage = "implementation"
+				if err := f.st.SaveFactoryRun(ctx, run, domain.RunEvidence{ID: "source-advanced", RunID: run.ID, Version: run.Version, Kind: "advance", RecordedAt: f.now}, false); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				db, err := sql.Open("sqlite", filepath.Join(f.dir, "ao.db"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer db.Close()
+				if _, err := db.Exec("UPDATE reports SET note='changed evidence' WHERE id='source-report'"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := f.st.AttemptOuterRequest(ctx, r.ID, "boot-1", f.now); err == nil {
+				t.Fatal("changed source reached final submission")
+			}
+		})
+	}
 }
 
 func TestOuterJournalFinalPredicateAndOneAttempt(t *testing.T) {
@@ -300,6 +357,9 @@ func TestOuterScopedCallerAndTerminalPurposeGenerationFences(t *testing.T) {
 	}
 	if _, err := f.st.AuthenticateOuterCaller(ctx, token); err == nil {
 		t.Fatal("stale CLI generation")
+	}
+	if err := f.st.CheckOuterOperation(local, "send", "a", rec.ID); err == nil {
+		t.Fatal("stale already-authenticated service context")
 	}
 	if _, err := f.st.AuthenticateOuterTerminal(ctx, rec.Metadata.RuntimeHandleID, grant); err == nil {
 		t.Fatal("stale terminal generation")

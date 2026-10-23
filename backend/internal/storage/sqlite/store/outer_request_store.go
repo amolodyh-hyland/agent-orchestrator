@@ -117,6 +117,9 @@ func validateOuterRequest(ctx context.Context, q *gen.Queries, r domain.OuterReq
 				return domain.ErrOuterHeld
 			}
 		}
+		if err := validateOuterFactSource(ctx, q, source); err != nil {
+			return err
+		}
 	}
 	row, err := q.GetSession(ctx, r.SessionID)
 	if err != nil {
@@ -140,6 +143,33 @@ func validateOuterRequest(ctx context.Context, q *gen.Queries, r domain.OuterReq
 	}
 	if domain.OuterSettingsDigest(rec, conversationToDomain(conv), p) != r.SettingsDigest {
 		return domain.ErrOuterHeld
+	}
+	return nil
+}
+
+func validateOuterFactSource(ctx context.Context, q *gen.Queries, source domain.OuterSource) error {
+	switch source.Kind {
+	case "sessions":
+		r, err := q.GetSession(ctx, domain.SessionID(source.ID))
+		if err != nil || r.ProjectID == nil || string(*r.ProjectID) != source.ProjectID || r.Revision != source.Revision || source.Digest == "" {
+			return domain.ErrOuterHeld
+		}
+	case "reports":
+		r, err := q.GetReport(ctx, source.ID)
+		if err != nil || r.ProjectID != source.ProjectID {
+			return domain.ErrOuterHeld
+		}
+		note := []rune(r.Note)
+		summary := string(note[:min(len(note), 8000)])
+		if domain.OuterDigest([]any{summary, r.State, r.DeliveryState + ":" + r.DeliveryBatchID, int64(0), ""}) != source.Digest {
+			return domain.ErrOuterHeld
+		}
+	case "runs":
+		document, err := q.GetFactoryRun(ctx, source.ID)
+		var run domain.FactoryRun
+		if err != nil || json.Unmarshal([]byte(document), &run) != nil || string(run.ProjectID) != source.ProjectID || run.Version != source.Revision || source.Digest == "" {
+			return domain.ErrOuterHeld
+		}
 	}
 	return nil
 }
