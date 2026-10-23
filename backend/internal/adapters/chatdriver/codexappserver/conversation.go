@@ -48,6 +48,7 @@ type conversation struct {
 	proc *process
 	log  *slog.Logger
 
+	workdir         string
 	threadID        string
 	historyParentID string
 	providerScopeID string
@@ -324,10 +325,14 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 
-	params := map[string]any{
-		"threadId": c.threadID,
-		"input":    []any{map[string]any{"type": "text", "text": msg.Text}},
+	input := []any{map[string]any{"type": "text", "text": msg.Text}}
+	for _, skill := range msg.NativeSkills {
+		if skill.Name == "" || skill.Path == "" || !hasSkillToken(msg.Text, "$"+skill.Name) {
+			return ports.ChatTurnRef{}, errors.New("invalid native skill binding")
+		}
+		input = append(input, map[string]any{"type": "skill", "name": skill.Name, "path": skill.Path})
 	}
+	params := map[string]any{"threadId": c.threadID, "input": input}
 	if msg.ClientMessageID != "" {
 		// The provider's own idempotency handle: a retry carrying the same id
 		// must not produce a second turn.
@@ -1182,4 +1187,13 @@ func approvalReply(method string, decision ports.ChatDecision) any {
 		return map[string]any{"decision": json.RawMessage(decision.Raw)}
 	}
 	return map[string]any{"decision": decision.ID}
+}
+
+func hasSkillToken(text, token string) bool {
+	for _, word := range strings.Fields(text) {
+		if word == token {
+			return true
+		}
+	}
+	return false
 }
