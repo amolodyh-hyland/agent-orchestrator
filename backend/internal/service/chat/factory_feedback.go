@@ -24,6 +24,9 @@ func (s *Service) holdUnapprovedContinuation(ctx context.Context, id domain.Sess
 	s.mu.RLock()
 	a := s.feedbackAdmission
 	s.mu.RUnlock()
+	if err := domain.CheckFactoryFeedback(ctx, s.store, id); err != nil {
+		return err
+	}
 	if a == nil {
 		return nil
 	}
@@ -34,12 +37,18 @@ func (s *Service) acquireFeedbackInput(ctx context.Context, id domain.SessionID,
 	a := s.feedbackAdmission
 	s.mu.RUnlock()
 	if a == nil {
+		if err := domain.CheckFactoryFeedback(ctx, s.store, id); err != nil {
+			return nil, err
+		}
 		return func() {}, nil
 	}
 	return a.AcquireFeedbackInput(ctx, id, msg, action)
 }
 func (c *Controller) acquireFeedbackInput(ctx context.Context, msg ports.ChatUserMessage, action string) (func(), error) {
-	if c.feedbackInput == nil || c.reviewID != "" {
+	if c.reviewID != "" || c.feedbackInput == nil {
+		if err := domain.CheckFactoryFeedback(ctx, c.store, c.sessionID); err != nil {
+			return nil, err
+		}
 		return func() {}, nil
 	}
 	msg.FeedbackControllerGeneration = c.generation
@@ -58,4 +67,21 @@ func (s *Service) DeliverFactoryFeedback(ctx context.Context, id domain.SessionI
 	}
 	_, err := controller.Send(ctx, ports.ChatUserMessage{Text: text, ClientMessageID: key, Origin: domain.MessageOriginAutomation})
 	return err
+}
+
+// Side transports have no receipt-bound native approval lane. Check again after
+// library admission so a queued turn cannot cross enrollment while it waits.
+func (s *Service) acquireSideInput(ctx context.Context, id domain.SessionID, text string) (func(), error) {
+	if err := s.holdUnapprovedContinuation(ctx, id); err != nil {
+		return nil, err
+	}
+	release, err := s.acquireLibraryInput(ctx, id, text)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.holdUnapprovedContinuation(ctx, id); err != nil {
+		release()
+		return nil, err
+	}
+	return release, nil
 }

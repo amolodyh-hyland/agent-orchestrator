@@ -112,6 +112,9 @@ func sideCurrentAnchor(rows ConversationRows, source *Controller, anchor string)
 }
 
 func (s *Service) lockCurrentSide(ctx context.Context, side domain.SideConversation) (context.Context, func(), error) {
+	if err := s.holdUnapprovedContinuation(ctx, side.SessionID); err != nil {
+		return nil, nil, err
+	}
 	source, release, err := s.workingController(ctx, side.SessionID)
 	if err != nil {
 		return nil, nil, err
@@ -137,6 +140,10 @@ func (s *Service) lockCurrentSide(ctx context.Context, side domain.SideConversat
 	source.sendMu.Lock()
 	unlock := func() { source.sendMu.Unlock(); gate.unlock(); release() }
 	if err := ctx.Err(); err != nil {
+		unlock()
+		return nil, nil, err
+	}
+	if err := s.holdUnapprovedContinuation(ctx, side.SessionID); err != nil {
 		unlock()
 		return nil, nil, err
 	}

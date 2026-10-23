@@ -5144,16 +5144,8 @@ func semanticMessageAccepted(rec domain.SessionRecord, clientMessageID string) b
 
 // InterruptTUI requests cancellation through the session's owned runtime.
 func (m *Manager) InterruptTUI(ctx context.Context, id domain.SessionID) error {
-	if participants, ok := m.store.(interface {
-		FactoryRunsForSession(context.Context, domain.SessionID) ([]domain.FactoryRun, error)
-	}); ok {
-		runs, err := participants.FactoryRunsForSession(ctx, id)
-		if err != nil {
-			return err
-		}
-		if len(runs) > 0 {
-			return fmt.Errorf("factory continuation requires per-turn native confirmation")
-		}
+	if err := domain.CheckFactoryFeedback(ctx, m.store, id); err != nil {
+		return err
 	}
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil {

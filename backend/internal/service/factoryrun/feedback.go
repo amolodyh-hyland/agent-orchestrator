@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -16,6 +17,7 @@ import (
 )
 
 type feedbackStore interface {
+	domain.FactoryFeedbackPolicy
 	FactoryRunsForSession(context.Context, domain.SessionID) ([]domain.FactoryRun, error)
 	ReserveFactoryFeedback(context.Context, domain.RunFeedbackBinding) error
 	ListFactoryFeedback(context.Context, string) ([]domain.RunFeedbackReceipt, error)
@@ -244,14 +246,7 @@ func (s *Service) confirmFeedback(ctx context.Context, preview ConfirmationPrevi
 
 // HoldUnapprovedContinuation prevents legacy routes from waking a run participant.
 func (s *Service) HoldUnapprovedContinuation(ctx context.Context, id domain.SessionID) error {
-	runs, err := s.store.FactoryRunsForSession(ctx, id)
-	if err != nil {
-		return err
-	}
-	if len(runs) > 0 {
-		return invalid("Per-turn native confirmation required for this run participant")
-	}
-	return nil
+	return domain.CheckFactoryFeedback(ctx, s.store, id)
 }
 
 // AcquireFeedbackInput runs at the actual transport boundary. Preparation does
@@ -259,12 +254,12 @@ func (s *Service) HoldUnapprovedContinuation(ctx context.Context, id domain.Sess
 func (s *Service) AcquireFeedbackInput(ctx context.Context, id domain.SessionID, msg ports.ChatUserMessage, action string) (func(), error) {
 	release := func() {}
 	st := s.store
-	runs, err := st.FactoryRunsForSession(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if len(runs) == 0 {
+	err := domain.CheckFactoryFeedback(ctx, st, id)
+	if err == nil {
 		return release, nil
+	}
+	if !errors.Is(err, domain.ErrFactoryFeedbackHeld) {
+		return nil, err
 	}
 	if action != "next_turn" && action != "prepare" {
 		return nil, invalid("Active steering needs a separately approved action")

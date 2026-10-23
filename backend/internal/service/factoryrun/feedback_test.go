@@ -271,3 +271,19 @@ func TestFactoryFeedbackRejectsTheImplementerNativeConversationAsReviewer(t *tes
 		t.Fatal("self review findings delivered")
 	}
 }
+
+func TestFactoryFeedbackWorkerApprovalCannotContinueReportRecipient(t *testing.T) {
+	f, q, d, _ := feedbackFixture(t)
+	f.confirm(d, "feedback")
+	recipient, err := f.db.CreateSession(f.ctx, domain.SessionRecord{ProjectID: "p", Kind: domain.KindOrchestrator, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.HoldUnapprovedContinuation(f.ctx, recipient.ID); !errors.Is(err, domain.ErrFactoryFeedbackHeld) {
+		t.Fatalf("report recipient was not held: %v", err)
+	}
+	if release, err := f.svc.AcquireFeedbackInput(f.ctx, recipient.ID, feedbackMessage(q), "next_turn"); err == nil {
+		release()
+		t.Fatal("worker receipt authorized a report recipient")
+	}
+}

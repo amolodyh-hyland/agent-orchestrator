@@ -35,6 +35,11 @@ var _ sessionguard.InputLease = (*Manager)(nil)
 // close admission and wait for every already-admitted write to finish.
 func (m *Manager) AcquireSessionInput(id domain.SessionID) (release func(), ok bool) {
 	id = domain.SessionID(strings.TrimSpace(string(id)))
+	// Raw bytes cannot carry a native continuation receipt. This transport stays
+	// closed for factory participants, including Enter and escape sequences.
+	if err := domain.CheckFactoryFeedback(context.Background(), m.store, id); err != nil {
+		return nil, false
+	}
 	libraryRelease := func() {}
 	if library := m.librarySelectionValue(); library != nil {
 		var allowed bool
@@ -42,6 +47,10 @@ func (m *Manager) AcquireSessionInput(id domain.SessionID) (release func(), ok b
 		if !allowed {
 			return nil, false
 		}
+	}
+	if err := domain.CheckFactoryFeedback(context.Background(), m.store, id); err != nil {
+		libraryRelease()
+		return nil, false
 	}
 	m.agentOpMu.Lock()
 	if m.agentOperationActiveLocked(id) && !m.agentSwitchDecisionInputAllowedLocked(id) {

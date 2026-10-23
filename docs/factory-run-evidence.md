@@ -233,7 +233,7 @@ are snapshotted without editing session settings or project defaults. Gates cove
 automatic review, lifecycle nudges, scheduled reports, stuck-report interrupts,
 piggyback, semantic sends, queued Chat dispatch and deferred starts. Delayed or
 queued feedback remains held across restart; toggles, elapsed deadlines, a pause
-or an old/revoked approval cannot make it executable. This release issues no
+or an old/revoked approval cannot make it executable. Monitoring issues no
 continuation grants and offers no automatic resume or steer. Unrelated workers
 and projects keep their existing behavior. Direct human conversation remains a
 separate action; these monitoring controls confer no authority on it.
@@ -242,8 +242,8 @@ There is no terminal run status or resource-release operation in this ledger.
 Handoff remains an active human release gate. Approved references remain monitored
 and feedback held; unknown ownership never frees a workspace. This consumes the
 PR #48 report coordinator and PR #57 native receipt distinction, preserving their
-cross-project deferral and recovery behavior. It does not implement the later
-factory admission, isolation or continuation-approval workflow.
+cross-project deferral and recovery behavior. Monitoring does not implement factory admission or isolation. The separate exact
+findings continuation approval is described below.
 
 Monitoring sweeps advance at most 25 references per pass and persist an exclusive
 cursor before each observation. A timeout, restart or failed observation advances
@@ -308,10 +308,19 @@ invalidates unsubmitted authority and restores receipts for observation only.
 Evidence and attempted deliveries survive rollback; hiding the UI cannot grant
 permission. No local release action is introduced.
 
-Migration `0226_factory_review_feedback.sql` adds immutable delivery bindings and
+Migration `0228_factory_review_feedback.sql` adds immutable delivery bindings and
 versioned feedback controls after 0225. Native receipt updates share the existing
 provider-event transaction. Focused regressions cover stale/mutated source,
 missing verdict, lost/duplicate delivery, pre-submission expiry, paused/revoked
 controls, settings/generation changes, restart, native acceptance and bounded rounds.
 
 The feedback ledger retains at most 16 immutable authority bindings per run. Reaching that bound holds new approvals and preserves every earlier receipt.
+
+The passive factory hold and exact findings authority share the same durable
+participant policy, including report recipients. The main Chat controller admits
+an exception only after validating the exact native approval binding at dispatch
+and again at actual transport submission. A source label, copied delivery ID,
+review request, or queued message grants no authority. Reviewer starts remain held
+at the shared review engine boundary. Raw terminal input and side conversations
+have no native approval transport and remain held for enrolled participants;
+this includes opening, restoration, retries, queued sends and deferred submission.

@@ -451,7 +451,7 @@ func (c *connState) handleTerminal(msg clientMsg) {
 		}
 		release, ok := c.mgr.acquireSessionInput(msg.ID)
 		if !ok {
-			c.enqueue(serverMsg{Ch: chTerminal, ID: msg.ID, Type: msgError, Error: "session input is disabled while an exclusive session operation is in progress"})
+			c.enqueue(serverMsg{Ch: chTerminal, ID: msg.ID, Type: msgError, Error: "session input is held by session policy or an exclusive operation"})
 			return
 		}
 		if a := c.lookup(msg.ID); a != nil {

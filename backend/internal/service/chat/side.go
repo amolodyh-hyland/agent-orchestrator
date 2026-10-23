@@ -352,6 +352,9 @@ func (m *sideManager) announce(sideID string) {
 
 // CreateIndependentSideChat opens or reuses a side anchored to a completed main turn.
 func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.SessionID, req SideCreateRequest) (domain.SideConversation, error) {
+	if err := s.holdUnapprovedContinuation(ctx, id); err != nil {
+		return domain.SideConversation{}, err
+	}
 	if s.sides == nil || s.sides.launchID() == "" {
 		return domain.SideConversation{}, ErrSideUnavailable
 	}
@@ -640,6 +643,10 @@ func (s *Service) validateSideReferences(ctx context.Context, session domain.Ses
 }
 
 func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver ports.ChatDriver) {
+	if err := m.service.holdUnapprovedContinuation(m.ctx, side.SessionID); err != nil {
+		m.failOpen(side, err)
+		return
+	}
 	if side.PolicyVersion != sidePolicyVersion {
 		m.failOpen(side, ErrSidePolicyRecreate)
 		return
@@ -698,6 +705,10 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 		m.announce(side.ID)
 		return nil
 	}
+	if err := m.service.holdUnapprovedContinuation(ctx, side.SessionID); err != nil {
+		failOpen(err)
+		return
+	}
 	if side.ContextMode == "native" {
 		if forker, ok := driver.(ports.ChatIsolatedForker); ok {
 			anchor := side.NativeAnchorID
@@ -742,6 +753,10 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 			failOpen(err)
 			return
 		}
+	}
+	if err := m.service.holdUnapprovedContinuation(ctx, side.SessionID); err != nil {
+		failOpen(err)
+		return
 	}
 	if conv == nil && providerID != "" {
 		conv, err = driver.Resume(ctx, ports.ChatResumeConfig{
@@ -788,6 +803,9 @@ func (m *sideManager) failOpen(side domain.SideConversation, err error) {
 }
 
 func (m *sideManager) ensureRestore(side domain.SideConversation) error {
+	if err := m.service.holdUnapprovedContinuation(m.ctx, side.SessionID); err != nil {
+		return err
+	}
 	if side.PolicyVersion != sidePolicyVersion || side.BoundaryState == "uncertain" {
 		return ErrSidePolicyRecreate
 	}
@@ -813,6 +831,9 @@ func (m *sideManager) ensureRestore(side domain.SideConversation) error {
 
 // RetrySideConnection resumes the registered fork without replacing its context.
 func (s *Service) RetrySideConnection(ctx context.Context, session domain.SessionID, sideID string) error {
+	if err := s.holdUnapprovedContinuation(ctx, session); err != nil {
+		return err
+	}
 	if s.sides == nil {
 		return ErrSideUnavailable
 	}
@@ -847,6 +868,10 @@ func (m *sideManager) restore(ctx context.Context, side domain.SideConversation)
 		delete(m.restoring, side.ID)
 		m.mu.Unlock()
 	}()
+	if err := m.service.holdUnapprovedContinuation(ctx, side.SessionID); err != nil {
+		m.failOpen(side, err)
+		return
+	}
 	connected := false
 	defer func() {
 		if !connected && m.ctx.Err() == nil {
@@ -872,6 +897,10 @@ func (m *sideManager) restore(ctx context.Context, side domain.SideConversation)
 	cfg, driver, err := m.service.sideLaunchConfig(side)
 	if err != nil {
 		m.service.log.Warn("side restore: main controller unavailable", "side", side.ID, "error", err)
+		return
+	}
+	if err := m.service.holdUnapprovedContinuation(ctx, side.SessionID); err != nil {
+		m.failOpen(side, err)
 		return
 	}
 	conv, err := driver.Resume(ctx, ports.ChatResumeConfig{
@@ -900,6 +929,12 @@ func (m *sideManager) restore(ctx context.Context, side domain.SideConversation)
 				activeProviderID = turn.ProviderTurnID
 				break
 			}
+		}
+		if err := m.service.holdUnapprovedContinuation(ctx, side.SessionID); err != nil {
+			_ = conv.Close()
+			m.failOpen(side, err)
+			connected = true
+			return
 		}
 		if err := activator.ActivateLiveReconnect(ctx, activeProviderID); err != nil {
 			_ = conv.Close()
@@ -1312,6 +1347,11 @@ func (m *sideManager) runTurn(runtime *sideRuntime, side domain.SideConversation
 	runtime.messageText = make(map[string]string)
 	runtime.messageIDs = make(map[string]string)
 	runtime.mu.Unlock()
+	if err := m.service.holdUnapprovedContinuation(ctx, side.SessionID); err != nil {
+		_ = m.store.SettleSideTurn(ctx, side.ID, turn.ID, side.Generation, "failed", "", err.Error(), m.service.now())
+		m.announce(side.ID)
+		return
+	}
 	if len(turn.References) > 0 && turn.RetryOfTurnID == "" {
 		refs := make([]ports.ChatExcerptReference, 0, len(turn.References))
 		for _, ref := range turn.References {
@@ -1372,7 +1412,7 @@ func (m *sideManager) runTurn(runtime *sideRuntime, side domain.SideConversation
 	if turn.DispatchAttempt > 0 {
 		providerRequestID = fmt.Sprintf("%s:retry:%d", turn.ClientMessageID, turn.DispatchAttempt)
 	}
-	libraryRelease, admissionErr := m.service.acquireLibraryInput(ctx, side.SessionID, text)
+	libraryRelease, admissionErr := m.service.acquireSideInput(ctx, side.SessionID, text)
 	if admissionErr != nil {
 		_ = m.store.SettleSideTurn(ctx, side.ID, turn.ID, side.Generation, "failed", "", admissionErr.Error(), m.service.now())
 		m.failOpen(side, admissionErr)
@@ -1418,7 +1458,7 @@ func (m *sideManager) runTurn(runtime *sideRuntime, side domain.SideConversation
 	// Bind the provider turn to this side before any streamed event can arrive.
 	if deferred, ok := runtime.conv.(ports.ChatDeferredTurnStarter); ok {
 		if err := startLibraryDeferredTurn(ctx, deferred, ref.ProviderTurnID, text, func(ctx context.Context, text string) (func(), error) {
-			return m.service.acquireLibraryInput(ctx, side.SessionID, text)
+			return m.service.acquireSideInput(ctx, side.SessionID, text)
 		}); err != nil {
 			_ = m.store.SettleSideTurn(context.Background(), side.ID, turn.ID, side.Generation,
 				"failed", ref.ProviderTurnID, err.Error(), m.service.now())
@@ -1546,6 +1586,9 @@ func (s *Service) SideSnapshot(ctx context.Context, session domain.SessionID, si
 
 // ResolveSideApproval forwards an approval decision to the side provider.
 func (s *Service) ResolveSideApproval(ctx context.Context, session domain.SessionID, sideID, requestID, decisionID string) error {
+	if err := s.holdUnapprovedContinuation(ctx, session); err != nil {
+		return err
+	}
 	if s.sides == nil {
 		return ErrSideUnavailable
 	}
@@ -1572,11 +1615,17 @@ func (s *Service) ResolveSideApproval(ctx context.Context, session domain.Sessio
 	if runtime == nil {
 		return ErrSideUnavailable
 	}
+	if err := s.holdUnapprovedContinuation(ctx, session); err != nil {
+		return err
+	}
 	return runtime.conv.ResolveRequest(ctx, requestID, decision)
 }
 
 // ResolveSideInput forwards requested input to the side provider.
 func (s *Service) ResolveSideInput(ctx context.Context, session domain.SessionID, sideID, requestID string, response ports.ChatInputResponse) error {
+	if err := s.holdUnapprovedContinuation(ctx, session); err != nil {
+		return err
+	}
 	if s.sides == nil {
 		return ErrSideUnavailable
 	}
@@ -1598,6 +1647,9 @@ func (s *Service) ResolveSideInput(ctx context.Context, session domain.SessionID
 	responder, ok := runtime.conv.(ports.ChatInputResponder)
 	if !ok {
 		return ErrSideProviderUnsupported
+	}
+	if err := s.holdUnapprovedContinuation(ctx, session); err != nil {
+		return err
 	}
 	return responder.ResolveInput(ctx, requestID, response)
 }
@@ -1622,6 +1674,9 @@ func (m *sideManager) ownedSide(ctx context.Context, session domain.SessionID, s
 
 // SendSideQuestion accepts a question for the side provider.
 func (s *Service) SendSideQuestion(ctx context.Context, session domain.SessionID, sideID string, msg ports.ChatUserMessage) (domain.SideTurn, error) {
+	if err := s.holdUnapprovedContinuation(ctx, session); err != nil {
+		return domain.SideTurn{}, err
+	}
 	if s.sides == nil {
 		return domain.SideTurn{}, ErrSideUnavailable
 	}
@@ -1720,6 +1775,9 @@ func (s *Service) EditQueuedSideQuestion(ctx context.Context, session domain.Ses
 
 // RetrySideQuestion requeues a failed side question.
 func (s *Service) RetrySideQuestion(ctx context.Context, session domain.SessionID, sideID, turnID string) error {
+	if err := s.holdUnapprovedContinuation(ctx, session); err != nil {
+		return err
+	}
 	if s.sides == nil {
 		return ErrSideUnavailable
 	}
@@ -1794,6 +1852,9 @@ func (s *Service) SideDraft(ctx context.Context, session domain.SessionID, sideI
 // CompactSideChat asks the side's own provider conversation to compact. It
 // never operates on the main chat controller or provider handle.
 func (s *Service) CompactSideChat(ctx context.Context, session domain.SessionID, sideID string) (ports.ChatCompactionResult, error) {
+	if err := s.holdUnapprovedContinuation(ctx, session); err != nil {
+		return ports.ChatCompactionResult{}, err
+	}
 	if s.sides == nil {
 		return ports.ChatCompactionResult{}, ErrSideUnavailable
 	}
@@ -1814,6 +1875,10 @@ func (s *Service) CompactSideChat(ctx context.Context, session domain.SessionID,
 	if runtime.activeTurnID != "" || runtime.compacting {
 		runtime.mu.Unlock()
 		return ports.ChatCompactionResult{}, ErrCompactionWhileBusy
+	}
+	if err := s.holdUnapprovedContinuation(ctx, session); err != nil {
+		runtime.mu.Unlock()
+		return ports.ChatCompactionResult{}, err
 	}
 	runtime.compacting = true
 	runtime.mu.Unlock()

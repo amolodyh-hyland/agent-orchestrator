@@ -1165,3 +1165,22 @@ func TestFactoryReviewEnrollmentDuringAdmissionWait(t *testing.T) {
 		})
 	}
 }
+
+func TestFactoryRequestedReviewHoldsBeforePRRefresh(t *testing.T) {
+	for _, source := range []domain.ReviewTriggerSource{domain.ReviewTriggerAgent, domain.ReviewTriggerManual} {
+		t.Run(string(source), func(t *testing.T) {
+			st := &factoryTriggerStore{fakeStore: &fakeStore{}}
+			st.held.Store(true)
+			refresher := &fakePRRefresher{}
+			svc := New(nil, st, WithPRRefresher(refresher))
+			svc.engineTrigger = func(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+				t.Fatal("held review reached engine")
+				return reviewcore.TriggerResult{}, nil
+			}
+			_, err := svc.TriggerRequested(context.Background(), "worker", TriggerRequest{Source: source, PRURL: "https://github.com/o/r/pull/9", EnableAutoInject: true})
+			if !errors.Is(err, domain.ErrFactoryFeedbackHeld) || len(refresher.calls) != 0 || len(st.autoInjectSets) != 0 {
+				t.Fatalf("held review performed work: %v refresh=%v", err, refresher.calls)
+			}
+		})
+	}
+}

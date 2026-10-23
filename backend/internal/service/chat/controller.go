@@ -1541,6 +1541,13 @@ func (c *Controller) sendLocked(
 		return domain.ConversationTurn{}, nil
 	}
 
+	if err := c.checkFactoryMessage(ctx, msg); err != nil {
+		if settleErr := c.store.SettleTurnByID(ctx, turnID, domain.TurnStateFailed, err.Error(), c.now()); settleErr != nil {
+			return domain.ConversationTurn{}, settleErr
+		}
+		return domain.ConversationTurn{}, err
+	}
+
 	if queueWhenBusy && c.busy() {
 		// AppendUserMessage wrote it as queued, which is exactly where it belongs
 		// until the running turn ends. drain picks it up from there.
@@ -1840,10 +1847,21 @@ func (c *Controller) inheritPermissionFallback(source *Controller) {
 // A turn the provider refused over its permission mode did not start, so
 // asking again cannot run the work twice.
 func (c *Controller) checkFactoryMessage(ctx context.Context, msg ports.ChatUserMessage) error {
-	if msg.Origin == domain.MessageOriginAutomation || msg.ReportBatchID != "" || (msg.Origin == domain.MessageOriginDaemon && c.reviewID != "") {
-		return domain.CheckFactoryFeedback(ctx, c.store, c.sessionID)
+	err := domain.CheckFactoryFeedback(ctx, c.store, c.sessionID)
+	if err == nil {
+		return nil
 	}
-	return nil
+	// A source label or delivery ID grants no exception to the shared hold.
+	// Only the installed native receipt validator can admit an exact main turn.
+	if !errors.Is(err, domain.ErrFactoryFeedbackHeld) || c.reviewID != "" || c.feedbackInput == nil {
+		return err
+	}
+	msg.Settings = c.turnSettings()
+	release, err := c.acquireFeedbackInput(ctx, msg, "prepare")
+	if err == nil {
+		release()
+	}
+	return err
 }
 
 func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (ports.ChatTurnRef, error) {
@@ -1865,6 +1883,10 @@ func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (p
 		release, admissionErr := c.acquireLibraryInput(ctx, attempt.Text)
 		if admissionErr != nil {
 			return admissionErr
+		}
+		if err := c.checkFactoryMessage(ctx, attempt); err != nil {
+			release()
+			return err
 		}
 		action := "next_turn"
 		if _, deferred := c.conv.(ports.ChatDeferredTurnStarter); deferred {
