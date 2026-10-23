@@ -322,3 +322,40 @@ func reportFromGen(r gen.Report) domain.ReportRecord {
 		DeliveryBatchID: r.DeliveryBatchID,
 	}
 }
+
+func (s *Store) ReportChatReceipt(ctx context.Context, batchID string) (domain.ReportDeliveryReceipt, bool, error) {
+	row, err := s.conversationReader(ctx).ReportChatReceipt(ctx, batchID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ReportDeliveryReceipt{}, false, nil
+	}
+	if err != nil {
+		return domain.ReportDeliveryReceipt{}, false, err
+	}
+	receipt := domain.ReportDeliveryReceipt{State: domain.ReportReceiptUnknown,
+		MessageID: row.MessageID, ClientMessageID: row.ClientMessageID, TurnID: row.TurnID,
+		ProviderTurnID: row.ProviderTurnID, ProviderConversationID: row.ProviderConversationID, SubmittedAt: timeFromNull(row.SubmittedAt), AcceptedAt: timeFromNull(row.AcceptedAt)}
+	if row.State == string(domain.TurnStateQueued) {
+		receipt.State = domain.ReportReceiptQueued
+	}
+	if row.SubmittedAt.Valid {
+		receipt.State = domain.ReportReceiptProviderSubmitted
+	}
+	if row.AcceptedAt.Valid {
+		receipt.State = domain.ReportReceiptNativeAccepted
+	}
+	return receipt, true, nil
+}
+
+func (s *Store) RecordReportChatAcceptance(ctx context.Context, conversationID, providerConversationID, providerTurnID string, at time.Time) error {
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+	return q.RecordReportChatAcceptance(ctx, gen.RecordReportChatAcceptanceParams{
+		ConversationID: conversationID, ProviderConversationID: providerConversationID, ProviderTurnID: providerTurnID, AcceptedAt: nullTime(at),
+	})
+}
+
+func (s *Store) RecordReportChatSubmission(ctx context.Context, turnID string, at time.Time) error {
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+	return q.RecordReportChatSubmission(ctx, gen.RecordReportChatSubmissionParams{TurnID: turnID, SubmittedAt: nullTime(at)})
+}

@@ -1287,6 +1287,18 @@ func (s *Store) appendUserMessage(
 		}); err != nil {
 			return err
 		}
+		if msg.ReportBatchID != "" {
+			count, err := q.LinkReportChatDelivery(ctx, gen.LinkReportChatDeliveryParams{
+				BatchID: msg.ReportBatchID, MessageID: msg.ID, ClaimToken: msg.ReportClaimToken, SessionID: session,
+				ClientMessageID: msg.ClientMessageID, ConversationID: conversationID, TurnID: turnID,
+			})
+			if err != nil {
+				return err
+			}
+			if count != 1 {
+				return domain.ErrInvalidReport
+			}
+		}
 		interactionAt := msg.InteractionAt
 		if interactionAt.IsZero() {
 			interactionAt = now

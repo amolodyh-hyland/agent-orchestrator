@@ -672,6 +672,18 @@ type Report struct {
 	DeliveryBatchID    string
 }
 
+type ReportChatDelivery struct {
+	BatchID                string
+	MessageID              string
+	ClientMessageID        string
+	ConversationID         string
+	TurnID                 string
+	ProviderTurnID         string
+	ProviderConversationID string
+	SubmittedAt            sql.NullTime
+	AcceptedAt             sql.NullTime
+}
+
 type ReportOutput struct {
 	ReportID  string
 	Position  int64

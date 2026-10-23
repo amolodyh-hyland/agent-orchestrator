@@ -156,15 +156,16 @@ type reportCoordinatorDelivery struct {
 	refusedKeys   []string
 }
 
-func (d *reportCoordinatorDelivery) Submit(_ context.Context, target domain.SessionID, message, key string) error {
+func (d *reportCoordinatorDelivery) Submit(_ context.Context, target domain.SessionID, message string, batch reportsvc.PreparedBatch) (domain.ReportDeliveryReceipt, error) {
+	key := batch.IdempotencyKey()
 	if target == d.refusedTarget {
 		d.refusedKeys = append(d.refusedKeys, key)
-		return reportsvc.ErrReportDeliveryModeUnsupported
+		return domain.ReportDeliveryReceipt{}, reportsvc.ErrReportDeliveryModeUnsupported
 	}
 	d.targets = append(d.targets, target)
 	d.messages = append(d.messages, message)
 	d.keys = append(d.keys, key)
-	return nil
+	return domain.ReportDeliveryReceipt{State: domain.ReportReceiptNativeAccepted}, nil
 }
 
 func (*reportCoordinatorDelivery) Interrupt(context.Context, domain.SessionID) error { return nil }

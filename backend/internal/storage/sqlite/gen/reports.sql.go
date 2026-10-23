@@ -9,6 +9,8 @@ import (
 	"context"
 	"database/sql"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 const acknowledgeReport = `-- name: AcknowledgeReport :one
@@ -308,7 +310,9 @@ func (q *Queries) CreateReportOutput(ctx context.Context, arg CreateReportOutput
 
 const deferReportBatch = `-- name: DeferReportBatch :many
 UPDATE reports
-SET delivery_state = 'pending', available_at = max(available_at, ?1),
+SET delivery_state = 'pending', available_at = CASE
+        WHEN EXISTS (SELECT 1 FROM report_chat_deliveries d WHERE d.batch_id = reports.delivery_batch_id)
+        THEN ?1 ELSE max(available_at, ?1) END,
     claim_token = '', claimed_at = NULL, last_error = ?2
 WHERE project_id = ?3 AND delivery_state = 'claimed'
   AND claim_token = ?4
@@ -316,7 +320,7 @@ RETURNING id, session_id, project_id, state, note, message, created_at, delivery
 `
 
 type DeferReportBatchParams struct {
-	AvailableAt interface{}
+	AvailableAt time.Time
 	LastError   string
 	ProjectID   string
 	ClaimToken  string
@@ -406,6 +410,43 @@ func (q *Queries) GetReportInterrupt(ctx context.Context, sessionID string) (tim
 	var last_interrupted_at time.Time
 	err := row.Scan(&last_interrupted_at)
 	return last_interrupted_at, err
+}
+
+const linkReportChatDelivery = `-- name: LinkReportChatDelivery :execrows
+INSERT INTO report_chat_deliveries(batch_id, message_id, client_message_id, conversation_id, turn_id)
+SELECT ?1, ?2, ?3, ?4, ?5
+WHERE EXISTS (
+    SELECT 1 FROM reports r JOIN sessions s ON s.project_id = r.project_id
+    WHERE r.delivery_batch_id = ?1
+      AND r.delivery_state = 'claimed' AND r.claim_token = ?6
+      AND s.id = ?7 AND s.kind = 'orchestrator'
+)
+`
+
+type LinkReportChatDeliveryParams struct {
+	BatchID         string
+	MessageID       string
+	ClientMessageID string
+	ConversationID  string
+	TurnID          string
+	ClaimToken      string
+	SessionID       domain.SessionID
+}
+
+func (q *Queries) LinkReportChatDelivery(ctx context.Context, arg LinkReportChatDeliveryParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, linkReportChatDelivery,
+		arg.BatchID,
+		arg.MessageID,
+		arg.ClientMessageID,
+		arg.ConversationID,
+		arg.TurnID,
+		arg.ClaimToken,
+		arg.SessionID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const listPendingReportSchedule = `-- name: ListPendingReportSchedule :many
@@ -731,6 +772,48 @@ func (q *Queries) PutReportInterrupt(ctx context.Context, arg PutReportInterrupt
 	return err
 }
 
+const recordReportChatAcceptance = `-- name: RecordReportChatAcceptance :exec
+UPDATE report_chat_deliveries SET accepted_at = ?1, submitted_at = coalesce(submitted_at, ?1), provider_turn_id = ?2,
+    provider_conversation_id = ?3
+WHERE accepted_at IS NULL AND turn_id IN (
+    SELECT t.id FROM conversation_turns t
+    WHERE t.conversation_id = ?4
+      AND t.provider_turn_id = ?2
+)
+`
+
+type RecordReportChatAcceptanceParams struct {
+	AcceptedAt             sql.NullTime
+	ProviderTurnID         string
+	ProviderConversationID string
+	ConversationID         string
+}
+
+func (q *Queries) RecordReportChatAcceptance(ctx context.Context, arg RecordReportChatAcceptanceParams) error {
+	_, err := q.db.ExecContext(ctx, recordReportChatAcceptance,
+		arg.AcceptedAt,
+		arg.ProviderTurnID,
+		arg.ProviderConversationID,
+		arg.ConversationID,
+	)
+	return err
+}
+
+const recordReportChatSubmission = `-- name: RecordReportChatSubmission :exec
+UPDATE report_chat_deliveries SET submitted_at = ?1
+WHERE turn_id = ?2 AND submitted_at IS NULL
+`
+
+type RecordReportChatSubmissionParams struct {
+	SubmittedAt sql.NullTime
+	TurnID      string
+}
+
+func (q *Queries) RecordReportChatSubmission(ctx context.Context, arg RecordReportChatSubmissionParams) error {
+	_, err := q.db.ExecContext(ctx, recordReportChatSubmission, arg.SubmittedAt, arg.TurnID)
+	return err
+}
+
 const releaseReport = `-- name: ReleaseReport :one
 UPDATE reports
 SET delivery_state = 'pending', available_at = ?1,
@@ -836,6 +919,42 @@ func (q *Queries) ReleaseReportBatch(ctx context.Context, arg ReleaseReportBatch
 		return nil, err
 	}
 	return items, nil
+}
+
+const reportChatReceipt = `-- name: ReportChatReceipt :one
+SELECT d.message_id, d.client_message_id, d.turn_id,
+       CAST(coalesce(t.provider_turn_id, d.provider_turn_id) AS TEXT) AS provider_turn_id,
+       CAST(coalesce(t.state, '') AS TEXT) AS state, d.provider_conversation_id, d.submitted_at, d.accepted_at
+FROM report_chat_deliveries d
+LEFT JOIN conversation_turns t ON t.id = d.turn_id
+WHERE d.batch_id = ?
+`
+
+type ReportChatReceiptRow struct {
+	MessageID              string
+	ClientMessageID        string
+	TurnID                 string
+	ProviderTurnID         string
+	State                  string
+	ProviderConversationID string
+	SubmittedAt            sql.NullTime
+	AcceptedAt             sql.NullTime
+}
+
+func (q *Queries) ReportChatReceipt(ctx context.Context, batchID string) (ReportChatReceiptRow, error) {
+	row := q.db.QueryRowContext(ctx, reportChatReceipt, batchID)
+	var i ReportChatReceiptRow
+	err := row.Scan(
+		&i.MessageID,
+		&i.ClientMessageID,
+		&i.TurnID,
+		&i.ProviderTurnID,
+		&i.State,
+		&i.ProviderConversationID,
+		&i.SubmittedAt,
+		&i.AcceptedAt,
+	)
+	return i, err
 }
 
 const requeueClaimedReports = `-- name: RequeueClaimedReports :execrows

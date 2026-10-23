@@ -134,6 +134,7 @@ func TestCoordinatorAcceptanceAndPiggybackFencing(t *testing.T) {
 	if store.acked != 0 {
 		t.Fatal("claimed report acknowledged before acceptance")
 	}
+	store.receipt = domain.ReportDeliveryReceipt{State: domain.ReportReceiptNativeAccepted}
 	if err := c.AcceptPiggyback(context.Background(), batch); err != nil {
 		t.Fatal(err)
 	}
@@ -146,6 +147,7 @@ func TestCoordinatorAcceptanceAndPiggybackFencing(t *testing.T) {
 }
 
 type coordinatorStore struct {
+	receipt    domain.ReportDeliveryReceipt
 	mu         sync.Mutex
 	now        time.Time
 	reports    []domain.ReportRecord
@@ -288,14 +290,19 @@ type coordinatorDelivery struct {
 	submitErr   error
 }
 
-func (d *coordinatorDelivery) Submit(_ context.Context, target domain.SessionID, message, key string) error {
+func (d *coordinatorDelivery) Submit(_ context.Context, target domain.SessionID, message string, batch PreparedBatch) (domain.ReportDeliveryReceipt, error) {
+	key := batch.IdempotencyKey()
 	if d.submitErr != nil {
-		return d.submitErr
+		return domain.ReportDeliveryReceipt{}, d.submitErr
 	}
 	d.submissions = append(d.submissions, coordinatorSubmission{target, message, key})
-	return nil
+	return domain.ReportDeliveryReceipt{State: domain.ReportReceiptNativeAccepted}, nil
 }
 func (d *coordinatorDelivery) Interrupt(_ context.Context, target domain.SessionID) error {
 	d.interrupts = append(d.interrupts, target)
 	return nil
+}
+
+func (s *coordinatorStore) ReportChatReceipt(context.Context, string) (domain.ReportDeliveryReceipt, bool, error) {
+	return s.receipt, s.receipt.State != "", nil
 }

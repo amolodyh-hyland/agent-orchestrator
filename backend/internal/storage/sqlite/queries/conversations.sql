@@ -1127,6 +1127,7 @@ SET text = ?,
 WHERE conversation_messages.conversation_id = ?
   AND conversation_messages.turn_id = ?
   AND conversation_messages.role = 'user'
+  AND NOT EXISTS (SELECT 1 FROM report_chat_deliveries WHERE message_id = conversation_messages.id)
   AND conversation_messages.revision = ?
   AND EXISTS (
       SELECT 1

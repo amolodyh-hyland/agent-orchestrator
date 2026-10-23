@@ -72,7 +72,9 @@ RETURNING *;
 
 -- name: DeferReportBatch :many
 UPDATE reports
-SET delivery_state = 'pending', available_at = max(available_at, sqlc.arg(available_at)),
+SET delivery_state = 'pending', available_at = CASE
+        WHEN EXISTS (SELECT 1 FROM report_chat_deliveries d WHERE d.batch_id = reports.delivery_batch_id)
+        THEN sqlc.arg(available_at) ELSE max(available_at, sqlc.arg(available_at)) END,
     claim_token = '', claimed_at = NULL, last_error = sqlc.arg(last_error)
 WHERE project_id = sqlc.arg(project_id) AND delivery_state = 'claimed'
   AND claim_token = sqlc.arg(claim_token)
@@ -118,3 +120,34 @@ UPDATE reports
 SET delivery_state = 'pending', claim_token = '', claimed_at = NULL,
     last_error = 'delivery claim recovered after daemon restart'
 WHERE delivery_state = 'claimed';
+
+-- name: LinkReportChatDelivery :execrows
+INSERT INTO report_chat_deliveries(batch_id, message_id, client_message_id, conversation_id, turn_id)
+SELECT sqlc.arg(batch_id), sqlc.arg(message_id), sqlc.arg(client_message_id), sqlc.arg(conversation_id), sqlc.arg(turn_id)
+WHERE EXISTS (
+    SELECT 1 FROM reports r JOIN sessions s ON s.project_id = r.project_id
+    WHERE r.delivery_batch_id = sqlc.arg(batch_id)
+      AND r.delivery_state = 'claimed' AND r.claim_token = sqlc.arg(claim_token)
+      AND s.id = sqlc.arg(session_id) AND s.kind = 'orchestrator'
+);
+
+-- name: ReportChatReceipt :one
+SELECT d.message_id, d.client_message_id, d.turn_id,
+       CAST(coalesce(t.provider_turn_id, d.provider_turn_id) AS TEXT) AS provider_turn_id,
+       CAST(coalesce(t.state, '') AS TEXT) AS state, d.provider_conversation_id, d.submitted_at, d.accepted_at
+FROM report_chat_deliveries d
+LEFT JOIN conversation_turns t ON t.id = d.turn_id
+WHERE d.batch_id = ?;
+
+-- name: RecordReportChatAcceptance :exec
+UPDATE report_chat_deliveries SET accepted_at = sqlc.arg(accepted_at), submitted_at = coalesce(submitted_at, sqlc.arg(accepted_at)), provider_turn_id = sqlc.arg(provider_turn_id),
+    provider_conversation_id = sqlc.arg(provider_conversation_id)
+WHERE accepted_at IS NULL AND turn_id IN (
+    SELECT t.id FROM conversation_turns t
+    WHERE t.conversation_id = sqlc.arg(conversation_id)
+      AND t.provider_turn_id = sqlc.arg(provider_turn_id)
+);
+
+-- name: RecordReportChatSubmission :exec
+UPDATE report_chat_deliveries SET submitted_at = sqlc.arg(submitted_at)
+WHERE turn_id = sqlc.arg(turn_id) AND submitted_at IS NULL;

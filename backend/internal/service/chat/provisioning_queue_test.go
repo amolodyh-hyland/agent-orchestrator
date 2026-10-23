@@ -176,7 +176,7 @@ func TestProvisioningSendPiggybacksReportsOnlyOnRecordedTurn(t *testing.T) {
 		t.Fatalf("queued message missing piggyback: %+v", snapshot.Messages)
 	}
 	first, found, err := st.GetReport(ctx, "first-report")
-	if err != nil || !found || first.DeliveryState != domain.ReportAcknowledged {
+	if err != nil || !found || first.DeliveryState != domain.ReportPending {
 		t.Fatalf("first report = %+v, found = %v, err = %v", first, found, err)
 	}
 

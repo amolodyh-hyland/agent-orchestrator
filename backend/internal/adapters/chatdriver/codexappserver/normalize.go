@@ -138,6 +138,7 @@ func normalizeNotification(n notification, now time.Time) []ports.ChatEvent {
 		}
 		return []ports.ChatEvent{{
 			Kind:                   ports.ChatEventTurnStarted,
+			NativeAcceptance:       true,
 			ProviderTurnID:         firstNonEmpty(p.Turn.ID, turnIDFallback(n.Params)),
 			ProviderConversationID: p.ThreadID,
 		}}

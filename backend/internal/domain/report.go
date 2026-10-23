@@ -217,3 +217,29 @@ func CoordinationDeliveryID(message string) (string, bool) {
 	}
 	return deliveryID(message, `<ao-session-delivery id="`)
 }
+
+// ReportDeliveryReceipt distinguishes durable intake from native acceptance.
+type ReportDeliveryReceipt struct {
+	State                  ReportReceiptState
+	MessageID              string
+	ClientMessageID        string
+	TurnID                 string
+	ProviderTurnID         string
+	ProviderConversationID string
+	SubmittedAt            time.Time
+	AcceptedAt             time.Time
+}
+
+type ReportReceiptState string
+
+const (
+	ReportReceiptQueued            ReportReceiptState = "ao_queued"
+	ReportReceiptUnknown           ReportReceiptState = "unknown"
+	ReportReceiptProviderSubmitted ReportReceiptState = "provider_submitted"
+	ReportReceiptNativeAccepted    ReportReceiptState = "native_accepted"
+	ReportReceiptPromptSubmitted   ReportReceiptState = "prompt_submitted"
+)
+
+func (r ReportDeliveryReceipt) Accepted() bool {
+	return r.State == ReportReceiptNativeAccepted || r.State == ReportReceiptPromptSubmitted
+}

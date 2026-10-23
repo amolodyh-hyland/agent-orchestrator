@@ -2,9 +2,11 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
 )
 
 type reportDeliverySession struct {
@@ -38,7 +40,7 @@ func TestReportSemanticDeliveryUsesAcceptedTUIBoundary(t *testing.T) {
 			ID: "ao-1", Mode: domain.SessionModeTUI,
 		}},
 	}
-	if err := delivery.Submit(context.Background(), "ao-1", "report context", "report-batch:abc123"); err != nil {
+	if receipt, err := delivery.Submit(context.Background(), "ao-1", "report context", reportsvc.PreparedBatch{ID: "report-batch:abc123"}); err != nil || receipt.State != domain.ReportReceiptPromptSubmitted {
 		t.Fatal(err)
 	}
 	if sessions.sentID != "ao-1" || sessions.sentMessage != "report context" || sessions.sentKey != "report-batch:abc123" {
@@ -49,5 +51,18 @@ func TestReportSemanticDeliveryUsesAcceptedTUIBoundary(t *testing.T) {
 	}
 	if sessions.interrupted != "ao-1" {
 		t.Fatalf("interrupted = %q", sessions.interrupted)
+	}
+}
+
+func (s reportDeliveryStore) ReportChatReceipt(context.Context, string) (domain.ReportDeliveryReceipt, bool, error) {
+	return domain.ReportDeliveryReceipt{}, false, nil
+}
+
+func TestReportSemanticDeliveryDoesNotUseQueueReturnAsAcceptance(t *testing.T) {
+	sessions := &reportDeliverySession{}
+	delivery := reportSemanticDelivery{sessions: sessions, store: reportDeliveryStore{rec: domain.SessionRecord{ID: "chat", Mode: domain.SessionModeChat}}}
+	receipt, err := delivery.Submit(context.Background(), "chat", "context", reportsvc.PreparedBatch{ID: "batch"})
+	if !errors.Is(err, reportsvc.ErrReportDeliveryModeUnsupported) || receipt.Accepted() || sessions.sentID != "" {
+		t.Fatalf("unsupported chat receipt=%+v err=%v semantic send=%q", receipt, err, sessions.sentID)
 	}
 }

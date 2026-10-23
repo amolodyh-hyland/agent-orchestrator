@@ -625,6 +625,8 @@ type RetryPrompt struct {
 
 // ConversationMessage is one readable block of text.
 type ConversationMessage struct {
+	ReportBatchID    string `json:"-"`
+	ReportClaimToken string `json:"-"`
 	// InteractionAt is an internal write fact, independent of history CreatedAt.
 	InteractionAt  time.Time `json:"-"`
 	ID             string    `json:"id"`

@@ -91,6 +91,8 @@ func (s *Service) queueWithoutController(
 		Text:                msg.Text,
 		Origin:              normalizeOrigin(msg.Origin),
 		ClientMessageID:     msg.ClientMessageID,
+		ReportBatchID:       msg.ReportBatchID,
+		ReportClaimToken:    msg.ReportClaimToken,
 		ClientPayloadHash:   msg.ClientPayloadHash,
 		DeliveryContentJSON: deliveryContent,
 		AuthoredByUser:      msg.AuthoredByUser,

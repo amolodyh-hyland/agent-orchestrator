@@ -139,9 +139,10 @@ func (c *conversation) ReadHistory(ctx context.Context) ([]ports.ChatEvent, erro
 		state := turnStateFrom(string(turn.Status))
 
 		events = append(events, ports.ChatEvent{
-			Kind:            ports.ChatEventTurnStarted,
-			ProviderEventID: historyEventID(c.threadID, turn.ID, "started"),
-			ProviderTurnID:  turn.ID,
+			Kind:             ports.ChatEventTurnStarted,
+			NativeAcceptance: true,
+			ProviderEventID:  historyEventID(c.threadID, turn.ID, "started"),
+			ProviderTurnID:   turn.ID,
 		})
 
 		for itemIndex, nativeItem := range turn.Items {

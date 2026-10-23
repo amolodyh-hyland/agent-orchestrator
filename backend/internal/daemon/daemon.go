@@ -1270,14 +1270,43 @@ type reportSemanticDelivery struct {
 	sessions reportSemanticSession
 	store    interface {
 		GetSession(context.Context, domain.SessionID) (domain.SessionRecord, bool, error)
+		ReportChatReceipt(context.Context, string) (domain.ReportDeliveryReceipt, bool, error)
 	}
 }
 
-func (d reportSemanticDelivery) Submit(ctx context.Context, id domain.SessionID, message, idempotencyKey string) error {
-	if d.sessions == nil {
-		return reportsvc.ErrReportDeliveryModeUnsupported
+func (d reportSemanticDelivery) Submit(ctx context.Context, id domain.SessionID, message string, batch reportsvc.PreparedBatch) (domain.ReportDeliveryReceipt, error) {
+	unknown := domain.ReportDeliveryReceipt{State: domain.ReportReceiptUnknown}
+	if d.store == nil {
+		return unknown, reportsvc.ErrReportDeliveryModeUnsupported
 	}
-	return d.sessions.SendSemantic(ctx, id, message, idempotencyKey)
+	rec, found, err := d.store.GetSession(ctx, id)
+	if err != nil {
+		return unknown, err
+	}
+	if !found {
+		return unknown, sessionmanager.ErrNotFound
+	}
+	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
+		if d.chat == nil {
+			return unknown, reportsvc.ErrReportDeliveryModeUnsupported
+		}
+		_, err := d.chat.Send(ctx, id, ports.ChatUserMessage{
+			Text: message, ClientMessageID: batch.IdempotencyKey(), Origin: domain.MessageOriginAutomation,
+			ReportBatchID: batch.ID, ReportClaimToken: batch.Token,
+		})
+		if err != nil {
+			return unknown, err
+		}
+		receipt, _, err := d.store.ReportChatReceipt(ctx, batch.ID)
+		return receipt, err
+	}
+	if d.sessions == nil {
+		return unknown, reportsvc.ErrReportDeliveryModeUnsupported
+	}
+	if err := d.sessions.SendSemantic(ctx, id, message, batch.IdempotencyKey()); err != nil {
+		return unknown, err
+	}
+	return domain.ReportDeliveryReceipt{State: domain.ReportReceiptPromptSubmitted}, nil
 }
 
 func (d reportSemanticDelivery) Interrupt(ctx context.Context, id domain.SessionID) error {

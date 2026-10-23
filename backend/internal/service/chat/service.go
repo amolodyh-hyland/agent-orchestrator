@@ -1375,6 +1375,7 @@ func (s *Service) Send(
 			return domain.ConversationTurn{}, fmt.Errorf("prepare worker reports: %w", err)
 		}
 		msg.Text = reports.AppendToUserMessage(msg.Text)
+		msg.ReportBatchID, msg.ReportClaimToken = reports.ID, reports.Token
 	}
 	var turn domain.ConversationTurn
 	if record.ProvisionState.IsProvisioning() || record.HibernatedAt != nil {
