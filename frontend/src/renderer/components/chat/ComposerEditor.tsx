@@ -35,6 +35,7 @@ import {
 	KEY_ARROW_RIGHT_COMMAND,
 	SELECTION_CHANGE_COMMAND,
 	CONTROLLED_TEXT_INSERTION_COMMAND,
+	BEFORE_INPUT_COMMAND,
 	DELETE_CHARACTER_COMMAND,
 	PASTE_COMMAND,
 	CUT_COMMAND,
@@ -481,14 +482,14 @@ function $codeEdgeKey(event: globalThis.KeyboardEvent, direction: -1 | 1, remove
 	const selection = $getSelection();
 	if (
 		!$isRangeSelection(selection) ||
-		!selection.isCollapsed() ||
+		(!selection.isCollapsed() && (remove || !event.shiftKey)) ||
 		event.isComposing ||
 		event.metaKey ||
 		event.ctrlKey ||
 		event.altKey
 	)
 		return false;
-	const offset = $documentOffsetForPoint(selection.anchor.getNode(), selection.anchor.offset);
+	const offset = $documentOffsetForPoint(selection.focus.getNode(), selection.focus.offset);
 	if (offset === undefined) return false;
 	const source = $serializeComposer();
 	const regions = composerCodeRegions(source);
@@ -538,8 +539,11 @@ function $codeEdgeKey(event: globalThis.KeyboardEvent, direction: -1 | 1, remove
 					);
 		}
 		if (target === offset) return false;
-		$selectComposerOffset(target, selection.anchor);
+		if (!event.shiftKey) $selectComposerOffset(target, selection.anchor);
 		$selectComposerOffset(target, selection.focus);
+		const focus = selection.focus.getNode();
+		selection.format = $isTextNode(focus) ? focus.getFormat() : 0;
+		selection.style = $isTextNode(focus) ? focus.getStyle() : "";
 	}
 	event.preventDefault();
 	return true;
@@ -710,6 +714,7 @@ function $insertComposerToken(trigger: ComposerTrigger, value: string): boolean 
 function $replaceEditorText(text: string, attached: string[] = [], caret: "start" | "end" = "end"): void {
 	const root = $getRoot();
 	root.clear();
+	$setSelection($createRangeSelection());
 	for (const line of text.split("\n")) {
 		const paragraph = $createParagraphNode();
 		// A restored draft is plain text; paths of still-attached images become chips
@@ -1064,6 +1069,24 @@ const EditorBridge = forwardRef<
 	useEffect(() => {
 		const commands = [
 			editor.registerCommand(
+				BEFORE_INPUT_COMMAND,
+				(event) => {
+					if (event.inputType !== "insertText" || event.isComposing || editor.isComposing() || compositionState.current) return false;
+					const selection = $getSelection();
+					if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
+					const offset = $documentOffsetForPoint(selection.anchor.getNode(), selection.anchor.offset);
+					if (composerCodeRegions($serializeComposer()).some((region) => offset === region.start || offset === region.end)) {
+						// Keep native target-range resolution from pulling an outside caret
+						// into the visible code text before controlled insertion runs.
+						selection.dirty = true;
+						selection.format = 0;
+						selection.style = "";
+					}
+					return false;
+				},
+				COMMAND_PRIORITY_HIGH,
+			),
+			editor.registerCommand(
 				CONTROLLED_TEXT_INSERTION_COMMAND,
 				(input) => {
 					if (!editor.isComposing() && !compositionState.current) {
@@ -1121,12 +1144,12 @@ const EditorBridge = forwardRef<
 			),
 			editor.registerCommand(
 				KEY_ARROW_LEFT_COMMAND,
-				(event) => !editor.isComposing() && !compositionState.current && !event.shiftKey && $codeEdgeKey(event, -1),
+				(event) => !editor.isComposing() && !compositionState.current && $codeEdgeKey(event, -1),
 				COMMAND_PRIORITY_HIGH,
 			),
 			editor.registerCommand(
 				KEY_ARROW_RIGHT_COMMAND,
-				(event) => !editor.isComposing() && !compositionState.current && !event.shiftKey && $codeEdgeKey(event, 1),
+				(event) => !editor.isComposing() && !compositionState.current && $codeEdgeKey(event, 1),
 				COMMAND_PRIORITY_HIGH,
 			),
 			editor.registerCommand(

@@ -22,6 +22,8 @@ function Fixture() {
 	const onChange = useCallback((snapshot: ComposerEditorSnapshot) => setWire(snapshot.text), []);
 	const onEnter = useCallback((snapshot: ComposerEditorSnapshot) => {
 		setSent(snapshot.text);
+		editor.current?.clear();
+		setWire("");
 		return true;
 	}, []);
 	return (
@@ -57,6 +59,16 @@ function Fixture() {
 				Code block
 			</button>
 			<pre data-testid="wire">{wire}</pre>
+			<button
+				type="button"
+				onMouseDown={(event) => event.preventDefault()}
+				onClick={() => {
+					editor.current?.clear();
+					setWire("");
+				}}
+			>
+				Clear
+			</button>
 			<pre data-testid="sent">{sent}</pre>
 		</main>
 	);

@@ -388,6 +388,58 @@ const chatSession = {
 } satisfies WorkspaceSession;
 
 describe("HumanMessage attachments", () => {
+	it.each([
+		["`C:\\` and **important** and `x`", ["C:\\", "x"]],
+		["`first\nsecond` and **important** and ``x ` y``", ["first second", "x ` y"]],
+		["[^note]: `x`\n\n**important** and `y` [^note]", ["x", "y"]],
+	])("keeps prose literal between parsed code spans and copies the source: %s", async (text, expectedCode) => {
+		const { container } = render(<HumanMessage message={humanMessage(text)} sessionId="ao-1" />);
+		expect([...container.querySelectorAll("code")].map((code) => code.textContent)).toEqual(expectedCode);
+		expect(container.querySelector("strong, b")).toBeNull();
+		expect(container.querySelector("[data-chat-message-body]")).toHaveTextContent("**important**");
+		await userEvent.click(screen.getByRole("button", { name: "Copy user message" }));
+		expect(writeText).toHaveBeenLastCalledWith(text);
+	});
+
+	it.each(["user", "assistant"] as const)("renders inline and fenced code in %s bubbles and copies the original source", async (role) => {
+		const text = "Run `npm test` and ``a ` tick``.\n\n```ts\nconst value = '<tag>';\n```\n\n```\nplain code\n```";
+		const stored = { ...humanMessage(text), role, origin: role === "user" ? "human" : "provider" } satisfies ConversationMessage;
+		const { container } = render(role === "user"
+			? <HumanMessage message={stored} sessionId="ao-1" />
+			: <AssistantMessage message={stored} showCopy />);
+		const inline = screen.getByText("npm test");
+		expect(inline.tagName).toBe("CODE");
+		expect(inline).toHaveClass("text-markdown-code");
+		expect(inline.closest("pre")).toBeNull();
+		expect(screen.getByText("a ` tick").tagName).toBe("CODE");
+		expect([...container.querySelectorAll("pre code")].map((node) => node.textContent)).toEqual([
+			"const value = '<tag>';",
+			"plain code",
+		]);
+		expect(screen.getAllByRole("button", { name: "Copy code" })).toHaveLength(2);
+		expect(container.querySelector("tag")).toBeNull();
+		await userEvent.click(screen.getAllByRole("button", { name: "Copy code" })[0]);
+		expect(writeText).toHaveBeenLastCalledWith("const value = '<tag>';");
+		await userEvent.click(screen.getByRole("button", { name: role === "user" ? "Copy user message" : "Copy message as markdown" }));
+		expect(writeText).toHaveBeenLastCalledWith(text);
+		expect(stored.text).toBe(text);
+	});
+
+	it("keeps attachment paths inside code literal while rendering prose references as image chips", () => {
+		const path = ".ao/attachments/attachment-ab12.png";
+		const { container } = render(<HumanMessage
+			message={humanMessage(`Example \`${path}\`\n\n\`\`\`text\n${path}\n\`\`\`\nSee ${path}\n\nAttached files (read these files in the workspace):\n- ${path}`)}
+			sessionId="ao-1"
+		/>);
+		const codes = container.querySelectorAll("code");
+		expect(codes).toHaveLength(2);
+		for (const code of codes) {
+			expect(code).toHaveTextContent(path);
+			expect(code.querySelector("img, button")).toBeNull();
+		}
+		expect(screen.getAllByRole("button", { name: "Open image: Image 1" })).toHaveLength(2);
+	});
+
 	it("loads a remote session's staged image from its proxy, not the local daemon", () => {
 		const snapshot: ConversationSnapshot = {
 			...chatFixtureEmpty,
@@ -489,7 +541,7 @@ describe("HumanMessage attachments", () => {
 			/>,
 		);
 
-		expect(container.querySelector(".cursor-chat-human-message > p")?.textContent).toBe(
+		expect(container.querySelector(".cursor-chat-human-message > [data-chat-message-body]")?.textContent).toBe(
 			authoredBody,
 		);
 	});
@@ -539,7 +591,7 @@ describe("HumanMessage attachments", () => {
 			/>,
 		);
 
-		const paragraph = container.querySelector(".cursor-chat-human-message > p");
+		const paragraph = container.querySelector(".cursor-chat-human-message > [data-chat-message-body]");
 		expect(paragraph).toHaveTextContent("before Image 1 after");
 		expect(paragraph).not.toHaveTextContent(".ao/attachments");
 		await userEvent.click(within(paragraph as HTMLElement).getByRole("button", { name: "Open image: Image 1" }));
@@ -562,7 +614,7 @@ describe("HumanMessage attachments", () => {
 		const text = "Notes:\n- fix *bug*\nao://sessions/proj/sess\n> write test";
 		const { container } = render(<HumanMessage message={humanMessage(text)} sessionId="ao-1" />);
 
-		const paragraph = container.querySelector(".cursor-chat-human-message > p");
+		const paragraph = container.querySelector(".cursor-chat-human-message > [data-chat-message-body]");
 		expect(paragraph).toHaveClass("whitespace-pre-wrap");
 		expect(paragraph?.textContent).toBe(text);
 		expect(screen.getByRole("link", { name: "ao://sessions/proj/sess" })).toBeInTheDocument();

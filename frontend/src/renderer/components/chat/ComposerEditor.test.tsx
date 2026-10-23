@@ -206,12 +206,70 @@ describe("composer code editing", () => {
 		},
 	);
 
-	it("moves across invisible inline delimiters and types outside the span", async () => {
-		const { ref, editor, field } = setup("`value`");
-		caret(editor, 6);
-		fireEvent.keyDown(field, { key: "ArrowRight" });
-		act(() => editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, "!"));
-		await waitFor(() => expect(ref.current!.getSnapshot().text).toBe("`value`!"));
+	it.each([
+		["`value`", 6, "ArrowRight", "`value`!"],
+		["`value`", 1, "ArrowLeft", "!`value`"],
+		["A ``value`` Z", 9, "ArrowRight", "A ``value``! Z"],
+		["A ``value`` Z", 4, "ArrowLeft", "A !``value`` Z"],
+	])("exits inline code before typing plain text: %s at %i %s", async (source, offset, key, expected) => {
+		const { ref, editor, field } = setup(source);
+		caret(editor, offset);
+		fireEvent.keyDown(field, { key });
+		await waitFor(() => expect(editor.getEditorState().read(() => {
+			const selection = $getSelection();
+			return $isRangeSelection(selection) && selection.hasFormat("code");
+		})).toBe(false));
+		await act(async () => editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, "!"));
+		await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(expected));
+		expect(editor.getEditorState().read(() => $getRoot().getAllTextNodes().find((node) => node.getTextContent().includes("!"))?.hasFormat("code"))).toBe(false);
+		act(() => editor.dispatchCommand(UNDO_COMMAND, undefined));
+		await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(source));
+	});
+
+	it.each([[1, "ArrowLeft", "ArrowRight"], [6, "ArrowRight", "ArrowLeft"]])(
+		"reenters code at the same visible edge: %i",
+		async (offset, exit, enter) => {
+			const { ref, editor, field } = setup("`value`");
+			caret(editor, offset);
+			fireEvent.keyDown(field, { key: exit });
+			fireEvent.keyDown(field, { key: enter });
+			await act(async () => editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, "!"));
+			await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(offset === 1 ? "`!value`" : "`value!`"));
+		},
+	);
+
+	it.each([[1, "ArrowLeft", "ArrowRight"], [6, "ArrowRight", "ArrowLeft"]])(
+		"extends and reverses a selection through the hidden boundary: %i",
+		async (offset, exit, enter) => {
+			const { editor, field, ref } = setup("`value`");
+			caret(editor, offset);
+			fireEvent.keyDown(field, { key: exit, shiftKey: true });
+			await waitFor(() => expect(editor.getEditorState().read(() => {
+				const selection = $getSelection();
+				return $isRangeSelection(selection) && !selection.isCollapsed();
+			})).toBe(true));
+			fireEvent.keyDown(field, { key: enter, shiftKey: true });
+			await waitFor(() => expect(editor.getEditorState().read(() => $getSelection()?.isCollapsed())).toBe(true));
+			fireEvent.keyDown(field, { key: exit, shiftKey: true });
+			await act(async () => editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, "!"));
+			await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(offset === 1 ? "!`value`" : "`value`!"));
+		},
+	);
+
+	it.each(["clear", "setText"] as const)("resets code insertion format when replacing the draft with %s", async (method) => {
+		const { editor, field, ref } = setup("`value`");
+		caret(editor, 3);
+		act(() => {
+			if (method === "clear") ref.current!.clear();
+			else ref.current!.setText("");
+		});
+		expect(editor.getEditorState().read(() => {
+			const selection = $getSelection();
+			return $isRangeSelection(selection) ? [selection.format, selection.style] : undefined;
+		})).toEqual([0, ""]);
+		await act(async () => editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, "new draft"));
+		await waitFor(() => expect(ref.current!.getSnapshot().text).toBe("new draft"));
+		expect(field.querySelector("code, .chat-composer-inline-code, .chat-composer-markdown-code")).toBeNull();
 	});
 
 	it("deletes the formatting at the closing edge without deleting code", async () => {

@@ -37,8 +37,14 @@ import {
 	type MouseEvent as ReactMouseEvent,
 	type ReactNode,
 } from "react";
+import { jsx, jsxs } from "react/jsx-runtime";
 import Markdown, { defaultUrlTransform, type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkParse from "remark-parse";
+import remarkRehype from "remark-rehype";
+import { toJsxRuntime } from "hast-util-to-jsx-runtime";
+import { unified } from "unified";
+import { SKIP, visit } from "unist-util-visit";
 import { WrapText } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { isHostLocalWebLink } from "../../lib/loopback";
@@ -84,6 +90,7 @@ export const ActivityTitle = memo(function ActivityTitle({ text }: { text: strin
 
 /** GitHub-flavoured markdown: tables, strikethrough, task lists, autolinks. */
 const PLUGINS = [remarkGfm, remarkSessionLinks];
+const CODE_TEXT_PARSER = unified().use(remarkParse).use(PLUGINS).use(remarkRehype);
 // Reduced motion gets plain text, not a span per character that never animates.
 const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 // How long a settled reply keeps its fade spans, so the last characters (and the final
@@ -210,6 +217,32 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 		</StreamingProse.Provider>
 	);
 });
+
+export function ChatCodeText({ text, renderText }: { text: string; renderText: (text: string) => ReactNode }) {
+	const tree = useMemo(() => CODE_TEXT_PARSER.runSync(CODE_TEXT_PARSER.parse(text)), [text]);
+	const regions: { start: number; end: number; content: ReactNode }[] = [];
+	const content: ReactNode[] = [];
+	let cursor = 0;
+	visit(tree, (node) => {
+		if (node.type !== "element" || (node.tagName !== "code" && node.tagName !== "pre")) return;
+		const start = node.position?.start.offset;
+		const end = node.position?.end.offset;
+		if (start === undefined || end === undefined) return;
+		regions.push({ start, end, content: toJsxRuntime(node, {
+			Fragment, jsx, jsxs, components: COMPONENTS,
+			ignoreInvalidStyle: true, passKeys: true, passNode: true,
+		}) });
+		return SKIP;
+	});
+	// Footnotes can move rendered nodes; user prose must keep its source order.
+	for (const region of regions.sort((left, right) => left.start - right.start)) {
+		if (region.start > cursor) content.push(<Fragment key={`text-${cursor}`}>{renderText(text.slice(cursor, region.start))}</Fragment>);
+		content.push(<Fragment key={`code-${region.start}`}>{region.content}</Fragment>);
+		cursor = region.end;
+	}
+	if (cursor < text.length) content.push(<Fragment key={`text-${cursor}`}>{renderText(text.slice(cursor))}</Fragment>);
+	return <>{content}</>;
+}
 
 /**
  * Wrapping is a reading preference, not a property of one block: a fence that
