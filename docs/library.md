@@ -1,7 +1,8 @@
 # Local library registry
 
-The library API is an inert backend catalog. Provider execution, runtime discovery
-projection, live invocation, and remote transfer are unavailable. Approval records
+The library API retains an inert approved-content catalog. Approved-library
+projection, invocation, and remote transfer remain unavailable. Native chat
+observations are a separate live catalog described below. Approval records
 never imply provider readiness. Every catalog entry defaults to
 `unsupported_provider` until a later adapter supplies version-specific evidence.
 
@@ -102,3 +103,53 @@ completed before submission refuses the write and settles the turn as failed.
 A stalled write closes its transport after five seconds so it cannot indefinitely
 hold admission; an already submitted prompt never keeps revocation waiting for
 its response.
+
+## Live chat catalogs
+
+`GET /api/v1/sessions/{sessionId}/conversation/skills` reports `status` and
+`reasonCode` separately from `skills`. A ready empty catalog, unsupported listing,
+and a controller awaiting its first catalog are distinct outcomes. Responses
+include session, pinned snapshot, controller generation, provider, adapter,
+resolver (where available), Project revision, catalog revision and trust epoch.
+Clients must scope their cache by the selected host as well as these identities;
+a response from a prior controller must not replace a newer controller's rows.
+
+Native observations carry opaque controller-scoped observation IDs and
+`native_unverified` trust. ACP commands retain `/name` and raw native arguments.
+App-server catalogs preserve enabled path-distinct entries, explicitly query the
+session working directory, and expose `$name` markers. Paths remain backend-only.
+Same-name skills require an opaque selection when the path is ambiguous. Manual
+unambiguous native skill tokens use the same backend resolution; ambiguous tokens
+are refused. Submission carries unchanged text plus native structured skill items.
+Structured skill steering is explicitly unsupported; queue the message as a new
+turn. Unrelated native slash commands retain passthrough behavior.
+
+Independent side chats apply the same native-name validation to each question,
+including queued and retried delivery. Unique native skill names receive backend
+structured items; ambiguous names are refused. Quoted history, references, and
+attachments do not select skills. A provider awaiting its first command catalog
+still accepts ordinary text, including paths and dollar words. Explicit catalog
+selections and known pinned library tokens remain checked.
+Codex requires an available validated catalog for every `$name` candidate; scan
+errors or unsupported listing refuse those submissions instead of sending them
+as text-only turns. Ordinary text and paths remain available.
+
+The ordinary message endpoint accepts optional `skillSelection` with `entryId`,
+`snapshotId`, `controllerGeneration`, `catalogRevision`, `bindingRef`, and `token`.
+There is no client path field or execution endpoint. The opaque selection is
+persisted with delivery content, revalidated on queue drain/retry, and removed
+from the native payload. Altering/removing the selected token clears its binding;
+queue edits also discard the stored binding. Current trust admission is checked
+at transport dispatch. Library rows remain non-invocable with explicit reasons
+until exact-byte projection and version-specific native resolution evidence are
+available. An advertised native command never supplies approval evidence, and
+unproved native/library name collisions disable that invocation.
+
+`POST /api/v1/sessions/{sessionId}/conversation/skills/refresh` accepts an optional
+`snapshotId`. Supported same-snapshot refresh relists the existing immutable
+selection (`forceReload` for app-server). ACP reload is explicitly unsupported.
+Failed reload returns unavailable/restart state rather than old ready bindings.
+Requesting a different snapshot or observing a pending selection returns
+`restart_required`, `snapshot_change_requires_successor`, and
+`nextAction: start_successor_session`. It does not create a successor automatically
+or change the active snapshot, transcript, or trust permissions.

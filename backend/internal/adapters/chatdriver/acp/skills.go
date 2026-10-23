@@ -2,6 +2,8 @@ package acp
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
@@ -18,13 +20,16 @@ func (c *conversation) ListSkills(ctx context.Context) ([]ports.ChatSkill, error
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if !c.skillsKnown {
+		return nil, ports.ErrChatSkillsNotReady
+	}
 	return cloneSkills(c.skills), nil
 }
 
 func (c *conversation) replaceAvailableCommands(commands []acpsdk.AvailableCommand) {
 	skills := make([]ports.ChatSkill, 0, len(commands))
 	hasCompact := false
-	for _, command := range commands {
+	for i, command := range commands {
 		if command.Name == "" {
 			continue
 		}
@@ -42,7 +47,10 @@ func (c *conversation) replaceAvailableCommands(commands []acpsdk.AvailableComma
 			InputHint:   inputHint,
 			// ACP does not report command provenance. "agent" tells the user this
 			// came from the live provider without leaking protocol jargon into UI.
-			Source: "agent",
+			Source:        "agent",
+			ObservationID: fmt.Sprintf("native_%x", sha256.Sum256([]byte(fmt.Sprintf("%d:%s", i, command.Name)))),
+			TrustState:    "native_unverified", Status: "native_passthrough",
+			Transport: "native_text", Token: "/" + command.Name, CanInvoke: true,
 		})
 	}
 

@@ -419,13 +419,14 @@ type ChatExcerptContext struct {
 // the durable transcript has an ordinary readable message; these blocks enrich
 // what the provider receives without leaking protocol DTOs above the adapter.
 type ChatContent struct {
-	Type     string              `json:"type"`
-	Data     string              `json:"data,omitempty"`
-	MIMEType string              `json:"mimeType,omitempty"`
-	URI      string              `json:"uri,omitempty"`
-	Name     string              `json:"name,omitempty"`
-	Text     string              `json:"text,omitempty"`
-	Excerpt  *ChatExcerptContext `json:"excerpt,omitempty"`
+	Type           string              `json:"type"`
+	Data           string              `json:"data,omitempty"`
+	MIMEType       string              `json:"mimeType,omitempty"`
+	URI            string              `json:"uri,omitempty"`
+	Name           string              `json:"name,omitempty"`
+	Text           string              `json:"text,omitempty"`
+	Excerpt        *ChatExcerptContext `json:"excerpt,omitempty"`
+	SkillSelection *ChatSkillSelection `json:"skillSelection,omitempty"`
 	// Internal distinguishes AO-owned prompt context from a user attachment.
 	// Public request DTOs never expose this bit; it is durable so edit/retry and
 	// snapshot reconstruction can hide only content AO actually synthesized.
@@ -471,7 +472,8 @@ type ChatUserMessage struct {
 	AuthoredByUser bool
 	// Settings are the per-turn provider choices for this message. Zero means the
 	// conversation's own defaults.
-	Settings ChatTurnSettings
+	Settings     ChatTurnSettings
+	NativeSkills []ChatNativeSkill
 	// Continuation marks the user's one-click "continue" after stopping a turn,
 	// so the timeline can show a marker instead of a message bubble.
 	Continuation bool
@@ -708,20 +710,65 @@ type ChatMCPReloadResult struct {
 	Authoritative bool
 }
 
-// ChatSkill is one capability the provider exposes to the agent, which a user can
-// invoke by name.
+// ChatSkill separates a native observation from an immutable library identity.
 type ChatSkill struct {
 	Name        string
 	DisplayName string
 	Description string
 	// InputHint is the provider's short argument placeholder, for example
-	// "<issue-number>". It is presentation only; invocation remains ordinary
-	// message text beginning with /Name.
+	// "<issue-number>". It is presentation only; Token and Transport describe invocation.
 	InputHint string
 	// Source says where it came from (built-in, a plugin, the project), so a user
 	// can tell an AO-provided skill from one the provider ships.
-	Source string
+	Source               string
+	Kind                 string
+	Format               string
+	Scope                string
+	ObservationID        string
+	EntryID              string
+	SourceID             string
+	SnapshotID           string
+	ContentHash          string
+	ControllerGeneration string
+	CatalogRevision      string
+	BindingRef           string
+	TrustState           string
+	Status               string
+	ReasonCode           string
+	Transport            string
+	Token                string
+	CanInvoke            bool
+	NativePath           string `json:"-"`
 }
+
+// ChatSkillSelection carries opaque catalog identity, never a filesystem locator.
+type ChatSkillSelection struct {
+	EntryID              string `json:"entryId,omitempty"`
+	SnapshotID           string `json:"snapshotId,omitempty"`
+	CatalogRevision      string `json:"catalogRevision"`
+	BindingRef           string `json:"bindingRef"`
+	ControllerGeneration string `json:"controllerGeneration"`
+	Token                string `json:"token"`
+}
+
+// ChatNativeSkill is resolved exclusively by the backend for native transport.
+type ChatNativeSkill struct{ Name, Path string }
+
+// ChatSkillCatalog is scoped to one immutable session and live controller.
+type ChatSkillCatalog struct {
+	Skills                                            []ChatSkill
+	Status, ReasonCode                                string
+	SessionID                                         domain.SessionID
+	SnapshotID, ControllerGeneration, CatalogRevision string
+	ProviderID, AdapterVersion, ResolverID            string
+	ProjectRevision, TrustEpoch                       int64
+	CanList                                           bool
+	CanReloadSameSnapshot                             bool
+	PendingSelectionID, NextAction                    string
+}
+
+// ErrChatSkillsNotReady means the provider has not supplied a catalog yet.
+var ErrChatSkillsNotReady = errors.New("skill catalog is not available yet")
 
 // ChatCompactionResult reports what a compaction did.
 type ChatCompactionResult struct {
@@ -777,7 +824,12 @@ type (
 	ChatRenamer interface {
 		SetTitle(ctx context.Context, title string) error
 	}
-	// ChatSkillLister enumerates the named skills a user can invoke.
+	// ChatSkillReloader refreshes observations of the same immutable selection.
+	ChatSkillReloader interface {
+		ReloadSkills(ctx context.Context) ([]ChatSkill, error)
+	}
+
+	// ChatSkillLister enumerates native observations without granting library trust.
 	ChatSkillLister interface {
 		ListSkills(ctx context.Context) ([]ChatSkill, error)
 	}

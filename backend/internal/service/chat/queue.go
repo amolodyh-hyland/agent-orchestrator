@@ -164,7 +164,7 @@ func (c *Controller) EditQueuedTurn(ctx context.Context, turnID string, edit Que
 		selected := make([]ports.ChatContent, 0, len(content))
 		index, next := 0, 0
 		for _, block := range content {
-			if block.Type == "text" || ports.IsInternalReplayContent(block) {
+			if block.Type == "text" || block.Type == "skill_selection" || ports.IsInternalReplayContent(block) {
 				selected = append(selected, block)
 				continue
 			}
@@ -179,6 +179,14 @@ func (c *Controller) EditQueuedTurn(ctx context.Context, turnID string, edit Que
 		}
 		content = selected
 	}
+	filtered := content[:0]
+	for _, block := range content {
+		if block.Type == "skill_selection" && (block.SkillSelection == nil || !skillTokenPresent(edit.Text, block.SkillSelection.Token)) {
+			continue
+		}
+		filtered = append(filtered, block)
+	}
+	content = filtered
 	content = append(content, edit.Content...)
 	// Match the native chat upload limits across repeated edits as well as a single request.
 	images, imageBytes := 0, 0

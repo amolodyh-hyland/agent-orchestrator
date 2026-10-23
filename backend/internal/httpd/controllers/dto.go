@@ -2555,7 +2555,8 @@ func (r *SetChatViewRequest) UnmarshalJSON(data []byte) error {
 
 // SendConversationMessageRequest is a message for a Chat session's agent.
 type SendConversationMessageRequest struct {
-	Text string `json:"text"`
+	SkillSelection *ConversationSkillSelectionRequest `json:"skillSelection,omitempty"`
+	Text           string                             `json:"text"`
 	// ClientMessageID makes delivery idempotent. A retry carrying the same value
 	// must not produce a second provider turn.
 	ClientMessageID string                                `json:"clientMessageId,omitempty"`
@@ -2564,6 +2565,21 @@ type SendConversationMessageRequest struct {
 	Excerpts        []ConversationExcerptReferenceRequest `json:"excerpts,omitempty"`
 	// Continuation marks the user's request to continue an interrupted task.
 	Continuation bool `json:"continuation,omitempty"`
+}
+
+// ConversationSkillSelectionRequest identifies one observed row without a client locator.
+type ConversationSkillSelectionRequest struct {
+	EntryID              string `json:"entryId,omitempty"`
+	SnapshotID           string `json:"snapshotId,omitempty"`
+	CatalogRevision      string `json:"catalogRevision"`
+	BindingRef           string `json:"bindingRef"`
+	ControllerGeneration string `json:"controllerGeneration"`
+	Token                string `json:"token"`
+}
+
+// RefreshConversationSkillsRequest refreshes the active snapshot or reports a successor.
+type RefreshConversationSkillsRequest struct {
+	SnapshotID string `json:"snapshotId,omitempty"`
 }
 
 // ConversationExcerptReferenceRequest attaches verified selected transcript
@@ -2762,17 +2778,48 @@ type ConversationModelResponse struct {
 	DefaultEffort string   `json:"defaultEffort,omitempty"`
 }
 
-// ConversationSkillsResponse is the named skills the provider will let this
-// session invoke.
-//
-// An empty list is a real answer, not a failure: it means this agent offers no
-// skills, and a client must render that as "no commands" rather than as an error.
+// ConversationSkillsResponse scopes live observations to a controller and snapshot.
+// Status distinguishes unsupported/warming catalogs from a ready empty list.
 type ConversationSkillsResponse struct {
-	Skills []ConversationSkillResponse `json:"skills"`
+	Skills                []ConversationSkillResponse `json:"skills"`
+	Status                string                      `json:"status"`
+	ReasonCode            string                      `json:"reasonCode,omitempty"`
+	SessionID             string                      `json:"sessionId,omitempty"`
+	SnapshotID            string                      `json:"snapshotId,omitempty"`
+	ControllerGeneration  string                      `json:"controllerGeneration,omitempty"`
+	CatalogRevision       string                      `json:"catalogRevision,omitempty"`
+	ProviderID            string                      `json:"providerId,omitempty"`
+	AdapterVersion        string                      `json:"adapterVersion,omitempty"`
+	ResolverID            string                      `json:"resolverId,omitempty"`
+	ProjectRevision       int64                       `json:"projectRevision"`
+	TrustEpoch            int64                       `json:"trustEpoch"`
+	CanList               bool                        `json:"canList"`
+	CanReloadSameSnapshot bool                        `json:"canReloadSameSnapshot"`
+	PendingSelectionID    string                      `json:"pendingSelectionId,omitempty"`
+	NextAction            string                      `json:"nextAction,omitempty"`
 }
 
-// ConversationSkillResponse is one skill a user can invoke by name.
+// ConversationSkillResponse reports identity, trust and native invocation availability.
 type ConversationSkillResponse struct {
+	Kind   string `json:"kind,omitempty"`
+	Format string `json:"format,omitempty"`
+	Scope  string `json:"scope,omitempty"`
+
+	ObservationID        string `json:"observationId,omitempty"`
+	EntryID              string `json:"entryId,omitempty"`
+	SourceID             string `json:"sourceId,omitempty"`
+	SnapshotID           string `json:"snapshotId,omitempty"`
+	ContentHash          string `json:"contentHash,omitempty"`
+	ControllerGeneration string `json:"controllerGeneration,omitempty"`
+	CatalogRevision      string `json:"catalogRevision,omitempty"`
+	BindingRef           string `json:"bindingRef,omitempty"`
+	TrustState           string `json:"trustState,omitempty"`
+	Status               string `json:"status,omitempty"`
+	ReasonCode           string `json:"reasonCode,omitempty"`
+	Transport            string `json:"transport,omitempty"`
+	Token                string `json:"token,omitempty"`
+	CanInvoke            bool   `json:"canInvoke"`
+
 	// Name is the invocable identifier. It is what a client puts in the message
 	// text; DisplayName is only a label.
 	Name        string `json:"name"`
