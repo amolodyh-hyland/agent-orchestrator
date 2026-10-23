@@ -69,6 +69,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	r.Use(codexAccountOriginMiddleware(cfg.AllowedOrigins))
 	r.Use(corsMiddleware(cfg.AllowedOrigins))
 	r.Use(previewOriginMiddleware(api.sessions))
+	r.Use(outerGuard(r, deps.Outer))
 
 	// JSON envelopes for unmatched routes / methods — chi's defaults are
 	// text/plain, which would break consumers that parse every response as
@@ -81,6 +82,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	mountControl(r, control)
 	mountAgentSwitchPolicyControl(r, control.AgentSwitchPolicy)
 	mountFactoryRunConfirmation(r, deps.FactoryRuns, deps.DelegationAuth)
+	mountOuterNative(r, deps.Outer, deps.DelegationAuth)
 	mountMulticaDelegationJournal(r, deps.MulticaDelegations, deps.DelegationAuth, deps.MulticaDelegationPolicy)
 	mountTelemetry(r, cfg, deps.Telemetry)
 	mountMobile(r, deps.Mobile)

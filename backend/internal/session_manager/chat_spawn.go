@@ -98,6 +98,9 @@ func (m *Manager) RunPromptSuggestionTask(ctx context.Context, id domain.Session
 }
 
 func (m *Manager) runBackgroundTask(ctx context.Context, id domain.SessionID, systemPrompt, prompt string, run func(context.Context, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)) (string, error) {
+	if err := domain.HoldOuterTarget(ctx, m.store, id, "background_task"); err != nil {
+		return "", err
+	}
 	rec, err := m.getRecord(ctx, id)
 	if err != nil {
 		return "", err

@@ -96,6 +96,27 @@ func HoldOuterTarget(ctx context.Context, store any, id SessionID, operation str
 	return ErrOuterHeld
 }
 
+func HoldOuterIncoming(ctx context.Context, store any, id SessionID, operation, text string) error {
+	bound, err := IsOuter(ctx, store, id)
+	if err != nil || !bound {
+		return err
+	}
+	if recorder, ok := store.(interface {
+		RecordOuterEvidence(context.Context, SessionID, string, OuterSource) error
+	}); ok {
+		source := OuterSource{Kind: operation, Unknown: true}
+		if caller, ok := OuterCallerFrom(ctx); ok {
+			source.ProjectID = string(caller.ProjectID)
+			source.ID = string(caller.SessionID)
+			source.Unknown = false
+		}
+		if err := recorder.RecordOuterEvidence(ctx, id, text, source); err != nil {
+			return err
+		}
+	}
+	return ErrOuterHeld
+}
+
 type OuterBinding struct {
 	AnchorProjectID     string    `json:"anchorProjectId"`
 	SessionID           SessionID `json:"sessionId"`

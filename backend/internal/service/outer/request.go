@@ -51,7 +51,12 @@ func (s *Service) Send(ctx context.Context, text string) (domain.OuterRequestRec
 		return domain.OuterRequestReceipt{}, domain.ErrOuterHeld
 	}
 	now := s.now().UTC()
-	r := domain.OuterRequest{ID: a.RequestID, HumanMessage: text, Payload: preview.Text, PayloadDigest: domain.OuterDigest(preview.Text), SessionID: b.SessionID, ConversationID: preview.ConversationID, ProviderConversationID: preview.ProviderConversationID, ControllerGeneration: preview.ControllerGeneration, BindingRevision: b.Revision, ScopeRevision: b.ScopeRevision, SettingsDigest: domain.OuterSettingsDigest(rec, conv, p), Epoch: s.epoch, IssuedAt: now, ExpiresAt: now.Add(2 * time.Minute), Sources: []domain.OuterSource{}}
+	sources, err := s.store.OuterSources(ctx, preview.ProviderConversationID)
+	if err != nil {
+		s.mu.Unlock()
+		return domain.OuterRequestReceipt{}, err
+	}
+	r := domain.OuterRequest{ID: a.RequestID, HumanMessage: text, Payload: preview.Text, PayloadDigest: domain.OuterDigest(preview.Text), SessionID: b.SessionID, ConversationID: preview.ConversationID, ProviderConversationID: preview.ProviderConversationID, ControllerGeneration: preview.ControllerGeneration, BindingRevision: b.Revision, ScopeRevision: b.ScopeRevision, SettingsDigest: domain.OuterSettingsDigest(rec, conv, p), Epoch: s.epoch, IssuedAt: now, ExpiresAt: now.Add(2 * time.Minute), Sources: sources}
 	if err := s.store.CreateOuterRequest(ctx, r); err != nil {
 		s.mu.Unlock()
 		return domain.OuterRequestReceipt{}, err

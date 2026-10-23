@@ -33,6 +33,15 @@ type sessionInputOwnerResolver interface {
 	ResolveSessionInput(context.Context, string) (domain.SessionID, bool, error)
 }
 
+func (m *Manager) RevalidateSessionInput(handle domain.SessionID) bool {
+	ctx := context.Background()
+	id, known := m.sessionInputOwner(ctx, handle)
+	if !known {
+		return false
+	}
+	return domain.HoldOuterTarget(ctx, m.store, id, "terminal.write") == nil && domain.CheckOuterOperation(ctx, m.store, "terminal.write", "", id) == nil && domain.CheckFactoryFeedback(ctx, m.store, id) == nil
+}
+
 func (m *Manager) sessionInputOwner(ctx context.Context, handle domain.SessionID) (domain.SessionID, bool) {
 	if resolver, ok := m.store.(sessionInputOwnerResolver); ok {
 		owner, known, err := resolver.ResolveSessionInput(ctx, string(handle))

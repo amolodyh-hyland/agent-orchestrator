@@ -111,6 +111,10 @@ func (a *Authority) AuthorizeRun(body []byte, proof string) bool {
 	return a.matches(append([]byte("factory-run-v1:"), body...), proof)
 }
 
+func (a *Authority) AuthorizeOuter(body []byte, proof string) bool {
+	return a.matches(append([]byte("outer-native-v1:"), body...), proof)
+}
+
 // ConsumeRun rejects replay, expiry and excessive outstanding desktop requests.
 // The caller must first authenticate the exact body containing nonce and expiry.
 func (a *Authority) ConsumeRun(nonce string, expires int64) bool {

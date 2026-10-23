@@ -117,6 +117,9 @@ func (s *Service) Steer(
 	id domain.SessionID,
 	msg ports.ChatUserMessage,
 ) (SteerResult, error) {
+	if err := domain.HoldOuterIncoming(ctx, s.store, id, "steer", msg.Text); err != nil {
+		return SteerResult{}, err
+	}
 	if err := s.holdUnapprovedContinuation(ctx, id); err != nil {
 		return SteerResult{}, err
 	}
@@ -163,6 +166,9 @@ func (s *Service) SteerOrSend(
 	msg ports.ChatUserMessage,
 	recoverOnly bool,
 ) (SteerOrSendResult, error) {
+	if err := domain.HoldOuterIncoming(ctx, s.store, id, "steer_or_send", msg.Text); err != nil {
+		return SteerOrSendResult{}, err
+	}
 	if err := s.holdUnapprovedContinuation(ctx, id); err != nil {
 		return SteerOrSendResult{}, err
 	}
@@ -548,6 +554,9 @@ func (c *Controller) SteerOrSend(
 	msg ports.ChatUserMessage,
 	recoverOnly bool,
 ) (SteerOrSendResult, error) {
+	if err := domain.HoldOuterTarget(ctx, c.store, c.sessionID, "steer_or_send"); err != nil {
+		return SteerOrSendResult{}, err
+	}
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 

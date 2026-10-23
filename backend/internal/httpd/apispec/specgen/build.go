@@ -161,6 +161,18 @@ func schemaName(_ reflect.Type, defaultName string) string {
 // by projectOperations(). Add an entry when a new contract type is introduced;
 // the drift test fails until the spec is regenerated, which flags the gap.
 var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
+	"OuterView":                                            "OuterView",
+	"OuterRequestView":                                     "OuterRequestView",
+	"DomainOuterBinding":                                   "OuterBinding",
+	"DomainOuterSource":                                    "OuterSource",
+	"DomainOuterCapacity":                                  "OuterCapacity",
+	"DomainOuterEvidence":                                  "OuterEvidence",
+	"DomainOuterFact":                                      "OuterFact",
+	"DomainOuterAudit":                                     "OuterAudit",
+	"ControllersOuterFactsResponse":                        "OuterFactsResponse",
+	"ControllersOuterAuditResponse":                        "OuterAuditResponse",
+	"ControllersOuterFactsQuery":                           "OuterFactsQuery",
+	"ControllersOuterAuditQuery":                           "OuterAuditQuery",
 	"DomainRunMonitoring":                                  "RunMonitoring",
 	"DomainRunMonitorConfig":                               "RunMonitorConfig",
 	"DomainRunParticipantSnapshot":                         "RunParticipantSnapshot",
@@ -784,6 +796,7 @@ func operations() []operation {
 	ops = append(ops, notificationOperations()...)
 	ops = append(ops, reportOperations()...)
 	ops = append(ops, factoryRunOperations()...)
+	ops = append(ops, outerOperations()...)
 	ops = append(ops, usageOperations()...)
 	ops = append(ops, pushOperations()...)
 	ops = append(ops, importOperations()...)

@@ -4,28 +4,48 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 type View struct {
-	Binding      *domain.OuterBinding         `json:"binding"`
-	Requests     []domain.OuterRequestReceipt `json:"requests"`
-	Reservations []domain.OuterCapacity       `json:"reservations"`
-	Incoming     []domain.OuterEvidence       `json:"incoming"`
-	Limitations  []string                     `json:"limitations"`
+	Binding      *domain.OuterBinding   `json:"binding"`
+	Requests     []RequestView          `json:"requests"`
+	Reservations []domain.OuterCapacity `json:"reservations"`
+	Incoming     []domain.OuterEvidence `json:"incoming"`
+	Limitations  []string               `json:"limitations"`
+}
+
+type RequestView struct {
+	ID             string               `json:"id"`
+	SessionID      domain.SessionID     `json:"sessionId"`
+	Digest         string               `json:"digest"`
+	TurnID         string               `json:"turnId"`
+	ProviderTurnID string               `json:"providerTurnId"`
+	State          string               `json:"state"`
+	IssuedAt       time.Time            `json:"issuedAt"`
+	ExpiresAt      time.Time            `json:"expiresAt"`
+	AttemptedAt    time.Time            `json:"attemptedAt"`
+	SubmittedAt    time.Time            `json:"submittedAt"`
+	AcceptedAt     time.Time            `json:"acceptedAt"`
+	SettledAt      time.Time            `json:"settledAt"`
+	Sources        []domain.OuterSource `json:"sources"`
 }
 
 func (s *Service) View(ctx context.Context) (View, error) {
-	v := View{Requests: []domain.OuterRequestReceipt{}, Reservations: []domain.OuterCapacity{}, Incoming: []domain.OuterEvidence{}, Limitations: []string{"M1: main desktop Chat only; every cross-project mutation held", "Observation-only restore; unknown submissions and reservations are retained", "Factory 2 stations / 1 heavy job; outside and unknown activity may hold admission", "Normal permissions; no process isolation, syscall audit, hard host cap or spending cap"}}
+	v := View{Requests: []RequestView{}, Reservations: []domain.OuterCapacity{}, Incoming: []domain.OuterEvidence{}, Limitations: []string{"M1: main desktop Chat only; every cross-project mutation held", "Observation-only restore; unknown submissions and reservations are retained", "Factory 2 stations / 1 heavy job; outside and unknown activity may hold admission", "Normal permissions; no process isolation, syscall audit, hard host cap or spending cap"}}
 	b, found, err := s.store.OuterBinding(ctx)
 	if err != nil || !found {
 		return v, err
 	}
 	v.Binding = &b
-	v.Requests, err = s.store.ListOuterRequests(ctx, b.SessionID)
+	receipts, err := s.store.ListOuterRequests(ctx, b.SessionID)
 	if err != nil {
 		return v, err
+	}
+	for _, r := range receipts {
+		v.Requests = append(v.Requests, RequestView{ID: r.Request.ID, SessionID: r.Request.SessionID, Digest: r.Request.PayloadDigest, TurnID: r.TurnID, ProviderTurnID: r.ProviderTurnID, State: r.State, IssuedAt: r.Request.IssuedAt, ExpiresAt: r.Request.ExpiresAt, AttemptedAt: r.AttemptedAt, SubmittedAt: r.SubmittedAt, AcceptedAt: r.AcceptedAt, SettledAt: r.SettledAt, Sources: r.Request.Sources})
 	}
 	v.Reservations, err = s.store.OuterCapacity(ctx)
 	if err != nil {
@@ -54,11 +74,14 @@ func (s *Service) Read(ctx context.Context, project, kind string, limit int) ([]
 	if err != nil {
 		return nil, err
 	}
-	conversation, err := s.store.ConversationForSession(ctx, b.SessionID)
+	session, sessionFound, err := s.store.GetSession(ctx, b.SessionID)
 	if err != nil {
 		return nil, err
 	}
-	key := conversation.ID
+	if !sessionFound {
+		return nil, domain.ErrOuterHeld
+	}
+	key := session.Metadata.ProviderConversationID
 	if b.HistoryHeld {
 		key = fmt.Sprintf("remaining:%d", b.Generation)
 	}
@@ -76,11 +99,20 @@ func (s *Service) denied(ctx context.Context, operation, reason, project string)
 	return domain.ErrOuterHeld
 }
 
-func(s *Service) Deny(ctx context.Context,op,reason,project string)error{return s.denied(ctx,op,reason,project)}
-func(s *Service) RetainIncoming(ctx context.Context,id domain.SessionID,text string)error{
-	source:=domain.OuterSource{Kind:"incoming",Unknown:true}
-	if caller,ok:=domain.OuterCallerFrom(ctx);ok{source.ProjectID=string(caller.ProjectID);source.ID=string(caller.SessionID);source.Unknown=false}
-	if err:=s.store.RecordOuterEvidence(ctx,id,text,source);err!=nil{return err};return domain.ErrOuterHeld
+func (s *Service) Deny(ctx context.Context, op, reason, project string) error {
+	return s.denied(ctx, op, reason, project)
+}
+func (s *Service) RetainIncoming(ctx context.Context, id domain.SessionID, text string) error {
+	source := domain.OuterSource{Kind: "incoming", Unknown: true}
+	if caller, ok := domain.OuterCallerFrom(ctx); ok {
+		source.ProjectID = string(caller.ProjectID)
+		source.ID = string(caller.SessionID)
+		source.Unknown = false
+	}
+	if err := s.store.RecordOuterEvidence(ctx, id, text, source); err != nil {
+		return err
+	}
+	return domain.ErrOuterHeld
 }
 
 func (s *Service) AuthenticateCaller(ctx context.Context, token string) (domain.OuterCaller, error) {

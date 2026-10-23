@@ -145,6 +145,16 @@ func (m *Manager) acquireSessionInput(id string) (func(), bool) {
 	return lease.AcquireSessionInput(domain.SessionID(id))
 }
 
+func (m *Manager) revalidateInput(id string) bool {
+	m.inputLeaseMu.RLock()
+	lease := m.inputLease
+	m.inputLeaseMu.RUnlock()
+	if guard, ok := lease.(interface{ RevalidateSessionInput(domain.SessionID) bool }); ok {
+		return guard.RevalidateSessionInput(domain.SessionID(id))
+	}
+	return true
+}
+
 // NewManager builds a Manager. src opens attach Streams; events feeds the session
 // channel (may be nil to disable it). A nil logger falls back to slog.Default.
 func NewManager(src Source, events EventSource, log *slog.Logger, opts ...Option) *Manager {
@@ -215,13 +225,10 @@ func (m *Manager) writeInput(terminalID string, a *attachment, raw []byte, relea
 		release()
 		return
 	}
-	finalRelease, allowed := m.acquireSessionInput(terminalID)
-	if !allowed {
+	if !m.revalidateInput(terminalID) {
 		release()
 		return
 	}
-	previousRelease := release
-	release = func() { finalRelease(); previousRelease() }
 	lane.lastInputAt = time.Now()
 	_ = a.writeLeased(raw, release)
 }
@@ -516,6 +523,7 @@ func (c *connState) openTerminal(id string, rows, cols uint16, role string) {
 			c.enqueue(serverMsg{Ch: chTerminal, ID: id, Type: msgExited})
 		},
 		c.mgr.log)
+	a.inputAllowed = func() bool { return c.mgr.revalidateInput(id) }
 	c.mu.Lock()
 	c.terms[id] = a
 	c.mu.Unlock()

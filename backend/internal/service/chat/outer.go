@@ -135,7 +135,7 @@ func (c *Controller) checkOuterReply(ctx context.Context, id, kind string) error
 		return err
 	}
 	a, ok := domain.OuterNativeActionFrom(ctx)
-	if !ok || a.Operation != "outer.reply."+kind || a.SessionID != c.sessionID || a.RequestID != id {
+	if !ok || a.Operation != "outer.reply."+kind || a.SessionID != c.sessionID || a.RequestID != id || a.Generation != c.generation {
 		return domain.ErrOuterHeld
 	}
 	c.mu.Lock()

@@ -1356,6 +1356,9 @@ func (s *Service) Send(
 	id domain.SessionID,
 	msg ports.ChatUserMessage,
 ) (domain.ConversationTurn, error) {
+	if err := domain.HoldOuterIncoming(ctx, s.store, id, "chat.send", msg.Text); err != nil {
+		return domain.ConversationTurn{}, err
+	}
 	if err := domain.CheckFactoryFeedback(ctx, s.store, id); err != nil {
 		return domain.ConversationTurn{}, err
 	}
