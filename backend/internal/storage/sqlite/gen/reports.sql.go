@@ -110,6 +110,7 @@ const assignPendingReportsToBatch = `-- name: AssignPendingReportsToBatch :exec
 UPDATE reports
 SET delivery_batch_id = ?1
 WHERE project_id = ?2 AND delivery_state = 'pending'
+  AND NOT EXISTS (SELECT 1 FROM report_delivery_resolutions x WHERE x.batch_id = reports.delivery_batch_id)
   AND delivery_batch_id = ''
 `
 
@@ -129,6 +130,7 @@ SET delivery_state = 'claimed', claim_token = ?1,
     claimed_at = ?2, delivery_attempts = delivery_attempts + 1,
     last_error = ''
 WHERE project_id = ?3 AND delivery_state = 'pending'
+  AND NOT EXISTS (SELECT 1 FROM report_delivery_resolutions x WHERE x.batch_id = reports.delivery_batch_id)
   AND delivery_batch_id = ?4
 RETURNING id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id
 `
@@ -191,7 +193,8 @@ UPDATE reports
 SET delivery_state = 'claimed', claim_token = ?1,
     claimed_at = ?2, delivery_attempts = delivery_attempts + 1,
     last_error = ''
-WHERE id = ?3 AND delivery_state = 'pending' AND available_at <= ?2
+WHERE id = ?3 AND delivery_state = 'pending'
+  AND NOT EXISTS (SELECT 1 FROM report_delivery_resolutions x WHERE x.batch_id = reports.delivery_batch_id) AND available_at <= ?2
 RETURNING id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id
 `
 
@@ -401,6 +404,22 @@ func (q *Queries) GetReport(ctx context.Context, id string) (Report, error) {
 	return i, err
 }
 
+const getReportDeliveryResolution = `-- name: GetReportDeliveryResolution :one
+SELECT batch_id, resolution, note, resolved_at FROM report_delivery_resolutions WHERE batch_id = ?
+`
+
+func (q *Queries) GetReportDeliveryResolution(ctx context.Context, batchID string) (ReportDeliveryResolution, error) {
+	row := q.db.QueryRowContext(ctx, getReportDeliveryResolution, batchID)
+	var i ReportDeliveryResolution
+	err := row.Scan(
+		&i.BatchID,
+		&i.Resolution,
+		&i.Note,
+		&i.ResolvedAt,
+	)
+	return i, err
+}
+
 const getReportInterrupt = `-- name: GetReportInterrupt :one
 SELECT last_interrupted_at FROM report_worker_interrupts WHERE session_id = ?
 `
@@ -421,6 +440,8 @@ WHERE EXISTS (
       AND r.delivery_state = 'claimed' AND r.claim_token = ?6
       AND s.id = ?7 AND s.kind = 'orchestrator'
 )
+ON CONFLICT(batch_id) DO UPDATE SET batch_id=excluded.batch_id
+WHERE report_chat_deliveries.message_id=excluded.message_id
 `
 
 type LinkReportChatDeliveryParams struct {
@@ -452,6 +473,7 @@ func (q *Queries) LinkReportChatDelivery(ctx context.Context, arg LinkReportChat
 const listPendingReportSchedule = `-- name: ListPendingReportSchedule :many
 SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id FROM reports
 WHERE delivery_state = 'pending'
+  AND NOT EXISTS (SELECT 1 FROM report_delivery_resolutions x WHERE x.batch_id = reports.delivery_batch_id)
 ORDER BY available_at, created_at, id
 LIMIT ?
 `
@@ -499,7 +521,8 @@ func (q *Queries) ListPendingReportSchedule(ctx context.Context, limit int64) ([
 
 const listPendingReports = `-- name: ListPendingReports :many
 SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id FROM reports
-WHERE delivery_state = 'pending' AND available_at <= ?
+WHERE delivery_state = 'pending'
+  AND NOT EXISTS (SELECT 1 FROM report_delivery_resolutions x WHERE x.batch_id = reports.delivery_batch_id) AND available_at <= ?
 ORDER BY created_at, id
 LIMIT ?
 `
@@ -553,6 +576,7 @@ func (q *Queries) ListPendingReports(ctx context.Context, arg ListPendingReports
 const listPendingReportsByProjectSchedule = `-- name: ListPendingReportsByProjectSchedule :many
 SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id FROM reports
 WHERE project_id = ? AND delivery_state = 'pending'
+  AND NOT EXISTS (SELECT 1 FROM report_delivery_resolutions x WHERE x.batch_id = reports.delivery_batch_id)
 ORDER BY available_at, created_at, id
 LIMIT ?
 `
@@ -814,6 +838,46 @@ func (q *Queries) RecordReportChatSubmission(ctx context.Context, arg RecordRepo
 	return err
 }
 
+const recoverReportChatAcceptance = `-- name: RecoverReportChatAcceptance :exec
+UPDATE report_chat_deliveries SET accepted_at = (
+    SELECT min(e.received_at) FROM conversation_provider_events e
+    JOIN conversation_turns t ON t.id = report_chat_deliveries.turn_id
+    JOIN sessions s ON s.id = t.handled_by_session_id
+    WHERE e.conversation_id = t.conversation_id AND e.session_id = t.handled_by_session_id
+      AND e.method = 'turn.started' AND t.provider_turn_id <> ''
+      AND json_extract(e.payload_json, '$.providerTurnId') = t.provider_turn_id
+      AND coalesce(json_extract(e.payload_json, '$.providerConversationId'), '') IN ('', s.provider_conversation_id)
+      AND json_extract(e.payload_json, '$.nativeAcceptance') = 1
+), provider_turn_id = coalesce((SELECT provider_turn_id FROM conversation_turns WHERE id = report_chat_deliveries.turn_id), ''),
+provider_conversation_id = coalesce((SELECT s.provider_conversation_id FROM conversation_turns t JOIN sessions s ON s.id=t.handled_by_session_id WHERE t.id=report_chat_deliveries.turn_id), '')
+WHERE accepted_at IS NULL AND batch_id = ?1
+`
+
+func (q *Queries) RecoverReportChatAcceptance(ctx context.Context, batchID string) error {
+	_, err := q.db.ExecContext(ctx, recoverReportChatAcceptance, batchID)
+	return err
+}
+
+const recoverReportChatDelivery = `-- name: RecoverReportChatDelivery :exec
+INSERT OR IGNORE INTO report_chat_deliveries(batch_id, message_id, client_message_id, conversation_id, turn_id)
+SELECT DISTINCT r.delivery_batch_id, m.id, m.client_message_id, t.conversation_id, t.id
+FROM reports r
+JOIN conversation_messages m ON m.client_message_id = r.delivery_batch_id AND m.role = 'user' AND m.origin = 'automation'
+JOIN conversation_turns t ON t.id = m.turn_id
+JOIN sessions s ON s.id = t.handled_by_session_id AND s.project_id = r.project_id AND s.kind = 'orchestrator'
+WHERE r.delivery_batch_id <> '' AND r.delivery_state IN ('pending', 'claimed')
+  AND (SELECT count(*) FROM conversation_messages cm
+       JOIN conversation_turns ct ON ct.id = cm.turn_id
+       JOIN sessions cs ON cs.id = ct.handled_by_session_id
+       WHERE cm.client_message_id = r.delivery_batch_id AND cm.role = 'user' AND cm.origin = 'automation'
+         AND cs.project_id = r.project_id AND cs.kind = 'orchestrator') = 1 AND r.delivery_batch_id = ?1
+`
+
+func (q *Queries) RecoverReportChatDelivery(ctx context.Context, batchID string) error {
+	_, err := q.db.ExecContext(ctx, recoverReportChatDelivery, batchID)
+	return err
+}
+
 const releaseReport = `-- name: ReleaseReport :one
 UPDATE reports
 SET delivery_state = 'pending', available_at = ?1,
@@ -924,7 +988,7 @@ func (q *Queries) ReleaseReportBatch(ctx context.Context, arg ReleaseReportBatch
 const reportChatReceipt = `-- name: ReportChatReceipt :one
 SELECT d.message_id, d.client_message_id, d.turn_id,
        CAST(coalesce(t.provider_turn_id, d.provider_turn_id) AS TEXT) AS provider_turn_id,
-       CAST(coalesce(t.state, '') AS TEXT) AS state, d.provider_conversation_id, d.submitted_at, d.accepted_at
+       CAST(coalesce(t.state, '') AS TEXT) AS state, CAST(coalesce(t.error_message, '') AS TEXT) AS error_message, d.provider_conversation_id, d.submitted_at, d.accepted_at
 FROM report_chat_deliveries d
 LEFT JOIN conversation_turns t ON t.id = d.turn_id
 WHERE d.batch_id = ?
@@ -936,6 +1000,7 @@ type ReportChatReceiptRow struct {
 	TurnID                 string
 	ProviderTurnID         string
 	State                  string
+	ErrorMessage           string
 	ProviderConversationID string
 	SubmittedAt            sql.NullTime
 	AcceptedAt             sql.NullTime
@@ -950,6 +1015,7 @@ func (q *Queries) ReportChatReceipt(ctx context.Context, batchID string) (Report
 		&i.TurnID,
 		&i.ProviderTurnID,
 		&i.State,
+		&i.ErrorMessage,
 		&i.ProviderConversationID,
 		&i.SubmittedAt,
 		&i.AcceptedAt,
@@ -966,6 +1032,28 @@ WHERE delivery_state = 'claimed'
 
 func (q *Queries) RequeueClaimedReports(ctx context.Context) (int64, error) {
 	result, err := q.db.ExecContext(ctx, requeueClaimedReports)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const resolveReportDelivery = `-- name: ResolveReportDelivery :execrows
+INSERT INTO report_delivery_resolutions(batch_id, resolution, note, resolved_at)
+SELECT ?1, 'delivered_elsewhere', ?2, ?3
+WHERE EXISTS (SELECT 1 FROM reports WHERE delivery_batch_id=?1 AND delivery_state='pending')
+ON CONFLICT(batch_id) DO UPDATE SET resolution=excluded.resolution,note=excluded.note,resolved_at=excluded.resolved_at
+WHERE report_delivery_resolutions.resolution='held'
+`
+
+type ResolveReportDeliveryParams struct {
+	BatchID    string
+	Note       string
+	ResolvedAt time.Time
+}
+
+func (q *Queries) ResolveReportDelivery(ctx context.Context, arg ResolveReportDeliveryParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, resolveReportDelivery, arg.BatchID, arg.Note, arg.ResolvedAt)
 	if err != nil {
 		return 0, err
 	}

@@ -134,6 +134,8 @@ type ReportRecord struct {
 	AcknowledgedAt     time.Time
 	LastError          string
 	DeliveryBatchID    string
+	DeliveryStatus     string
+	ResolutionNote     string
 }
 
 // ErrInvalidReport reports an invalid report or delivery transition input.
@@ -221,6 +223,7 @@ func CoordinationDeliveryID(message string) (string, bool) {
 // ReportDeliveryReceipt distinguishes durable intake from native acceptance.
 type ReportDeliveryReceipt struct {
 	State                  ReportReceiptState
+	ErrorMessage           string
 	MessageID              string
 	ClientMessageID        string
 	TurnID                 string
@@ -235,6 +238,7 @@ type ReportReceiptState string
 const (
 	ReportReceiptQueued            ReportReceiptState = "ao_queued"
 	ReportReceiptUnknown           ReportReceiptState = "unknown"
+	ReportReceiptHeld              ReportReceiptState = "held"
 	ReportReceiptProviderSubmitted ReportReceiptState = "provider_submitted"
 	ReportReceiptNativeAccepted    ReportReceiptState = "native_accepted"
 	ReportReceiptPromptSubmitted   ReportReceiptState = "prompt_submitted"

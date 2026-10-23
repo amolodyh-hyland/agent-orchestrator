@@ -95,3 +95,31 @@ func reportContainsAll(s string, values ...string) bool {
 	}
 	return true
 }
+
+func (f *fakeReportService) ResolveDelivery(_ context.Context, id, resolution, note string) error {
+	f.input = reportsvc.CreateInput{SessionID: domain.SessionID(id), Note: note, Message: resolution}
+	return f.err
+}
+
+func TestReportsAPI_DeliveryStatusAndExplicitResolution(t *testing.T) {
+	svc := &fakeReportService{reports: []domain.ReportRecord{{ID: "report", SessionID: "worker", ProjectID: "project", DeliveryState: domain.ReportPending, DeliveryStatus: "held", LastError: "native receipt missing; resolve explicitly", DeliveryBatchID: "batch"}}}
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, slog.New(slog.DiscardHandler), nil, httpd.APIDeps{Reports: svc}, httpd.ControlDeps{}))
+	defer srv.Close()
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/reports?projectId=project", "")
+	if status != http.StatusOK || !reportContainsAll(string(body), `"deliveryStatus":"held"`, `"lastError":"native receipt missing; resolve explicitly"`, `"deliveryState":"pending"`, `"deliveryBatchId":"batch"`) {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	_, status, _ = doRequest(t, srv, "POST", "/api/v1/reports/report/resolve", `{"resolution":"delivered_elsewhere","note":"read manually"}`)
+	if status != http.StatusNoContent || svc.input.SessionID != "report" || svc.input.Message != "delivered_elsewhere" || svc.input.Note != "read manually" {
+		t.Fatalf("status=%d input=%+v", status, svc.input)
+	}
+	svc.err = apierr.Conflict("REPORT_NOT_UNCERTAIN", "Still queued", nil)
+	body, status, _ = doRequest(t, srv, "POST", "/api/v1/reports/report/resolve", `{"resolution":"delivered_elsewhere","note":"read manually"}`)
+	if status != http.StatusConflict || !reportContainsAll(string(body), "REPORT_NOT_UNCERTAIN", "requestId") {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	_, status, _ = doRequest(t, srv, "POST", "/api/v1/reports/report/resolve", `{"unexpected":true}`)
+	if status != http.StatusBadRequest {
+		t.Fatal(status)
+	}
+}

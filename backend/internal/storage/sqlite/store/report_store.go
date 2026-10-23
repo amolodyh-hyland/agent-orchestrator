@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
@@ -127,6 +128,12 @@ func (s *Store) ClaimPendingReportBatch(ctx context.Context, projectID domain.Pr
 			}); err != nil {
 				return err
 			}
+		}
+		if err := q.RecoverReportChatDelivery(ctx, batchID); err != nil {
+			return err
+		}
+		if err := q.RecoverReportChatAcceptance(ctx, batchID); err != nil {
+			return err
 		}
 		rows, err = q.ClaimPendingReportsByBatch(ctx, gen.ClaimPendingReportsByBatchParams{
 			ProjectID: string(projectID), DeliveryBatchID: batchID,
@@ -286,6 +293,35 @@ func (s *Store) reportWithOutputs(ctx context.Context, row gen.Report) (domain.R
 	for i, output := range outputs {
 		rec.Outputs[i] = domain.ReportOutput{Kind: domain.ReportOutputKind(output.Kind), Reference: output.Reference, Label: output.Label}
 	}
+	rec.DeliveryStatus = string(rec.DeliveryState)
+	if rec.DeliveryBatchID != "" {
+		receipt, linked, err := s.ReportChatReceipt(ctx, rec.DeliveryBatchID)
+		if err != nil {
+			return domain.ReportRecord{}, err
+		}
+		if linked {
+			rec.DeliveryStatus = string(receipt.State)
+			if receipt.State == domain.ReportReceiptUnknown || receipt.State == domain.ReportReceiptHeld {
+				if rec.LastError == "" {
+					rec.LastError = "native acceptance unproved: " + receipt.ErrorMessage
+				}
+				rec.LastError += "; inspect the linked turn or explicitly resolve as delivered elsewhere"
+			}
+		}
+		resolution, err := s.qr.GetReportDeliveryResolution(ctx, rec.DeliveryBatchID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return domain.ReportRecord{}, err
+		}
+		if err == nil {
+			rec.DeliveryStatus = resolution.Resolution
+			if resolution.Resolution == "delivered_elsewhere" {
+				rec.ResolutionNote = resolution.Note
+				rec.LastError = ""
+			} else {
+				rec.LastError = resolution.Note
+			}
+		}
+	}
 	return rec, nil
 }
 
@@ -334,10 +370,17 @@ func (s *Store) ReportChatReceipt(ctx context.Context, batchID string) (domain.R
 	receipt := domain.ReportDeliveryReceipt{State: domain.ReportReceiptUnknown,
 		MessageID: row.MessageID, ClientMessageID: row.ClientMessageID, TurnID: row.TurnID,
 		ProviderTurnID: row.ProviderTurnID, ProviderConversationID: row.ProviderConversationID, SubmittedAt: timeFromNull(row.SubmittedAt), AcceptedAt: timeFromNull(row.AcceptedAt)}
+	receipt.ErrorMessage = row.ErrorMessage
+	if receipt.ErrorMessage == "" {
+		receipt.ErrorMessage = "native acceptance evidence unavailable for turn state " + row.State
+	}
+	if row.State == string(domain.TurnStateCancelled) || row.State == string(domain.TurnStateRecovered) || row.State == string(domain.TurnStateFailed) || row.State == string(domain.TurnStateInterrupted) || row.State == string(domain.TurnStateCompleted) {
+		receipt.State = domain.ReportReceiptHeld
+	}
 	if row.State == string(domain.TurnStateQueued) {
 		receipt.State = domain.ReportReceiptQueued
 	}
-	if row.SubmittedAt.Valid {
+	if row.SubmittedAt.Valid && receipt.State != domain.ReportReceiptHeld {
 		receipt.State = domain.ReportReceiptProviderSubmitted
 	}
 	if row.AcceptedAt.Valid {
@@ -358,4 +401,49 @@ func (s *Store) RecordReportChatSubmission(ctx context.Context, turnID string, a
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
 	return q.RecordReportChatSubmission(ctx, gen.RecordReportChatSubmissionParams{TurnID: turnID, SubmittedAt: nullTime(at)})
+}
+
+func (s *Store) ResolveReportDelivery(ctx context.Context, reportID, note string, at time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "resolve report delivery", func(q *gen.Queries) error {
+		r, err := q.GetReport(ctx, reportID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return apierr.NotFound("REPORT_NOT_FOUND", "Unknown report")
+		}
+		if err != nil {
+			return err
+		}
+		if r.DeliveryBatchID == "" {
+			return apierr.Conflict("REPORT_NOT_LINKED", "Report has no delivery batch", nil)
+		}
+		existing, err := q.GetReportDeliveryResolution(ctx, r.DeliveryBatchID)
+		if err == nil && existing.Resolution != "held" {
+			if existing.Note != note {
+				return apierr.Conflict("REPORT_RESOLUTION_CONFLICT", "A different resolution is already recorded", nil)
+			}
+			return nil
+		}
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if r.DeliveryState != "pending" {
+			return apierr.Conflict("REPORT_DELIVERY_BUSY", "Only pending deliveries can be resolved", nil)
+		}
+		receipt, receiptErr := q.ReportChatReceipt(ctx, r.DeliveryBatchID)
+		if receiptErr != nil && !errors.Is(receiptErr, sql.ErrNoRows) {
+			return receiptErr
+		}
+		if (receiptErr != nil && existing.Resolution != "held") || receipt.State == "queued" || receipt.AcceptedAt.Valid {
+			return apierr.Conflict("REPORT_NOT_UNCERTAIN", "Only a held or unknown linked delivery can be resolved", nil)
+		}
+		count, err := q.ResolveReportDelivery(ctx, gen.ResolveReportDeliveryParams{BatchID: r.DeliveryBatchID, Note: note, ResolvedAt: at})
+		if err != nil {
+			return err
+		}
+		if count != 1 {
+			return apierr.Conflict("REPORT_RESOLUTION_CONFLICT", "Delivery changed before resolution", nil)
+		}
+		return nil
+	})
 }

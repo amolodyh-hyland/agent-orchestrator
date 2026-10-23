@@ -23,6 +23,7 @@ var shippedMigrations = map[int64]string{
 	222: "0222_factory_run_evidence.sql",
 	223: "0223_factory_run_evidence_bounds.sql",
 	224: "0224_report_chat_acceptance.sql",
+	225: "0225_report_delivery_recovery.sql",
 	220: "0220_library_registry.sql",
 	221: "0221_library_session_snapshots.sql",
 	1:   "0001_init.sql",

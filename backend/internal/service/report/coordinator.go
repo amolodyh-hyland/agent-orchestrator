@@ -287,7 +287,7 @@ func (c *Coordinator) finishChatDelivery(ctx context.Context, batch PreparedBatc
 		_, err := c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
 		return err
 	}
-	_, err := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(c.retryDelay), "native acceptance "+string(receipt.State))
+	_, err := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(c.retryDelay), "native acceptance "+string(receipt.State)+": "+receipt.ErrorMessage)
 	return err
 }
 

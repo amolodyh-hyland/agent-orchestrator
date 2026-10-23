@@ -1031,10 +1031,11 @@ LIMIT 1;
 -- name: ReserveQueuedConversationTurnForPromotion :execrows
 UPDATE conversation_turns
 SET promotion_started_at = sqlc.arg(promotion_started_at)
-WHERE id = sqlc.arg(id)
-  AND conversation_id = sqlc.arg(conversation_id)
+WHERE conversation_turns.id = sqlc.arg(id)
+  AND conversation_turns.conversation_id = sqlc.arg(conversation_id)
   AND state = 'queued'
-  AND promotion_started_at IS NULL;
+  AND promotion_started_at IS NULL
+  AND NOT EXISTS (SELECT 1 FROM report_chat_deliveries WHERE turn_id=conversation_turns.id);
 
 -- The content is loaded after the compare-and-set, from AO's durable message
 -- rather than from a client request that could be stale or substituted.

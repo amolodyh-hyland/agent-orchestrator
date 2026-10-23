@@ -56,15 +56,20 @@ type ReportOutputResponse struct {
 
 // ReportResponse is one persisted worker claim, independent of delivery state.
 type ReportResponse struct {
-	ID          string                 `json:"id"`
-	SessionID   string                 `json:"sessionId"`
-	ProjectID   string                 `json:"projectId"`
-	State       string                 `json:"state,omitempty"`
-	Note        string                 `json:"note,omitempty"`
-	Message     string                 `json:"message,omitempty"`
-	Outputs     []ReportOutputResponse `json:"outputs,omitempty"`
-	CreatedAt   time.Time              `json:"createdAt"`
-	RepeatCount int64                  `json:"repeatCount"`
+	DeliveryState   string                 `json:"deliveryState,omitempty"`
+	DeliveryStatus  string                 `json:"deliveryStatus,omitempty"`
+	DeliveryBatchID string                 `json:"deliveryBatchId,omitempty"`
+	LastError       string                 `json:"lastError,omitempty"`
+	ResolutionNote  string                 `json:"resolutionNote,omitempty"`
+	ID              string                 `json:"id"`
+	SessionID       string                 `json:"sessionId"`
+	ProjectID       string                 `json:"projectId"`
+	State           string                 `json:"state,omitempty"`
+	Note            string                 `json:"note,omitempty"`
+	Message         string                 `json:"message,omitempty"`
+	Outputs         []ReportOutputResponse `json:"outputs,omitempty"`
+	CreatedAt       time.Time              `json:"createdAt"`
+	RepeatCount     int64                  `json:"repeatCount"`
 }
 
 // ListReportsResponse contains a project's ordered persisted reports.
@@ -3735,4 +3740,13 @@ type RunEvidencePage struct {
 type RunEvidencePageQuery struct {
 	AfterVersion int64 `query:"afterVersion" required:"false"`
 	Limit        int64 `query:"limit" required:"false"`
+}
+
+type ReportPathParams struct {
+	ReportID string `path:"reportId" description:"Durable report identifier."`
+}
+
+type ResolveReportDeliveryRequest struct {
+	Resolution string `json:"resolution" enum:"delivered_elsewhere"`
+	Note       string `json:"note"`
 }

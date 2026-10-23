@@ -612,3 +612,122 @@ func TestReportChatAcceptanceCommitsWithNativeEvent(t *testing.T) {
 		t.Fatal("projection recovery resent work")
 	}
 }
+
+func TestReportPiggybackPromotionIsFencedBeforeProvider(t *testing.T) {
+	ctx := context.Background()
+	h, provider := steerHarness(t)
+	seedChatReport(t, h, "report")
+	coordinator := reportsvc.NewCoordinator(reportsvc.CoordinatorDeps{Store: h.st, Now: h.now, RetryDelay: time.Second})
+	h.svc.SetReportCoordinator(coordinator)
+	queued, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "human piggyback", ClientMessageID: "piggyback", Origin: domain.MessageOriginHuman})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.PromoteQueuedTurn(ctx, testSession, queued.ID); !errors.Is(err, chatsvc.ErrTurnNotQueued) {
+		t.Fatalf("promotion error=%v", err)
+	}
+	if len(provider.steers()) != 0 {
+		t.Fatal("report-bearing promotion contacted provider")
+	}
+	source, err := h.st.TurnByID(ctx, queued.ID)
+	if err != nil || source.State != domain.TurnStateQueued {
+		t.Fatalf("source=%+v err=%v", source, err)
+	}
+	assertReportState(t, h.st, "report", domain.ReportPending)
+}
+
+func TestReportHeldDeliveryExplicitResolutionNeverResends(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+	seedChatReport(t, h, "report")
+	if _, err := h.ctrl.Send(ctx, ports.ChatUserMessage{Text: "busy"}); err != nil {
+		t.Fatal(err)
+	}
+	delivery := &reportChatDelivery{h: h}
+	coordinator := reportsvc.NewCoordinator(reportsvc.CoordinatorDeps{Store: h.st, Delivery: delivery, Now: h.now, RetryDelay: time.Second})
+	if _, err := coordinator.RunDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	record := assertReportState(t, h.st, "report", domain.ReportPending)
+	receipt, _, err := h.st.ReportChatReceipt(ctx, record.DeliveryBatchID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := reportsvc.New(reportsvc.Deps{Store: h.st, Now: h.now})
+	if err := service.ResolveDelivery(ctx, "report", "delivered_elsewhere", "read manually"); err == nil {
+		t.Fatal("resolved a still-queued report")
+	}
+	if err := h.st.CancelQueuedTurnByID(ctx, h.ctrl.ConversationID(), receipt.TurnID, h.now()); err != nil {
+		t.Fatal(err)
+	}
+	reports, err := service.ListProject(ctx, testProject)
+	if err != nil || len(reports) != 1 || reports[0].DeliveryStatus != "held" || reports[0].LastError == "" {
+		t.Fatalf("reports=%+v err=%v", reports, err)
+	}
+	if err := service.ResolveDelivery(ctx, "report", "resend", "retry automatically"); err == nil {
+		t.Fatal("accepted an unsupported resolution")
+	}
+	if err := service.ResolveDelivery(ctx, "report", "delivered_elsewhere", ""); err == nil {
+		t.Fatal("accepted empty reason")
+	}
+	for range 2 {
+		if err := service.ResolveDelivery(ctx, "report", "delivered_elsewhere", "read manually"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := service.ResolveDelivery(ctx, "report", "delivered_elsewhere", "changed reason"); err == nil {
+		t.Fatal("overwrote durable resolution")
+	}
+	resolved, _, err := h.st.GetReport(ctx, "report")
+	if err != nil || resolved.DeliveryStatus != "delivered_elsewhere" || resolved.ResolutionNote != "read manually" || !resolved.AcknowledgedAt.IsZero() {
+		t.Fatalf("resolved=%+v err=%v", resolved, err)
+	}
+	for range 3 {
+		h.advance(time.Hour)
+		if _, err := coordinator.RunDue(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, claimed, err := h.st.ClaimReport(ctx, "report", "new-token", h.now()); err != nil || claimed {
+		t.Fatalf("resolved report was reclaimable: claimed=%v err=%v", claimed, err)
+	}
+	if delivery.calls != 1 || h.conv.sendCallCount() != 1 {
+		t.Fatal("resolution resubmitted work")
+	}
+	seedChatReport(t, h, "new-report")
+	if _, err := coordinator.RunDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if delivery.calls != 2 {
+		t.Fatal("resolved batch blocked newer reports")
+	}
+}
+
+func TestReportExistingClientMessageAcquiresReceiptOnDuplicate(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+	seedChatReport(t, h, "report")
+	if _, err := h.ctrl.Send(ctx, ports.ChatUserMessage{Text: "busy"}); err != nil {
+		t.Fatal(err)
+	}
+	coordinator := reportsvc.NewCoordinator(reportsvc.CoordinatorDeps{Store: h.st, Now: h.now})
+	batch, err := coordinator.PreparePiggyback(ctx, testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := ports.ChatUserMessage{Text: batch.Render(), ClientMessageID: batch.ID, Origin: domain.MessageOriginAutomation}
+	original, err := h.ctrl.Send(ctx, message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message.ReportBatchID = batch.ID
+	message.ReportClaimToken = batch.Token
+	duplicate, err := h.ctrl.Send(ctx, message)
+	if err != nil || duplicate.ID != "" {
+		t.Fatalf("duplicate=%+v err=%v", duplicate, err)
+	}
+	receipt, found, err := h.st.ReportChatReceipt(ctx, batch.ID)
+	if err != nil || !found || receipt.TurnID != original.ID || receipt.State != domain.ReportReceiptQueued || h.conv.sendCallCount() != 1 {
+		t.Fatalf("receipt=%+v found=%v err=%v", receipt, found, err)
+	}
+}

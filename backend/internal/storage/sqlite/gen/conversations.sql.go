@@ -1784,10 +1784,11 @@ func (q *Queries) ReplaceUntouchedConversationProvider(ctx context.Context, arg 
 const reserveQueuedConversationTurnForPromotion = `-- name: ReserveQueuedConversationTurnForPromotion :execrows
 UPDATE conversation_turns
 SET promotion_started_at = ?1
-WHERE id = ?2
-  AND conversation_id = ?3
+WHERE conversation_turns.id = ?2
+  AND conversation_turns.conversation_id = ?3
   AND state = 'queued'
   AND promotion_started_at IS NULL
+  AND NOT EXISTS (SELECT 1 FROM report_chat_deliveries WHERE turn_id=conversation_turns.id)
 `
 
 type ReserveQueuedConversationTurnForPromotionParams struct {

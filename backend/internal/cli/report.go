@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"unicode/utf8"
@@ -51,6 +53,7 @@ func newReportCommand(ctx *commandContext) *cobra.Command {
 	f.BoolVar(&o.needsInput, "needs-input", false, "Report that input is needed")
 	f.BoolVar(&o.stuck, "stuck", false, "Report that work is stuck")
 	f.BoolVar(&o.done, "done", false, "Report that work is done")
+	cmd.AddCommand(newReportStatusCommand(ctx), newReportResolveCommand(ctx))
 	return cmd
 }
 
@@ -131,4 +134,54 @@ func legacyReportStatus(value string) bool {
 	default:
 		return false
 	}
+}
+
+func newReportStatusCommand(c *commandContext) *cobra.Command {
+	var project string
+	var jsonOutput bool
+	cmd := &cobra.Command{Use: "status", Short: "Show report delivery status and unresolved receipt errors", Args: noArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		if project == "" {
+			return usageError{errors.New("usage: --project is required")}
+		}
+		var result struct {
+			Reports []struct {
+				ID             string `json:"id"`
+				DeliveryStatus string `json:"deliveryStatus"`
+				LastError      string `json:"lastError"`
+				ResolutionNote string `json:"resolutionNote"`
+			} `json:"reports"`
+		}
+		if err := c.getJSON(cmd.Context(), "reports?projectId="+url.QueryEscape(project), &result); err != nil {
+			return err
+		}
+		if jsonOutput {
+			return writeJSON(cmd.OutOrStdout(), result)
+		}
+		for _, r := range result.Reports {
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s: %s %s%s\n", r.ID, r.DeliveryStatus, r.LastError, r.ResolutionNote); err != nil {
+				return err
+			}
+		}
+		return nil
+	}}
+	cmd.Flags().StringVarP(&project, "project", "p", "", "Stable project id")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output delivery status as JSON")
+	return cmd
+}
+
+func newReportResolveCommand(c *commandContext) *cobra.Command {
+	var deliveredElsewhere bool
+	var note string
+	cmd := &cobra.Command{Use: "resolve <report-id>", Short: "Record an explicit delivered-elsewhere resolution without resending", Args: usageArgs(cobra.ExactArgs(1)), RunE: func(cmd *cobra.Command, args []string) error {
+		if !deliveredElsewhere || strings.TrimSpace(note) == "" || utf8.RuneCountInString(note) > domain.MaxReportTextCharacters {
+			return usageError{errors.New("usage: --delivered-elsewhere and --note (at most 1000 characters) are required")}
+		}
+		return c.postJSON(cmd.Context(), "reports/"+url.PathEscape(args[0])+"/resolve", struct {
+			Resolution string `json:"resolution"`
+			Note       string `json:"note"`
+		}{"delivered_elsewhere", note}, nil)
+	}}
+	cmd.Flags().BoolVar(&deliveredElsewhere, "delivered-elsewhere", false, "Resolve without claiming native acceptance or resending")
+	cmd.Flags().StringVar(&note, "note", "", "Reason for the human resolution")
+	return cmd
 }

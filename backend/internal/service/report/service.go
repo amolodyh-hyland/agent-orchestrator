@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -150,4 +152,20 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.ReportR
 		}
 	}
 	return created, nil
+}
+
+func (s *Service) ResolveDelivery(ctx context.Context, reportID, resolution, note string) error {
+	if s == nil || s.store == nil {
+		return errors.New("report: store is required")
+	}
+	if reportID == "" || resolution != "delivered_elsewhere" || strings.TrimSpace(note) == "" || utf8.RuneCountInString(note) > domain.MaxReportTextCharacters {
+		return apierr.Invalid("INVALID_REPORT_RESOLUTION", "Choose delivered_elsewhere and provide a note of at most 1000 characters", nil)
+	}
+	resolver, ok := s.store.(interface {
+		ResolveReportDelivery(context.Context, string, string, time.Time) error
+	})
+	if !ok {
+		return errors.New("report: delivery resolver is required")
+	}
+	return resolver.ResolveReportDelivery(ctx, reportID, note, s.now().UTC())
 }

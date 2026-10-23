@@ -684,6 +684,13 @@ type ReportChatDelivery struct {
 	AcceptedAt             sql.NullTime
 }
 
+type ReportDeliveryResolution struct {
+	BatchID    string
+	Resolution string
+	Note       string
+	ResolvedAt time.Time
+}
+
 type ReportOutput struct {
 	ReportID  string
 	Position  int64
