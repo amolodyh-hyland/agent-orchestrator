@@ -1829,7 +1829,7 @@ function ChatWorkspaceContent({
 										sentMessages={sentMessages}
 										sentMessagesScope={`${snapshot.conversationId}:${snapshot.activeBranchId ?? ""}`}
 										draftSeed={composerDraftSeed}
-										promptSuggestion={!queueEdit && !composerApproval && !composerElicitation && !turn &&
+										promptSuggestion={!nativeSession && !queueEdit && !composerApproval && !composerElicitation && !turn &&
 											!busy && !sendPending && !steerPending && !agentInputDisabled && !newWorkDisabled &&
 											!controllerTransitioning && !loadingQuietly && !agentResuming &&
 											!workspaceActiveTabKey && !reviewerActive && !shellActive && snapshot.controller.state === "ready"
