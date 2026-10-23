@@ -37,3 +37,14 @@ it("continues the startup scan after one unavailable reference", async () => {
 	const monitor = createFactoryDelegationMonitor({ origin: () => "http://127.0.0.1:39001", fetch: vi.fn(async () => new Response(JSON.stringify({ runs: rows }))) as typeof fetch, restore });
 	await vi.advanceTimersByTimeAsync(0); expect(restore).toHaveBeenCalledTimes(2); expect(restore).toHaveBeenLastCalledWith(rows[1]); monitor.dispose();
 });
+it("restores every approved page without an observation sweep or any POST", async () => {
+ vi.useFakeTimers();
+ const fetcher=vi.fn(async(url: string,input: RequestInit)=>{
+  expect(input.method).toBe("GET");
+  return new Response(JSON.stringify(url.includes("afterId=") ? {runs:[{projectId:"p",taskId:"late",delegationId:"late-id"}]} : {runs:[{projectId:"p",taskId:"early",delegationId:"early-id"}],nextCursor:"run-099"}));
+ });
+ const restore=vi.fn(async()=>undefined);
+ const monitor=createFactoryDelegationMonitor({origin:()=>"http://127.0.0.1:39001",fetch:fetcher as typeof fetch,restore});
+ await vi.advanceTimersByTimeAsync(0);
+ expect(fetcher).toHaveBeenCalledTimes(2);expect(fetcher.mock.calls[1][0]).toContain("afterId=run-099");expect(restore).toHaveBeenCalledTimes(2);monitor.dispose();
+});

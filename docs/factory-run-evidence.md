@@ -246,3 +246,20 @@ and feedback held; unknown ownership never frees a workspace. This consumes the
 PR #48 report coordinator and PR #57 native receipt distinction, preserving their
 cross-project deferral and recovery behavior. It does not implement the later
 factory admission, isolation or continuation-approval workflow.
+
+Monitoring sweeps advance at most 25 references per pass and persist an exclusive
+cursor before each observation. A timeout, restart or failed observation advances
+the next pass beyond that reference; the cursor wraps at the end. Each run has its
+own observation lock. Listing never waits for a complete sweep: it returns saved
+snapshots and explicit `unobserved` references in pages of 1–100 rows, using
+`afterId`/`nextCursor`. `ao run attention --after-id <cursor> --limit 100` reads the
+next page. The desktop follows every page when restoring delegation observation.
+SQL limits report observations to the newest 100 metadata rows before hydration;
+no report bodies or output attachments are loaded. Participant queries read only
+the run worker and active report recipients. Feedback policy metadata is bounded
+to 1,000 entries, with an explicit held marker for additional entries.
+
+All review trigger sources recheck the factory hold after admission waits and
+before invoking the shared review engine. A source label cannot authorize a new
+factory review. Reviewer Chat messages from the daemon pass the same hold at
+queue drain, dispatch, provider submission and deferred transport admission.

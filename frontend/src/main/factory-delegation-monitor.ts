@@ -17,16 +17,24 @@ export function createFactoryDelegationMonitor(options: {
 				if (!base) return;
 				const origin = new URL(base);
 				if (origin.protocol !== "http:" || origin.hostname !== "127.0.0.1" || origin.username || origin.password || origin.pathname !== "/" || origin.search || origin.hash) return;
-				const response = await options.fetch(`${origin.origin}/api/v1/runs/monitoring`, { method: "GET", redirect: "error", credentials: "omit", signal: AbortSignal.timeout(5000) });
-				if (!response.ok || disposed) return;
-				const body: unknown = await response.json();
-				if (!body || typeof body !== "object" || !("runs" in body) || !Array.isArray(body.runs)) return;
-				for (const row of body.runs) {
-					if (disposed) return;
-					if (row && typeof row.projectId === "string" && typeof row.taskId === "string" && typeof row.delegationId === "string" && row.delegationId) {
-						try { await options.restore(row); } catch {}
+				let afterId = "";
+				const seen = new Set<string>();
+				do {
+					const query = afterId ? `?afterId=${encodeURIComponent(afterId)}` : "";
+					const response = await options.fetch(`${origin.origin}/api/v1/runs/monitoring${query}`, { method: "GET", redirect: "error", credentials: "omit", signal: AbortSignal.timeout(5000) });
+					if (!response.ok || disposed) return;
+					const body: unknown = await response.json();
+					if (!body || typeof body !== "object" || !("runs" in body) || !Array.isArray(body.runs)) return;
+					for (const row of body.runs) {
+						if (disposed) return;
+						if (row && typeof row.projectId === "string" && typeof row.taskId === "string" && typeof row.delegationId === "string" && row.delegationId) {
+							try { await options.restore(row); } catch {}
+						}
 					}
-				}
+					afterId = "nextCursor" in body && typeof body.nextCursor === "string" ? body.nextCursor : "";
+					if (afterId && seen.has(afterId)) return;
+					if (afterId) seen.add(afterId);
+				} while (afterId && !disposed);
 			} catch {} finally {
 				pending = undefined;
 				if (!disposed) timer = setTimeout(() => void scan(), 30_000);

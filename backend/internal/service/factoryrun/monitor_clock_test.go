@@ -67,13 +67,16 @@ func TestMonitorFiveMinuteSilenceBuildDeadlineAndFreshness(t *testing.T) {
 
 func TestMonitorStatusHonorsDeadlineWhileScanOwnsLock(t *testing.T) {
 	m := NewMonitor(nil)
-	m.mu <- struct{}{}
+	release, err := m.lock(context.Background(), "r")
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	started := time.Now()
-	_, err := m.Get(ctx, "r")
+	_, err = m.Get(ctx, "r")
 	if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) > time.Second {
 		t.Fatalf("unbounded status: %v", err)
 	}
-	<-m.mu
+	release()
 }

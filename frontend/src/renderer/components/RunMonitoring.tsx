@@ -1,3 +1,4 @@
+import type { components } from "../../api/schema";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { apiClient } from "../lib/api-client";
@@ -9,9 +10,19 @@ export function RunMonitoring({ projectId, runId, sessionId }: { projectId?: str
 	const query = useQuery({
 		queryKey: ["run-monitoring", projectId, runId, sessionId],
 		queryFn: async ({ signal }) => {
-			const { data, error } = await apiClient.GET("/api/v1/runs/monitoring", { params: { query: { projectId } }, signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) });
-			if (error) throw error;
-			return (data?.runs ?? []).filter((row) => (!projectId || row.projectId === projectId) && (!runId || row.runId === runId) && (!sessionId || row.participants.some((p) => p.sessionId === sessionId)));
+			const rows: components["schemas"]["RunMonitoring"][] = [];
+			const bounded = AbortSignal.any([signal, AbortSignal.timeout(5000)]);
+			let afterId: string | undefined;
+			const seen = new Set<string>();
+			do {
+				const { data, error } = await apiClient.GET("/api/v1/runs/monitoring", { params: { query: { projectId, afterId, limit: 100 } }, signal: bounded });
+				if (error) throw error;
+				rows.push(...(data?.runs ?? []));
+				afterId = data?.nextCursor;
+				if (afterId && seen.has(afterId)) throw new Error("repeated_monitor_cursor");
+				if (afterId) seen.add(afterId);
+			} while (afterId);
+			return rows.filter((row) => (!projectId || row.projectId === projectId) && (!runId || row.runId === runId) && (!sessionId || row.sessionId === sessionId || row.participants.some((p) => p.sessionId === sessionId)));
 		},
 		refetchInterval: 30_000,
 	});
@@ -23,8 +34,8 @@ export function RunMonitoring({ projectId, runId, sessionId }: { projectId?: str
 		{query.data?.map((row) => <div key={row.runId} className="space-y-1 border-t border-border py-2">
 			<p className="break-all">{row.runId} · {row.stage} · {copy("progress", "In progress")}</p>
 			<p>{copy("owner", "Next owner")}: {row.config.nextOwner || copy("unknown", "Unknown — human decision required")}</p>
-			<p className="text-xs text-muted-foreground">{copy("observed", "Observed")}: {new Date(row.observedAt).toLocaleString()} · {query.isError ? copy("unavailable", "Unavailable") : row.freshness} · {Math.max(0, Math.floor((Date.now() - Date.parse(row.observedAt)) / 60_000))} {copy("minutesOld", "min old")}</p>
-			<p className="text-xs text-muted-foreground">{copy("activity", "Last activity")}: {new Date(row.lastActivityAt).toLocaleString()} · {copy("deadline", "Deadline")}: {new Date(row.deadline).toLocaleString()}</p>
+			<p className="text-xs text-muted-foreground">{copy("observed", "Observed")}: {Date.parse(row.observedAt) > 0 ? new Date(row.observedAt).toLocaleString() : copy("unobserved", "Not observed yet")} · {query.isError ? copy("unavailable", "Unavailable") : row.freshness} · {Math.max(0, Math.floor((Date.now() - (Date.parse(row.observedAt) > 0 ? Date.parse(row.observedAt) : Date.now())) / 60_000))} {copy("minutesOld", "min old")}</p>
+			<p className="text-xs text-muted-foreground">{copy("activity", "Last activity")}: {Date.parse(row.lastActivityAt) > 0 ? new Date(row.lastActivityAt).toLocaleString() : copy("unknownTime", "Unknown")} · {copy("deadline", "Deadline")}: {Date.parse(row.deadline) > 0 ? new Date(row.deadline).toLocaleString() : copy("unknownTime", "Unknown")}</p>
 			{row.attention ? <p role="status" className="text-warning">{copy("attention", "Needs attention")}: {row.attention.condition} · {row.attention.acknowledgedAt ? copy("acknowledged", "Display acknowledged; cause remains") : copy("unacknowledged", "Not acknowledged")}</p> : null}
 			{row.reports.map((report) => <p key={report.id} className="break-all text-xs text-muted-foreground">{report.id} · {copy("delivery", "Report delivery")}: {report.deliveryState} · {copy("native", "Native receipt")}: {report.nativeReceipt}</p>)}
 		</div>)}

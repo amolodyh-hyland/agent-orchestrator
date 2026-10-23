@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -13,68 +14,133 @@ import (
 // MonitorStore reads existing participant facts and persists observation snapshots.
 type MonitorStore interface {
 	Store
-	ApprovedActiveFactoryRuns(context.Context) ([]domain.FactoryRun, error)
+	ApprovedFactoryRunPage(context.Context, string, string, int64) ([]domain.FactoryRun, error)
+	GetFactoryMonitorCursor(context.Context, string) (string, error)
+	SaveFactoryMonitorCursor(context.Context, string, string) error
 	GetRunMonitor(context.Context, string) (domain.RunMonitoring, bool, error)
 	SaveRunMonitor(context.Context, domain.RunMonitoring) error
-	ListSessions(context.Context, domain.ProjectID) ([]domain.SessionRecord, error)
-	ListReportsBySession(context.Context, domain.SessionID) ([]domain.ReportRecord, error)
+	FactoryMonitorParticipants(context.Context, string, domain.SessionID) ([]domain.SessionRecord, error)
+	FactoryMonitorReports(context.Context, domain.SessionID, time.Time) ([]domain.ReportRecord, error)
 	ReportChatReceipt(context.Context, string) (domain.ReportDeliveryReceipt, bool, error)
-	ListPRsBySession(context.Context, domain.SessionID) ([]domain.PullRequest, error)
-	ListPRComments(context.Context, string) ([]domain.PullRequestComment, error)
-	ListPRReviews(context.Context, string) ([]domain.PullRequestReview, error)
+	FactoryMonitorPolicies(context.Context, domain.SessionID) ([]string, error)
 }
 
 // Monitor restores passive observation without an execution callback.
 type Monitor struct {
 	store MonitorStore
-	mu    chan struct{}
+	mu    sync.Mutex
+	runs  map[string]chan struct{}
+	sweep chan struct{}
 	now   func() time.Time
 }
 
 // NewMonitor constructs a monitor using durable run and report records.
 func NewMonitor(store MonitorStore) *Monitor {
-	return &Monitor{store: store, now: time.Now, mu: make(chan struct{}, 1)}
+	return &Monitor{store: store, now: time.Now, runs: make(map[string]chan struct{}), sweep: make(chan struct{}, 1)}
 }
-
-func (m *Monitor) lock(ctx context.Context) error {
+func (m *Monitor) lock(ctx context.Context, id string) (func(), error) {
+	m.mu.Lock()
+	semaphore := m.runs[id]
+	if semaphore == nil {
+		semaphore = make(chan struct{}, 1)
+		m.runs[id] = semaphore
+	}
+	m.mu.Unlock()
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
-	case m.mu <- struct{}{}:
-		return nil
+		return nil, ctx.Err()
+	case semaphore <- struct{}{}:
+		return func() { <-semaphore }, nil
 	}
 }
 
-// Scan observes only confirmed run references, optionally within one project.
+// Scan advances one durable batch; a timed-out run cannot starve later references.
 func (m *Monitor) Scan(ctx context.Context, project string) ([]domain.RunMonitoring, error) {
-	if err := m.lock(ctx); err != nil {
-		return nil, err
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case m.sweep <- struct{}{}:
 	}
-	defer func() { <-m.mu }()
-	runs, err := m.store.ApprovedActiveFactoryRuns(ctx)
+	defer func() { <-m.sweep }()
+	after, err := m.store.GetFactoryMonitorCursor(ctx, project)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]domain.RunMonitoring, 0, len(runs))
-	for _, run := range runs {
-		if project != "" && run.ProjectID != project {
-			continue
+	runs, err := m.store.ApprovedFactoryRunPage(ctx, project, after, 25)
+	if err != nil {
+		return nil, err
+	}
+	if len(runs) == 0 {
+		if err := m.store.SaveFactoryMonitorCursor(ctx, project, ""); err != nil {
+			return nil, err
 		}
-		observation, err := m.observe(ctx, run)
+		runs, err = m.store.ApprovedFactoryRunPage(ctx, project, "", 25)
 		if err != nil {
 			return nil, err
 		}
+	}
+	out := make([]domain.RunMonitoring, 0, len(runs))
+	var firstErr error
+	for _, run := range runs {
+		if err := m.store.SaveFactoryMonitorCursor(ctx, project, run.ID); err != nil {
+			return out, err
+		}
+		release, err := m.lock(ctx, run.ID)
+		if err != nil {
+			return out, err
+		}
+		observation, err := m.observe(ctx, run)
+		release()
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			if ctx.Err() != nil {
+				return out, err
+			}
+			continue
+		}
 		out = append(out, observation)
 	}
-	return out, nil
+	return out, firstErr
+}
+
+// List reads available snapshots without waiting for a sweep or refreshing every run.
+func (m *Monitor) List(ctx context.Context, project, after string, limit int64) ([]domain.RunMonitoring, string, error) {
+	if limit < 1 || limit > 100 {
+		return nil, "", invalid("Monitoring page size must be 1..100")
+	}
+	runs, err := m.store.ApprovedFactoryRunPage(ctx, project, after, limit+1)
+	if err != nil {
+		return nil, "", err
+	}
+	next := ""
+	if int64(len(runs)) > limit {
+		runs = runs[:limit]
+		next = runs[len(runs)-1].ID
+	}
+	out := make([]domain.RunMonitoring, 0, len(runs))
+	for _, run := range runs {
+		state, found, err := m.store.GetRunMonitor(ctx, run.ID)
+		if err != nil {
+			return nil, "", err
+		}
+		if !found {
+			state = domain.RunMonitoring{RunID: run.ID, ProjectID: run.ProjectID, TaskID: run.TaskID, DelegationID: run.DelegationID, Stage: run.Stage, State: "in_progress", Ownership: "unknown", Freshness: "unobserved", Participants: []domain.RunParticipantSnapshot{}, Reports: []domain.RunReportObservation{}}
+		}
+		state.SessionID = run.SessionID
+		out = append(out, state)
+	}
+	return out, next, nil
 }
 
 // Get refreshes one approved run without submitting work.
 func (m *Monitor) Get(ctx context.Context, id string) (domain.RunMonitoring, error) {
-	if err := m.lock(ctx); err != nil {
+	release, err := m.lock(ctx, id)
+	if err != nil {
 		return domain.RunMonitoring{}, err
 	}
-	defer func() { <-m.mu }()
+	defer release()
 	run, err := m.store.GetFactoryRun(ctx, id)
 	if err != nil {
 		return domain.RunMonitoring{}, failure(err)
@@ -87,10 +153,11 @@ func (m *Monitor) Configure(ctx context.Context, id string, c domain.RunMonitorC
 	if c.SilenceSeconds < 1 || c.SilenceSeconds > 86400 || c.BuildSeconds < c.SilenceSeconds || c.BuildSeconds > 604800 || len(c.NextOwner) > 200 {
 		return domain.RunMonitoring{}, invalid("Silence must be 1..86400 seconds, build silence at least silence and at most 604800 seconds; owner at most 200 characters")
 	}
-	if err := m.lock(ctx); err != nil {
+	release, err := m.lock(ctx, id)
+	if err != nil {
 		return domain.RunMonitoring{}, err
 	}
-	defer func() { <-m.mu }()
+	defer release()
 	run, err := m.store.GetFactoryRun(ctx, id)
 	if err != nil {
 		return domain.RunMonitoring{}, failure(err)
@@ -108,10 +175,11 @@ func (m *Monitor) Configure(ctx context.Context, id string, c domain.RunMonitorC
 
 // Acknowledge records display acknowledgement without consuming a report.
 func (m *Monitor) Acknowledge(ctx context.Context, id, key string) (domain.RunMonitoring, error) {
-	if err := m.lock(ctx); err != nil {
+	release, err := m.lock(ctx, id)
+	if err != nil {
 		return domain.RunMonitoring{}, err
 	}
-	defer func() { <-m.mu }()
+	defer release()
 	run, err := m.store.GetFactoryRun(ctx, id)
 	if err != nil {
 		return domain.RunMonitoring{}, failure(err)
@@ -166,13 +234,14 @@ func (m *Monitor) observe(ctx context.Context, run domain.FactoryRun) (domain.Ru
 		}
 
 	}
+	state.SessionID = run.SessionID
 	state.Stage = run.Stage
 	state.StageVersion = stageVersion
 	state.ObservedAt = now
 	state.State = "in_progress"
 	state.Ownership = "unknown"
 	state.Reports = []domain.RunReportObservation{}
-	sessions, err := m.store.ListSessions(ctx, domain.ProjectID(run.ProjectID))
+	sessions, err := m.store.FactoryMonitorParticipants(ctx, run.ProjectID, run.SessionID)
 	if err != nil {
 		return state, err
 	}
@@ -186,27 +255,11 @@ func (m *Monitor) observe(ctx context.Context, run domain.FactoryRun) (domain.Ru
 		}
 		if !slices.ContainsFunc(state.Participants, func(p domain.RunParticipantSnapshot) bool { return p.SessionID == session.ID }) {
 			snap := domain.RunParticipantSnapshot{SessionID: session.ID, AutoReview: session.AutoReviewEnabled, AutoInjectCI: session.AutoInjectCI, AutoInjectReview: session.AutoInjectReview, CapturedAt: now, FeedbackPolicies: []string{}, ReportRoute: "worker_reports_to_project_orchestrator:display_only"}
-			prs, err := m.store.ListPRsBySession(ctx, session.ID)
+			policies, err := m.store.FactoryMonitorPolicies(ctx, session.ID)
 			if err != nil {
 				return state, err
 			}
-			for _, pr := range prs {
-				snap.FeedbackPolicies = append(snap.FeedbackPolicies, fmt.Sprintf("pr:%s:ci=%t", pr.URL, pr.AutoInjectCI))
-				comments, err := m.store.ListPRComments(ctx, pr.URL)
-				if err != nil {
-					return state, err
-				}
-				reviews, err := m.store.ListPRReviews(ctx, pr.URL)
-				if err != nil {
-					return state, err
-				}
-				for _, c := range comments {
-					snap.FeedbackPolicies = append(snap.FeedbackPolicies, fmt.Sprintf("comment:%s:review=%t", c.ID, c.AutoInjectReview))
-				}
-				for _, r := range reviews {
-					snap.FeedbackPolicies = append(snap.FeedbackPolicies, fmt.Sprintf("review:%s:review=%t", r.ID, r.AutoInjectReview))
-				}
-			}
+			snap.FeedbackPolicies = policies
 			state.Participants = append(state.Participants, snap)
 		}
 		if session.ID != run.SessionID {
@@ -236,7 +289,7 @@ func (m *Monitor) observe(ctx context.Context, run domain.FactoryRun) (domain.Ru
 		if session.Activity.LastActivityAt.After(last) && !session.Activity.LastActivityAt.After(now) {
 			last = session.Activity.LastActivityAt
 		}
-		reports, err := m.store.ListReportsBySession(ctx, session.ID)
+		reports, err := m.store.FactoryMonitorReports(ctx, session.ID, stageAt)
 		if err != nil {
 			return state, err
 		}
@@ -260,9 +313,7 @@ func (m *Monitor) observe(ctx context.Context, run domain.FactoryRun) (domain.Ru
 			state.Reports = append(state.Reports, domain.RunReportObservation{ID: r.ID, RecordedAt: r.CreatedAt, DeliveryState: string(r.DeliveryState), NativeReceipt: receipt})
 		}
 	}
-	if len(state.Reports) > 100 {
-		state.Reports = state.Reports[len(state.Reports)-100:]
-	}
+	slices.Reverse(state.Reports)
 	state.LastActivityAt = last
 	silence := state.Config.SilenceSeconds
 	if state.Config.Heavy {

@@ -417,6 +417,11 @@ type Cue struct {
 	UpdatedAt time.Time
 }
 
+type FactoryMonitorCursor struct {
+	Scope   string
+	AfterID string
+}
+
 type FactoryRun struct {
 	ID        string
 	ProjectID string

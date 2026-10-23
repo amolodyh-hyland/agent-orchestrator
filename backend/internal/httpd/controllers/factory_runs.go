@@ -195,12 +195,21 @@ func (c *FactoryRunsController) monitorList(w http.ResponseWriter, r *http.Reque
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	rows, err := c.Monitor.Scan(ctx, r.URL.Query().Get("projectId"))
+	limit := int64(100)
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		value, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "RUN_INVALID", "Invalid monitoring page size", nil)
+			return
+		}
+		limit = value
+	}
+	rows, next, err := c.Monitor.List(ctx, r.URL.Query().Get("projectId"), r.URL.Query().Get("afterId"), limit)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, RunMonitoringList{Runs: rows})
+	envelope.WriteJSON(w, http.StatusOK, RunMonitoringList{Runs: rows, NextCursor: next})
 }
 func (c *FactoryRunsController) monitorStatus(w http.ResponseWriter, r *http.Request) {
 	if c.Monitor == nil {

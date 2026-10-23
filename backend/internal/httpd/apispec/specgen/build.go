@@ -166,6 +166,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"DomainRunParticipantSnapshot":                         "RunParticipantSnapshot",
 	"DomainRunAttention":                                   "RunAttention",
 	"DomainRunReportObservation":                           "RunReportObservation",
+	"ControllersRunMonitoringQuery":                        "RunMonitoringQuery",
 	"ControllersRunMonitoringList":                         "RunMonitoringList",
 	"ControllersRunAttentionAck":                           "RunAttentionAck",
 	"DomainFactoryRun":                                     "FactoryRun",
@@ -3788,7 +3789,7 @@ func awakeOperations() []operation {
 func factoryRunOperations() []operation {
 	errorResponses := []respUnit{{http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}}
 	return []operation{
-		{method: http.MethodGet, path: "/api/v1/runs/monitoring", id: "listRunMonitoring", tag: "runs", summary: "Observe approved active run references without submitting work", pathParams: []any{controllers.ListFactoryRunsQuery{}}, resps: append([]respUnit{{http.StatusOK, controllers.RunMonitoringList{}}}, errorResponses...)},
+		{method: http.MethodGet, path: "/api/v1/runs/monitoring", id: "listRunMonitoring", tag: "runs", summary: "Read a bounded page of available run observations", pathParams: []any{controllers.RunMonitoringQuery{}}, resps: append([]respUnit{{http.StatusOK, controllers.RunMonitoringList{}}}, errorResponses...)},
 		{method: http.MethodGet, path: "/api/v1/runs/{runId}/status", id: "getRunStatus", tag: "runs", summary: "Bounded passive status observation", pathParams: []any{controllers.FactoryRunIDParam{}}, resps: append([]respUnit{{http.StatusOK, domain.RunMonitoring{}}}, errorResponses...)},
 		{method: http.MethodPost, path: "/api/v1/runs/{runId}/monitor", id: "configureRunMonitoring", tag: "runs", summary: "Configure display deadlines and next owner", pathParams: []any{controllers.FactoryRunIDParam{}}, reqBody: domain.RunMonitorConfig{}, resps: append([]respUnit{{http.StatusOK, domain.RunMonitoring{}}}, errorResponses...)},
 		{method: http.MethodPost, path: "/api/v1/runs/{runId}/attention", id: "acknowledgeRunAttention", tag: "runs", summary: "Acknowledge display attention without acknowledging reports or resuming work", pathParams: []any{controllers.FactoryRunIDParam{}}, reqBody: controllers.RunAttentionAck{}, resps: append([]respUnit{{http.StatusOK, domain.RunMonitoring{}}}, errorResponses...)},

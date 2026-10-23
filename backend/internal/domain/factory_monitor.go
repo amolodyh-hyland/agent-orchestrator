@@ -60,6 +60,7 @@ type RunAttention struct {
 // RunMonitoring is a timestamped observation of an approved run reference.
 type RunMonitoring struct {
 	RunID          string                   `json:"runId"`
+	SessionID      SessionID                `json:"sessionId,omitempty"`
 	ProjectID      string                   `json:"projectId"`
 	TaskID         string                   `json:"taskId"`
 	DelegationID   string                   `json:"delegationId,omitempty"`

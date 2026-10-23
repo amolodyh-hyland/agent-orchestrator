@@ -6072,6 +6072,15 @@ paths:
         name: projectId
         schema:
           type: string
+      - in: query
+        name: afterId
+        schema:
+          type: string
+      - in: query
+        name: limit
+        schema:
+          format: int64
+          type: integer
       responses:
         "200":
           content:
@@ -6109,7 +6118,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Observe approved active run references without submitting work
+      summary: Read a bounded page of available run observations
       tags:
       - runs
   /api/v1/sessions:
@@ -20469,6 +20478,8 @@ components:
           type: array
         runId:
           type: string
+        sessionId:
+          type: string
         stage:
           type: string
         stageVersion:
@@ -20496,6 +20507,8 @@ components:
       type: object
     RunMonitoringList:
       properties:
+        nextCursor:
+          type: string
         runs:
           items:
             $ref: '#/components/schemas/RunMonitoring'

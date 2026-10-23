@@ -595,6 +595,9 @@ func (s *Service) triggerWithOptions(
 		}
 		defer release()
 	}
+	if err := domain.CheckFactoryFeedback(ctx, s.store, workerID); err != nil {
+		return reviewcore.TriggerResult{}, err
+	}
 	result, err := s.engineTrigger(ctx, workerID, opts)
 	if err != nil {
 		s.emit(ctx, "ao.review.trigger_failed", workerID, map[string]any{

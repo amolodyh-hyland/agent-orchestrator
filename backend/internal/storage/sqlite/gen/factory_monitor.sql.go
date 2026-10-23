@@ -7,19 +7,28 @@ package gen
 
 import (
 	"context"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-const approvedActiveFactoryRuns = `-- name: ApprovedActiveFactoryRuns :many
+const approvedFactoryRunPage = `-- name: ApprovedFactoryRunPage :many
 SELECT r.document FROM factory_runs r
-WHERE EXISTS (SELECT 1 FROM factory_run_evidence e WHERE e.run_id=r.id
+WHERE r.id > ?1
+ AND (?2 = '' OR r.project_id = ?2)
+ AND EXISTS (SELECT 1 FROM factory_run_evidence e WHERE e.run_id=r.id
  AND json_extract(e.document,'$.kind')='created' AND json_extract(e.document,'$.confirmed')=1)
-ORDER BY r.id
+ORDER BY r.id LIMIT ?3
 `
 
-func (q *Queries) ApprovedActiveFactoryRuns(ctx context.Context) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, approvedActiveFactoryRuns)
+type ApprovedFactoryRunPageParams struct {
+	AfterID   string
+	ProjectID interface{}
+	PageSize  int64
+}
+
+func (q *Queries) ApprovedFactoryRunPage(ctx context.Context, arg ApprovedFactoryRunPageParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, approvedFactoryRunPage, arg.AfterID, arg.ProjectID, arg.PageSize)
 	if err != nil {
 		return nil, err
 	}
@@ -57,6 +66,132 @@ func (q *Queries) FactoryFeedbackHeld(ctx context.Context, sessionID domain.Sess
 	return exists, err
 }
 
+const factoryMonitorParticipants = `-- name: FactoryMonitorParticipants :many
+SELECT id FROM sessions WHERE project_id = ?1
+ AND (id=?2 OR (kind='orchestrator' AND is_terminated=0))
+ORDER BY kind DESC, created_at DESC, id LIMIT 100
+`
+
+type FactoryMonitorParticipantsParams struct {
+	ProjectID *domain.ProjectID
+	WorkerID  domain.SessionID
+}
+
+func (q *Queries) FactoryMonitorParticipants(ctx context.Context, arg FactoryMonitorParticipantsParams) ([]domain.SessionID, error) {
+	rows, err := q.db.QueryContext(ctx, factoryMonitorParticipants, arg.ProjectID, arg.WorkerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []domain.SessionID{}
+	for rows.Next() {
+		var id domain.SessionID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const factoryMonitorPolicies = `-- name: FactoryMonitorPolicies :many
+SELECT CAST(policy AS TEXT) AS policy FROM (
+ SELECT 'pr:' || own_pr.url || ':ci=' || own_pr.auto_inject_ci AS policy FROM pr own_pr WHERE own_pr.session_id=?1
+ UNION ALL
+ SELECT 'comment:' || c.comment_id || ':review=' || c.auto_inject_review FROM pr_comment c JOIN pr p ON p.url=c.pr_url WHERE p.session_id=?1
+ UNION ALL
+ SELECT 'review:' || r.review_id || ':review=' || r.auto_inject_review FROM pr_reviews r JOIN pr p ON p.url=r.pr_url WHERE p.session_id=?1
+) ORDER BY policy LIMIT 1001
+`
+
+func (q *Queries) FactoryMonitorPolicies(ctx context.Context, ownerID domain.SessionID) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, factoryMonitorPolicies, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var policy string
+		if err := rows.Scan(&policy); err != nil {
+			return nil, err
+		}
+		items = append(items, policy)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const factoryMonitorReports = `-- name: FactoryMonitorReports :many
+SELECT id, project_id, created_at, delivery_state, delivery_batch_id FROM reports
+WHERE session_id=?1 AND created_at>=?2
+ORDER BY created_at DESC,id DESC LIMIT 100
+`
+
+type FactoryMonitorReportsParams struct {
+	SessionID string
+	StageAt   time.Time
+}
+
+type FactoryMonitorReportsRow struct {
+	ID              string
+	ProjectID       string
+	CreatedAt       time.Time
+	DeliveryState   string
+	DeliveryBatchID string
+}
+
+func (q *Queries) FactoryMonitorReports(ctx context.Context, arg FactoryMonitorReportsParams) ([]FactoryMonitorReportsRow, error) {
+	rows, err := q.db.QueryContext(ctx, factoryMonitorReports, arg.SessionID, arg.StageAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []FactoryMonitorReportsRow{}
+	for rows.Next() {
+		var i FactoryMonitorReportsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.CreatedAt,
+			&i.DeliveryState,
+			&i.DeliveryBatchID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getFactoryMonitorCursor = `-- name: GetFactoryMonitorCursor :one
+SELECT after_id FROM factory_monitor_cursors WHERE scope = ?
+`
+
+func (q *Queries) GetFactoryMonitorCursor(ctx context.Context, scope string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getFactoryMonitorCursor, scope)
+	var after_id string
+	err := row.Scan(&after_id)
+	return after_id, err
+}
+
 const getRunMonitor = `-- name: GetRunMonitor :one
 SELECT document FROM factory_run_monitors WHERE run_id = ?
 `
@@ -66,6 +201,21 @@ func (q *Queries) GetRunMonitor(ctx context.Context, runID string) (string, erro
 	var document string
 	err := row.Scan(&document)
 	return document, err
+}
+
+const saveFactoryMonitorCursor = `-- name: SaveFactoryMonitorCursor :exec
+INSERT INTO factory_monitor_cursors(scope,after_id) VALUES (?,?)
+ON CONFLICT(scope) DO UPDATE SET after_id=excluded.after_id
+`
+
+type SaveFactoryMonitorCursorParams struct {
+	Scope   string
+	AfterID string
+}
+
+func (q *Queries) SaveFactoryMonitorCursor(ctx context.Context, arg SaveFactoryMonitorCursorParams) error {
+	_, err := q.db.ExecContext(ctx, saveFactoryMonitorCursor, arg.Scope, arg.AfterID)
+	return err
 }
 
 const saveRunMonitor = `-- name: SaveRunMonitor :exec

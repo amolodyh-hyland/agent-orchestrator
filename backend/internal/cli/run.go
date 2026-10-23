@@ -72,16 +72,23 @@ func newRunCommand(ctx *commandContext) *cobra.Command {
 		}
 		return writeJSON(cmd.OutOrStdout(), response)
 	}}
+	var attentionAfter string
+	var attentionLimit int64
 	attention := &cobra.Command{Use: "attention", Args: usageArgs(cobra.NoArgs), Short: "Observe approved runs and deduplicated attention", RunE: func(cmd *cobra.Command, _ []string) error {
+		if attentionLimit < 1 || attentionLimit > 100 {
+			return usageError{errors.New("--limit must be 1..100")}
+		}
 		bounded, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
 		defer cancel()
 		var response json.RawMessage
-		if err := ctx.getJSON(bounded, "runs/monitoring?projectId="+url.QueryEscape(project), &response); err != nil {
+		if err := ctx.getJSON(bounded, "runs/monitoring?projectId="+url.QueryEscape(project)+"&afterId="+url.QueryEscape(attentionAfter)+"&limit="+strconv.FormatInt(attentionLimit, 10), &response); err != nil {
 			return err
 		}
 		return writeJSON(cmd.OutOrStdout(), response)
 	}}
 	attention.Flags().StringVarP(&project, "project", "p", "", "Optional project id")
+	attention.Flags().StringVar(&attentionAfter, "after-id", "", "Exclusive run cursor from the previous page")
+	attention.Flags().Int64Var(&attentionLimit, "limit", 100, "Monitoring page size, 1..100")
 	cmd.AddCommand(status, attention)
 	cmd.AddCommand(advance)
 	return cmd

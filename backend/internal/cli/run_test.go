@@ -142,3 +142,27 @@ func TestRunStatusAndAttentionOnlyGet(t *testing.T) {
 		}
 	}
 }
+
+func TestRunAttentionCursorPage(t *testing.T) {
+	cfg := setConfigEnv(t)
+	seen := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/internal/telemetry/") {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/runs/monitoring" || r.URL.Query().Get("afterId") != "run-099" || r.URL.Query().Get("limit") != "25" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+		}
+		seen = true
+		_, _ = w.Write([]byte(`{"runs":[],"nextCursor":"run-124"}`))
+	}))
+	defer server.Close()
+	writeRunFileFor(t, cfg, server)
+	if _, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "run", "attention", "--project", "p", "--after-id", "run-099", "--limit", "25"); err != nil {
+		t.Fatal(err)
+	}
+	if !seen {
+		t.Fatal("monitoring page was not read")
+	}
+}

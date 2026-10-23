@@ -18,3 +18,9 @@ it("shows one attention, unknown ownership and separate acknowledgement facts wi
 	expect(mocks.get).toHaveBeenCalledTimes(2); expect(mocks.post).not.toHaveBeenCalled();
 	client.clear();
 });
+it("reads available cursor pages and shows an unobserved later run", async () => {
+ mocks.get.mockImplementation(async(_path,options)=>({data:options.params.query.afterId ? {runs:[{runId:"late",sessionId:"worker",projectId:"p",taskId:"t",stage:"implementation",state:"in_progress",freshness:"unobserved",ownership:"unknown",config:{nextOwner:""},observedAt:"0001-01-01T00:00:00Z",lastActivityAt:"0001-01-01T00:00:00Z",deadline:"0001-01-01T00:00:00Z",participants:[],reports:[]}]} : {runs:[],nextCursor:"first-page"}}));
+ const client=new QueryClient({defaultOptions:{queries:{retry:false}}});
+ render(<QueryClientProvider client={client}><RunMonitoring projectId="p" sessionId="worker" /></QueryClientProvider>);
+ await screen.findByText(/late · implementation · In progress/);expect(screen.getByText(/Not observed yet/)).toBeInTheDocument();expect(mocks.get).toHaveBeenCalledTimes(2);expect(mocks.post).not.toHaveBeenCalled();client.clear();
+});

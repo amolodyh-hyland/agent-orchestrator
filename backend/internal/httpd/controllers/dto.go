@@ -3753,10 +3753,18 @@ type ResolveReportDeliveryRequest struct {
 
 // RunMonitoringList contains passive observations of approved run references.
 type RunMonitoringList struct {
-	Runs []domain.RunMonitoring `json:"runs"`
+	Runs       []domain.RunMonitoring `json:"runs"`
+	NextCursor string                 `json:"nextCursor,omitempty"`
 }
 
 // RunAttentionAck identifies the currently displayed condition.
 type RunAttentionAck struct {
 	Key string `json:"key"`
+}
+
+// RunMonitoringQuery selects a bounded page of available observations.
+type RunMonitoringQuery struct {
+	ProjectID string `query:"projectId" json:"projectId,omitempty"`
+	AfterID   string `query:"afterId" json:"afterId,omitempty"`
+	Limit     int64  `query:"limit" json:"limit,omitempty"`
 }

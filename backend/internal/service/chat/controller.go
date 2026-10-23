@@ -1838,11 +1838,16 @@ func (c *Controller) inheritPermissionFallback(source *Controller) {
 //
 // A turn the provider refused over its permission mode did not start, so
 // asking again cannot run the work twice.
+func (c *Controller) checkFactoryMessage(ctx context.Context, msg ports.ChatUserMessage) error {
+	if msg.Origin == domain.MessageOriginAutomation || msg.ReportBatchID != "" || (msg.Origin == domain.MessageOriginDaemon && c.reviewID != "") {
+		return domain.CheckFactoryFeedback(ctx, c.store, c.sessionID)
+	}
+	return nil
+}
+
 func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (ports.ChatTurnRef, error) {
-	if msg.Origin == domain.MessageOriginAutomation || msg.ReportBatchID != "" {
-		if err := domain.CheckFactoryFeedback(ctx, c.store, c.sessionID); err != nil {
-			return ports.ChatTurnRef{}, err
-		}
+	if err := c.checkFactoryMessage(ctx, msg); err != nil {
+		return ports.ChatTurnRef{}, err
 	}
 	requested := msg.Settings.Approval
 	var ref ports.ChatTurnRef
@@ -1860,11 +1865,9 @@ func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (p
 		if admissionErr != nil {
 			return admissionErr
 		}
-		if attempt.Origin == domain.MessageOriginAutomation || attempt.ReportBatchID != "" {
-			if err := domain.CheckFactoryFeedback(ctx, c.store, c.sessionID); err != nil {
-				release()
-				return err
-			}
+		if err := c.checkFactoryMessage(ctx, attempt); err != nil {
+			release()
+			return err
 		}
 		ref, sendErr = c.conv.SendTurn(ctx, attempt)
 		release()
@@ -1953,6 +1956,14 @@ func (c *Controller) dispatch(
 	// the user's behalf: a queued message draining, or a relay from `ao send`. A
 	// setting that only applied when the user pressed send would silently stop
 	// applying exactly when they were not watching.
+	if err := c.checkFactoryMessage(ctx, msg); err != nil {
+		if errors.Is(err, domain.ErrFactoryFeedbackHeld) {
+			if settleErr := c.store.SettleTurnByID(ctx, turnID, domain.TurnStateFailed, err.Error(), c.now()); settleErr != nil {
+				return domain.ConversationTurn{}, settleErr
+			}
+		}
+		return domain.ConversationTurn{}, err
+	}
 	msg.Settings = c.turnSettings()
 	deferred, hasDeferredStart := c.conv.(ports.ChatDeferredTurnStarter)
 	// A provider can accept this turn and then lose its SQLite binding to ENOSPC.
@@ -2031,12 +2042,15 @@ func (c *Controller) dispatch(
 	// projected. Eager drivers do not implement this optional interface.
 	if hasDeferredStart {
 		guardedAcquire := func(ctx context.Context, text string) (func(), error) {
-			if msg.Origin == domain.MessageOriginAutomation || msg.ReportBatchID != "" {
-				if err := domain.CheckFactoryFeedback(ctx, c.store, c.sessionID); err != nil {
-					return nil, err
-				}
+			release, err := c.acquireLibraryInput(ctx, text)
+			if err != nil {
+				return nil, err
 			}
-			return c.acquireLibraryInput(ctx, text)
+			if err := c.checkFactoryMessage(ctx, msg); err != nil {
+				release()
+				return nil, err
+			}
+			return release, nil
 		}
 		if err := startLibraryDeferredTurn(ctx, deferred, ref.ProviderTurnID, excerptDeliveryMessage(msg).Text, guardedAcquire); err != nil {
 			c.mu.Lock()
@@ -2169,6 +2183,14 @@ func (c *Controller) drainLocked(ctx context.Context, allowDispatch bool) error 
 			Content:         content,
 			Origin:          queued.Origin,
 			ClientMessageID: queued.ClientMessageID,
+		}
+		if err := c.checkFactoryMessage(ctx, queuedMessage); err != nil {
+			if errors.Is(err, domain.ErrFactoryFeedbackHeld) {
+				if settleErr := c.store.SettleTurnByID(ctx, queued.TurnID, domain.TurnStateFailed, err.Error(), c.now()); settleErr != nil {
+					return settleErr
+				}
+			}
+			return err
 		}
 		for _, item := range content {
 			if item.Type == "excerpt" && item.Excerpt != nil {

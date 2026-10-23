@@ -2326,7 +2326,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Observe approved active run references without submitting work */
+        /** Read a bounded page of available run observations */
         get: operations["listRunMonitoring"];
         put?: never;
         post?: never;
@@ -7246,6 +7246,7 @@ export interface components {
             projectId: string;
             reports: components["schemas"]["RunReportObservation"][];
             runId: string;
+            sessionId?: string;
             stage: string;
             /** Format: int64 */
             stageVersion: number;
@@ -7253,6 +7254,7 @@ export interface components {
             taskId: string;
         };
         RunMonitoringList: {
+            nextCursor?: string;
             runs: components["schemas"]["RunMonitoring"][];
         };
         RunParticipantSnapshot: {
@@ -16465,6 +16467,8 @@ export interface operations {
         parameters: {
             query?: {
                 projectId?: string;
+                afterId?: string;
+                limit?: number;
             };
             header?: never;
             path?: never;
