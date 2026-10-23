@@ -2,10 +2,13 @@ package chat_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
 // skillfulConversation is a provider double that can enumerate skills.
@@ -67,5 +70,47 @@ func TestSkillsRequiresALiveController(t *testing.T) {
 	_, err := h.svc.Skills(context.Background(), testSession)
 	if !errorsIs(err, chatsvc.ErrNoController) {
 		t.Fatalf("err = %v, want ErrNoController", err)
+	}
+}
+
+func TestSkillSelectionSurvivesQueueAndTokenEditsClearIt(t *testing.T) {
+	ctx := context.Background()
+	provider := &skillfulConversation{fakeConversation: newFakeConversation(), skills: []ports.ChatSkill{{Name: "review", Transport: "native_skill", Token: "$review", CanInvoke: true, NativePath: "/owned/SKILL.md"}}}
+	h := newHarnessWithConversation(t, provider)
+	first, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "first", ClientMessageID: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := h.svc.SkillCatalog(ctx, testSession, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := catalog.Skills[0]
+	queued, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "$review args", ClientMessageID: "queued", Content: []ports.ChatContent{{Type: "skill_selection", Internal: true, SkillSelection: &ports.ChatSkillSelection{Token: row.Token, BindingRef: row.BindingRef, CatalogRevision: row.CatalogRevision, ControllerGeneration: row.ControllerGeneration}}}})
+	if err != nil || queued.State != domain.TurnStateQueued {
+		t.Fatalf("queue: %+v %v", queued, err)
+	}
+	conversation, err := h.st.ConversationForSession(ctx, testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := h.st.QueuedTurnMessage(ctx, conversation.ID, queued.ID)
+	if err != nil || !strings.Contains(stored.DeliveryContentJSON, "skillSelection") {
+		t.Fatalf("selection lost: %+v %v", stored, err)
+	}
+	if err := h.svc.EditQueuedTurn(ctx, testSession, queued.ID, chatsvc.QueuedMessageEdit{Text: "edited ordinary message"}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = h.st.QueuedTurnMessage(ctx, conversation.ID, queued.ID)
+	if err != nil || strings.Contains(stored.DeliveryContentJSON, "skillSelection") {
+		t.Fatalf("edit retained hidden binding: %+v %v", stored, err)
+	}
+	provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: first.ProviderTurnID, TurnState: domain.TurnStateCompleted})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return turnStateByText(t, s)["edited ordinary message"] == domain.TurnStateRunning
+	})
+	messages := provider.sentMessages()
+	if len(messages) != 2 || messages[1].Text != "edited ordinary message" || len(messages[1].NativeSkills) != 0 || len(messages[1].Content) != 0 {
+		t.Fatalf("hidden invocation on queue drain: %+v", messages)
 	}
 }

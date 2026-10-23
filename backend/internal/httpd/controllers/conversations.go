@@ -132,6 +132,7 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Get("/sessions/{sessionId}/conversation/config-options", c.configOptions)
 	r.Patch("/sessions/{sessionId}/conversation/config-options/{configId}", c.setConfigOption)
 	r.Get("/sessions/{sessionId}/conversation/skills", c.skills)
+	r.Post("/sessions/{sessionId}/conversation/skills/refresh", c.refreshSkills)
 	r.Patch("/sessions/{sessionId}/conversation/settings", c.setSettings)
 	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/rollback", c.rollback)
 	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/edit", c.editMessage)
@@ -832,6 +833,10 @@ func (c *ConversationsController) send(w http.ResponseWriter, r *http.Request) {
 			attachmentErr.code, attachmentErr.message, nil)
 		return
 	}
+	if req.SkillSelection != nil {
+		sel := req.SkillSelection
+		content = append(content, ports.ChatContent{Type: "skill_selection", Internal: true, SkillSelection: &ports.ChatSkillSelection{EntryID: sel.EntryID, SnapshotID: sel.SnapshotID, CatalogRevision: sel.CatalogRevision, BindingRef: sel.BindingRef, ControllerGeneration: sel.ControllerGeneration, Token: sel.Token}})
+	}
 	text := req.Text
 	if text == "" {
 		if len(req.Excerpts) > 0 {
@@ -1319,7 +1324,7 @@ func conversationContentSummary(msg domain.ConversationMessage) ([]ConversationC
 		// AO's reconstructed-history seed is provider context, not content the
 		// person attached. Keeping it out of this public summary prevents it from
 		// appearing as a user resource when the edited message is rendered again.
-		if block.Type == "text" || ports.IsInternalReplayContent(block) {
+		if block.Type == "text" || block.Type == "skill_selection" || ports.IsInternalReplayContent(block) {
 			continue
 		}
 		name := block.Name

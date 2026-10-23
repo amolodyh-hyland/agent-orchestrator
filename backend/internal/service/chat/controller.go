@@ -27,6 +27,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	librarysvc "github.com/aoagents/agent-orchestrator/backend/internal/service/library"
 )
 
 const (
@@ -199,6 +200,9 @@ type Controller struct {
 	sessionID    domain.SessionID
 	reviewID     string
 	conversation domain.ConversationRecord
+	skillsMu     sync.Mutex
+	skillView    func(context.Context, domain.SessionID) (librarysvc.Result, error)
+	skillCurrent func(context.Context, *Controller) bool
 	generation   string
 	harness      domain.AgentHarness
 
@@ -1690,6 +1694,10 @@ func retryPromptContent(raw string, capabilities ports.ChatCapabilities) ([]port
 			if !capabilities.Has(ports.ChatCapabilityImages) {
 				return nil, fmt.Errorf("%w: image attachments are unsupported", ErrRetryUnsupported)
 			}
+		case "skill_selection":
+			if !item.Internal || item.SkillSelection == nil {
+				return nil, ErrRetryContentInvalid
+			}
 		case "excerpt":
 			if item.Excerpt == nil {
 				return nil, fmt.Errorf("%w: chat excerpts require verified context", ErrRetryContentInvalid)
@@ -1832,6 +1840,10 @@ func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (p
 		attempt := msg
 		attempt.Settings.Approval = mode
 		var sendErr error
+		attempt, sendErr = c.resolveSkillMessage(ctx, attempt)
+		if sendErr != nil {
+			return sendErr
+		}
 		release, admissionErr := c.acquireLibraryInput(ctx, attempt.Text)
 		if admissionErr != nil {
 			return admissionErr

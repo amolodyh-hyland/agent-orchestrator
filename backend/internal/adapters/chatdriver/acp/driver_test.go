@@ -3807,12 +3807,10 @@ func TestACPDriverExposesDynamicAvailableCommandsAsSkills(t *testing.T) {
 	}
 
 	skills := awaitSkillCount(t, lister, 1)
-	if len(skills) != 1 || skills[0] != (ports.ChatSkill{
-		Name: "review", DisplayName: "review", Description: "Review a pull request",
-		InputHint: "<number>", Source: "agent",
-	}) {
+	if len(skills) != 1 || skills[0].Name != "review" || skills[0].InputHint != "<number>" || skills[0].Source != "agent" || skills[0].Token != "/review" || skills[0].TrustState != "native_unverified" || skills[0].Transport != "native_text" || !skills[0].CanInvoke || skills[0].ObservationID == "" {
 		t.Fatalf("skills = %#v", skills)
 	}
+
 	if !conv.Capabilities()[ports.ChatCapabilitySkills] {
 		t.Fatal("skills capability was not advertised after the command catalog arrived")
 	}
@@ -3839,10 +3837,10 @@ func awaitSkillCount(t *testing.T, lister ports.ChatSkillLister, want int) []por
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		skills, err := lister.ListSkills(context.Background())
-		if err != nil {
+		if err != nil && !errors.Is(err, ports.ErrChatSkillsNotReady) {
 			t.Fatalf("ListSkills: %v", err)
 		}
-		if len(skills) == want {
+		if err == nil && len(skills) == want {
 			return skills
 		}
 		if time.Now().After(deadline) {
@@ -5130,5 +5128,36 @@ func TestACPHistoryReplaySplitsIDLessPromptsAfterAnswers(t *testing.T) {
 	want := []turn{{"Hi how are you", "Doing well."}, {"What did I ask?", "You asked how I am."}}
 	if !reflect.DeepEqual(turns, want) {
 		t.Fatalf("replayed turns = %+v, want %+v", turns, want)
+	}
+}
+
+func TestACPNativeSkillKeepsRawSlashArguments(t *testing.T) {
+	agent := &fakeAgent{promptNoPermission: true}
+	driver := New(Config{Harness: domain.HarnessClaudeCode, Probe: func(context.Context) error { return nil }, Launch: func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil }}, slog.New(slog.DiscardHandler))
+	driver.useTestProcess(fakeSpawn(agent))
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conv.Close()
+	text := "/review 123 --keep='raw text'"
+	ref, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: text})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conv.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		event := nextEvent(t, conv.Events())
+		if event.Kind == ports.ChatEventTurnCompleted {
+			break
+		}
+	}
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	prompt := agent.promptParams.Prompt
+	if len(prompt) != 1 || prompt[0].Text == nil || prompt[0].Text.Text != text {
+		t.Fatalf("slash arguments changed: %+v", prompt)
 	}
 }

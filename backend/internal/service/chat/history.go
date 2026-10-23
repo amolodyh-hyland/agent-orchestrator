@@ -1224,6 +1224,8 @@ func (s *Service) newReplacementController(
 		id, source.owner(), conversation, generation, source.harness, provider,
 		s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
 	replacement.libraryInput = s.acquireLibraryInput
+	replacement.skillView = s.librarySkillView
+	replacement.skillCurrent = s.skillControllerCurrent
 	replacement.inheritPermissionFallback(source)
 	return replacement
 }

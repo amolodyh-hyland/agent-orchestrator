@@ -8177,6 +8177,63 @@ paths:
       summary: List the named skills the provider offers for a chat session
       tags:
       - conversations
+  /api/v1/sessions/{sessionId}/conversation/skills/refresh:
+    post:
+      operationId: refreshSessionConversationSkills
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshConversationSkillsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationSkillsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Refresh the pinned skill catalog or report a required successor session
+      tags:
+      - conversations
   /api/v1/sessions/{sessionId}/conversation/steer:
     post:
       operationId: steerSessionConversationTurn
@@ -15711,28 +15768,120 @@ components:
       type: object
     ConversationSkillResponse:
       properties:
+        bindingRef:
+          type: string
+        canInvoke:
+          type: boolean
+        catalogRevision:
+          type: string
+        contentHash:
+          type: string
+        controllerGeneration:
+          type: string
         description:
           type: string
         displayName:
           type: string
+        entryId:
+          type: string
+        format:
+          type: string
         inputHint:
+          type: string
+        kind:
           type: string
         name:
           type: string
+        observationId:
+          type: string
+        reasonCode:
+          type: string
+        scope:
+          type: string
+        snapshotId:
+          type: string
         source:
           type: string
+        sourceId:
+          type: string
+        status:
+          type: string
+        token:
+          type: string
+        transport:
+          type: string
+        trustState:
+          type: string
       required:
+      - canInvoke
       - name
       - displayName
       type: object
+    ConversationSkillSelectionRequest:
+      properties:
+        bindingRef:
+          type: string
+        catalogRevision:
+          type: string
+        controllerGeneration:
+          type: string
+        entryId:
+          type: string
+        snapshotId:
+          type: string
+        token:
+          type: string
+      required:
+      - catalogRevision
+      - bindingRef
+      - controllerGeneration
+      - token
+      type: object
     ConversationSkillsResponse:
       properties:
+        adapterVersion:
+          type: string
+        canList:
+          type: boolean
+        canReloadSameSnapshot:
+          type: boolean
+        catalogRevision:
+          type: string
+        controllerGeneration:
+          type: string
+        nextAction:
+          type: string
+        pendingSelectionId:
+          type: string
+        projectRevision:
+          format: int64
+          type: integer
+        providerId:
+          type: string
+        reasonCode:
+          type: string
+        resolverId:
+          type: string
+        sessionId:
+          type: string
         skills:
           items:
             $ref: '#/components/schemas/ConversationSkillResponse'
           type: array
+        snapshotId:
+          type: string
+        status:
+          type: string
+        trustEpoch:
+          format: int64
+          type: integer
       required:
       - skills
+      - status
+      - projectRevision
+      - trustEpoch
+      - canList
+      - canReloadSameSnapshot
       type: object
     ConversationSnapshotResponse:
       properties:
@@ -18845,6 +18994,11 @@ components:
       required:
       - pat
       type: object
+    RefreshConversationSkillsRequest:
+      properties:
+        snapshotId:
+          type: string
+      type: object
     RegisterPushDeviceRequest:
       properties:
         deviceName:
@@ -19345,6 +19499,8 @@ components:
           items:
             $ref: '#/components/schemas/ConversationResourceContentRequest'
           type: array
+        skillSelection:
+          $ref: '#/components/schemas/ConversationSkillSelectionRequest'
         text:
           type: string
       required:

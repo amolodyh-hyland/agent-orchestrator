@@ -3005,6 +3005,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/conversation/skills/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refresh the pinned skill catalog or report a required successor session */
+        post: operations["refreshSessionConversationSkills"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/conversation/steer": {
         parameters: {
             query?: never;
@@ -5513,14 +5530,56 @@ export interface components {
             uri: string;
         };
         ConversationSkillResponse: {
+            bindingRef?: string;
+            canInvoke: boolean;
+            catalogRevision?: string;
+            contentHash?: string;
+            controllerGeneration?: string;
             description?: string;
             displayName: string;
+            entryId?: string;
+            format?: string;
             inputHint?: string;
+            kind?: string;
             name: string;
+            observationId?: string;
+            reasonCode?: string;
+            scope?: string;
+            snapshotId?: string;
             source?: string;
+            sourceId?: string;
+            status?: string;
+            token?: string;
+            transport?: string;
+            trustState?: string;
+        };
+        ConversationSkillSelectionRequest: {
+            bindingRef: string;
+            catalogRevision: string;
+            controllerGeneration: string;
+            entryId?: string;
+            snapshotId?: string;
+            token: string;
         };
         ConversationSkillsResponse: {
+            adapterVersion?: string;
+            canList: boolean;
+            canReloadSameSnapshot: boolean;
+            catalogRevision?: string;
+            controllerGeneration?: string;
+            nextAction?: string;
+            pendingSelectionId?: string;
+            /** Format: int64 */
+            projectRevision: number;
+            providerId?: string;
+            reasonCode?: string;
+            resolverId?: string;
+            sessionId?: string;
             skills: components["schemas"]["ConversationSkillResponse"][];
+            snapshotId?: string;
+            status: string;
+            /** Format: int64 */
+            trustEpoch: number;
         };
         ConversationSnapshotResponse: {
             account?: components["schemas"]["ConversationAccountPayload"];
@@ -6683,6 +6742,9 @@ export interface components {
             refreshToken?: string;
             refreshTokenExpiresIn?: number;
         };
+        RefreshConversationSkillsRequest: {
+            snapshotId?: string;
+        };
         RegisterPushDeviceRequest: {
             /** @description Human-friendly device label. */
             deviceName?: string;
@@ -6887,6 +6949,7 @@ export interface components {
             continuation?: boolean;
             excerpts?: components["schemas"]["ConversationExcerptReferenceRequest"][];
             resources?: components["schemas"]["ConversationResourceContentRequest"][];
+            skillSelection?: components["schemas"]["ConversationSkillSelectionRequest"];
             text: string;
         };
         SendConversationMessageResponse: {
@@ -18345,6 +18408,78 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConversationSkillsResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    refreshSessionConversationSkills: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefreshConversationSkillsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationSkillsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Not Found */

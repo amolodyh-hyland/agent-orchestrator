@@ -255,6 +255,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersConversationConfigOptionResponse":          "ConversationConfigOptionResponse",
 	"ControllersConversationConfigChoiceResponse":          "ConversationConfigChoiceResponse",
 	"ControllersSetConversationConfigOptionRequest":        "SetConversationConfigOptionRequest",
+	"ControllersConversationSkillSelectionRequest":         "ConversationSkillSelectionRequest",
+	"ControllersRefreshConversationSkillsRequest":          "RefreshConversationSkillsRequest",
 	"ControllersConversationSkillsResponse":                "ConversationSkillsResponse",
 	"ControllersConversationSkillResponse":                 "ConversationSkillResponse",
 	"ControllersConversationTurnSettingsPayload":           "ConversationTurnSettingsPayload",
@@ -1378,6 +1380,13 @@ func shellTerminalOperations() []operation {
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/conversation/skills/refresh", id: "refreshSessionConversationSkills", tag: "conversations",
+			summary:    "Refresh the pinned skill catalog or report a required successor session",
+			pathParams: []any{controllers.SessionIDParam{}}, reqBody: controllers.RefreshConversationSkillsRequest{},
+			resps: []respUnit{{http.StatusOK, controllers.ConversationSkillsResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+
 		{
 			method: http.MethodPatch, path: "/api/v1/sessions/{sessionId}/conversation/settings", id: "setSessionConversationTurnSettings", tag: "conversations",
 			summary:    "Choose the model, reasoning effort and approval mode for the next turn",

@@ -1036,6 +1036,8 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	controller := newController(
 		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
 	controller.libraryInput = s.acquireLibraryInput
+	controller.skillView = s.librarySkillView
+	controller.skillCurrent = s.skillControllerCurrent
 	controller.permissionFallbackOff = cfg.DisablePermissionFallback
 	controller.onPermissionsChanged = s.recordEffectivePermissions(owner)
 	// Seed deduplication only from the accepted launch result reported above,
