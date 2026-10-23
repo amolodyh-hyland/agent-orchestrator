@@ -1,13 +1,13 @@
 import { expect, test, type Locator } from "@playwright/test";
 
-async function selectVisibleText(field: Locator, start: number, end: number) {
+async function selectVisibleText(field: Locator, start: number, end: number, endAtNextText = false) {
 	await field.focus();
 	await field.evaluate(
 		(root, offsets) => {
 			const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
 				acceptNode(node) {
-				const element = node.parentElement?.closest("[data-lexical-text]");
-				return element && getComputedStyle(element).display !== "none"
+					const element = node.parentElement?.closest("[data-lexical-text]");
+					return element && getComputedStyle(element).display !== "none"
 						? NodeFilter.FILTER_ACCEPT
 						: NodeFilter.FILTER_REJECT;
 				},
@@ -20,16 +20,82 @@ async function selectVisibleText(field: Locator, start: number, end: number) {
 				length += node.textContent!.length;
 			}
 			const range = document.createRange();
-			for (const [index, offset] of offsets.entries()) {
-				const point = points.find((point) => offset >= point.start && offset <= point.end)!;
+			for (const [index, offset] of offsets.positions.entries()) {
+				const point = points.find(
+					(point) =>
+						offset >= point.start &&
+						(offset < point.end || (!(index === 1 && offsets.endAtNextText) && offset === point.end)),
+				)!;
 				if (index === 0) range.setStart(point.node, offset - point.start);
 				else range.setEnd(point.node, offset - point.start);
 			}
 			window.getSelection()!.removeAllRanges();
 			window.getSelection()!.addRange(range);
 		},
-		[start, end],
+		{ positions: [start, end], endAtNextText },
 	);
+}
+
+for (const example of [
+	{
+		name: "after inline code",
+		source: "A `abcd` Z",
+		start: 6,
+		end: 8,
+		typed: "A `abcd`X",
+		cut: "A `abcd`",
+		copied: " Z",
+	},
+	{
+		name: "before inline code",
+		source: "A `abcd` Z",
+		start: 0,
+		end: 2,
+		typed: "X`abcd` Z",
+		cut: "`abcd` Z",
+		copied: "A ",
+		endAtNextText: true,
+	},
+	{
+		name: "after fenced code",
+		source: "A\n```ts\nabcd\n```\nZ",
+		start: 5,
+		end: 6,
+		typed: "A\n```ts\nabcd\n```\nX",
+		cut: "A\n```ts\nabcd\n```",
+		copied: "\nZ",
+	},
+	{
+		name: "before fenced code",
+		source: "A\n```ts\nabcd\n```\nZ",
+		start: 0,
+		end: 1,
+		typed: "X\n```ts\nabcd\n```\nZ",
+		cut: "```ts\nabcd\n```\nZ",
+		copied: "A\n",
+		endAtNextText: true,
+	},
+]) {
+	test(`native typing, paste and cut at the exact edge ${example.name} keep the markers`, async ({ page, context }) => {
+		await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+		await page.goto("/e2e/composer-code/harness.html?text=" + encodeURIComponent(example.source));
+		const field = page.getByRole("combobox", { name: "Message", exact: true });
+		await expect(page.getByTestId("wire")).toHaveText(example.source);
+		for (const action of ["type", "paste", "cut"]) {
+			await selectVisibleText(field, example.start, example.end, example.endAtNextText);
+			if (action === "type") await field.pressSequentially("X");
+			else if (action === "paste") {
+				await page.evaluate(() => navigator.clipboard.writeText("X"));
+				await field.press("ControlOrMeta+v");
+			} else await field.press("ControlOrMeta+x");
+			await expect(page.getByTestId("wire")).toHaveText(action === "cut" ? example.cut : example.typed);
+			await expect(field.locator(".chat-composer-inline-code, .chat-composer-code-block")).toHaveCount(1);
+			if (action === "cut")
+				await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(example.copied);
+			await field.press("ControlOrMeta+z");
+			await expect(page.getByTestId("wire")).toHaveText(example.source);
+		}
+	});
 }
 
 test("native replacement across a code boundary keeps the remaining code and undoes in one step", async ({

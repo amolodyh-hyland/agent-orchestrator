@@ -555,7 +555,32 @@ function $normalizeCodeRangeSelection(replacement = ""): string | undefined {
 	const regions = composerCodeRegions(source);
 	let start = Math.min(anchor, focus);
 	let end = Math.max(anchor, focus);
+	const repairs: { offset: number; end?: number; text: string }[] = [];
 	for (const region of regions) {
+		// A visible endpoint at the code edge can sit inside the hidden syntax.
+		// Keep that syntax with the untouched code, including a fence's line boundary.
+		if (start >= region.contentEnd && start < region.end && end >= region.end) {
+			start = region.end;
+			const after = replacement + source.slice(end);
+			if (region.kind === "fenced" && after && !after.startsWith("\n") && !after.startsWith("\r\n")) {
+				repairs.push({
+					offset: start,
+					text: source.slice(region.start, region.contentStart).endsWith("\r\n") ? "\r\n" : "\n",
+				});
+			}
+			continue;
+		}
+		if (end > region.start && end <= region.contentStart && start <= region.start) {
+			end = region.start;
+			const before = source.slice(0, start) + replacement;
+			if (region.kind === "fenced" && before && !before.endsWith("\n")) {
+				repairs.push({
+					offset: end,
+					text: source.slice(region.start, region.contentStart).endsWith("\r\n") ? "\r\n" : "\n",
+				});
+			}
+			continue;
+		}
 		if (
 			start <= region.contentStart &&
 			end >= region.contentEnd &&
@@ -571,7 +596,6 @@ function $normalizeCodeRangeSelection(replacement = ""): string | undefined {
 	let copied = source.slice(start, end);
 	// Repair the unselected code before the normal replacement removes a crossing
 	// selection. The clipboard receives balanced Markdown for the selected code too.
-	const repairs: { offset: number; end?: number; text: string }[] = [];
 	const head = regions.find(
 		(region) => start > region.contentStart && start < region.contentEnd && end > region.contentEnd,
 	);

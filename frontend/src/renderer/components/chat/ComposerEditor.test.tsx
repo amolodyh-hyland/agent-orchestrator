@@ -109,10 +109,18 @@ describe("composer code editing", () => {
 		["A `abcd` Z", 0, 5, "X`cd` Z", "`cd` Z", "A `ab`"],
 		["A `abcd` Z", 5, 0, "X`cd` Z", "`cd` Z", "A `ab`"],
 		["A `abcd` Z", 5, 10, "A `ab`X", "A `ab`", "`cd` Z"],
+		["A `abcd` Z", 7, 10, "A `abcd`X", "A `abcd`", " Z"],
+		["A `abcd` Z", 10, 7, "A `abcd`X", "A `abcd`", " Z"],
+		["A `abcd` Z", 0, 3, "X`abcd` Z", "`abcd` Z", "A "],
+		["A `abcd` Z", 3, 0, "X`abcd` Z", "`abcd` Z", "A "],
 		["A `abcd` M `efgh` Z", 5, 14, "A `ab`X`gh` Z", "A `abgh` Z", "`cd` M `ef`"],
 		["A ``abcd`` M `efgh` Z", 6, 16, "A ``ab``X`gh` Z", "A ``abgh`` Z", "``cd`` M `ef`"],
 		["A\n```ts\nabcd\n```\nZ", 0, 10, "X\n```ts\ncd\n```\nZ", "```ts\ncd\n```\nZ", "A\n```ts\nab\n```"],
 		["A\n```ts\nabcd\n```\nZ", 10, 18, "A\n```ts\nab\n```\nX", "A\n```ts\nab\n```", "```ts\ncd\n```\nZ"],
+		["A\n```ts\nabcd\n```\nZ", 12, 18, "A\n```ts\nabcd\n```\nX", "A\n```ts\nabcd\n```", "\nZ"],
+		["A\n```ts\nabcd\n```\nZ", 18, 12, "A\n```ts\nabcd\n```\nX", "A\n```ts\nabcd\n```", "\nZ"],
+		["A\n```ts\nabcd\n```\nZ", 0, 8, "X\n```ts\nabcd\n```\nZ", "```ts\nabcd\n```\nZ", "A\n"],
+		["A\n```ts\nabcd\n```\nZ", 8, 0, "X\n```ts\nabcd\n```\nZ", "```ts\nabcd\n```\nZ", "A\n"],
 	])(
 		"keeps code boundaries balanced for typing, paste, and cut: %s [%i,%i]",
 		async (source, anchor, focus, typed, cut, copied) => {
