@@ -1994,7 +1994,7 @@ func (c *Controller) dispatch(
 	// provider-id binding above must exist before the first streamed update can be
 	// projected. Eager drivers do not implement this optional interface.
 	if hasDeferredStart {
-		if err := deferred.StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		if err := startLibraryDeferredTurn(ctx, deferred, ref.ProviderTurnID, excerptDeliveryMessage(msg).Text, c.acquireLibraryInput); err != nil {
 			c.mu.Lock()
 			c.pendingTurnID = ""
 			c.mu.Unlock()
