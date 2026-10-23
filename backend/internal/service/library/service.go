@@ -9,12 +9,14 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // Store is the durable local registry and ownership boundary.
@@ -74,6 +76,9 @@ type Service struct {
 	policy    Policy
 	clock     func() time.Time
 	admission sync.RWMutex
+	revokeMu  sync.Mutex
+	revoking  atomic.Value
+	lifecycle ports.TaskLibraryLifecycle
 }
 
 // New binds library operations to one local owner and resolver authority.
@@ -167,6 +172,9 @@ func (s *Service) Operate(ctx context.Context, in Operation) (result Result, err
 			_ = s.store.RecordLibraryAudit(ctx, audit)
 		}
 	}()
+	if in.Operation == "revoke" {
+		return s.revokeRuntimes(ctx, in)
+	}
 	return s.operate(ctx, in)
 }
 

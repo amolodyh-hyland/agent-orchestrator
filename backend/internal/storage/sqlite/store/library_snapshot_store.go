@@ -195,3 +195,36 @@ func validatePreparedLibrarySelection(ctx context.Context, q *gen.Queries, db ge
 	}
 	return nil
 }
+
+func (s *Store) ListLibrarySessionsByApproval(ctx context.Context, approvalID string) ([]domain.SessionID, error) {
+	rows, err := s.readDB.QueryContext(ctx, "SELECT session_id,manifest_json FROM library_session_snapshots ORDER BY session_id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []domain.SessionID
+	for rows.Next() {
+		var id string
+		var data string
+		if err := rows.Scan(&id, &data); err != nil {
+			return nil, err
+		}
+		var snapshot domain.LibrarySnapshot
+		if err := json.Unmarshal([]byte(data), &snapshot); err != nil {
+			return nil, err
+		}
+		if err := snapshot.VerifyDigest(); err != nil {
+			return nil, err
+		}
+		if snapshot.SessionID != domain.SessionID(id) {
+			return nil, fmt.Errorf("library snapshot session ownership mismatch")
+		}
+		for _, e := range snapshot.Entries {
+			if e.ApprovalID == approvalID {
+				ids = append(ids, domain.SessionID(id))
+				break
+			}
+		}
+	}
+	return ids, rows.Err()
+}

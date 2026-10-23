@@ -1498,6 +1498,13 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: %w", id, ports.ErrAgentAuthRequired)
 		}
 	}
+	libraryCtx, releaseLibraryLaunch, libraryErr := m.acquireLibraryRuntimeLaunch(ctx, id)
+	if libraryErr != nil {
+		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
+		return domain.SessionRecord{}, 0, 0, libraryErr
+	}
+	defer releaseLibraryLaunch()
+	ctx = libraryCtx
 	if err := m.prepareWorkspace(ctx, agent, id, ws.Path, systemPrompt, systemPromptFile, adapterConfig, env); err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPrepare, err)
@@ -1612,6 +1619,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		m.markSpawnFailedTerminatedAfterFailure(ctx, id, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnCommit, err)
 	}
+	releaseLibraryLaunch()
 	if delivery == ports.PromptDeliveryAfterStart {
 		if err := m.deliverAfterStartPrompt(ctx, agent, launchCfg, handle, id, afterStartPrompt); err != nil {
 			runtimeDestroyed := m.destroySpawnRuntimeAfterFailure(ctx, handle)
@@ -3631,6 +3639,12 @@ func (m *Manager) relaunchSessionWithPolicy(
 }
 
 func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, operation string, rec domain.SessionRecord, project domain.ProjectRecord, ws ports.WorkspaceInfo, restartHandle *ports.RuntimeHandle, forceFresh, requireNativeHistory bool, reservedGeneration string, historyPolicy domain.SessionInterfaceTransitionHistoryPolicy) (RestoreResult, error) {
+	libraryCtx, releaseLibraryLaunch, libraryErr := m.acquireLibraryRuntimeLaunch(ctx, rec.ID)
+	if libraryErr != nil {
+		return RestoreResult{}, libraryErr
+	}
+	defer releaseLibraryLaunch()
+	ctx = libraryCtx
 	// Relaunch dispatches from the currently committed persisted mode, never from
 	// a caller hint. The interface-transition coordinator changes that fact only
 	// after stopping the old controller, then reuses this ordinary restore path.
@@ -3879,6 +3893,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		m.cleanupSystemPromptDir(rec.ID)
 		return RestoreResult{}, fmt.Errorf("%s %s: completed: %w", operation, rec.ID, err)
 	}
+	releaseLibraryLaunch()
 	if initialization != nil {
 		if err := m.initializeNativeRestore(ctx, rec, handle, launchID, initialization); err != nil {
 			cleanupCtx, cancel := spawnRollbackContext(ctx)
@@ -6629,6 +6644,14 @@ func (m *Manager) augmentAgentRuntimeEnv(agent ports.Agent, env map[string]strin
 // startup hooks can update the already-created session row), then any optional
 // PreLaunch step. Shared by Spawn and Restore.
 func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, env map[string]string) error {
+	if library := m.librarySelectionValue(); library != nil {
+		if err := library.CheckLaunch(ctx, id); err != nil {
+			return err
+		}
+	}
+	if err := m.prepareTaskLibrary(ctx, agent, id, workspacePath, env); err != nil {
+		return err
+	}
 	if err := agent.GetAgentHooks(ctx, ports.WorkspaceHookConfig{
 		SessionID:        string(id),
 		WorkspacePath:    workspacePath,
@@ -6651,6 +6674,11 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id do
 }
 
 func (m *Manager) prepareRuntimeLaunch(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, env map[string]string) error {
+	if library := m.librarySelectionValue(); library != nil {
+		if err := library.CheckLaunch(ctx, id); err != nil {
+			return err
+		}
+	}
 	preparer, ok := agent.(runtimeLaunchPreparer)
 	if !ok {
 		return nil

@@ -59,7 +59,11 @@ func TestLibraryMutationPolicyUsesAuthoritativeResourceAtBothChecks(t *testing.T
 									t.Fatalf("wrong policy resource: %+v", request)
 								}
 							}
-							if phase == "commit" && len(requests) != 2 {
+							checks := 2
+							if operation == "revoke" && denial == "lock" {
+								checks = 3
+							}
+							if phase == "commit" && len(requests) != checks {
 								t.Fatalf("policy not rechecked at commit: %+v", requests)
 							}
 							state, err := f.store.ReadLibraryRegistry(context.Background())

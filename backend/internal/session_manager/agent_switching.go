@@ -752,6 +752,12 @@ func (m *Manager) executeAgentSwitch(ctx context.Context, admitted *admittedAgen
 	// Only now may the target mutate workspace-local hooks/instructions. The
 	// source snapshot above therefore cannot contain target preflight artifacts.
 	// A pre-activation failure removes this provider-owned state.
+	libraryCtx, releaseLibraryLaunch, libraryErr := m.acquireLibraryRuntimeLaunch(ctx, id)
+	if libraryErr != nil {
+		return result, libraryErr
+	}
+	defer releaseLibraryLaunch()
+	ctx = libraryCtx
 	recorder.boundary(domain.AgentSwitchFailureTargetWorkspacePrepare)
 	if err := m.prepareWorkspace(ctx, target.agent, rec.ID, rec.Metadata.WorkspacePath, target.launch.SystemPrompt, target.launch.SystemPromptFile, target.launch.Config, target.env); err != nil {
 		return result, fmt.Errorf("switch agent %s: prepare target workspace: %w", id, err)
@@ -943,6 +949,7 @@ func (m *Manager) executeAgentSwitch(ctx context.Context, admitted *admittedAgen
 			return result, fmt.Errorf("switch agent %s: activate target owner: durable ownership changed concurrently", id)
 		}
 	}
+	releaseLibraryLaunch()
 	targetOwnerCommitted = true
 	recorder.targetOwnerCommitted = domain.AgentSwitchTriTrue
 	recorder.ownership = domain.AgentSwitchOwnershipTarget

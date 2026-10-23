@@ -75,9 +75,10 @@ type Manager struct {
 	// inputMu makes BeginInputDrain atomic with pane writes. Once a drain returns,
 	// every write that began before it has finished and every later write is
 	// refused until the matching release runs.
-	inputMu      sync.Mutex
-	inputBlocked map[string]int
-	lastInputAt  map[string]time.Time
+	inputMu             sync.Mutex
+	inputBlocked        map[string]int
+	libraryInputBlocked map[string]int
+	lastInputAt         map[string]time.Time
 }
 
 // sharedTerm tracks every client currently viewing one terminal id (one PTY) so
@@ -132,16 +133,17 @@ func NewManager(src Source, events EventSource, log *slog.Logger, opts ...Option
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
-		src:          src,
-		events:       events,
-		log:          log,
-		heartbeat:    defaultHeartbeat,
-		ctx:          ctx,
-		cancel:       cancel,
-		attachments:  map[*attachment]struct{}{},
-		shared:       map[string]*sharedTerm{},
-		inputBlocked: map[string]int{},
-		lastInputAt:  map[string]time.Time{},
+		src:                 src,
+		events:              events,
+		log:                 log,
+		heartbeat:           defaultHeartbeat,
+		ctx:                 ctx,
+		cancel:              cancel,
+		attachments:         map[*attachment]struct{}{},
+		shared:              map[string]*sharedTerm{},
+		inputBlocked:        map[string]int{},
+		libraryInputBlocked: map[string]int{},
+		lastInputAt:         map[string]time.Time{},
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -189,7 +191,7 @@ func (m *Manager) TerminalOnScreen(terminalID string) bool {
 func (m *Manager) writeInput(terminalID string, a *attachment, raw []byte, release func()) {
 	m.inputMu.Lock()
 	defer m.inputMu.Unlock()
-	if m.inputBlocked[terminalID] > 0 {
+	if m.inputBlocked[terminalID] > 0 || m.libraryInputBlocked[terminalID] > 0 {
 		release()
 		return
 	}
@@ -733,4 +735,39 @@ func (c *connState) cleanup() {
 		unsubEvts()
 	}
 	_ = c.conn.Close("server: connection closed")
+}
+
+func (m *Manager) FenceLibraryInput(terminalID string) func() {
+	if terminalID == "" {
+		return func() {}
+	}
+	m.inputMu.Lock()
+	if m.libraryInputBlocked == nil {
+		m.libraryInputBlocked = map[string]int{}
+	}
+	m.libraryInputBlocked[terminalID]++
+	m.inputMu.Unlock()
+	m.mu.Lock()
+	var attachments []*attachment
+	for a := range m.attachments {
+		if a.id == terminalID {
+			attachments = append(attachments, a)
+		}
+	}
+	m.mu.Unlock()
+	for _, a := range attachments {
+		a.close()
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			m.inputMu.Lock()
+			defer m.inputMu.Unlock()
+			if m.libraryInputBlocked[terminalID] <= 1 {
+				delete(m.libraryInputBlocked, terminalID)
+			} else {
+				m.libraryInputBlocked[terminalID]--
+			}
+		})
+	}
 }
