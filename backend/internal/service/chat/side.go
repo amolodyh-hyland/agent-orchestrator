@@ -1337,6 +1337,12 @@ func (m *sideManager) runTurn(runtime *sideRuntime, side domain.SideConversation
 		}
 	}
 	m.announce(side.ID)
+	invocation, err := m.resolveSideSkillMessage(ctx, runtime, side, turn.Text)
+	if err != nil {
+		_ = m.store.SettleSideTurn(ctx, side.ID, turn.ID, side.Generation, "failed", "", err.Error(), m.service.now())
+		m.announce(side.ID)
+		return
+	}
 	text := sideQuestionWithReferences(turn)
 	// Keep attachment paths and resource contents out of the user's wording while
 	// retaining a text representation for providers without resource blocks.
@@ -1372,7 +1378,7 @@ func (m *sideManager) runTurn(runtime *sideRuntime, side domain.SideConversation
 		m.failOpen(side, admissionErr)
 		return
 	}
-	ref, err := runtime.conv.SendTurn(ctx, ports.ChatUserMessage{Text: text, Content: content,
+	ref, err := runtime.conv.SendTurn(ctx, ports.ChatUserMessage{Text: text, Content: content, NativeSkills: invocation.NativeSkills,
 		ClientMessageID: providerRequestID, Origin: domain.MessageOriginHuman,
 		Settings: ports.ChatTurnSettings{Model: side.Model, Effort: side.Effort}})
 	libraryRelease()

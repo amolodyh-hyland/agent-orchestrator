@@ -124,6 +124,13 @@ are refused. Submission carries unchanged text plus native structured skill item
 Structured skill steering is explicitly unsupported; queue the message as a new
 turn. Unrelated native slash commands retain passthrough behavior.
 
+Independent side chats apply the same native-name validation to each question,
+including queued and retried delivery. Unique native skill names receive backend
+structured items; ambiguous names are refused. Quoted history, references, and
+attachments do not select skills. A provider awaiting its first command catalog
+still accepts ordinary text, including paths and dollar words. Explicit catalog
+selections and known pinned library tokens remain checked.
+
 The ordinary message endpoint accepts optional `skillSelection` with `entryId`,
 `snapshotId`, `controllerGeneration`, `catalogRevision`, `bindingRef`, and `token`.
 There is no client path field or execution endpoint. The opaque selection is

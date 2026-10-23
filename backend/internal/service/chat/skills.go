@@ -350,6 +350,18 @@ func pendingLibrarySelection(view librarysvc.Result) bool {
 	return len(pinned) > 0
 }
 
+func (m *sideManager) resolveSideSkillMessage(ctx context.Context, runtime *sideRuntime, side domain.SideConversation, text string) (ports.ChatUserMessage, error) {
+	c := &Controller{
+		sessionID: side.SessionID, generation: side.Generation, harness: side.Harness,
+		conv: runtime.conv, skillView: m.service.librarySkillView,
+		skillCurrent: func(ctx context.Context, _ *Controller) bool {
+			current, err := m.store.SideConversation(ctx, side.ID)
+			return err == nil && current.State == "ready" && current.Generation == side.Generation
+		},
+	}
+	return c.resolveSkillMessage(ctx, ports.ChatUserMessage{Text: text})
+}
+
 // resolveSkillMessage is called again at dispatch, including queued and retry
 // delivery. It strips opaque metadata before the native driver receives content.
 func (c *Controller) resolveSkillMessage(ctx context.Context, msg ports.ChatUserMessage) (ports.ChatUserMessage, error) {
@@ -380,7 +392,7 @@ func (c *Controller) resolveSkillMessage(ctx context.Context, msg ports.ChatUser
 	if err != nil {
 		return msg, err
 	}
-	if catalog.Status == "controller_not_ready" {
+	if catalog.Status == "controller_not_ready" && selection != nil && skillTokenPresent(msg.Text, selection.Token) {
 		return msg, skillError(catalog.ReasonCode)
 	}
 	var chosen *ports.ChatSkill
