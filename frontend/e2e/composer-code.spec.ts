@@ -36,6 +36,49 @@ async function selectVisibleText(field: Locator, start: number, end: number, end
 	);
 }
 
+for (const edge of ["start", "end"] as const) {
+	for (const shift of [false, true]) {
+		test(`inline code ${edge} has an outside caret with ${shift ? "Shift+arrow" : "arrow"}`, async ({ page }) => {
+			await page.goto("/e2e/composer-code/harness.html?text=" + encodeURIComponent("`value`"));
+			const field = page.getByRole("combobox", { name: "Message", exact: true });
+			await expect(field).toHaveJSProperty("innerText", "value");
+			const offset = edge === "start" ? 0 : 5;
+			const exit = edge === "start" ? "ArrowLeft" : "ArrowRight";
+			const enter = edge === "start" ? "ArrowRight" : "ArrowLeft";
+			await selectVisibleText(field, offset, offset);
+			await field.press(shift ? `Shift+${exit}` : exit);
+			await field.press(shift ? `Shift+${enter}` : enter);
+			await field.pressSequentially("I");
+			await expect(page.getByTestId("wire")).toHaveText(edge === "start" ? "`Ivalue`" : "`valueI`");
+			await selectVisibleText(field, edge === "start" ? 0 : 6, edge === "start" ? 0 : 6);
+			await field.press(shift ? `Shift+${exit}` : exit);
+			await field.pressSequentially("!");
+			await expect(page.getByTestId("wire")).toHaveText(edge === "start" ? "!`Ivalue`" : "`valueI`!");
+			await expect(field.locator(".chat-composer-inline-code")).toHaveText(edge === "start" ? "`Ivalue`" : "`valueI`");
+			await expect(field.locator(".chat-composer-markdown-code").filter({ hasText: "!" })).toHaveCount(0);
+		});
+	}
+}
+
+for (const action of ["send", "clear"]) {
+	test(`${action} from inline code starts the next draft as plain text`, async ({ page }) => {
+		await page.goto("/e2e/composer-code/harness.html?text=" + encodeURIComponent("`value`"));
+		const field = page.getByRole("combobox", { name: "Message", exact: true });
+		await expect(field).toHaveJSProperty("innerText", "value");
+		await selectVisibleText(field, 5, 5);
+		if (action === "send") {
+			await field.press("Enter");
+			await expect(page.getByTestId("sent")).toHaveText("`value`");
+		} else await page.getByRole("button", { name: "Clear", exact: true }).click();
+		await expect(page.getByTestId("wire")).toBeEmpty();
+		await field.pressSequentially("new draft");
+		await expect(page.getByTestId("wire")).toHaveText("new draft");
+		await expect(field.locator(".chat-composer-markdown-code, .chat-composer-inline-code")).toHaveCount(0);
+		await field.press("Enter");
+		await expect(page.getByTestId("sent")).toHaveText("new draft");
+	});
+}
+
 for (const example of [
 	{
 		name: "after inline code",

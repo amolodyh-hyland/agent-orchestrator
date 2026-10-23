@@ -67,7 +67,7 @@ import { caretNotation, stripAnsi } from "../../lib/ansi";
 import { getApiBaseUrl } from "../../lib/api-client";
 import { readArtifactRef, readRenderRef } from "../../lib/render-frame";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
-import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
+import { ActivityTitle, ChatCodeText, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
 import { HumanMessageEditor } from "./HumanMessageEditor";
@@ -663,15 +663,20 @@ export function HumanMessage({
 						/>
 					) : null}
 					{body ? (
-						<p data-chat-message-body="" className="break-words whitespace-pre-wrap text-pretty">
-							<ProseWithInlineImages
+						<div data-chat-message-body="" className="break-words whitespace-pre-wrap text-pretty">
+							<ChatCodeText
 								text={body}
-								attachments={attachments}
-								sessionId={sessionId}
-								apiBaseUrl={apiBaseUrl}
-								renderText={(text) => <SessionLinkedText text={text} />}
+								renderText={(text) => (
+									<ProseWithInlineImages
+										text={text}
+										attachments={attachments}
+										sessionId={sessionId}
+										apiBaseUrl={apiBaseUrl}
+										renderText={(text) => <SessionLinkedText text={text} />}
+									/>
+								)}
 							/>
-						</p>
+						</div>
 					) : null}
 					<StagedAttachmentItems
 						paths={attachments}

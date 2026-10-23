@@ -109,6 +109,24 @@ const textFile = (name = "notes.txt") => new File(["hello"], name, { type: "text
 /* ---- the keyboard contract the composer already had ---------------------- */
 
 describe("send keys", () => {
+	it.each(["Enter", "button"])("starts a plain draft after sending from inline code with %s", async (send) => {
+		const { field, onSend } = renderComposer();
+		await typeInComposer(field, "`value`");
+		const editor = (field as HTMLElement & { __lexicalEditor: LexicalEditor }).__lexicalEditor;
+		act(() => editor.update(() => {
+			$getRoot().getAllTextNodes().find((node) => node.getTextContent() === "value")!.selectEnd();
+		}, { discrete: true }));
+		if (send === "Enter") fireEvent.keyDown(field, { key: "Enter" });
+		else await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await waitFor(() => expect(composerWireText(field)).toBe(""));
+		expect(onSend).toHaveBeenCalledWith("`value`");
+		await typeInComposer(field, "new draft");
+		expect(composerWireText(field)).toBe("new draft");
+		expect(editor.getEditorState().read(() => $getRoot().getAllTextNodes().some((node) => node.hasFormat("code")))).toBe(false);
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(onSend).toHaveBeenLastCalledWith("new draft"));
+	});
+
 	it("lays attachments beside annotations and clears only annotation references", async () => {
 		const sessionId = "composer-shared-attachment-row";
 		writeChatExcerptReferences(sessionId, EXCERPTS);
