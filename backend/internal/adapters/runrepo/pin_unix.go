@@ -15,13 +15,14 @@ const directoryHelper = "--ao-observe-owned-repo"
 // A minimal self-exec trampoline performs fchdir in the child only. macOS does
 // not support chdir through /dev/fd directory paths. Never change daemon cwd.
 func init() {
-	if len(os.Args) < 4 || os.Args[1] != directoryHelper {
+	if len(os.Args) < 5 || os.Args[1] != directoryHelper {
 		return
 	}
 	gitPath, err := exec.LookPath("git")
 	prefix := inspectionOptions()
-	args := os.Args[3:]
-	if err != nil || !filepath.IsAbs(gitPath) || gitPath != os.Args[2] || len(args) <= len(prefix) || !slices.Equal(args[:len(prefix)], prefix) || !safeInspectionArgs(args[len(prefix):]) {
+	view := os.Args[3]
+	args := os.Args[4:]
+	if err != nil || validateViewConfig(view) != nil || !filepath.IsAbs(gitPath) || gitPath != os.Args[2] || len(args) <= len(prefix) || !slices.Equal(args[:len(prefix)], prefix) || !safeInspectionArgs(args[len(prefix):]) {
 		os.Exit(125)
 	}
 	file := os.NewFile(3, "owned-directory")
@@ -29,12 +30,12 @@ func init() {
 		os.Exit(125)
 	}
 	_ = file.Close()
-	if err := syscall.Exec(gitPath, append([]string{gitPath}, args...), inspectionEnv()); err != nil { //nolint:gosec // Exact options and read-only builtin arguments were allowlisted above; executable resolved before fchdir.
+	if err := syscall.Exec(gitPath, append([]string{gitPath}, args...), inspectionEnv(view)); err != nil { //nolint:gosec // Exact options and read-only builtin arguments were allowlisted above; executable resolved before fchdir.
 		os.Exit(125)
 	}
 }
 
-func pinCommand(cmd *exec.Cmd, root *os.Root, _ string) (func(), error) {
+func pinCommand(cmd *exec.Cmd, root *os.Root, _, view string) (func(), error) {
 	file, err := root.Open(".")
 	if err != nil {
 		return nil, err
@@ -44,7 +45,7 @@ func pinCommand(cmd *exec.Cmd, root *os.Root, _ string) (func(), error) {
 		_ = file.Close()
 		return nil, err
 	}
-	args := []string{self, directoryHelper, cmd.Path}
+	args := []string{self, directoryHelper, cmd.Path, view}
 	for i := 1; i < len(cmd.Args); i++ {
 		if cmd.Args[i] == "-C" {
 			i++

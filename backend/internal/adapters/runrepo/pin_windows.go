@@ -12,7 +12,7 @@ import (
 
 // Hold every ancestor without FILE_SHARE_DELETE until Git exits. Windows then
 // refuses rename/replacement of any path component used by the child process.
-func pinCommand(_ *exec.Cmd, root *os.Root, path string) (func(), error) {
+func pinCommand(_ *exec.Cmd, root *os.Root, path string, _ string) (func(), error) {
 	handles := []windows.Handle{}
 	release := func() {
 		for i := len(handles) - 1; i >= 0; i-- {

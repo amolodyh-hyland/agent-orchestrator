@@ -26,9 +26,11 @@ import (
 // Reader observes raw Git objects and file bytes, never worktree conversion drivers.
 type Reader struct{}
 
-const maxObservation = 1 << 20
+const maxObservation = 32 << 20
 const maxFile = 32 << 20
-const maxFiles = 4096
+const maxFiles = 100000
+const maxSourceBytes = int64(2) << 30
+const maxFactsBytes = 16 << 10
 
 type boundedBuffer struct{ bytes.Buffer }
 
@@ -88,14 +90,14 @@ func openOwned(path string) (*os.Root, string, error) {
 func inspectionOptions() []string {
 	return []string{"--no-pager", "--no-optional-locks", "--no-replace-objects", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "core.hooksPath=" + os.DevNull}
 }
-func inspectionEnv() []string {
+func inspectionEnv(view string) []string {
 	out := []string{}
 	for _, entry := range os.Environ() {
 		if !strings.HasPrefix(entry, "GIT_") {
 			out = append(out, entry)
 		}
 	}
-	return append(out, "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_ATTR_NOSYSTEM=1", "GIT_NO_LAZY_FETCH=1", "GIT_ALLOW_PROTOCOL=")
+	return append(out, "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_ATTR_NOSYSTEM=1", "GIT_NO_LAZY_FETCH=1", "GIT_ALLOW_PROTOCOL=", "GIT_DIR="+view, "GIT_COMMON_DIR="+view, "GIT_WORK_TREE=.")
 }
 
 // Keep the child trampoline limited to the exact non-converting plumbing used here.
@@ -129,9 +131,12 @@ func safeInspectionArgs(args []string) bool {
 	return false
 }
 
-func git(ctx context.Context, path string, args ...string) (string, error) {
+func (v *gitView) git(ctx context.Context, path string, args ...string) (string, error) {
 	if !safeInspectionArgs(args) {
 		return "", errors.New("unsupported inspection command")
+	}
+	if err := validateViewConfig(v.directory); err != nil {
+		return "", err
 	}
 	root, clean, err := openOwned(path)
 	if err != nil {
@@ -142,12 +147,12 @@ func git(ctx context.Context, path string, args ...string) (string, error) {
 	defer cancel()
 	argv := append(append(inspectionOptions(), "-C", clean), args...)
 	cmd := process.CommandContext(ctx, "git", argv...)
-	release, err := pinCommand(cmd, root, clean)
+	release, err := pinCommand(cmd, root, clean, v.directory)
 	if err != nil {
 		return "", err
 	}
 	defer release()
-	cmd.Env = inspectionEnv()
+	cmd.Env = inspectionEnv(v.directory)
 	var output boundedBuffer
 	cmd.Stdout = &output
 	var stderr boundedBuffer
@@ -185,14 +190,31 @@ func names(value string) []string {
 
 // rawFiles compares index entries with anchored raw bytes. Neither Git status nor
 // worktree diff is safe here: both may execute repository-defined clean filters.
-func rawFiles(root *os.Root, index string, sha256Objects bool) ([]string, error) {
+func rawFiles(ctx context.Context, root *os.Root, index string, sha256Objects bool) ([]string, error) {
 	dirty := []string{}
 	total := int64(0)
-	entries := names(index)
+	// ls-files emits index entries in path order. Keep that order so adjacent
+	// files can share an anchored parent, rather than reopening every ancestor.
+	entries := strings.Split(strings.TrimSuffix(index, "\x00"), "\x00")
 	if len(entries) > maxFiles {
 		return nil, errors.New("too many indexed files")
 	}
+	var parent *os.Root
+	defer func() {
+		if parent != nil {
+			_ = parent.Close()
+		}
+	}()
+	directory := ""
+	missingParent := false
+	current := root
 	for _, entry := range entries {
+		if entry == "" {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		header, name, ok := strings.Cut(entry, "\t")
 		fields := strings.Fields(header)
 		if !ok || len(fields) != 3 || fields[2] != "0" || !filepath.IsLocal(name) {
@@ -202,7 +224,33 @@ func rawFiles(root *os.Root, index string, sha256Objects bool) ([]string, error)
 		if mode != "100644" && mode != "100755" && mode != "120000" {
 			return nil, errors.New("unsupported index mode")
 		}
-		info, err := root.Lstat(name)
+		dir := filepath.Dir(name)
+		if dir != directory {
+			missingParent = false
+			if parent != nil {
+				_ = parent.Close()
+				parent = nil
+			}
+			current = root
+			if dir != "." {
+				var openErr error
+				parent, openErr = root.OpenRoot(dir)
+				if os.IsNotExist(openErr) {
+					missingParent = true
+				} else if openErr != nil {
+					return nil, openErr
+				} else {
+					current = parent
+				}
+			}
+			directory = dir
+		}
+		if missingParent {
+			dirty = append(dirty, name)
+			continue
+		}
+		leaf := filepath.Base(name)
+		info, err := current.Lstat(leaf)
 		if os.IsNotExist(err) {
 			dirty = append(dirty, name)
 			continue
@@ -212,7 +260,7 @@ func rawFiles(root *os.Root, index string, sha256Objects bool) ([]string, error)
 		}
 		var data []byte
 		if mode == "120000" && info.Mode()&os.ModeSymlink != 0 {
-			target, e := root.Readlink(name)
+			target, e := current.Readlink(leaf)
 			if e != nil {
 				return nil, e
 			}
@@ -221,7 +269,7 @@ func rawFiles(root *os.Root, index string, sha256Objects bool) ([]string, error)
 			if info.Size() > maxFile {
 				return nil, errors.New("source file exceeds limit")
 			}
-			file, e := root.Open(name)
+			file, e := current.Open(leaf)
 			if e != nil {
 				return nil, e
 			}
@@ -238,17 +286,17 @@ func rawFiles(root *os.Root, index string, sha256Objects bool) ([]string, error)
 			if len(data) > maxFile {
 				return nil, errors.New("source file exceeds limit")
 			}
-			if runtime.GOOS != "windows" && (info.Mode()&0o111 != 0) != (mode == "100755") {
-				dirty = append(dirty, name)
-				continue
-			}
 		} else {
 			dirty = append(dirty, name)
 			continue
 		}
 		total += int64(len(data))
-		if total > 256<<20 {
+		if total > maxSourceBytes {
 			return nil, errors.New("source observation exceeds limit")
+		}
+		if mode != "120000" && runtime.GOOS != "windows" && (info.Mode()&0o111 != 0) != (mode == "100755") {
+			dirty = append(dirty, name)
+			continue
 		}
 		digest := sha1.New() //nolint:gosec // Compare Git SHA-1 object IDs; this is not an evidence signature.
 		if sha256Objects {
@@ -278,81 +326,13 @@ func (Reader) Inspect(ctx context.Context, repoPath, worktreePath, base string) 
 		return facts, err
 	}
 	defer func() { _ = root.Close() }()
-	repoRoot, _, err := openOwned(repo)
+	view, err := newGitView(ctx, repo, worktree, root, base)
 	if err != nil {
 		return facts, err
 	}
-	metadata, err := repoRoot.Lstat(".git")
-	_ = repoRoot.Close()
-	if err != nil || !metadata.IsDir() || metadata.Mode()&os.ModeSymlink != 0 {
-		return facts, errors.New("registered repository metadata must be an owned directory")
-	}
-	metadata, err = root.Lstat(".git")
-	if err != nil || metadata.Mode()&os.ModeSymlink != 0 {
-		return facts, errors.New("owned worktree metadata unavailable")
-	}
-	if !metadata.IsDir() {
-		if !metadata.Mode().IsRegular() || metadata.Size() > 4096 {
-			return facts, errors.New("invalid owned worktree metadata")
-		}
-		file, e := root.Open(".git")
-		if e != nil {
-			return facts, e
-		}
-		info, e := file.Stat()
-		if e != nil || !os.SameFile(metadata, info) {
-			_ = file.Close()
-			return facts, errors.New("worktree pointer identity changed")
-		}
-		data, e := io.ReadAll(io.LimitReader(file, 4097))
-		_ = file.Close()
-		if e != nil {
-			return facts, e
-		}
-		if len(data) > 4096 {
-			return facts, errors.New("worktree pointer exceeds limit")
-		}
-		target, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir: ")
-		if !ok {
-			return facts, errors.New("invalid worktree pointer")
-		}
-		if !filepath.IsAbs(target) {
-			target = filepath.Join(worktree, target)
-		}
-		target, e = canonical(target)
-		if e != nil {
-			return facts, e
-		}
-		rel, e := filepath.Rel(filepath.Join(repo, ".git"), target)
-		if e != nil || !filepath.IsLocal(rel) {
-			return facts, errors.New("worktree metadata escapes registered repository")
-		}
-	}
-	top, err := git(ctx, worktree, "rev-parse", "--show-toplevel")
-	if err != nil {
-		return facts, err
-	}
-	top, err = canonical(top)
-	if err != nil || top != worktree {
-		return facts, errors.New("owned worktree identity changed")
-	}
-	projectCommon, err := git(ctx, repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	if err != nil {
-		return facts, err
-	}
-	common, err := git(ctx, worktree, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	if err != nil {
-		return facts, err
-	}
-	projectCommon, err = canonical(projectCommon)
-	if err != nil {
-		return facts, err
-	}
-	common, err = canonical(common)
-	if err != nil || common != projectCommon || projectCommon != filepath.Join(repo, ".git") {
-		return facts, errors.New("repository identity mismatch")
-	}
-	flags, err := git(ctx, worktree, "ls-files", "-v", "-z")
+	defer view.close()
+	common := view.commonPath
+	flags, err := view.git(ctx, worktree, "ls-files", "-v", "-z")
 	if err != nil {
 		return facts, err
 	}
@@ -361,52 +341,55 @@ func (Reader) Inspect(ctx context.Context, repoPath, worktreePath, base string) 
 			return facts, errors.New("index hides working source changes")
 		}
 	}
-	head, err := git(ctx, worktree, "rev-parse", "--verify", "HEAD^{commit}")
+	head, err := view.git(ctx, worktree, "rev-parse", "--verify", "HEAD^{commit}")
 	if err != nil || !domain.FullCommit(head) {
 		return facts, errors.New("HEAD unavailable")
 	}
-	branch, err := git(ctx, worktree, "symbolic-ref", "--short", "HEAD")
+	branch, err := view.git(ctx, worktree, "symbolic-ref", "--short", "HEAD")
 	if err != nil {
 		return facts, err
 	}
-	if _, err := git(ctx, worktree, "merge-base", "--is-ancestor", base, head); err != nil {
+	if _, err := view.git(ctx, worktree, "merge-base", "--is-ancestor", base, head); err != nil {
 		return facts, errors.New("owned base is not an ancestor")
 	}
-	changed, err := git(ctx, worktree, "diff-tree", "--no-commit-id", "-r", "--no-ext-diff", "--no-textconv", "--name-only", "--no-renames", "-z", base, head, "--")
+	changed, err := view.git(ctx, worktree, "diff-tree", "--no-commit-id", "-r", "--no-ext-diff", "--no-textconv", "--name-only", "--no-renames", "-z", base, head, "--")
 	if err != nil {
 		return facts, err
 	}
-	staged, err := git(ctx, worktree, "diff-index", "--cached", "--no-ext-diff", "--no-textconv", "--name-only", "--no-renames", "-z", head, "--")
+	staged, err := view.git(ctx, worktree, "diff-index", "--cached", "--no-ext-diff", "--no-textconv", "--name-only", "--no-renames", "-z", head, "--")
 	if err != nil {
 		return facts, err
 	}
-	index, err := git(ctx, worktree, "ls-files", "--stage", "-z")
+	index, err := view.git(ctx, worktree, "ls-files", "--stage", "-z")
 	if err != nil {
 		return facts, err
 	}
-	unstaged, err := rawFiles(root, index, len(head) == 64)
+	unstaged, err := rawFiles(ctx, root, index, len(head) == 64)
 	if err != nil {
 		return facts, err
 	}
-	untracked, err := git(ctx, worktree, "ls-files", "--others", "--exclude-standard", "-z", "--")
+	untracked, err := view.git(ctx, worktree, "ls-files", "--others", "--exclude-standard", "-z", "--")
 	if err != nil {
 		return facts, err
 	}
-	endHead, err := git(ctx, worktree, "rev-parse", "--verify", "HEAD^{commit}")
+	endHead, err := view.git(ctx, worktree, "rev-parse", "--verify", "HEAD^{commit}")
 	if err != nil {
 		return facts, err
 	}
-	endIndex, err := git(ctx, worktree, "ls-files", "--stage", "-z")
+	endIndex, err := view.git(ctx, worktree, "ls-files", "--stage", "-z")
 	if err != nil {
 		return facts, err
 	}
-	endUntracked, err := git(ctx, worktree, "ls-files", "--others", "--exclude-standard", "-z", "--")
+	endUntracked, err := view.git(ctx, worktree, "ls-files", "--others", "--exclude-standard", "-z", "--")
 	if err != nil {
 		return facts, err
 	}
-	endDirty, err := rawFiles(root, endIndex, len(head) == 64)
+	endDirty, err := rawFiles(ctx, root, endIndex, len(head) == 64)
 	if err != nil || head != endHead || index != endIndex || untracked != endUntracked || strings.Join(unstaged, "\x00") != strings.Join(endDirty, "\x00") {
 		return facts, errors.New("repository changed during observation")
+	}
+	if err := view.unchanged(repo, worktree, root); err != nil {
+		return facts, err
 	}
 	facts = domain.RunRepoFacts{RepoPath: repo, WorktreePath: worktree, BaseSHA: base, HeadSHA: head, Branch: branch, ChangedFiles: names(changed), Staged: names(staged), Unstaged: unstaged, Untracked: names(untracked)}
 	for _, list := range [][]string{facts.ChangedFiles, facts.Staged, facts.Unstaged, facts.Untracked} {
@@ -415,13 +398,13 @@ func (Reader) Inspect(ctx context.Context, repoPath, worktreePath, base string) 
 		}
 	}
 	data, err := json.Marshal(struct {
-		Facts         domain.RunRepoFacts
-		Common, Index string
-	}{facts, common, index})
+		Facts               domain.RunRepoFacts
+		Common, IndexDigest string
+	}{facts, common, indexDigest(index)})
 	if err != nil {
 		return facts, err
 	}
-	if len(data) > 16<<10 {
+	if len(data) > maxFactsBytes {
 		return domain.RunRepoFacts{}, errors.New("repository facts exceed limit")
 	}
 	sum := sha256.Sum256(data)

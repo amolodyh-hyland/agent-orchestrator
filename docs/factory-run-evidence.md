@@ -166,11 +166,15 @@ Runs admit at most eight repositories, 50 required checks, 64 KiB per submitted
 claim, 64 KiB per header and 256 KiB per stored observation/receipt. A run has at
 most 512 immutable events; reaching that bound preserves history and makes the
 ledger read-only. Native dialogs refuse previews over 24,000 characters. Git
-output is bounded to 1 MiB per command, repository facts to 16 KiB and 4,096 paths,
-and each raw source/artifact file to 32 MiB (256 MiB total source bytes per pass).
-Oversized or unsupported observations hold readiness. Registered project repositories must own their `.git` directory; linked project
-roots are conservatively held. Git submodules and worktree
-bytes requiring normalization are conservatively held rather than converted.
+output is bounded to 32 MiB per command and 100,000 indexed paths. Repository
+facts remain limited to 16 KiB of source identity and changed paths; the full
+index is hashed separately before computing the observation fingerprint. Raw
+source/artifact files are limited to 32 MiB each, with 2 GiB total source bytes
+per pass. Index snapshots accept 64 MiB. The private object view accepts up to
+250,000 entries and 8 GiB of object files.
+Oversized or unsupported observations hold readiness. Registered project
+repositories must own their `.git` directory; linked project roots are
+conservatively held. Git submodules and worktree bytes requiring normalization are conservatively held rather than converted.
 
 Repository and artifact roots are anchored beneath validated filesystem parents;
 root symlinks are refused. Unix inspection enters an inherited open directory in
@@ -179,3 +183,14 @@ Git plumbing compares index/tree object identities to raw file bytes. It disable
 global/system configuration, filesystem monitors, optional locks, pagers and
 external diff/textconv, and never invokes status, worktree diff, clean/process
 filters, hooks or project-defined commands. This inspection does not run checks.
+
+Git reads a disposable metadata view with a fixed, generated configuration. It
+never opens the original local config or config.worktree, and never evaluates
+include/includeIf directives. The view contains bounded, anchored HEAD/ref/index
+snapshots, owned object files and the owned info/exclude patterns. Object files
+are inode-verified links or anchored copies; outward symlinks and alternate
+object stores are refused. Git sees no original metadata paths. Source HEAD,
+branch, index and exclusion snapshots are checked again after observation, and
+the private view is removed afterwards. Unsupported metadata layouts (including
+split indexes or reftable refs) hold readiness rather than falling back to reading
+unvalidated configuration. Packed refs and ordinary linked worktrees are supported.
