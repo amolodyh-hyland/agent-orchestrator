@@ -32,18 +32,19 @@ func (s *libraryTerminalStream) Write(p []byte) (int, error) {
 }
 
 type libraryTerminalSource struct {
-	blocked bool
-	opened  chan *libraryTerminalStream
-	t       *testing.T
+	blocked   bool
+	blockedID string
+	opened    chan *libraryTerminalStream
+	t         *testing.T
 }
 
 func (s *libraryTerminalSource) IsAlive(context.Context, ports.RuntimeHandle) (bool, error) {
 	return true, nil
 }
-func (s *libraryTerminalSource) Attach(context.Context, ports.RuntimeHandle, uint16, uint16) (ports.Stream, error) {
+func (s *libraryTerminalSource) Attach(_ context.Context, handle ports.RuntimeHandle, _, _ uint16) (ports.Stream, error) {
 	local, remote := net.Pipe()
 	s.t.Cleanup(func() { _ = remote.Close() })
-	stream := &libraryTerminalStream{Conn: local, blocked: s.blocked, started: make(chan struct{}), written: make(chan string, 4)}
+	stream := &libraryTerminalStream{Conn: local, blocked: s.blocked || (s.blockedID != "" && handle.ID == s.blockedID), started: make(chan struct{}), written: make(chan string, 4)}
 	s.opened <- stream
 	return stream, nil
 }
@@ -108,20 +109,29 @@ func (c *libraryTerminalConn) receive(t *testing.T, kind string) {
 type libraryTerminalInput struct {
 	service *Service
 	id      domain.SessionID
+	ids     map[string]domain.SessionID
 }
 
-func (l libraryTerminalInput) AcquireSessionInput(domain.SessionID) (func(), bool) {
+func (l libraryTerminalInput) AcquireSessionInput(id domain.SessionID) (func(), bool) {
+	if l.ids != nil {
+		return l.service.AcquireTaskInput(l.ids[string(id)])
+	}
 	return l.service.AcquireTaskInput(l.id)
 }
 
 type libraryTerminalLifecycle struct {
-	terminal  *terminal.Manager
-	runtimeID string
-	stop      func(context.Context, domain.SessionID) error
+	terminal   *terminal.Manager
+	runtimeID  string
+	runtimeIDs map[domain.SessionID]string
+	stop       func(context.Context, domain.SessionID) error
 }
 
-func (l libraryTerminalLifecycle) FenceLibraryInput(ctx context.Context, _ domain.SessionID) (func(), error) {
-	return l.terminal.FenceLibraryInput(ctx, l.runtimeID)
+func (l libraryTerminalLifecycle) FenceLibraryInput(ctx context.Context, id domain.SessionID) (func(), error) {
+	runtimeID := l.runtimeID
+	if l.runtimeIDs != nil {
+		runtimeID = l.runtimeIDs[id]
+	}
+	return l.terminal.FenceLibraryInput(ctx, runtimeID)
 }
 func (l libraryTerminalLifecycle) StopLibraryRuntime(ctx context.Context, id domain.SessionID) error {
 	return l.stop(ctx, id)
@@ -251,4 +261,110 @@ func TestTaskLibraryDeniedRevocationReopensSameTerminalConnection(t *testing.T) 
 	if err != nil || state.Approvals[f.result.Approvals[0].ApprovalID].State != "approved" {
 		t.Fatalf("denied mutation changed approval: %v", err)
 	}
+}
+
+func TestTaskLibraryRevocationDrainsSessionsIndependently(t *testing.T) {
+	f, first := pinnedTaskFixture(t)
+	second, parent, project := f.session("planning")
+	if err := f.svc.Pin(context.Background(), parent, project, "claude-code"); err != nil {
+		t.Fatal(err)
+	}
+	second.Metadata.RuntimeHandleID = "second-runtime"
+	if err := f.store.UpdateSession(context.Background(), second); err != nil {
+		t.Fatal(err)
+	}
+	approvalID := f.result.Approvals[0].ApprovalID
+	ids, err := f.store.ListLibrarySessionsByApproval(context.Background(), approvalID)
+	if err != nil || len(ids) != 2 {
+		t.Fatalf("affected sessions=%v err=%v", ids, err)
+	}
+	records := map[domain.SessionID]domain.SessionRecord{first.ID: first, second.ID: second}
+	runtimeIDs := map[domain.SessionID]string{first.ID: first.Metadata.RuntimeHandleID, second.ID: second.Metadata.RuntimeHandleID}
+	a, b := ids[0], ids[1]
+	src := &libraryTerminalSource{t: t, blockedID: runtimeIDs[b], opened: make(chan *libraryTerminalStream, 2)}
+	mgr := terminal.NewManager(src, nil, nil, terminal.WithHeartbeat(0))
+	mgr.SetSessionInputLease(libraryTerminalInput{service: f.svc, ids: map[string]domain.SessionID{runtimeIDs[a]: a, runtimeIDs[b]: b}})
+	ctx, cancel := context.WithCancel(context.Background())
+	conn := &libraryTerminalConn{in: make(chan []byte, 8), out: make(chan []byte, 16)}
+	served := make(chan struct{})
+	go func() { defer close(served); mgr.Serve(ctx, conn) }()
+	t.Cleanup(func() {
+		cancel()
+		mgr.Close()
+		select {
+		case <-served:
+		case <-time.After(time.Second):
+			t.Error("terminal connection did not stop")
+		}
+	})
+	for _, id := range ids {
+		conn.send(t, runtimeIDs[id], "open", "")
+		conn.receive(t, "opened")
+	}
+	<-src.opened
+	blocked := <-src.opened
+	conn.send(t, runtimeIDs[b], "data", "blocked B input")
+	select {
+	case <-blocked.started:
+	case <-time.After(time.Second):
+		t.Fatal("B's PTY write did not block")
+	}
+	var fenced []domain.SessionID
+	stopped := map[domain.SessionID]bool{}
+	f.svc.SetTaskLibraryLifecycle(twoSessionTerminalLifecycle{
+		libraryTerminalLifecycle: libraryTerminalLifecycle{terminal: mgr, runtimeIDs: runtimeIDs, stop: func(ctx context.Context, id domain.SessionID) error {
+			state, err := f.store.ReadLibraryRegistry(ctx)
+			if err != nil {
+				return err
+			}
+			if state.Approvals[approvalID].State != "revoked" {
+				return errors.New("runtime stop overtook ledger commit")
+			}
+			stopped[id] = true
+			rec := records[id]
+			rec.IsTerminated = true
+			return f.store.UpdateSession(ctx, rec)
+		}},
+		fenced: &fenced,
+	})
+	revokeCtx, revokeCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer revokeCancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.svc.Operate(revokeCtx, Operation{Operation: "revoke", ApprovalID: approvalID, ExpectedRevision: f.result.Revision})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("A's fence blocked before B's writer could close")
+	}
+	if len(fenced) != 2 || fenced[0] != a || fenced[1] != b {
+		t.Fatalf("fence order=%v, want A then blocked B", fenced)
+	}
+	for _, id := range ids {
+		if !stopped[id] {
+			t.Fatalf("runtime %s was not stopped", id)
+		}
+		rec, found, err := f.store.GetSession(context.Background(), id)
+		if err != nil || !found || !rec.IsTerminated {
+			t.Fatalf("session %s not terminated: %v", id, err)
+		}
+		if err := f.svc.CheckLaunch(context.Background(), id); reason(err) != "revoked" {
+			t.Fatalf("revoked launch %s admitted: %v", id, err)
+		}
+	}
+}
+
+type twoSessionTerminalLifecycle struct {
+	libraryTerminalLifecycle
+	fenced *[]domain.SessionID
+}
+
+func (l twoSessionTerminalLifecycle) FenceLibraryInput(ctx context.Context, id domain.SessionID) (func(), error) {
+	*l.fenced = append(*l.fenced, id)
+	return l.libraryTerminalLifecycle.FenceLibraryInput(ctx, id)
 }

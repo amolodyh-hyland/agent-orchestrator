@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -125,6 +127,26 @@ func TestTaskLibraryFenceInterruptsBlockedWriteAndBoundsDrain(t *testing.T) {
 			if !a.isClosed() {
 				t.Fatal("attachment remained open")
 			}
+			assertNoLibraryFenceWaiters(t)
+			if !interrupt {
+				for attempt := 0; attempt < 8; attempt++ {
+					ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+					release, err := mgr.FenceLibraryInput(ctx, "runtime")
+					cancel()
+					if release != nil {
+						release()
+					}
+					if !errors.Is(err, context.DeadlineExceeded) {
+						t.Fatalf("attempt %d: %v", attempt, err)
+					}
+					assertNoLibraryFenceWaiters(t)
+				}
+				select {
+				case <-released:
+					t.Fatal("uninterruptible writer stopped before waiter assertions")
+				default:
+				}
+			}
 			p.once.Do(func() { close(p.unblock) })
 			select {
 			case <-released:
@@ -132,5 +154,19 @@ func TestTaskLibraryFenceInterruptsBlockedWriteAndBoundsDrain(t *testing.T) {
 				t.Fatal("input lease not released")
 			}
 		})
+	}
+}
+
+func assertNoLibraryFenceWaiters(t *testing.T) {
+	t.Helper()
+	buf := make([]byte, 1<<20)
+	n := runtime.Stack(buf, true)
+	if n == len(buf) {
+		t.Fatal("goroutine snapshot truncated")
+	}
+	for _, stack := range strings.Split(string(buf[:n]), "\n\n") {
+		if strings.Contains(stack, "(*Manager).FenceLibraryInput") {
+			t.Fatalf("fence left a goroutine after returning while the writer is still blocked:\n%s", stack)
+		}
 	}
 }

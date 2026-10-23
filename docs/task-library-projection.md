@@ -54,7 +54,10 @@ Revocation fences admission for the affected approval before waiting for input
 leases. The terminal mux closes affected attachments and discards pending bytes,
 releasing their leases; reconnects cannot reopen that runtime's input lane.
 Closing each attachment interrupts its outstanding stream writes before a bounded
-drain; a failed drain refuses the mutation. Closed attachments send `exited` and
+drain for that terminal only; a failed drain refuses the mutation. Waiting for
+the drain is cancellable and creates no background waiter. A blocked write in
+another affected session cannot prevent reaching and closing that session’s
+stream. Closed attachments send `exited` and
 unregister, so a denied mutation can reopen on the same connection after its fence
 is released. Unrelated selections retain admission.
 

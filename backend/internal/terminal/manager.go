@@ -73,14 +73,32 @@ type Manager struct {
 	inputLeaseMu sync.RWMutex
 	inputLease   sessionguard.InputLease
 
-	// inputMu makes BeginInputDrain atomic with pane writes. Once a drain returns,
-	// every write that began before it has finished and every later write is
-	// refused until the matching release runs.
 	inputMu             sync.Mutex
-	inputBlocked        map[string]int
+	inputLanes          map[string]*terminalInputLane
 	libraryInputMu      sync.Mutex
 	libraryInputBlocked map[string]int
-	lastInputAt         map[string]time.Time
+}
+
+// Each terminal serializes its writes independently. The channel also lets a
+// revocation abandon its drain on cancellation without leaving a waiter behind.
+type terminalInputLane struct {
+	gate        chan struct{}
+	blocked     int
+	lastInputAt time.Time
+}
+
+func (m *Manager) inputLane(id string) *terminalInputLane {
+	m.inputMu.Lock()
+	defer m.inputMu.Unlock()
+	if m.inputLanes == nil {
+		m.inputLanes = map[string]*terminalInputLane{}
+	}
+	lane := m.inputLanes[id]
+	if lane == nil {
+		lane = &terminalInputLane{gate: make(chan struct{}, 1)}
+		m.inputLanes[id] = lane
+	}
+	return lane
 }
 
 // sharedTerm tracks every client currently viewing one terminal id (one PTY) so
@@ -143,9 +161,8 @@ func NewManager(src Source, events EventSource, log *slog.Logger, opts ...Option
 		cancel:              cancel,
 		attachments:         map[*attachment]struct{}{},
 		shared:              map[string]*sharedTerm{},
-		inputBlocked:        map[string]int{},
+		inputLanes:          map[string]*terminalInputLane{},
 		libraryInputBlocked: map[string]int{},
-		lastInputAt:         map[string]time.Time{},
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -156,21 +173,18 @@ func NewManager(src Source, events EventSource, log *slog.Logger, opts ...Option
 // BeginInputDrain blocks new user input for one terminal while Session Manager
 // hands its controller to another interface. The returned release is idempotent.
 func (m *Manager) BeginInputDrain(terminalID string) (lastInputAt time.Time, release func()) {
-	m.inputMu.Lock()
-	m.inputBlocked[terminalID]++
-	lastInputAt = m.lastInputAt[terminalID]
-	m.inputMu.Unlock()
+	lane := m.inputLane(terminalID)
+	lane.gate <- struct{}{}
+	lane.blocked++
+	lastInputAt = lane.lastInputAt
+	<-lane.gate
 
 	var once sync.Once
 	return lastInputAt, func() {
 		once.Do(func() {
-			m.inputMu.Lock()
-			defer m.inputMu.Unlock()
-			if m.inputBlocked[terminalID] <= 1 {
-				delete(m.inputBlocked, terminalID)
-				return
-			}
-			m.inputBlocked[terminalID]--
+			lane.gate <- struct{}{}
+			lane.blocked--
+			<-lane.gate
 		})
 	}
 }
@@ -191,16 +205,17 @@ func (m *Manager) TerminalOnScreen(terminalID string) bool {
 }
 
 func (m *Manager) writeInput(terminalID string, a *attachment, raw []byte, release func()) {
-	m.inputMu.Lock()
-	defer m.inputMu.Unlock()
+	lane := m.inputLane(terminalID)
+	lane.gate <- struct{}{}
+	defer func() { <-lane.gate }()
 	m.libraryInputMu.Lock()
 	libraryBlocked := m.libraryInputBlocked[terminalID] > 0
 	m.libraryInputMu.Unlock()
-	if m.inputBlocked[terminalID] > 0 || libraryBlocked {
+	if lane.blocked > 0 || libraryBlocked {
 		release()
 		return
 	}
-	m.lastInputAt[terminalID] = time.Now()
+	lane.lastInputAt = time.Now()
 	_ = a.writeLeased(raw, release)
 }
 
@@ -773,24 +788,6 @@ func (m *Manager) FenceLibraryInput(ctx context.Context, terminalID string) (fun
 		}
 	}
 	m.mu.Unlock()
-	drained := make(chan struct{})
-	go func() {
-		// Closing the stream interrupts a backpressured write before waiting for its barrier.
-		var closing sync.WaitGroup
-		for _, a := range attachments {
-			closing.Add(1)
-			go func() {
-				defer closing.Done()
-				a.close()
-				a.markExited()
-				m.forget(a)
-			}()
-		}
-		closing.Wait()
-		m.inputMu.Lock()
-		m.inputMu.Unlock()
-		close(drained)
-	}()
 	var once sync.Once
 	release := func() {
 		once.Do(func() {
@@ -803,8 +800,15 @@ func (m *Manager) FenceLibraryInput(ctx context.Context, terminalID string) (fun
 			}
 		})
 	}
+	for _, a := range attachments {
+		a.close()
+		a.markExited()
+		m.forget(a)
+	}
+	lane := m.inputLane(terminalID)
 	select {
-	case <-drained:
+	case lane.gate <- struct{}{}:
+		<-lane.gate
 		return release, nil
 	case <-ctx.Done():
 		return release, ctx.Err()
