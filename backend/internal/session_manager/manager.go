@@ -5144,6 +5144,17 @@ func semanticMessageAccepted(rec domain.SessionRecord, clientMessageID string) b
 
 // InterruptTUI requests cancellation through the session's owned runtime.
 func (m *Manager) InterruptTUI(ctx context.Context, id domain.SessionID) error {
+	if participants, ok := m.store.(interface {
+		FactoryRunsForSession(context.Context, domain.SessionID) ([]domain.FactoryRun, error)
+	}); ok {
+		runs, err := participants.FactoryRunsForSession(ctx, id)
+		if err != nil {
+			return err
+		}
+		if len(runs) > 0 {
+			return fmt.Errorf("factory continuation requires per-turn native confirmation")
+		}
+	}
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil {
 		return err
@@ -5165,10 +5176,8 @@ func (m *Manager) InterruptTUI(ctx context.Context, id domain.SessionID) error {
 // retries. Ordinary callers leave it empty; the outbox preserves the key across
 // restart, rollback, and even a second overlapping handoff.
 func (m *Manager) send(ctx context.Context, id domain.SessionID, message, clientMessageID string, options ports.MessageDeliveryOptions) error {
-	if !options.AuthoredByUser {
-		if err := domain.CheckFactoryFeedback(ctx, m.store, id); err != nil {
-			return err
-		}
+	if err := domain.CheckFactoryFeedback(ctx, m.store, id); err != nil {
+		return err
 	}
 	// A controller transition deliberately has a short interval with no writer.
 	// Queue internal/lifecycle sends durably instead of racing either controller
@@ -5214,10 +5223,8 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 			}
 		}
 	}
-	if !options.AuthoredByUser {
-		if err := domain.CheckFactoryFeedback(ctx, m.store, id); err != nil {
-			return err
-		}
+	if err := domain.CheckFactoryFeedback(ctx, m.store, id); err != nil {
+		return err
 	}
 	outcome, err := m.messenger.DeliverWithPostWrite(ctx, id, message, afterWrite)
 	if err != nil {

@@ -54,6 +54,7 @@ type SessionReader interface {
 // Service owns the live Chat controllers.
 type Service struct {
 	libraryAdmission       LibraryAdmission
+	feedbackAdmission      FeedbackAdmission
 	store                  Store
 	reader                 SnapshotReader
 	pageReader             SnapshotPageReader
@@ -1036,6 +1037,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	controller := newController(
 		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
 	controller.libraryInput = s.acquireLibraryInput
+	controller.feedbackInput = s.acquireFeedbackInput
 	controller.skillView = s.librarySkillView
 	controller.skillCurrent = s.skillControllerCurrent
 	controller.permissionFallbackOff = cfg.DisablePermissionFallback
@@ -1342,10 +1344,11 @@ func (s *Service) Send(
 	id domain.SessionID,
 	msg ports.ChatUserMessage,
 ) (domain.ConversationTurn, error) {
-	if msg.Origin == domain.MessageOriginAutomation || msg.ReportBatchID != "" {
-		if err := domain.CheckFactoryFeedback(ctx, s.store, id); err != nil {
-			return domain.ConversationTurn{}, err
-		}
+	if err := domain.CheckFactoryFeedback(ctx, s.store, id); err != nil {
+		return domain.ConversationTurn{}, err
+	}
+	if err := s.holdUnapprovedContinuation(ctx, id); err != nil {
+		return domain.ConversationTurn{}, err
 	}
 	record, err := s.requireChatSession(ctx, id)
 	if err != nil {
@@ -2674,6 +2677,9 @@ func (s *Service) relayChatTurn(
 	text, clientMessageID string,
 	options ports.MessageDeliveryOptions,
 ) (string, error) {
+	if err := s.holdUnapprovedContinuation(ctx, id); err != nil {
+		return "", err
+	}
 	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
 		return "", err

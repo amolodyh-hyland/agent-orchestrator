@@ -21,6 +21,7 @@ import (
 
 // Store provides existing ownership/report/review facts and the run ledger.
 type Store interface {
+	feedbackStore
 	GetProject(context.Context, string) (domain.ProjectRecord, bool, error)
 	GetSession(context.Context, domain.SessionID) (domain.SessionRecord, bool, error)
 	ListSessionWorktrees(context.Context, domain.SessionID) ([]domain.SessionWorktreeRecord, error)
@@ -73,16 +74,29 @@ type AdvanceInput struct {
 	Decision        string `json:"decision"`
 }
 
-// Service records and verifies evidence without steering execution.
+// Service verifies evidence and gates explicitly confirmed findings continuations.
 type Service struct {
-	store   Store
-	repos   RepositoryReader
-	dataDir string
+	store    Store
+	repos    RepositoryReader
+	dataDir  string
+	feedback FeedbackTransport
+	epoch    string
+	now      func() time.Time
 }
 
+// Option configures the run evidence service.
+type Option func(*Service)
+
+// WithClock supplies the authority deadline clock.
+func WithClock(now func() time.Time) Option { return func(s *Service) { s.now = now } }
+
 // New constructs the run evidence service with read-only source inspection.
-func New(store Store, repos RepositoryReader, dataDir string) *Service {
-	return &Service{store: store, repos: repos, dataDir: dataDir}
+func New(store Store, repos RepositoryReader, dataDir string, options ...Option) *Service {
+	s := &Service{store: store, repos: repos, dataDir: dataDir, epoch: uuid.NewString(), now: time.Now}
+	for _, option := range options {
+		option(s)
+	}
+	return s
 }
 
 func invalid(message string) error { return apierr.Invalid("RUN_INVALID", message, nil) }
@@ -224,7 +238,15 @@ func (s *Service) Get(ctx context.Context, id string) (domain.RunDetail, error) 
 	if err != nil {
 		return domain.RunDetail{}, err
 	}
-	detail := domain.RunDetail{Run: run, Evidence: page, Blockers: []string{}, Observed: []domain.RunRepoFacts{}}
+	feedback, err := s.feedbackReceipts(ctx, run.ID)
+	if err != nil {
+		return domain.RunDetail{}, err
+	}
+	revision, paused, err := s.feedbackControl(ctx, run.ID)
+	if err != nil {
+		return domain.RunDetail{}, err
+	}
+	detail := domain.RunDetail{FeedbackRevision: revision, FeedbackPaused: paused, Feedback: feedback, Run: run, Evidence: page, Blockers: []string{}, Observed: []domain.RunRepoFacts{}}
 	detail.Blockers, detail.Observed = s.evaluate(ctx, run, history, run.Stage == "review" || run.Stage == "handoff")
 	switch run.Stage {
 	case "design":
@@ -290,6 +312,15 @@ func (s *Service) Record(ctx context.Context, id string, in RecordInput) (domain
 	}
 	if !slices.ContainsFunc(run.Repositories, func(b domain.RunRepoBinding) bool { return b.RepoName == repoName }) {
 		return domain.RunDetail{}, invalid("Receipt repository is not owned by this run")
+	}
+	if in.Review != nil {
+		duplicate, err := s.admitReview(ctx, run, *in.Review)
+		if err != nil {
+			return domain.RunDetail{}, err
+		}
+		if duplicate {
+			return s.Get(ctx, id)
+		}
 	}
 	run.Version++
 	kind := "completion"
@@ -519,7 +550,7 @@ func (s *Service) reviewBlockers(ctx context.Context, run domain.FactoryRun, ses
 	if receipt == nil {
 		return []string{prefix + "review_missing"}
 	}
-	valid := receipt.Independent && strings.TrimSpace(receipt.ReviewerID) != "" && receipt.ReviewerID != string(run.SessionID) && receipt.ReviewerID != session.Metadata.AgentSessionID && receipt.Round >= 1 && receipt.Round <= 3 && receipt.SHA == facts.HeadSHA && receipt.BeforeFingerprint == facts.Fingerprint && receipt.AfterFingerprint == facts.Fingerprint && receipt.Verdict == "approved" && s.artifact(ctx, session, repo, receipt.Artifact)
+	valid := receipt.ReadOnly && domain.FullCommit(receipt.SHA) && receipt.Independent && strings.TrimSpace(receipt.ReviewerID) != "" && receipt.ReviewerID != string(run.SessionID) && receipt.ReviewerID != session.Metadata.AgentSessionID && receipt.ReviewerID != session.Metadata.ProviderConversationID && receipt.Round >= 1 && receipt.Round <= 3 && receipt.SHA == facts.HeadSHA && receipt.BeforeFingerprint == facts.Fingerprint && receipt.AfterFingerprint == facts.Fingerprint && receipt.Verdict == "approved" && s.artifact(ctx, session, repo, receipt.Artifact)
 	for _, finding := range receipt.Findings {
 		if finding.ID == "" || !slices.Contains([]string{"P3", "P4"}, finding.Severity) {
 			valid = false
@@ -531,7 +562,7 @@ func (s *Service) reviewBlockers(ctx context.Context, run domain.FactoryRun, ses
 			valid = false
 		}
 		reviewer, reviewerOK, reviewerErr := s.store.GetReviewByID(ctx, native.ReviewID)
-		if reviewerErr != nil || !reviewerOK || reviewer.SessionID != run.SessionID || string(reviewer.ProjectID) != run.ProjectID || (receipt.ReviewerID != reviewer.ID && receipt.ReviewerID != reviewer.AgentSessionID) || (reviewer.AgentSessionID != "" && reviewer.AgentSessionID == session.Metadata.AgentSessionID) {
+		if reviewerErr != nil || !reviewerOK || reviewer.SessionID != run.SessionID || string(reviewer.ProjectID) != run.ProjectID || (receipt.ReviewerID != reviewer.ID && receipt.ReviewerID != reviewer.AgentSessionID) || (reviewer.AgentSessionID != "" && (reviewer.AgentSessionID == session.Metadata.AgentSessionID || reviewer.AgentSessionID == session.Metadata.ProviderConversationID)) {
 			valid = false
 		}
 	}
@@ -544,14 +575,15 @@ func (s *Service) reviewBlockers(ctx context.Context, run domain.FactoryRun, ses
 // ConfirmationPreview binds the exact run version, current claims, source facts,
 // artifact verification results and requested action to a native dialog.
 type ConfirmationPreview struct {
-	Detail domain.RunDetail `json:"detail"`
-	Action string           `json:"action"`
-	Digest string           `json:"digest"`
+	Detail   domain.RunDetail           `json:"detail"`
+	Action   string                     `json:"action"`
+	Digest   string                     `json:"digest"`
+	Feedback *domain.RunFeedbackBinding `json:"feedback,omitempty"`
 }
 
 // Preview is read-only; possessing its digest grants no authority.
 func (s *Service) Preview(ctx context.Context, id, action string) (ConfirmationPreview, error) {
-	if action != "evidence" && action != "advance" {
+	if action != "evidence" && action != "advance" && action != "feedback" && action != "pause_feedback" && action != "resume_feedback" {
 		return ConfirmationPreview{}, invalid("Unknown confirmation action")
 	}
 	d, err := s.Get(ctx, id)
@@ -564,6 +596,13 @@ func (s *Service) Preview(ctx context.Context, id, action string) (ConfirmationP
 	}
 	d.Evidence = current
 	p := ConfirmationPreview{Detail: d, Action: action}
+	if action == "feedback" {
+		binding, err := s.feedbackProposal(ctx, d)
+		if err != nil {
+			return p, err
+		}
+		p.Feedback = &binding
+	}
 	data, err := json.Marshal(p)
 	if err != nil {
 		return p, err
@@ -585,6 +624,16 @@ func (s *Service) Confirm(ctx context.Context, id, action string, version int64,
 	}
 	if preview.Detail.Run.Version != version || !domain.SHA256Digest(digest) || preview.Digest != digest {
 		return domain.RunDetail{}, failure(domain.ErrRunConflict)
+	}
+	if action == "pause_feedback" || action == "resume_feedback" {
+		st := s.store
+		if err := st.SetFactoryFeedbackControl(ctx, id, preview.Detail.FeedbackRevision, action == "pause_feedback"); err != nil {
+			return domain.RunDetail{}, failure(err)
+		}
+		return s.Get(ctx, id)
+	}
+	if action == "feedback" {
+		return s.confirmFeedback(ctx, preview)
 	}
 	if action == "advance" {
 		return s.advanceDecision(ctx, preview.Detail, AdvanceInput{ExpectedVersion: version, Actor: "desktop-user", Decision: "Native confirmation of " + digest}, true, digest)

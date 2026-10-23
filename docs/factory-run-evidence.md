@@ -1,7 +1,7 @@
 # Manual run evidence
 
 A run records one task claim, confirmed by a person in the desktop app, around an existing Project and implementation
-session. It does not start, resume, send to, review, publish, or terminate a session.
+session. Recording a run does not start, resume, send to, review, publish, or terminate a session. Findings delivery is a separate native-confirmed action.
 The stages are `design`, `implementation`, `review`, and `handoff`. Advancing a stage
 records a decision; it grants no execution or release authority. Feedback
 continuations still need a separate human decision for each turn.
@@ -97,10 +97,10 @@ recording them. A receipt without that verification, successful exit, matching
 current SHA, or readable matching output cannot satisfy a required check.
 
 Review receipts include `repoName`, `reviewerId`, `independent`, full `sha`,
-`beforeFingerprint`, `afterFingerprint`, `verdict`, finding IDs/severities,
+`readOnly`, `beforeFingerprint`, `afterFingerprint`, `verdict`, finding IDs/severities,
 `round`, and a hashed `artifact`. Local review independence and the original
 before/after observation are explicitly attested by the operator; this ticket
-neither launches a reviewer nor provisions a read-only snapshot. Both
+does not launch a reviewer. Before confirmation the operator must verify a separately human-started read-only reviewer and its immutable source view. The `readOnly` attestation is required; missing or writable reviews hold readiness. Both
 fingerprints must match the current source fingerprint. A native `reviewRunId`,
 when supplied, must also resolve to the existing session's completed, approved
 per-SHA review record. No provider write is performed. Missing/stale review,
@@ -131,9 +131,7 @@ at the new source. This does not authorize publication or installation.
 
 The ledger's stages are human decisions, not persisted derived session status.
 Report coordinator/outbox delivery and native review records keep their existing
-ownership. This change only references and reads them. Existing review/CI/report
-injection policy is not changed by creating a run; enrolling participants under
-an enforced factory continuation policy is separate work. An allowed next action
+ownership. This change only references and reads them. Existing review/CI/report settings are not rewritten. Sessions named by natively confirmed run records now have a continuation gate: automatic turns and review starts hold for human action, while unrelated sessions keep their existing behavior. An allowed next action
 is informational and cannot authorize a model turn, release, installation, or
 cleanup. Handoff always retains a separate human release decision.
 
@@ -263,3 +261,57 @@ All review trigger sources recheck the factory hold after admission waits and
 before invoking the shared review engine. A source label cannot authorize a new
 factory review. Reviewer Chat messages from the daemon pass the same hold at
 queue drain, dispatch, provider submission and deferred transport admission.
+
+## Exact-commit findings and one approved continuation
+
+In **Run evidence**, confirm the review receipt before choosing **Preview findings
+delivery**. The preview names the assigned implementation session, native
+conversation/controller generation, full SHA, round, findings and exact text.
+Reading, displaying, and recording a receipt performs no delivery or provider
+write. Local review never posts a provider review or comment. After separately
+authorized publication, continue using the existing native PR review records and
+feedback; referencing a `reviewRunId` does not create publication authority.
+
+Each pass is immutable. Repeating the same receipt does not create another round;
+changing it requires the next separately human-started pass. Three passes and
+two findings continuations are the maximum per run. Unresolved P0/P1/P2 findings,
+a missing verdict, failed or stale checks, changed HEAD, or source mutation hold
+handoff. A new commit needs fresh checks, review, and a reconfirmed handoff.
+
+The real desktop click and main-process native dialog approve exactly one next
+turn in the existing implementer. CLI/API claims, receipt text, read acknowledgement,
+and renderer calls cannot issue that authority. Delivery requires an already live
+Codex Chat controller with a native identity and one owned repository. Workspace receipts remain readable and release-gated; multi-repository findings require manual handoff until a single approved payload can cover their rounds. Other transports hold until they
+can enforce the same final submission and acceptance boundary. Delivery cannot
+wake, restore, start, or replace a station. Before approval, turn off automatic
+review and review/CI injection for this participant; the gate also refuses
+unapproved automation regardless of persisted injection policies. Ordinary message APIs cannot manufacture human authority for an enrolled participant; unsupported continuations hold for a trusted native action.
+
+Authority expires two minutes after confirmation unless actual submission has
+begun. A queued message does not consume it or extend its deadline. Dispatch
+checks the exact payload, target/generation, settings, run version, current
+source and artifact bytes, daemon epoch and feedback control revision. Deferred
+transports check again at their actual start boundary. No appended skills,
+excerpts, piggyback or permission fallback can change the approved message.
+
+The run read model exposes `feedback` with separate approved, queued, attempted
+(unknown), provider-submitted and native-accepted facts. The durable native
+`turn.started` evidence used by report receipts acknowledges findings once;
+synthetic starts and successful enqueue do not. Late native acceptance remains
+evidence of the original delivery even after expiry. Lost responses and uncertain
+submission retain the same identity without resending. A held or lost delivery
+needs human inspection. An expired, revoked or pre-restart approval that never attempted submission can be replaced only by a fresh native decision. Its old queued identity is fenced. An uncertain or accepted submission cannot be replaced; no automatic resend is offered.
+
+**Pause findings delivery** revokes pending authority. **Allow new findings
+approvals** permits new previews but never replays an old turn. Restart also
+invalidates unsubmitted authority and restores receipts for observation only.
+Evidence and attempted deliveries survive rollback; hiding the UI cannot grant
+permission. No local release action is introduced.
+
+Migration `0226_factory_review_feedback.sql` adds immutable delivery bindings and
+versioned feedback controls after 0225. Native receipt updates share the existing
+provider-event transaction. Focused regressions cover stale/mutated source,
+missing verdict, lost/duplicate delivery, pre-submission expiry, paused/revoked
+controls, settings/generation changes, restart, native acceptance and bounded rounds.
+
+The feedback ledger retains at most 16 immutable authority bindings per run. Reaching that bound holds new approvals and preserves every earlier receipt.

@@ -198,15 +198,16 @@ func interfaceHandoff(policy domain.SessionInterfaceTransitionPolicy) controller
 
 // Controller drives one Chat session.
 type Controller struct {
-	libraryInput func(context.Context, domain.SessionID, string) (func(), error)
-	sessionID    domain.SessionID
-	reviewID     string
-	conversation domain.ConversationRecord
-	skillsMu     sync.Mutex
-	skillView    func(context.Context, domain.SessionID) (librarysvc.Result, error)
-	skillCurrent func(context.Context, *Controller) bool
-	generation   string
-	harness      domain.AgentHarness
+	libraryInput  func(context.Context, domain.SessionID, string) (func(), error)
+	feedbackInput func(context.Context, domain.SessionID, ports.ChatUserMessage, string) (func(), error)
+	sessionID     domain.SessionID
+	reviewID      string
+	conversation  domain.ConversationRecord
+	skillsMu      sync.Mutex
+	skillView     func(context.Context, domain.SessionID) (librarysvc.Result, error)
+	skillCurrent  func(context.Context, *Controller) bool
+	generation    string
+	harness       domain.AgentHarness
 
 	conv                   ports.ChatConversation
 	store                  Store
@@ -1865,11 +1866,17 @@ func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (p
 		if admissionErr != nil {
 			return admissionErr
 		}
-		if err := c.checkFactoryMessage(ctx, attempt); err != nil {
+		action := "next_turn"
+		if _, deferred := c.conv.(ports.ChatDeferredTurnStarter); deferred {
+			action = "prepare"
+		}
+		feedbackRelease, feedbackErr := c.acquireFeedbackInput(ctx, attempt, action)
+		if feedbackErr != nil {
 			release()
-			return err
+			return feedbackErr
 		}
 		ref, sendErr = c.conv.SendTurn(ctx, attempt)
+		feedbackRelease()
 		release()
 		if sendErr == nil {
 			// The sandbox the turn runs under is the mode that was accepted,
@@ -2041,18 +2048,20 @@ func (c *Controller) dispatch(
 	// provider-id binding above must exist before the first streamed update can be
 	// projected. Eager drivers do not implement this optional interface.
 	if hasDeferredStart {
-		guardedAcquire := func(ctx context.Context, text string) (func(), error) {
-			release, err := c.acquireLibraryInput(ctx, text)
+		if err := startLibraryDeferredTurn(ctx, deferred, ref.ProviderTurnID, excerptDeliveryMessage(msg).Text, func(turnCtx context.Context, text string) (func(), error) {
+			final := excerptDeliveryMessage(msg)
+			final.Text = text
+			libraryRelease, err := c.acquireLibraryInput(turnCtx, text)
 			if err != nil {
 				return nil, err
 			}
-			if err := c.checkFactoryMessage(ctx, msg); err != nil {
-				release()
+			feedbackRelease, err := c.acquireFeedbackInput(turnCtx, final, "next_turn")
+			if err != nil {
+				libraryRelease()
 				return nil, err
 			}
-			return release, nil
-		}
-		if err := startLibraryDeferredTurn(ctx, deferred, ref.ProviderTurnID, excerptDeliveryMessage(msg).Text, guardedAcquire); err != nil {
+			return func() { feedbackRelease(); libraryRelease() }, nil
+		}); err != nil {
 			c.mu.Lock()
 			c.pendingTurnID = ""
 			c.mu.Unlock()

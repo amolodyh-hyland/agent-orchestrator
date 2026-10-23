@@ -5965,6 +5965,12 @@ export interface components {
             lastActivityAt: string;
             state: string;
         };
+        DomainConversationSettings: {
+            approvalMode?: string;
+            model?: string;
+            openCodeMode?: string;
+            reasoningEffort?: string;
+        };
         DomainReviewerConfig: {
             agentConfig?: components["schemas"]["AgentConfig"];
             harness: string;
@@ -7189,6 +7195,10 @@ export interface components {
         RunDetail: {
             blockers: string[];
             evidence: components["schemas"]["RunEvidence"][];
+            feedback: components["schemas"]["RunFeedbackReceipt"][];
+            feedbackPaused: boolean;
+            /** Format: int64 */
+            feedbackRevision: number;
             nextAction: string;
             observed: components["schemas"]["RunRepoFacts"][];
             run: components["schemas"]["FactoryRun"];
@@ -7217,7 +7227,44 @@ export interface components {
             /** Format: int64 */
             nextAfterVersion: number;
         };
+        RunFeedbackBinding: {
+            /** Format: int64 */
+            controlRevision: number;
+            conversationId: string;
+            epoch: string;
+            /** Format: date-time */
+            expiresAt: string;
+            id: string;
+            payload: string;
+            repoName: string;
+            reviewEvidenceId: string;
+            round: number;
+            runId: string;
+            /** Format: int64 */
+            runVersion: number;
+            sessionId: string;
+            settings: components["schemas"]["DomainConversationSettings"];
+            sha: string;
+            source: components["schemas"]["RunRepoFacts"][];
+            targetDigest: string;
+        };
+        RunFeedbackReceipt: {
+            /** Format: date-time */
+            acceptedAt?: string;
+            active: boolean;
+            /** Format: date-time */
+            attemptedAt?: string;
+            binding: components["schemas"]["RunFeedbackBinding"];
+            holdReason?: string;
+            providerConversationId?: string;
+            providerTurnId?: string;
+            state: string;
+            /** Format: date-time */
+            submittedAt?: string;
+            turnId?: string;
+        };
         RunFinding: {
+            description?: string;
             id: string;
             /** @enum {string} */
             severity: "P0" | "P1" | "P2" | "P3" | "P4";
@@ -7299,6 +7346,7 @@ export interface components {
             beforeFingerprint: string;
             findings: components["schemas"]["RunFinding"][];
             independent: boolean;
+            readOnly: boolean;
             repoName: string;
             reviewRunId?: string;
             reviewerId: string;

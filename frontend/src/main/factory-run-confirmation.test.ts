@@ -10,7 +10,7 @@ function fixture() {
 	const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>();
 	const shell = { id: 7, mainFrame: {}, isDestroyed: () => false, isFocused: vi.fn(() => true), send: vi.fn(), on: vi.fn(), removeListener: vi.fn() };
 	const event = { sender: { id: 7 }, senderFrame: shell.mainFrame } as unknown as IpcMainInvokeEvent;
-	const preview = { action: "evidence", digest: "a".repeat(64), detail: { run: { id: "run", projectId: "p", sessionId: "s", version: 3, stage: "implementation" }, evidence: [{ kind: "completion", confirmed: false }], observed: [], blockers: ["human_evidence_confirmation_required"], nextAction: "hold" } };
+	const preview = { feedback: {payload: "P2-1: correct stale source",sessionId:"s",sha:"a".repeat(40),round:1,targetDigest:"b".repeat(64)}, action: "evidence", digest: "a".repeat(64), detail: { run: { id: "run", projectId: "p", sessionId: "s", version: 3, stage: "implementation" }, evidence: [{ kind: "completion", confirmed: false }], observed: [], blockers: ["human_evidence_confirmation_required"], nextAction: "hold" } };
 	const operations: string[] = [];
 	const fetcher = vi.fn(async (_url: unknown, init: RequestInit) => {
 		const body = String(init.body); const input = JSON.parse(body) as { operation: string };
@@ -61,4 +61,26 @@ describe("native run evidence confirmation", () => {
 			expect(f.operations).not.toContain("confirm");
 		}
 	});
+});
+
+describe("native review findings continuation", () => {
+ it("shows exact findings and target, then confirms one continuation",async()=>{
+  const f=fixture();f.preview.action="feedback";
+  const p=await f.handlers.get(RUN_PREVIEW)!(f.event,"run","feedback") as RunPreview;
+  await f.handlers.get(RUN_CONFIRM_CLICK)!(f.event,{id:p.id,digest:p.digest});
+  expect(f.confirm).toHaveBeenCalledOnce();
+  expect(f.confirm.mock.calls[0]?.[0]).toContain("P2-1: correct stale source");
+  expect(f.confirm.mock.calls[0]?.[0]).toContain("native acceptance is recorded separately");
+  expect(f.operations).toEqual(["preview","preview","confirm"]);
+ });
+ it("does not confirm when the native decision outlives its preview",async()=>{
+  const clock=vi.spyOn(Date,"now");let now=100000;clock.mockImplementation(()=>now);
+  try {
+   const f=fixture();f.preview.action="feedback";
+   const p=await f.handlers.get(RUN_PREVIEW)!(f.event,"run","feedback") as RunPreview;
+   f.confirm.mockImplementation(async()=>{now+=120001;return true});
+   await f.handlers.get(RUN_CONFIRM_CLICK)!(f.event,{id:p.id,digest:p.digest});
+   expect(f.operations).not.toContain("confirm");
+  }finally{clock.mockRestore()}
+ });
 });

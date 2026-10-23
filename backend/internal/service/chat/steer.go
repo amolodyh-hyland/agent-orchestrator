@@ -117,6 +117,9 @@ func (s *Service) Steer(
 	id domain.SessionID,
 	msg ports.ChatUserMessage,
 ) (SteerResult, error) {
+	if err := s.holdUnapprovedContinuation(ctx, id); err != nil {
+		return SteerResult{}, err
+	}
 	if strings.TrimSpace(msg.Text) == "" {
 		return SteerResult{}, ErrSteerTextRequired
 	}
@@ -160,6 +163,9 @@ func (s *Service) SteerOrSend(
 	msg ports.ChatUserMessage,
 	recoverOnly bool,
 ) (SteerOrSendResult, error) {
+	if err := s.holdUnapprovedContinuation(ctx, id); err != nil {
+		return SteerOrSendResult{}, err
+	}
 	if strings.TrimSpace(msg.Text) == "" && !recoverOnly {
 		return SteerOrSendResult{}, ErrSteerTextRequired
 	}
@@ -288,6 +294,12 @@ func (c *Controller) PromoteQueuedTurn(
 		return PromoteQueuedTurnResult{}, ErrSteerContentUnsupported
 	}
 	msg = resolved
+	feedbackRelease, feedbackErr := c.acquireFeedbackInput(ctx, msg, "active_steer")
+	if feedbackErr != nil {
+		release()
+		return PromoteQueuedTurnResult{}, feedbackErr
+	}
+	defer feedbackRelease()
 	libraryRelease, admissionErr := c.acquireLibraryInput(ctx, msg.Text)
 	if admissionErr != nil {
 		release()
@@ -401,6 +413,11 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 		return SteerResult{}, ErrSteerContentUnsupported
 	}
 	msg = resolved
+	feedbackRelease, feedbackErr := c.acquireFeedbackInput(ctx, msg, "active_steer")
+	if feedbackErr != nil {
+		return SteerResult{}, feedbackErr
+	}
+	defer feedbackRelease()
 	libraryRelease, admissionErr := c.acquireLibraryInput(ctx, msg.Text)
 	if admissionErr != nil {
 		return SteerResult{}, admissionErr
