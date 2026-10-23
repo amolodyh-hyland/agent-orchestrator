@@ -12,9 +12,12 @@ other projects. A renamed project keeps its selection; an archived or removed
 project retains its selected ID with an unavailable message and no new report
 reads. Deselecting it removes its visible facts. Project boards are the source
 navigation targets, carrying `observation=true` in the URL to suppress shell
-readiness checks and model-catalog warming, including after reload. The cockpit
-also suppresses those checks on focus. Session surfaces can resume execution on mount, so the
-cockpit does not link directly to them. Report bodies and output references
+readiness checks, model-catalog warming and chat-hibernation setting syncs,
+including after reload. The cockpit also suppresses those checks on focus.
+Sidebar conversation prefetch and provider warm-up are disabled on both
+observation routes; entering either route cancels pending hover timers. Session
+surfaces can resume execution on mount, so the cockpit does not link directly
+to them. Report bodies and output references
 remain plain text; they cannot provide navigation or actions.
 
 Each session's source update time and each report's recorded time are separate
@@ -53,5 +56,11 @@ isolation for the existing loopback API; that boundary belongs to later work.
 - `ProjectCockpit.test.tsx`: two-project allowlist, claims, timestamps,
   missing/stale coordinators, inert content, partial failures, refresh,
   rename/archive, removal and remount checks with mutation assertions.
+- `shell-new-session-shortcut.test.tsx` and `Sidebar.test.tsx`: normal-renderer
+  lifecycle sync suppression, cancelled retries/queued syncs and hover timers.
+- `project-cockpit.spec.ts`: load, hover over an unselected stopped Chat session,
+  refresh, source board navigation and reload with all mutating requests blocked
+  and asserted absent. Run with `AO_E2E_REAL_RENDERER=1` to exercise API-backed
+  workspace reads and lifecycle effects without the preview-data shortcut.
 - `observation_test.go` and `session_observation_test.go`: read-only projection
   and query validation. Existing report tests cover read ordering and API shape.

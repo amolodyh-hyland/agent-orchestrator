@@ -546,6 +546,56 @@ describe("shell workspace startup", () => {
 		}));
 	});
 
+	it.each(["cockpit", "observation board"])("never syncs lifecycle settings on %s, including daemon restarts", async (route) => {
+		// Exercise the normal renderer effect, with a ready daemon (no preview bypass).
+		if (route === "cockpit") shellMocks.state.matchRouteTarget = "/cockpit";
+		else shellMocks.state.routeSearch = { observation: true };
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 101 };
+		const view = await renderShell();
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 202 };
+		act(() => useUiStore.setState({ developerMode: true }));
+		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
+		await act(async () => {});
+		expect(apiClient.PATCH).not.toHaveBeenCalled();
+	});
+
+	it("cancels hibernation retries when entering observation", async () => {
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 101 };
+		vi.mocked(apiClient.PATCH).mockResolvedValue({ error: { message: "offline" } } as never);
+		const setTimeoutOriginal = globalThis.setTimeout;
+		let retry: (() => void) | undefined;
+		const timer = vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
+			if (delay === 5_000) retry = callback as () => void;
+			return setTimeoutOriginal(callback, delay, ...args);
+		});
+		try {
+			const view = await renderShell();
+			await waitFor(() => expect(retry).toBeDefined());
+			shellMocks.state.routeSearch = { observation: true };
+			view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
+			// Even an already-dequeued retry must observe the cancelled effect.
+			await act(async () => { retry?.(); });
+			expect(apiClient.PATCH).toHaveBeenCalledTimes(1);
+		} finally {
+			timer.mockRestore();
+		}
+	});
+
+	it("cancels queued hibernation syncs when entering the cockpit", async () => {
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 101 };
+		let finish: (() => void) | undefined;
+		vi.mocked(apiClient.PATCH).mockImplementationOnce(() => new Promise((resolve) => {
+			finish = () => resolve({ error: undefined } as never);
+		}));
+		const view = await renderShell();
+		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledTimes(1));
+		act(() => useUiStore.setState({ developerMode: true }));
+		shellMocks.state.matchRouteTarget = "/cockpit";
+		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
+		await act(async () => { finish?.(); });
+		expect(apiClient.PATCH).toHaveBeenCalledTimes(1);
+	});
+
 	it("routes duplicate-path project adds to the registered project and shows a toast", async () => {
 		shellMocks.state.daemonStatus = { state: "ready", port: 4777 };
 		vi.mocked(apiClient.POST).mockResolvedValueOnce({

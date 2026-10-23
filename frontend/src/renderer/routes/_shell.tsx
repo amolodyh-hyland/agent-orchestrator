@@ -1062,7 +1062,7 @@ function ShellLayout() {
 	// The renderer owns Developer Mode; the daemon must know its value before
 	// either the view-close path or the idle sweep can hibernate a provider.
 	useEffect(() => {
-		if (usesPreviewWorkspaceData || daemonStatus.state !== "ready" || !daemonStatus.port) return;
+		if (observationOnly || usesPreviewWorkspaceData || daemonStatus.state !== "ready" || !daemonStatus.port) return;
 		let cancelled = false;
 		let retry: ReturnType<typeof setTimeout> | undefined;
 		const sync = () => {
@@ -1082,7 +1082,7 @@ function ShellLayout() {
 			cancelled = true;
 			clearTimeout(retry);
 		};
-	}, [daemonStatus.pid, daemonStatus.port, daemonStatus.state, developerMode]);
+	}, [daemonStatus.pid, daemonStatus.port, daemonStatus.state, developerMode, observationOnly]);
 
 	// A daemon port is not enough to render a trustworthy empty state: the
 	// route loader may have cached [] before Electron reported the port. Fetch

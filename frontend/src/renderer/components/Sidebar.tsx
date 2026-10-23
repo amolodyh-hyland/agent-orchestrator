@@ -2425,18 +2425,26 @@ const SessionRow = memo(function SessionRow({
 	const lastTouchAtRef = useRef(0);
 	const suppressTouchOpenRef = useRef(false);
 	const hoverTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-	const canPrefetch = session.mode === "chat" && !session.cloud && !session.hostId && !active && !listIsDragging && !reorder?.isDragging;
-	useEffect(() => () => clearTimeout(hoverTimerRef.current), [canPrefetch]);
+	const observationOnly = useRouterState({
+		select: (state) => state.location.pathname === "/cockpit" || state.location.search?.observation === true,
+	});
+	const canPrefetch = !observationOnly && session.mode === "chat" && !session.cloud && !session.hostId && !active && !listIsDragging && !reorder?.isDragging;
+	// Pending callbacks must see the current route even when queued by an older render.
+	const canPrefetchRef = useRef(canPrefetch);
+	canPrefetchRef.current = canPrefetch;
 	const resumeTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-	useEffect(() => () => clearTimeout(resumeTimerRef.current), [canPrefetch]);
+	useLayoutEffect(() => () => {
+		clearTimeout(hoverTimerRef.current);
+		clearTimeout(resumeTimerRef.current);
+	}, [canPrefetch]);
 	const prefetchConversation = () => {
-		if (!canPrefetch || !hasTrustedApiBaseUrl() || queryClient.getQueryData(conversationQueryKey(session.id))) return;
+		if (!canPrefetchRef.current || !hasTrustedApiBaseUrl() || queryClient.getQueryData(conversationQueryKey(session.id))) return;
 		void queryClient.prefetchInfiniteQuery(conversationQueryOptions(session.id));
 	};
 	// A stopped agent takes seconds to come back. Start it while the pointer rests
 	// on the row so the chat is ready when it opens; opening joins this request.
 	const warmUpAgent = () => {
-		if (!canPrefetch || !hasTrustedApiBaseUrl() || !canResumeAgent(session)) return;
+		if (!canPrefetchRef.current || !hasTrustedApiBaseUrl() || !canResumeAgent(session)) return;
 		void resumeAgentOnOpen(session.id)
 			.catch(() => {})
 			.finally(() => {
