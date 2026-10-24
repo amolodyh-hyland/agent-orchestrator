@@ -454,6 +454,9 @@ export const ChatComposer = memo(function ChatComposer({
 	// transition. This keeps Enter-after-fast-typing from observing stale state.
 	const textRef = useRef("");
 	const [nativeText, setNativeText] = useState("");
+	useEffect(() => {
+		if (nativeSession) setNativeText(textRef.current);
+	}, [nativeSession?.sessionId]);
 	const queuedSelectionCleared = useRef(false);
 	const preservedSkillToken = useRef<string | undefined>(undefined);
 	const selectedSkill = useRef<ComposerSkillSelection | undefined>(draftScope ? readChatSessionDraft(draftScope).composer.skillSelection : undefined);

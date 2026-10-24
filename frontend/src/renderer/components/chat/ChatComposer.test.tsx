@@ -66,6 +66,19 @@ function renderComposer(props: Partial<Parameters<typeof ChatComposer>[0]> = {})
 	return { onSend, field: screen.getByLabelText("Message the agent") as HTMLElement };
 }
 
+it("stages an existing visible draft when the outer binding arrives after typing", async () => {
+	const expected = {bindingRevision:2,scopeRevision:2,controllerGeneration:"native-generation",settingsDigest:"a".repeat(64)};
+	const stage = vi.mocked(aoBridge.outer.stage).mockResolvedValue({id:"late-stage",digest:"exact",expiresAt:Date.now()+120_000});
+	stage.mockClear();
+	const onSend = vi.fn();
+	const view = render(<ChatComposer onSend={onSend} />);
+	await typeInLexicalEditor(screen.getByLabelText("Message the agent"), "Already visible question");
+	expect(stage).not.toHaveBeenCalled();
+	view.rerender(<ChatComposer onSend={onSend} nativeSession={{sessionId:"outer",outer:true,expected}} />);
+	await waitFor(() => expect(stage).toHaveBeenCalledWith(expect.any(String), {operation:"send",sessionId:"outer",text:"Already visible question",expected}));
+	expect(onSend).not.toHaveBeenCalled();
+});
+
 it("stages outer Send with the visible scope and settings snapshot without a renderer submission", async () => {
 	const expected = {bindingRevision:2,scopeRevision:2,controllerGeneration:"native-generation",settingsDigest:"a".repeat(64)};
 	const stage = vi.spyOn(aoBridge.outer,"stage").mockResolvedValue({id:"native-send",digest:"exact",expiresAt:Date.now()+120_000});

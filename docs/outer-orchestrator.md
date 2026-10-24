@@ -56,6 +56,8 @@ Send stages include the visible scope revision, native generation and settings
 digest. A change before native issuance holds the request, as does a later change
 at queue drain or final write. Rejected native Sends retain their exact private
 payload and audit link without creating executable queue entries.
+When a passive binding arrives after typing, the composer stages the existing
+visible draft without submitting it or requiring another edit.
 
 The journal covers logical operations and observable native invocation events.
 It does not claim syscall coverage, same-account process isolation, a spending
