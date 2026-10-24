@@ -99,6 +99,7 @@ func outerGuard(router chi.Router, svc *outer.Service) func(http.Handler) http.H
 }
 
 var outerMutationManifest = map[string]string{
+	"POST /api/v1/outer/plans":                                                                         "outer.plan.propose",
 	"POST /api/v1/awake/downloads":                                                                     "native_only",
 	"DELETE /api/v1/awake/history":                                                                     "native_only",
 	"POST /api/v1/awake/low-power/authorize":                                                           "native_only",

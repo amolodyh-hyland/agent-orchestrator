@@ -545,6 +545,14 @@ type Notification struct {
 	SourceKey   string
 }
 
+type OuterActionPlan struct {
+	ID         string
+	RequestID  string
+	Document   string
+	ApprovedAt sql.NullTime
+	ExpiresAt  sql.NullTime
+}
+
 type OuterAudit struct {
 	Sequence int64
 	ID       string
@@ -588,6 +596,22 @@ type OuterNativeAction struct {
 	ID         string
 	Document   string
 	RecordedAt time.Time
+}
+
+type OuterParticipant struct {
+	SessionID  string
+	ActionID   string
+	Snapshot   string
+	EnrolledAt time.Time
+}
+
+type OuterPlanAction struct {
+	ID          string
+	PlanID      string
+	SessionID   string
+	AttemptedAt sql.NullTime
+	CompletedAt sql.NullTime
+	State       string
 }
 
 type OuterRequest struct {

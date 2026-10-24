@@ -3555,6 +3555,9 @@ SELECT conversation_turns.id,
        conversation_messages.text,
        conversation_messages.client_message_id,
        conversation_messages.origin,
+       conversation_messages.sender_session_id,
+       conversation_messages.sender_project_id,
+       conversation_messages.sender_display_name,
        conversation_messages.delivery_content_json
 FROM conversation_turns
 JOIN conversation_messages
@@ -3572,6 +3575,9 @@ type SelectNextQueuedConversationTurnRow struct {
 	Text                string
 	ClientMessageID     string
 	Origin              domain.MessageOrigin
+	SenderSessionID     string
+	SenderProjectID     string
+	SenderDisplayName   string
 	DeliveryContentJson string
 }
 
@@ -3589,6 +3595,9 @@ func (q *Queries) SelectNextQueuedConversationTurn(ctx context.Context, conversa
 		&i.Text,
 		&i.ClientMessageID,
 		&i.Origin,
+		&i.SenderSessionID,
+		&i.SenderProjectID,
+		&i.SenderDisplayName,
 		&i.DeliveryContentJson,
 	)
 	return i, err

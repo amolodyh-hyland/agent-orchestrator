@@ -1162,6 +1162,11 @@ async function createWindowInternal(): Promise<void> {
 		},
 	});
 	outerNative = registerOuterNative({ ipcMain, shellWebContents, authority: delegationConfirmation.authority,
+		confirmPlan: async (detail) => {
+			if (!mainWindow || mainWindow.isDestroyed()) return false;
+			const result = await dialog.showMessageBox(mainWindow, {type:"question",title:"Confirm requested actions",message:"Confirm that the listed Projects are the complete sources, permit disclosure to the named destinations, and approve these exact actions?",detail,buttons:["Cancel","Confirm sources and actions"],defaultId:0,cancelId:0,noLink:true});
+			return result.response===1;
+		},
 		origin: () => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null,
 		fetch: (url, init) => net.fetch(url instanceof URL ? url.href : url, init),
 	});

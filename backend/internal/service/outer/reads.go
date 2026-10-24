@@ -11,13 +11,15 @@ import (
 
 // View contains passive binding, receipt, reservation and evidence observations.
 type View struct {
-	Session      *SessionView                     `json:"session"`
-	Binding      *domain.OuterBinding             `json:"binding"`
-	Requests     []RequestView                    `json:"requests"`
-	Reservations []domain.OuterCapacity           `json:"reservations"`
-	Capacity     *domain.OuterCapacityObservation `json:"capacity"`
-	Incoming     []domain.OuterEvidence           `json:"incoming"`
-	Limitations  []string                         `json:"limitations"`
+	Plans          []domain.OuterPlanReceipt        `json:"plans"`
+	ActionsEnabled bool                             `json:"actionsEnabled"`
+	Session        *SessionView                     `json:"session"`
+	Binding        *domain.OuterBinding             `json:"binding"`
+	Requests       []RequestView                    `json:"requests"`
+	Reservations   []domain.OuterCapacity           `json:"reservations"`
+	Capacity       *domain.OuterCapacityObservation `json:"capacity"`
+	Incoming       []domain.OuterEvidence           `json:"incoming"`
+	Limitations    []string                         `json:"limitations"`
 }
 
 // SessionView reports the current harness and existing conversation settings.
@@ -49,7 +51,7 @@ type RequestView struct {
 
 // View reads passive state without starting, resuming or draining a conversation.
 func (s *Service) View(ctx context.Context) (View, error) {
-	v := View{Requests: []RequestView{}, Reservations: []domain.OuterCapacity{}, Incoming: []domain.OuterEvidence{}, Limitations: []string{"M1: main desktop Chat only; every cross-project mutation held", "Observation-only restore; unknown submissions and reservations are retained", "Factory 2 stations / 1 heavy job; outside and unknown activity may hold admission", "Normal permissions; no process isolation, syscall audit, hard host cap or spending cap"}}
+	v := View{Requests: []RequestView{}, Reservations: []domain.OuterCapacity{}, Incoming: []domain.OuterEvidence{}, Limitations: []string{"M2: exact confirmed coordinator send, owned worker spawn and preserving worker stop only", "Observation-only restore; unknown submissions and reservations are retained", "Factory 2 stations / 1 heavy job; outside and unknown activity may hold admission", "Normal permissions; no process isolation, syscall audit, hard host cap or spending cap"}}
 	if err := s.checkReader(ctx); err != nil {
 		return v, err
 	}
@@ -58,6 +60,11 @@ func (s *Service) View(ctx context.Context) (View, error) {
 		return v, err
 	}
 	v.Binding = &b
+	v.ActionsEnabled = s.actionsEnabled
+	v.Plans, err = s.Plans(ctx)
+	if err != nil {
+		return v, err
+	}
 	if rec, ok, readErr := s.store.GetSession(ctx, b.SessionID); readErr != nil {
 		return v, readErr
 	} else if ok {
@@ -76,10 +83,10 @@ func (s *Service) View(ctx context.Context) (View, error) {
 		return v, err
 	}
 	for _, r := range receipts {
-		if !native(ctx, "outer.read") && (r.Request.SessionID != b.SessionID || r.Request.ScopeRevision != b.ScopeRevision) {
+		if !native(ctx, "outer.read") && ((r.Request.SessionID != b.SessionID && r.Request.OwnerSessionID != b.SessionID) || r.Request.ScopeRevision != b.ScopeRevision) {
 			continue
 		}
-		if r.AttemptedAt.IsZero() && (b.Paused || b.HistoryHeld || b.SessionID != r.Request.SessionID || b.Revision != r.Request.BindingRevision || !s.now().Before(r.Request.ExpiresAt)) {
+		if r.AttemptedAt.IsZero() && (b.Paused || b.HistoryHeld || (b.SessionID != r.Request.SessionID && b.SessionID != r.Request.OwnerSessionID) || b.Revision != r.Request.BindingRevision || !s.now().Before(r.Request.ExpiresAt)) {
 			r.State = "held"
 		}
 		v.Requests = append(v.Requests, RequestView{ID: r.Request.ID, SessionID: r.Request.SessionID, Digest: r.Request.PayloadDigest, TurnID: r.TurnID, ProviderTurnID: r.ProviderTurnID, State: r.State, IssuedAt: r.Request.IssuedAt, ExpiresAt: r.Request.ExpiresAt, AttemptedAt: r.AttemptedAt, SubmittedAt: r.SubmittedAt, AcceptedAt: r.AcceptedAt, SettledAt: r.SettledAt, Sources: r.Request.Sources})
@@ -196,6 +203,9 @@ func (s *Service) ResolveTarget(ctx context.Context, kind, id string) (domain.Pr
 
 // AuthorizeOperation applies the common mutation guard to a resolved target.
 func (s *Service) AuthorizeOperation(ctx context.Context, op string, p domain.ProjectID, id domain.SessionID) error {
+	if op == "outer.plan.propose" {
+		return s.checkReader(ctx)
+	}
 	return s.store.CheckOuterOperation(ctx, op, p, id)
 }
 
@@ -239,7 +249,7 @@ func (s *Service) BeginNativeControl(ctx context.Context, a domain.OuterNativeAc
 	// not invert that gate with final submission, which acquires this mutex
 	// after the provider's serialized-write lock. Settings alone need to share
 	// the exact settings snapshot barrier through their local commit.
-	hold := a.Operation == "settings"
+	hold := a.Operation == "settings" || a.Operation == "project.config" || a.Operation == "project.settings" || a.Operation == "project.permissions"
 	if !hold {
 		s.mu.Unlock()
 	}

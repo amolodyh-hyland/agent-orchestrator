@@ -188,6 +188,7 @@ func interfaceTransitionProviderBoundaryID(transitionID string) string {
 // chatSpawn bundles the shared state the chat launch needs from Spawn, so the
 // signature does not grow to a dozen positional arguments.
 type chatSpawn struct {
+	mayHaveStarted   *bool
 	cfg              ports.SpawnConfig
 	project          domain.ProjectRecord
 	projectKind      domain.ProjectKind
@@ -247,6 +248,9 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		controllerCommitted bool
 		completionErr       error
 	)
+	if in.mayHaveStarted != nil {
+		*in.mayHaveStarted = true
+	}
 	_, err = m.chat.StartChat(ctx, ChatStart{
 		SessionID:               id,
 		ProjectID:               in.cfg.ProjectID,

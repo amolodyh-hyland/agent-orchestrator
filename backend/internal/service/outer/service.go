@@ -57,13 +57,14 @@ type Sessions interface {
 
 // Service owns explicit outer setup, request binding and passive observation.
 type Service struct {
-	store     Store
-	projects  Projects
-	sessions  Sessions
-	mu        sync.Mutex
-	transport Transport
-	epoch     string
-	now       func() time.Time
+	actionsEnabled bool
+	store          Store
+	projects       Projects
+	sessions       Sessions
+	mu             sync.Mutex
+	transport      Transport
+	epoch          string
+	now            func() time.Time
 }
 
 // Transport reuses the existing main Chat preparation and delivery path.

@@ -108,7 +108,7 @@ describe("finite desktop control staging", () => {
 	});
 });
 
-function fixture() {
+function fixture(options: {confirmPlan?: (detail:string)=>Promise<boolean>; view?: unknown} = {}) {
 	const key = Buffer.alloc(32, 13),
 		authority = createMainProcessDelegationAuthority(key);
 	const handlers = new Map<
@@ -145,7 +145,7 @@ function fixture() {
 		const query = JSON.parse(body) as { projection?: string };
 		const raw = JSON.stringify({
 			record: reading
-				? { projection: query.projection, data: { observed: true } }
+				? { projection: query.projection, data: options.view ?? { observed: true } }
 				: { state: "queued" },
 		});
 		return new Response(raw, {
@@ -167,6 +167,7 @@ function fixture() {
 		authority,
 		origin: () => origin,
 		fetch: fetcher as typeof fetch,
+		confirmPlan: options.confirmPlan,
 	});
 	const stage = async (
 		draft: unknown = {
@@ -472,4 +473,29 @@ describe("trusted passive outer projections", () => {
 			expect(f.shell.send).not.toHaveBeenCalled();
 		}
 	);
+});
+
+
+describe("exact outer plan confirmation",()=>{
+ const planId="exact-sealed-plan-id", digest="a".repeat(64);
+ const view={actionsEnabled:true,plans:[{digest,approvedAt:"0001-01-01T00:00:00Z",expiresAt:"0001-01-01T00:00:00Z",plan:{id:planId,request:{humanMessage:"Send to the named coordinator and start this worker",sessionId:"outer-1",controllerGeneration:"outer-generation",scopeRevision:3},sources:[{projectId:"A",label:"Source A",unknown:true,sources:["A","B"]}],actions:[{id:"send-once",spec:{operation:"send",projectId:"B",sessionId:"B-coordinator",text:"Exact disclosed message"},controllerGeneration:"target-generation"},{id:"spawn-once",spec:{operation:"spawn",projectId:"B",branch:"feat/exact-worker",text:"Exact worker task"}}]}}]};
+ it("shows one authoritative complete manifest and submits its exact digest once",async()=>{
+  const confirm=vi.fn(async(detail:string)=>{expect(detail).toContain("Exact disclosed message");expect(detail).toContain("Exact worker task");expect(detail).toContain("Source A");expect(detail).toContain('"operationCount": 2');return true;});
+  const f=fixture({confirmPlan:confirm,view});
+  try { const stage=await f.stage({operation:"plan",planId,digest}); expect(f.submitted).toHaveLength(0);
+   const click={id:stage.id,digest:stage.digest}; await f.handlers.get(OUTER_USER_ACTION)!(f.event,click); await f.handlers.get(OUTER_USER_ACTION)!(f.event,click);
+   expect(confirm).toHaveBeenCalledTimes(1);expect(f.submitted.filter(x=>x.operation)).toMatchObject([{operation:"plan",planId,digest}]);
+  }finally{f.registration.dispose();}
+ });
+ it.each(["cancel","mismatched digest","stale renderer","expired"])("holds %s without an action approval",async(mode)=>{
+  let invalidate=()=>{};
+  const confirm=vi.fn(async()=>{if(mode==="stale renderer")invalidate();if(mode==="expired")vi.spyOn(Date,"now").mockReturnValue(Date.now()+180000);return mode!=="cancel";});
+  const f=fixture({confirmPlan:confirm,view});invalidate=f.registration.invalidate;
+  try {const stage=await f.stage({operation:"plan",planId,digest:mode==="mismatched digest"?"b".repeat(64):digest});await f.handlers.get(OUTER_USER_ACTION)!(f.event,{id:stage.id,digest:stage.digest});
+   expect(f.submitted.filter(x=>x.operation==="plan")).toHaveLength(0);if(mode==="cancel")expect(f.submitted.filter(x=>x.operation)).toMatchObject([{operation:"plan.cancel",planId,digest}]);
+  }finally{vi.restoreAllMocks();f.registration.dispose();}
+ });
+ it("rejects caller supplied approval, manifest and wildcard fields",async()=>{
+  const f=fixture({view});try{for(const extra of [{approved:true},{actions:["*"]},{humanAuthored:true},{authority:"forged"}])expect(await f.stage({operation:"plan",planId,digest,...extra})).toBeNull();expect(f.submitted).toHaveLength(0);}finally{f.registration.dispose();}
+ });
 });

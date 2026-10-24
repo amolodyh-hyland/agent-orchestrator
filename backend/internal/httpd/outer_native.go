@@ -18,6 +18,8 @@ import (
 )
 
 type nativeOuterInput struct {
+	PlanID            string                       `json:"planId"`
+	Digest            string                       `json:"digest"`
 	Operation         string                       `json:"operation"`
 	ID                string                       `json:"id"`
 	SessionID         domain.SessionID             `json:"sessionId"`
@@ -113,6 +115,10 @@ func mountOuterNative(r chi.Router, svc *outer.Service, authority *delegationaut
 				return
 			}
 			value, err = svc.Send(domain.WithOuterNativeAction(req.Context(), domain.OuterNativeAction{Operation: "outer.send", RequestID: in.ID, SessionID: in.SessionID, Expected: in.Expected}), in.Text)
+		case "plan.cancel":
+			value, err = svc.CancelPlan(domain.WithOuterNativeAction(req.Context(), domain.OuterNativeAction{Operation: "outer.plan.cancel", RequestID: in.PlanID}), in.PlanID, in.Digest)
+		case "plan":
+			value, err = svc.ApprovePlan(domain.WithOuterNativeAction(req.Context(), domain.OuterNativeAction{Operation: "outer.plan.approve", RequestID: in.PlanID}), in.PlanID, in.Digest)
 		case "control":
 			if in.Control == nil {
 				reject()

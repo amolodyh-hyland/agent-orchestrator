@@ -557,6 +557,8 @@ type WorkspaceConfig struct {
 	// FreshBranch never checks out a leftover local branch for a new
 	// speculative task; a collision gets a new suffixed branch instead.
 	FreshBranch bool
+	// ExactBranch requires a new branch with this exact name and refuses collisions.
+	ExactBranch bool
 	// BaseBranch is the explicitly configured branch new session branches are
 	// created from. Empty asks the workspace adapter to resolve an authoritative
 	// repository default; it must never infer from the checked-out branch.
@@ -597,6 +599,7 @@ type WorkspaceProjectConfig struct {
 	SessionPrefix string
 	Branch        string
 	FreshBranch   bool
+	ExactBranch   bool
 	RootRepoPath  string
 	// BaseBranch applies only to RootRepoPath. Empty asks the workspace adapter
 	// to resolve that repository's default independently from every child.

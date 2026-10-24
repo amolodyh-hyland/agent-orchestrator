@@ -122,6 +122,16 @@ func (s *Store) LabelOuterFacts(ctx context.Context, b domain.OuterBinding, conv
 				return err
 			}
 			f.Source.Sources = append(f.Source.Sources, all...)
+			sourceProject := domain.ProjectID(f.Source.ProjectID)
+			imported, err := q.OuterProjectImportedSources(ctx, &sourceProject)
+			if err != nil {
+				return err
+			}
+			// A truncated import history cannot establish the complete source set.
+			if len(imported) > 1000 {
+				return domain.ErrOuterHeld
+			}
+			lineage = append(lineage, imported...)
 			for _, doc := range lineage {
 				var source domain.OuterSource
 				if err := json.Unmarshal([]byte(doc), &source); err != nil {

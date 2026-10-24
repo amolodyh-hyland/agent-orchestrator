@@ -2297,7 +2297,8 @@ func (s *Store) NextQueuedTurn(ctx context.Context, conversationID string) (doma
 		return domain.QueuedTurn{}, fmt.Errorf("select next queued turn for %s: %w", conversationID, err)
 	}
 	return domain.QueuedTurn{
-		TurnID:              row.ID,
+		TurnID:          row.ID,
+		SenderSessionID: row.SenderSessionID, SenderProjectID: row.SenderProjectID, SenderDisplayName: row.SenderDisplayName,
 		Text:                row.Text,
 		ClientMessageID:     row.ClientMessageID,
 		Origin:              row.Origin,

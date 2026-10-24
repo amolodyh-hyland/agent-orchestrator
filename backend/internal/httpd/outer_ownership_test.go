@@ -131,6 +131,12 @@ func TestOuterEveryMutationRouteRejectsOmittedAndForgedOwnership(t *testing.T) {
 				req.Header.Set("X-AO-Scope-Credential", attempt.token)
 				response := httptest.NewRecorder()
 				router.ServeHTTP(response, req)
+				if pattern == "/api/v1/outer/plans" && attempt.name == "outer credential" {
+					if response.Code != http.StatusNoContent || effects != before+1 {
+						t.Fatal("authenticated inert proposal route unavailable")
+					}
+					continue
+				}
 				if response.Code != http.StatusConflict || effects != before {
 					t.Fatalf("%s reached mutation: %d %s", attempt.name, response.Code, response.Body.String())
 				}

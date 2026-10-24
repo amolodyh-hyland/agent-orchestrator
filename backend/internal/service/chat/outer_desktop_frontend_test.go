@@ -31,11 +31,15 @@ import (
 )
 
 type outerDesktopConversation struct {
+	beforeWrite func()
 	*fakeConversation
 	inputs map[string]ports.ChatInputResponse
 }
 
 func (c *outerDesktopConversation) SendTurnWithAdmission(ctx context.Context, msg ports.ChatUserMessage, acquire func(context.Context) (func(), error)) (ports.ChatTurnRef, error) {
+	if c.beforeWrite != nil {
+		c.beforeWrite()
+	}
 	release, err := acquire(ctx)
 	if err != nil {
 		return ports.ChatTurnRef{}, err
@@ -54,14 +58,15 @@ func (c *outerDesktopConversation) ResolveInput(_ context.Context, id string, re
 }
 
 type outerDesktopFixture struct {
-	t         *testing.T
-	dir       string
-	st        *sqlite.Store
-	chat      *chatsvc.Service
-	outer     *outer.Service
-	router    http.Handler
-	providers map[domain.SessionID]*outerDesktopConversation
-	starts    []ports.ChatStartConfig
+	providerWrap func(ports.ChatStartConfig, *outerDesktopConversation) ports.ChatConversation
+	t            *testing.T
+	dir          string
+	st           *sqlite.Store
+	chat         *chatsvc.Service
+	outer        *outer.Service
+	router       http.Handler
+	providers    map[domain.SessionID]*outerDesktopConversation
+	starts       []ports.ChatStartConfig
 }
 
 // Only provisioning is synthetic. New Task uses the real session service,
@@ -95,6 +100,9 @@ func (f *outerDesktopFixture) wire() {
 			conv := &outerDesktopConversation{fakeConversation: provider, inputs: map[string]ports.ChatInputResponse{}}
 			f.providers[cfg.SessionID] = conv
 			f.starts = append(f.starts, cfg)
+			if f.providerWrap != nil {
+				return f.providerWrap(cfg, conv), nil
+			}
 			return conv, nil
 		}}},
 	})

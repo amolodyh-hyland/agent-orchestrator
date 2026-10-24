@@ -159,6 +159,9 @@ func (s *Store) CheckOuterOperation(ctx context.Context, operation string, proje
 		}
 		project = r.ProjectID
 	}
+	if _, executing := domain.OuterExecutionFrom(ctx); executing {
+		return s.CheckOuterExecution(ctx, operation, project, session)
+	}
 	caller, scoped := domain.OuterCallerFrom(ctx)
 	if scoped && !caller.Outer {
 		owner, ok, err := s.GetSession(ctx, caller.SessionID)
@@ -176,6 +179,13 @@ func (s *Store) CheckOuterOperation(ctx context.Context, operation string, proje
 			return domain.ErrOuterHeld
 		}
 	}
+	if scoped {
+		if held, err := s.IsOuterParticipant(ctx, caller.SessionID); err != nil {
+			return err
+		} else if held && operation != "report.scoped" {
+			return s.AppendOuterHeld(ctx, operation, project, session, "participant_cascade_held")
+		}
+	}
 	if scoped && !caller.Outer && caller.ProjectID != project {
 		if err := s.AppendOuterAudit(ctx, domain.OuterAudit{Operation: operation, State: "held", Reason: "wrong_project_credential", SessionID: caller.SessionID, ProjectID: string(project)}); err != nil {
 			return err
@@ -183,7 +193,7 @@ func (s *Store) CheckOuterOperation(ctx context.Context, operation string, proje
 		return domain.ErrOuterHeld
 	}
 	if scoped && caller.Outer {
-		if err := s.AppendOuterAudit(ctx, domain.OuterAudit{Operation: operation, State: "held", Reason: "M1 cross-project mutations disabled", SessionID: caller.SessionID, ProjectID: string(project)}); err != nil {
+		if err := s.AppendOuterAudit(ctx, domain.OuterAudit{Operation: operation, State: "held", Reason: "sealed native plan required for outer mutations", SessionID: caller.SessionID, ProjectID: string(project)}); err != nil {
 			return err
 		}
 		return domain.ErrOuterHeld
@@ -196,6 +206,13 @@ func (s *Store) CheckOuterOperation(ctx context.Context, operation string, proje
 			return err
 		}
 		return domain.ErrOuterHeld
+	}
+	if session != "" {
+		if held, err := s.IsOuterParticipant(ctx, session); err != nil {
+			return err
+		} else if held && operation != "outer.reply.approval" && operation != "outer.reply.input" {
+			return s.AppendOuterHeld(ctx, operation, project, session, "participant_exact_plan_required")
+		}
 	}
 	guarded := operation == "native_only" || operation == "unclassified" || string(project) == b.AnchorProjectID || slices.Contains(b.ProjectIDs, string(project)) || (project == "" && session == "")
 	if !guarded {
@@ -223,6 +240,14 @@ func (s *Store) CheckOuterOperation(ctx context.Context, operation string, proje
 		return nil
 	}
 	if err := s.AppendOuterAudit(ctx, domain.OuterAudit{Operation: operation, State: "held", Reason: "native_or_scoped_authority_required", ProjectID: string(project), SessionID: session}); err != nil {
+		return err
+	}
+	return domain.ErrOuterHeld
+}
+
+// AppendOuterHeld persists the denial before returning the common hold.
+func (s *Store) AppendOuterHeld(ctx context.Context, op string, project domain.ProjectID, session domain.SessionID, reason string) error {
+	if err := s.AppendOuterAudit(ctx, domain.OuterAudit{Operation: op, State: "held", ProjectID: string(project), SessionID: session, Reason: reason}); err != nil {
 		return err
 	}
 	return domain.ErrOuterHeld

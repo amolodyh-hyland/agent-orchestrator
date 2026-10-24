@@ -632,7 +632,7 @@ func Run() error {
 	lcStack.LCM.SetSessionOperationGate(sessMgr)
 	termMgr.SetSessionInputLease(sessMgr)
 	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Logger: log, OnModelScopeChanged: agentSvc.InvalidateProjectModelCatalogs})
-	outerSvc := outersvc.New(store, projectSvc, sessionSvc)
+	outerSvc := outersvc.New(store, projectSvc, sessionSvc, outersvc.WithActionsEnabled(os.Getenv("AO_OUTER_M2_ACTIONS") == "1"))
 	outerSvc.SetTransport(chatSvc)
 	chatSvc.SetOuterAdmission(outerSvc)
 	reportSessions, ok := sessMgr.(reportSemanticSession)

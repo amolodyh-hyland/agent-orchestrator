@@ -13,6 +13,9 @@ import (
 
 // FactoryFeedbackHeld applies the passive policy to run workers and report recipients.
 func (s *Store) FactoryFeedbackHeld(ctx context.Context, id domain.SessionID) (bool, error) {
+	if held, err := s.IsOuterParticipant(ctx, id); err != nil || held {
+		return held, err
+	}
 	return s.qr.FactoryFeedbackHeld(ctx, id)
 }
 

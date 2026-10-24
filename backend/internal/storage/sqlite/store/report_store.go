@@ -395,6 +395,9 @@ func (s *Store) RecordReportChatAcceptance(ctx context.Context, conversationID, 
 	if err := q.AcceptOuterRequest(ctx, gen.AcceptOuterRequestParams{ConversationID: conversationID, ProviderConversationID: providerConversationID, ProviderTurnID: providerTurnID, AcceptedAt: nullTime(at)}); err != nil {
 		return err
 	}
+	if err := q.AcceptOuterPlanActions(ctx, gen.AcceptOuterPlanActionsParams{ConversationID: conversationID, ProviderTurnID: providerTurnID, AcceptedAt: nullTime(at)}); err != nil {
+		return err
+	}
 	if err := q.AcceptFactoryFeedback(ctx, gen.AcceptFactoryFeedbackParams{ConversationID: conversationID, ProviderConversationID: providerConversationID, ProviderTurnID: providerTurnID, AcceptedAt: nullTime(at)}); err != nil {
 		return err
 	}

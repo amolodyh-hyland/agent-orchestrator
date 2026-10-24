@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +13,30 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
+
+func TestOuterSpawnServicePreservesDefinitiveNoStartAcrossAPIErrorMapping(t *testing.T) {
+	for _, phase := range []string{"preflight", "manager_no_start", "manager_unknown"} {
+		t.Run(phase, func(t *testing.T) {
+			st := newFakeStore()
+			st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+			manager := &fakeCommander{spawnErr: ports.ErrUnsupportedEffort}
+			deps := Deps{Store: st, Manager: manager}
+			switch phase {
+			case "preflight":
+				deps.AgentReadiness = &fakeAgentReadiness{err: errors.New("unavailable")}
+			case "manager_no_start":
+				manager.spawnErr = errors.Join(manager.spawnErr, domain.ErrOuterSpawnNotStarted)
+			}
+			_, _, _, err := NewWithDeps(deps).Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex, OuterActionID: "exact-spawn"})
+			if err == nil || errors.Is(err, domain.ErrOuterSpawnNotStarted) != (phase != "manager_unknown") {
+				t.Fatal("no-start evidence changed across service boundary", err)
+			}
+			if phase == "preflight" && manager.spawnCalls != 0 {
+				t.Fatal("failed preflight reached manager")
+			}
+		})
+	}
+}
 
 type nativeDesktopLifecycleCommander struct {
 	*fakeCommander

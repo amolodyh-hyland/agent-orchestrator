@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,7 +22,7 @@ func (s *Service) SetOuterAdmission(a OuterAdmission) {
 	s.mu.Unlock()
 }
 func (s *Service) acquireOuterInput(ctx context.Context, id domain.SessionID, msg ports.ChatUserMessage, action string) (func(), error) {
-	bound, err := domain.IsOuter(ctx, s.store, id)
+	bound, err := domain.IsOuterControlledSession(ctx, s.store, id)
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +38,7 @@ func (s *Service) acquireOuterInput(ctx context.Context, id domain.SessionID, ms
 	return a.AcquireOuterInput(ctx, id, msg, action)
 }
 func (c *Controller) acquireOuterInput(ctx context.Context, msg ports.ChatUserMessage, action string) (func(), error) {
-	bound, err := domain.IsOuter(ctx, c.store, c.sessionID)
+	bound, err := domain.IsOuterControlledSession(ctx, c.store, c.sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -93,10 +94,53 @@ func (s *Service) DeliverOuterSend(ctx context.Context, id domain.SessionID, tex
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}
-	return c.Send(ctx, ports.ChatUserMessage{Text: text, ClientMessageID: key, Origin: domain.MessageOriginHuman})
+	msg := ports.ChatUserMessage{Text: text, ClientMessageID: key, Origin: domain.MessageOriginHuman}
+	if journal, ok := s.store.(interface {
+		GetOuterRequest(context.Context, string) (domain.OuterRequestReceipt, error)
+	}); ok {
+		r, err := journal.GetOuterRequest(ctx, key)
+		if err != nil {
+			return domain.ConversationTurn{}, err
+		}
+		if r.Request.PlanID != "" {
+			policy, ok := s.store.(domain.OuterPolicy)
+			if !ok {
+				return domain.ConversationTurn{}, domain.ErrOuterHeld
+			}
+			b, found, err := policy.OuterBinding(ctx)
+			if err != nil || !found {
+				return domain.ConversationTurn{}, domain.ErrOuterHeld
+			}
+			labels := map[string]string{}
+			for _, source := range r.Request.Sources {
+				for _, project := range source.Sources {
+					if _, exists := labels[project]; !exists {
+						labels[project] = project
+					}
+				}
+				if source.ProjectID != "" {
+					label := source.Label
+					if label == "" {
+						label = source.ProjectID
+					}
+					labels[source.ProjectID] = label + " [" + source.ProjectID + "]"
+				}
+			}
+			sources := make([]string, 0, len(labels))
+			for _, label := range labels {
+				sources = append(sources, label)
+			}
+			slices.Sort(sources)
+			msg.Origin = domain.MessageOriginAutomation
+			msg.SenderSessionID = string(r.Request.OwnerSessionID)
+			msg.SenderProjectID = b.AnchorProjectID
+			msg.SenderDisplayName = "Outer / request " + r.Request.ID + " / sources " + strings.Join(sources, ", ")
+		}
+	}
+	return c.Send(ctx, msg)
 }
 func (c *Controller) auditOuterEvent(ctx context.Context, event ports.ChatEvent) error {
-	bound, err := domain.IsOuter(ctx, c.store, c.sessionID)
+	bound, err := domain.IsOuterControlledSession(ctx, c.store, c.sessionID)
 	if err != nil || !bound {
 		return err
 	}
@@ -134,11 +178,11 @@ func (c *Controller) auditOuterEvent(ctx context.Context, event ports.ChatEvent)
 			return err
 		}
 	}
-	return audit.AppendOuterAudit(ctx, domain.OuterAudit{Operation: "native." + string(event.Kind), State: "observed", RequestID: request, SessionID: c.sessionID, Generation: c.generation, Digest: domain.OuterDigest([]any{event.Kind, event.ProviderTurnID, event.ProviderItemID}), ReceiptID: turn, Reason: "native invocation metadata only; raw output retained in transcript"})
+	return audit.AppendOuterAudit(ctx, domain.OuterAudit{Operation: "native." + string(event.Kind), State: "observed", RequestID: request, SessionID: c.sessionID, ProjectID: string(c.conversation.ProjectID), Generation: c.generation, Digest: domain.OuterDigest([]any{event.Kind, event.ProviderTurnID, event.ProviderItemID}), ReceiptID: turn, Reason: "native invocation metadata only; raw output retained in transcript"})
 }
 
 func (c *Controller) checkOuterReply(ctx context.Context, id, kind string) error {
-	bound, err := domain.IsOuter(ctx, c.store, c.sessionID)
+	bound, err := domain.IsOuterControlledSession(ctx, c.store, c.sessionID)
 	if err != nil || !bound {
 		return err
 	}

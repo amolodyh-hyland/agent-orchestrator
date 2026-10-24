@@ -84,6 +84,15 @@ func (s *Store) CreateOuterRequest(ctx context.Context, r domain.OuterRequest) e
 			return err
 		}
 		for _, source := range r.Sources {
+			if r.PlanID != "" {
+				doc, err := json.Marshal(source)
+				if err != nil {
+					return err
+				}
+				if err := q.UpsertOuterSource(ctx, gen.UpsertOuterSourceParams{ConversationID: r.ProviderConversationID, SourceKey: "export:" + r.ID + ":" + source.ProjectID + ":" + source.ID, Document: string(doc)}); err != nil {
+					return err
+				}
+			}
 			if source.Kind == "human_input" {
 				doc, err := json.Marshal(source)
 				if err != nil {
@@ -107,8 +116,17 @@ func validateOuterRequest(ctx context.Context, q *gen.Queries, r domain.OuterReq
 	if err := json.Unmarshal([]byte(doc), &b); err != nil {
 		return err
 	}
-	if b.Paused || b.HistoryHeld || b.SessionID != r.SessionID || b.Revision != r.BindingRevision || b.ScopeRevision != r.ScopeRevision || !now.Before(r.ExpiresAt) {
+	owner := r.SessionID
+	if r.PlanID != "" {
+		owner = r.OwnerSessionID
+	}
+	if b.Paused || b.HistoryHeld || b.SessionID != owner || b.Revision != r.BindingRevision || b.ScopeRevision != r.ScopeRevision || !now.Before(r.ExpiresAt) {
 		return domain.ErrOuterHeld
+	}
+	if r.PlanID != "" {
+		if err := validateOuterActionRequest(ctx, q, r, now); err != nil {
+			return err
+		}
 	}
 	for _, id := range b.ProjectIDs {
 		p, err := q.GetProject(ctx, domain.ProjectID(id))
@@ -205,8 +223,23 @@ func (s *Store) AttemptOuterRequest(ctx context.Context, id, epoch string, now t
 		if err := validateOuterRequest(ctx, q, r.Request, now); err != nil {
 			return err
 		}
-		if err := s.reserveOuterCapacity(ctx, q, domain.OuterCapacity{RequestID: id, SessionID: r.Request.SessionID, Generation: r.Request.ControllerGeneration, Foreground: true, ReservedAt: now}); err != nil {
+		adopted, err := q.AdoptOuterCapacity(ctx, gen.AdoptOuterCapacityParams{RequestID: id, SessionID: string(r.Request.SessionID), Generation: r.Request.ControllerGeneration})
+		if err != nil {
 			return err
+		}
+		if adopted != 0 {
+			counts, err := s.observeOuterCapacity(ctx, q, r.Request.SessionID)
+			if err != nil {
+				return err
+			}
+			if counts.Unknown != 0 || counts.Stations > 2 || counts.HeavyReserved > 1 || (counts.ForegroundReserve && counts.Background > 1) {
+				return domain.ErrOuterHeld
+			}
+		}
+		if adopted == 0 {
+			if err := s.reserveOuterCapacity(ctx, q, domain.OuterCapacity{RequestID: id, SessionID: r.Request.SessionID, Generation: r.Request.ControllerGeneration, Foreground: r.Request.PlanID == "", ReservedAt: now}); err != nil {
+				return err
+			}
 		}
 		count, err := q.AttemptOuterRequest(ctx, gen.AttemptOuterRequestParams{ID: id, AttemptedAt: nullTime(now)})
 		if err != nil {
@@ -342,7 +375,11 @@ func linkOuterRequest(ctx context.Context, q *gen.Queries, session domain.Sessio
 	if err != nil {
 		return err
 	}
-	if row.ProjectID == nil || string(*row.ProjectID) != b.AnchorProjectID {
+	participant, err := q.IsOuterParticipant(ctx, session)
+	if err != nil {
+		return err
+	}
+	if !participant && (row.ProjectID == nil || string(*row.ProjectID) != b.AnchorProjectID) {
 		return nil
 	}
 	a, ok := domain.OuterNativeActionFrom(ctx)
@@ -358,7 +395,11 @@ func linkOuterRequest(ctx context.Context, q *gen.Queries, session domain.Sessio
 		return err
 	}
 	r := receipt.Request
-	if r.ControllerGeneration != generation || r.ConversationID != conversation || msg.Text != r.Payload || msg.Origin != domain.MessageOriginHuman || msg.DeliveryContentJSON != "" || msg.Continuation {
+	expectedOrigin := domain.MessageOriginHuman
+	if r.PlanID != "" {
+		expectedOrigin = domain.MessageOriginAutomation
+	}
+	if r.ControllerGeneration != generation || r.ConversationID != conversation || msg.Text != r.Payload || msg.Origin != expectedOrigin || msg.DeliveryContentJSON != "" || msg.Continuation {
 		return domain.ErrOuterHeld
 	}
 	if err := validateOuterRequest(ctx, q, r, now); err != nil {
@@ -385,7 +426,11 @@ func (s *Store) CheckOuterPendingReply(ctx context.Context, id domain.SessionID,
 		return err
 	}
 	b, found, err := s.OuterBinding(ctx)
-	if err != nil || !found || b.SessionID != id || b.HistoryHeld || b.Paused || b.ScopeRevision != receipt.Request.ScopeRevision {
+	owner := id
+	if receipt.Request.PlanID != "" {
+		owner = receipt.Request.OwnerSessionID
+	}
+	if err != nil || !found || b.SessionID != owner || b.HistoryHeld || b.Paused || b.ScopeRevision != receipt.Request.ScopeRevision {
 		return domain.ErrOuterHeld
 	}
 	r, found, err := s.GetSession(ctx, id)

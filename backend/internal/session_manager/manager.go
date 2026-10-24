@@ -974,6 +974,15 @@ func New(d Deps) *Manager {
 // materialization fails the still-seed row is deleted outright; a later failure
 // parks the row as terminated and rolls back what was built.
 func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+	mayHaveStarted := false
+	rec, promptBytes, systemPromptBytes, err := m.spawn(ctx, cfg, &mayHaveStarted)
+	if cfg.OuterActionID != "" && err != nil && !mayHaveStarted {
+		err = errors.Join(err, domain.ErrOuterSpawnNotStarted)
+	}
+	return rec, promptBytes, systemPromptBytes, err
+}
+
+func (m *Manager) spawn(ctx context.Context, cfg ports.SpawnConfig, mayHaveStarted *bool) (domain.SessionRecord, int, int, error) {
 	if err := domain.CheckOuterOperation(ctx, m.store, "spawn", cfg.ProjectID, ""); err != nil {
 		return domain.SessionRecord{}, 0, 0, err
 	}
@@ -981,6 +990,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ErrArtifactOutputUnavailable)
 	}
 	if cfg.ClientRequestID != "" {
+		*mayHaveStarted = true
 		existing, found, err := m.store.GetSessionByClientRequestID(ctx, cfg.ClientRequestID)
 		if err != nil {
 			return domain.SessionRecord{}, 0, 0, err
@@ -989,6 +999,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			rec, err := replayClientRequest(existing, cfg.ClientRequestHash)
 			return rec, 0, 0, err
 		}
+		*mayHaveStarted = false
 	}
 	project, err := m.loadProject(ctx, cfg.ProjectID)
 	if err != nil {
@@ -1170,6 +1181,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 	}
 	id := rec.ID
+	if err := m.enrollOuterSpawn(ctx, cfg, id); err != nil {
+		return domain.SessionRecord{}, 0, 0, err
+	}
 	// A claimed preparation was created as a TUI session with no issue; the
 	// requested mode, kind and issue only land when it is promoted below. Resolve
 	// context against those effective values so chat and issue attachments are
@@ -1320,6 +1334,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// The attachments are named now (spawnAttachmentRefs is derived, not read
 	// from disk) so the opening prompt is complete before the files land.
 	if asyncChat {
+		*mayHaveStarted = true
 		started, promptBytes, systemPromptBytes, err := m.beginAsyncChatSpawn(ctx, asyncChatSpawn{
 			cfg:               cfg,
 			project:           project,
@@ -1363,13 +1378,20 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	}
 	if err != nil {
 		if ws.Path != "" {
-			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, prep != nil, false)
+			if cfg.OuterActionID != "" {
+				m.markSpawnFailedTerminatedAfterFailure(ctx, id, false)
+			} else {
+				m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, prep != nil, false)
+			}
 		} else {
 			// No worktree exists, so the seed row can be discarded.
 			m.rollbackSpawnSeedRowAfterFailure(ctx, id)
 			m.cleanupArtifactDir(id)
 		}
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
+	}
+	if cfg.OuterActionID != "" && ws.Branch != cfg.Branch {
+		return domain.SessionRecord{}, 0, 0, domain.ErrOuterHeld
 	}
 	// A synchronous request is unacknowledged until launch. Record that setup
 	// has not completed before naming publishes its workspace path.
@@ -1430,7 +1452,14 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// provisioning, attachments. From here the two modes launch different
 	// controllers, and exactly one of them runs.
 	if mode == domain.SessionModeChat {
+		if cfg.OuterActionID != "" {
+			if err := domain.CheckOuterOperation(ctx, m.store, "spawn", cfg.ProjectID, ""); err != nil {
+				return domain.SessionRecord{}, 0, 0, err
+			}
+			prompt = ""
+		}
 		rec, err = m.launchChatController(ctx, chatSpawn{
+			mayHaveStarted:   mayHaveStarted,
 			cfg:              cfg,
 			project:          project,
 			projectKind:      projectKind,
@@ -1461,6 +1490,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		return rec, promptBytes, systemPromptBytes, nil
 	}
 
+	*mayHaveStarted = true
 	agent, ok := m.agents.Agent(cfg.Harness)
 	if !ok {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
@@ -2076,6 +2106,7 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 			SessionPrefix: sessionPrefix(project),
 			Branch:        branch,
 			FreshBranch:   cfg.TaskPreparation != "",
+			ExactBranch:   cfg.OuterActionID != "",
 			BaseBranch:    baseBranch,
 			BaseRef:       baseRefs[filepath.Clean(project.Path)],
 		}
@@ -2128,20 +2159,32 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 		SessionPrefix: sessionPrefix(project),
 		Branch:        branch,
 		FreshBranch:   cfg.TaskPreparation != "",
+		ExactBranch:   cfg.OuterActionID != "",
 		RootRepoPath:  project.Path,
 		BaseBranch:    project.Config.WorktreeBaseBranch(),
 		BaseRef:       baseRefs[filepath.Clean(project.Path)],
 		Repos:         childRepos,
 		Assets:        assets,
 	})
-	if err != nil && (cfg.TaskPreparation == "" || len(info.Worktrees) == 0) {
+	// Confirmed spawns retain completed checkouts after a later repository fails.
+	// Record their inventory even when the original request was canceled.
+	retainInventory := cfg.TaskPreparation != "" || cfg.OuterActionID != ""
+	if err != nil && (!retainInventory || len(info.Worktrees) == 0 && info.Root.Path == "") {
 		return ports.WorkspaceInfo{}, nil, err
 	}
 	persistCtx := ctx
-	if cfg.TaskPreparation != "" {
+	if retainInventory {
 		var cancel context.CancelFunc
 		persistCtx, cancel = spawnRollbackContext(ctx)
 		defer cancel()
+	}
+	if cfg.OuterActionID != "" && info.Root.Path != "" {
+		updated, recordErr := m.store.SetSessionNamedWorkspace(persistCtx, id, "", info.Root.Branch, info.Root.Path, info.Root.RepoPath, m.clock())
+		if recordErr != nil {
+			err = errors.Join(err, recordErr)
+		} else if !updated {
+			err = errors.Join(err, errors.New("record confirmed workspace: session ownership changed"))
+		}
 	}
 	var previousRows []domain.SessionWorktreeRecord
 	if cfg.TaskPreparation != "" {
@@ -2175,8 +2218,8 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 			WorktreePath: wt.Path,
 			State:        "active",
 		}); storeErr != nil {
-			if cfg.TaskPreparation != "" {
-				return info.Root, &info, errors.Join(err, fmt.Errorf("record prepared workspace worktree %q: %w", wt.RepoName, storeErr))
+			if retainInventory {
+				return info.Root, &info, errors.Join(err, fmt.Errorf("record workspace worktree %q: %w", wt.RepoName, storeErr))
 			}
 			cleanupCtx, cancel := spawnRollbackContext(ctx)
 			cleanupErr := workspaceProject.DestroyWorkspaceProject(cleanupCtx, info)
@@ -2752,6 +2795,11 @@ func (m *Manager) RequestKill(ctx context.Context, id domain.SessionID) (KillRes
 }
 
 func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundCleanup bool) (KillResult, error) {
+	if participant, err := domain.IsOuterParticipant(ctx, m.store, id); err != nil {
+		return KillResult{}, err
+	} else if participant {
+		return KillResult{}, domain.ErrOuterHeld
+	}
 	// Teardown deliberately stops riding the caller's context. Kill runs a
 	// sequence (stop the agent, tear the controller down, mark the row
 	// terminated, drop the worktree) where being cancelled partway leaves a session
@@ -5646,6 +5694,9 @@ func (m *Manager) isWorkspaceInUse(ctx context.Context, projectID domain.Project
 // call) — most commonly because a scoped shell terminal could not be
 // confirmed closed, so reclaiming would pull the ground out from under it.
 func (m *Manager) cleanupOne(ctx context.Context, rec domain.SessionRecord, ws ports.WorkspaceInfo) (ports.WorkspaceReclaim, string) {
+	if err := domain.HoldOuterTarget(ctx, m.store, rec.ID, "cleanup"); err != nil {
+		return ports.WorkspaceReclaimRemoved, "outer participant artifacts retained"
+	}
 	{
 		release := m.acquireWorkspaceGate(rec.ProjectID)
 

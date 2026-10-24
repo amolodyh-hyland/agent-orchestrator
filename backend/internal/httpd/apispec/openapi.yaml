@@ -4330,6 +4330,43 @@ paths:
       summary: Read bounded selected-project evidence with source labels
       tags:
       - outer
+  /api/v1/outer/plans:
+    post:
+      operationId: proposeOuterPlan
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OuterPlanProposal'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OuterPlanReceipt'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Seal concrete requested actions without executing them
+      tags:
+      - outer
   /api/v1/projects:
     get:
       operationId: listProjects
@@ -19374,6 +19411,78 @@ components:
       - id
       - projectId
       type: object
+    OuterActionPlan:
+      properties:
+        actions:
+          items:
+            $ref: '#/components/schemas/OuterPlannedAction'
+          type: array
+        createdAt:
+          format: date-time
+          type: string
+        epoch:
+          type: string
+        id:
+          type: string
+        request:
+          $ref: '#/components/schemas/OuterRequest'
+        sources:
+          items:
+            $ref: '#/components/schemas/OuterSource'
+          type: array
+      required:
+      - id
+      - request
+      - epoch
+      - createdAt
+      - sources
+      - actions
+      type: object
+    OuterActionReceipt:
+      properties:
+        attemptedAt:
+          format: date-time
+          type: string
+        completedAt:
+          format: date-time
+          type: string
+        id:
+          type: string
+        sessionId:
+          type: string
+        state:
+          type: string
+      required:
+      - id
+      - sessionId
+      - attemptedAt
+      - completedAt
+      - state
+      type: object
+    OuterActionSpec:
+      properties:
+        branch:
+          type: string
+        config:
+          $ref: '#/components/schemas/AgentConfig'
+        dependsOn:
+          items:
+            type: integer
+          type: array
+        operation:
+          type: string
+        projectId:
+          type: string
+        sessionId:
+          type: string
+        text:
+          type: string
+      required:
+      - operation
+      - projectId
+      - config
+      - dependsOn
+      type: object
     OuterAudit:
       properties:
         at:
@@ -19544,6 +19653,146 @@ components:
       required:
       - facts
       type: object
+    OuterPlanProposal:
+      properties:
+        actions:
+          items:
+            $ref: '#/components/schemas/OuterActionSpec'
+          type: array
+        requestId:
+          type: string
+        sourceProjects:
+          items:
+            type: string
+          type: array
+      required:
+      - requestId
+      - sourceProjects
+      - actions
+      type: object
+    OuterPlanReceipt:
+      properties:
+        actions:
+          items:
+            $ref: '#/components/schemas/OuterActionReceipt'
+          type: array
+        approvedAt:
+          format: date-time
+          type: string
+        digest:
+          type: string
+        expiresAt:
+          format: date-time
+          type: string
+        plan:
+          $ref: '#/components/schemas/OuterActionPlan'
+      required:
+      - plan
+      - digest
+      - approvedAt
+      - expiresAt
+      - actions
+      type: object
+    OuterPlannedAction:
+      properties:
+        controllerGeneration:
+          type: string
+        conversationId:
+          type: string
+        harness:
+          type: string
+        id:
+          type: string
+        mode:
+          type: string
+        permissionCeiling:
+          type: string
+        projectLabel:
+          type: string
+        projectRevision:
+          format: int64
+          type: integer
+        providerConversationId:
+          type: string
+        settings:
+          $ref: '#/components/schemas/DomainConversationSettings'
+        spec:
+          $ref: '#/components/schemas/OuterActionSpec'
+        targetDigest:
+          type: string
+      required:
+      - harness
+      - mode
+      - settings
+      - permissionCeiling
+      - id
+      - spec
+      - projectLabel
+      - projectRevision
+      - targetDigest
+      - controllerGeneration
+      - providerConversationId
+      - conversationId
+      type: object
+    OuterRequest:
+      properties:
+        bindingRevision:
+          format: int64
+          type: integer
+        controllerGeneration:
+          type: string
+        conversationId:
+          type: string
+        epoch:
+          type: string
+        expiresAt:
+          format: date-time
+          type: string
+        humanMessage:
+          type: string
+        id:
+          type: string
+        issuedAt:
+          format: date-time
+          type: string
+        ownerSessionId:
+          type: string
+        payload:
+          type: string
+        payloadDigest:
+          type: string
+        planId:
+          type: string
+        providerConversationId:
+          type: string
+        scopeRevision:
+          format: int64
+          type: integer
+        sessionId:
+          type: string
+        settingsDigest:
+          type: string
+        sources:
+          items:
+            $ref: '#/components/schemas/OuterSource'
+          type: array
+      required:
+      - id
+      - humanMessage
+      - payload
+      - payloadDigest
+      - sessionId
+      - conversationId
+      - providerConversationId
+      - controllerGeneration
+      - bindingRevision
+      - scopeRevision
+      - settingsDigest
+      - epoch
+      - issuedAt
+      - expiresAt
+      - sources
+      type: object
     OuterRequestView:
       properties:
         acceptedAt:
@@ -19658,6 +19907,8 @@ components:
       type: object
     OuterView:
       properties:
+        actionsEnabled:
+          type: boolean
         binding:
           anyOf:
           - type: "null"
@@ -19676,6 +19927,10 @@ components:
           items:
             type: string
           type: array
+        plans:
+          items:
+            $ref: '#/components/schemas/OuterPlanReceipt'
+          type: array
         requests:
           items:
             $ref: '#/components/schemas/OuterRequestView'
@@ -19690,6 +19945,8 @@ components:
           - $ref: '#/components/schemas/OuterSessionView'
             type: object
       required:
+      - plans
+      - actionsEnabled
       - session
       - binding
       - requests

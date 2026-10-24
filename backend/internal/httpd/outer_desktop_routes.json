@@ -359,6 +359,10 @@
     "operation": "spawn",
     "mode": "confirm"
   },
+  "POST /api/v1/outer/plans": {
+    "operation": "outer.plan.propose",
+    "mode": "held"
+  },
   "POST /api/v1/projects": {
     "operation": "project.scoped",
     "mode": "confirm"

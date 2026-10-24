@@ -49,6 +49,13 @@ let selected: string[];
 let historyHeld: boolean;
 let manySessions: boolean;
 let setupPending: boolean;
+let actionsEnabled: boolean;
+let paused: boolean;
+let plans: ReturnType<typeof actionPlan>[];
+
+function actionPlan() {
+	return { digest:"a".repeat(64), approvedAt:"0001-01-01T00:00:00Z", expiresAt:"0001-01-01T00:00:00Z", plan:{ id:"sealed-manifest", request:{ humanMessage:"Send this exact message, then stop",sessionId:"outer-1" }, actions:[{id:"exact-action",spec:{operation:"send",sessionId:"a-coordinator",text:"Exact content"}}],sources:[{projectId:"a",label:"Alpha"}] },actions:[{id:"exact-action",sessionId:"a-coordinator",state:"proposed"}] };
+}
 const clients: QueryClient[] = [];
 
 function mount(entry = "/outer") {
@@ -91,6 +98,7 @@ beforeEach(() => {
 	historyHeld = false;
 	manySessions = false;
 	setupPending = false;
+	actionsEnabled = false; paused = false; plans = [];
 	let sequence = 0;
 	vi.mocked(aoBridge.outer.stage).mockImplementation(async () => ({
 		id: `stage-${++sequence}`,
@@ -111,12 +119,13 @@ beforeEach(() => {
 		if (path === "/api/v1/outer")
 			return {
 				data: {
+					plans,actionsEnabled,
 					binding: {
 						anchorProjectId: "anchor",
 						sessionId: setupPending ? "" : "outer-1",
 						projectIds: selected,
 						revision: 1,
-						paused: false,
+						paused,
 						foregroundReserve: true,
 						historyHeld,
 					},
@@ -383,37 +392,48 @@ describe("Outer console", () => {
 		assertPassive();
 	});
 
-	it("stages controls only for the chosen session, preserving the bounded native draft pool", async () => {
+	it("keeps selected-session lifecycle controls held and the native draft pool bounded", async () => {
 		manySessions = true;
-		const user = userEvent.setup();
 		mount();
 		await screen.findByText("Evidence sessions-19");
-		expect(
-			screen.queryByRole("button", { name: "Stop this session" })
-		).not.toBeInTheDocument();
-		expect(vi.mocked(aoBridge.outer.stage).mock.calls.length).toBeLessThan(
-			10
-		);
-		await user.click(
-			screen.getAllByRole("button", {
-				name: "Inspect human session controls",
-			})[19]
-		);
-		await waitFor(() =>
-			expect(aoBridge.outer.stage).toHaveBeenCalledWith(
-				expect.any(String),
-				expect.objectContaining({
-					control: {
-						action: "session.kill",
-						targetId: "sessions-19",
-						body: {},
-					},
-				})
-			)
-		);
-		expect(
-			screen.getAllByRole("button", { name: "Stop this session" })
-		).toHaveLength(1);
+		expect(screen.queryByRole("button", { name: "Stop this session" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Inspect human session controls" })).not.toBeInTheDocument();
+		expect(vi.mocked(aoBridge.outer.stage).mock.calls.length).toBeLessThan(10);
+		expect(vi.mocked(aoBridge.outer.stage).mock.calls.some(([, draft]) => draft.operation === "control" && (draft.control.action === "session.kill" || draft.control.action === "session.restore"))).toBe(false);
 		assertPassive();
 	});
+
+	it("shows the original request and stages only the sealed plan identity", async () => {
+		actionsEnabled = true;
+		plans = [actionPlan()];
+		mount();
+		await screen.findByText("Send this exact message, then stop");
+		await waitFor(() => expect(screen.getByRole("button", { name: "Review exact plan" })).toBeEnabled());
+		expect(aoBridge.outer.stage).toHaveBeenCalledWith(expect.any(String), { operation:"plan",planId:"sealed-manifest",digest:"a".repeat(64) });
+		assertPassive();
+	});
+
+	it.each(["disabled", "paused", "history"])("keeps plan confirmation held when %s", async (mode) => {
+		actionsEnabled = mode !== "disabled";
+		paused = mode === "paused";
+		historyHeld = mode === "history";
+		plans = [actionPlan()];
+		mount();
+		await screen.findByText("Send this exact message, then stop");
+		expect(screen.getByRole("button", { name: "Review exact plan" })).toBeDisabled();
+		expect(vi.mocked(aoBridge.outer.stage).mock.calls.some(([, draft]) => draft.operation === "plan")).toBe(false);
+		assertPassive();
+	});
+
+	it.each(["approvedAt", "expiresAt"])("offers no second confirmation after %s", async (field) => {
+		actionsEnabled = true;
+		const plan = actionPlan();
+		plan[field as "approvedAt" | "expiresAt"] = new Date().toISOString();
+		plans = [plan];
+		mount();
+		await screen.findByText("Send this exact message, then stop");
+		expect(screen.queryByRole("button", { name: "Review exact plan" })).not.toBeInTheDocument();
+		assertPassive();
+	});
+
 });
