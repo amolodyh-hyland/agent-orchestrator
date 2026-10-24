@@ -14,6 +14,7 @@ export function resultText(value: unknown): string {
 export const resultHash = (value: string) => createHash("sha256").update(value).digest("hex");
 export function delegationResult(value: unknown, expected: PublicDelegation): PublicDelegationResult {
  const v = object(value);
+ if (typeof v.byte_count !== "number" || !Number.isSafeInteger(v.byte_count)) throw new Error("invalid byte count");
  const digest = (x: unknown) => { const s = text(x, 64); if (!/^[a-f0-9]{64}$/.test(s)) throw new Error("invalid digest"); return s; };
  if (v.version !== 1 || v.format !== "text/plain" || !expected.terminal || !["completed", "failed", "cancelled"].includes(expected.status)) throw new Error("invalid terminal result");
  const r: PublicDelegationResult = { version: 1, format: "text/plain", delegation_id: uuid(v.delegation_id), task_id: uuid(v.task_id), workspace_id: uuid(v.workspace_id), agent_id: uuid(v.agent_id), runtime_id: uuid(v.runtime_id), status: expected.status as PublicDelegationResult["status"], terminal_revision: digest(v.terminal_revision), completed_at: text(v.completed_at,64), revision: "", digest: digest(v.digest), byte_count: Number(v.byte_count), text: resultText(v.text) };
