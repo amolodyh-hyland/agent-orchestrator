@@ -25,6 +25,8 @@ import (
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/outer"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
+	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
@@ -62,6 +64,28 @@ type outerDesktopFixture struct {
 	starts    []ports.ChatStartConfig
 }
 
+// Only provisioning is synthetic. New Task uses the real session service,
+// controllers, ownership guard and SQLite; no process or provider is launched.
+type outerDesktopCommander struct {
+	*sessionmanager.Manager
+	st *sqlite.Store
+}
+
+func (outerDesktopCommander) SessionStatusReadiness(domain.SessionRecord) string { return "ready" }
+func (outerDesktopCommander) StatusRecoveryRevision() uint64                     { return 0 }
+
+func (m outerDesktopCommander) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+	if err := domain.CheckOuterOperation(ctx, m.st, "spawn", cfg.ProjectID, ""); err != nil {
+		return domain.SessionRecord{}, 0, 0, err
+	}
+	record, err := m.st.CreateSession(ctx, domain.SessionRecord{ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness, Mode: cfg.RequestedMode, Metadata: domain.SessionMetadata{Prompt: cfg.Prompt}, DisplayName: cfg.DisplayName, ClientRequestID: cfg.ClientRequestID, ClientRequestHash: cfg.ClientRequestHash, ClientRequestCommitted: true, CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	return record, len(cfg.Prompt), 0, err
+}
+
+func (m outerDesktopCommander) RunBackgroundTask(context.Context, domain.SessionID, string, string) (string, error) {
+	return "", domain.ErrOuterHeld
+}
+
 func (f *outerDesktopFixture) wire() {
 	log := slog.New(slog.DiscardHandler)
 	f.chat = chatsvc.New(chatsvc.Options{Store: f.st, Reader: fullSnapshotReader(f.st), PageReader: boundedSnapshotReader(f.st), Sessions: f.st, Log: log, NewID: uuid.NewString, Now: time.Now, DataDir: f.dir,
@@ -81,7 +105,8 @@ func (f *outerDesktopFixture) wire() {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	f.router = httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{Outer: f.outer, DelegationAuth: authority, Conversations: f.chat}, httpd.ControlDeps{})
+	sessions := sessionsvc.NewWithDeps(sessionsvc.Deps{Manager: outerDesktopCommander{st: f.st}, Store: f.st, Logger: log, DataDir: f.dir})
+	f.router = httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{Outer: f.outer, DelegationAuth: authority, Conversations: f.chat, Projects: projectsvc.New(f.st), Sessions: sessions}, httpd.ControlDeps{})
 }
 
 func (f *outerDesktopFixture) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
@@ -142,7 +167,17 @@ func (f *outerDesktopFixture) stats() any {
 	for _, cfg := range f.starts {
 		starts = append(starts, map[string]any{"sessionId": cfg.SessionID, "model": cfg.Model, "effort": cfg.Effort, "permissions": cfg.Permissions, "nativeId": f.providers[cfg.SessionID].ProviderConversationID()})
 	}
-	return map[string]any{"launches": len(f.starts), "sends": calls, "approvals": approvals, "inputs": inputs, "requests": requests, "reservations": capacity, "starts": starts}
+	workers, err := f.st.ListAllSessions(context.Background())
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	workerViews := []map[string]any{}
+	for _, worker := range workers {
+		if worker.Kind == domain.KindWorker {
+			workerViews = append(workerViews, map[string]any{"id": worker.ID, "projectId": worker.ProjectID, "metadata": map[string]any{"prompt": worker.Metadata.Prompt}})
+		}
+	}
+	return map[string]any{"launches": len(f.starts), "sends": calls, "approvals": approvals, "inputs": inputs, "requests": requests, "reservations": capacity, "starts": starts, "workers": workerViews}
 }
 
 func (f *outerDesktopFixture) emit(kind string) {
@@ -222,7 +257,9 @@ func TestOuterDesktopFrontendIntegration(t *testing.T) {
 	}
 	defer func() { _ = f.st.Close() }()
 	for _, id := range []string{"a", "b"} {
-		if err := f.st.UpsertProject(context.Background(), domain.ProjectRecord{ID: id, Kind: domain.ProjectKindScratch, DisplayName: strings.ToUpper(id), RegisteredAt: time.Now()}); err != nil {
+		cfg := domain.ProjectConfig{}
+		cfg.Worker.Harness, cfg.Orchestrator.Harness = domain.HarnessCodex, domain.HarnessCodex
+		if err := f.st.UpsertProject(context.Background(), domain.ProjectRecord{ID: id, Kind: domain.ProjectKindScratch, DisplayName: strings.ToUpper(id), Config: cfg, RegisteredAt: time.Now()}); err != nil {
 			t.Fatal(err)
 		}
 	}

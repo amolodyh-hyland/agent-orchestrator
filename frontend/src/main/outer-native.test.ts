@@ -13,6 +13,101 @@ import {
 	type OuterStage,
 } from "../shared/outer-native";
 
+describe("finite desktop control staging", () => {
+	it("freezes the exact route and body without issuing until a trusted private gesture", async () => {
+		const f = fixture();
+		try {
+			const draft = {
+				operation: "control",
+				control: {
+					action: "desktop.control",
+					targetId: "",
+					body: {
+						route: "PUT /api/v1/projects/{id}",
+						parameters: ["project-a"],
+						query: "",
+						payload: {
+							displayName: "Exact human draft",
+							config: {},
+						},
+						attachmentUpload: false,
+					},
+				},
+			};
+			const stage = await f.stage(draft);
+			expect(stage.id).toBeTruthy();
+			expect(f.submitted).toHaveLength(0);
+			draft.control.body.parameters[0] = "project-b";
+			draft.control.body.payload.displayName = "Altered";
+			await f.handlers.get(OUTER_USER_ACTION)!(f.event, {
+				id: stage.id,
+				digest: stage.digest,
+			});
+			expect(f.submitted).toMatchObject([
+				{
+					operation: "control",
+					control: {
+						body: {
+							parameters: ["project-a"],
+							payload: { displayName: "Exact human draft" },
+						},
+					},
+				},
+			]);
+		} finally {
+			f.registration.dispose();
+		}
+	});
+
+	it("rejects arbitrary routes, headers, ownership overrides and held interfaces", async () => {
+		const f = fixture();
+		try {
+			const body = {
+				route: "PUT /api/v1/projects/{id}",
+				parameters: ["a"],
+				query: "",
+				payload: {},
+				attachmentUpload: false,
+			};
+			for (const change of [
+				{ route: "POST https://example.invalid/send" },
+				{ route: "POST /internal/outer/native" },
+				{ parameters: ["../a"] },
+				{ parameters: ["a/b"] },
+				{ parameters: ["a", "b"] },
+				{ headers: { "X-AO-Scope-Credential": "forged" } },
+				{ operation: "outer.send" },
+				{
+					route: "POST /api/v1/sessions/{sessionId}/conversation/prompt-suggestion",
+				},
+			])
+				expect(
+					await f.stage({
+						operation: "control",
+						control: {
+							action: "desktop.control",
+							targetId: "",
+							body: { ...body, ...change },
+						},
+					})
+				).toBeNull();
+			expect(
+				await f.stage({
+					operation: "control",
+					control: {
+						action: "desktop.control",
+						targetId: "claimed-owner",
+						body,
+					},
+				})
+			).toBeNull();
+			expect(f.submitted).toHaveLength(0);
+		} finally {
+			f.registration.dispose();
+		}
+	});
+});
+
 function fixture() {
 	const key = Buffer.alloc(32, 13),
 		authority = createMainProcessDelegationAuthority(key);

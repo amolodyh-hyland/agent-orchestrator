@@ -12,8 +12,10 @@ import {
 	type OuterReadResponse,
 } from "../shared/outer-native";
 import type { MainProcessDelegationAuthority } from "./multica-delegation-authority";
+import { validOuterDesktopRequest } from "../shared/outer-desktop";
 
 const controls = new Set([
+	"desktop.control",
 	"session.spawn",
 	"orchestrator.ensure",
 	"session.send",
@@ -107,6 +109,14 @@ function validDraft(value: unknown): value is OuterNativeDraft {
 			)
 				return false;
 			const c = v.control as Record<string, unknown>;
+			if (
+				c.action === "desktop.control" &&
+				(c.targetId !== "" ||
+					c.pendingId !== undefined ||
+					c.generation !== undefined ||
+					!validOuterDesktopRequest(c.body))
+			)
+				return false;
 			return (
 				Object.keys(c).every((k) =>
 					[

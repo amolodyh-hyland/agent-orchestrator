@@ -23,7 +23,7 @@ export function OuterNativeButton({
 				type="button"
 				disabled={disabled || !action.ready}
 			/>
-			{action.result && !action.result.ok ? (
+			{action.held || (action.result && !action.result.ok) ? (
 				<span role="alert" className="text-xs text-destructive">
 					{t("outer.actionHeld")}
 				</span>

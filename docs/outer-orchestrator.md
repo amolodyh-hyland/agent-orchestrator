@@ -79,3 +79,29 @@ the automation deletion controller. `cli/outer_caller_e2e_test.go` carries the
 owned launch credential through the CLI transport to real report persistence,
 rejects forged/missing/stale and cross-Project callers, and preserves inert
 daemon report production. Unsupported controls remain held across that inventory.
+
+Desktop forms that prepare their payload asynchronously (including New Task,
+standalone tasks and Project Settings) use the shared native confirmation after
+an explicit router hold. The dialog previews the frozen route, target and body;
+only its trusted preload gesture submits it. `httpd/outer_desktop_routes.json` is
+the finite catalog shared by the renderer, main process and daemon, checked
+against every protected route. URL ownership still comes from stored resources.
+Only the attachment-upload flag can cross as a header. Native HTTP receipts
+preserve controller validation errors and status; closing, aborting or expiring
+the confirmation never resends or claims that an uncertain attempt was canceled.
+Credential fields are masked in the preview. These ordinary desktop request
+journals retain the route and immutable request/control digests, preserving
+single use without duplicating secrets; dedicated outer request journals keep
+their existing exact-content contract. Raw GitHub daemon writes share this
+transport; remaining direct renderer fetches are reads or cloud/remote requests.
+This compatibility path cannot target the outer anchor, issue outer turns or
+enable an outer-origin adapter. Existing outer Send and pending replies retain
+their dedicated native bindings. Payloads over the bounded staging limit,
+background preparation/readiness, prompt suggestions, unbound shell controls,
+bulk cleanup and wildcard interfaces show a hold rather than authenticating
+legacy requests. Remote/mobile/web clients receive no native privilege.
+
+The desktop integration also mounts the actual task composer and settings form,
+uses the ordinary API client through the real router, and confirms that enrolled
+Project and standalone tasks and Project settings need the exact native gesture.
+Scripted confirmation clicks and identical anonymous REST requests stay held.

@@ -25,6 +25,7 @@ import {
 	type OuterResult,
 } from "../../shared/outer-native";
 import { aoBridge } from "../lib/bridge";
+import { setApiBaseUrl } from "../lib/api-client";
 import { readOuter } from "../lib/outer-read";
 import { toSnapshot } from "../hooks/useConversation";
 import { typeInLexicalEditor } from "../test/lexical";
@@ -33,8 +34,13 @@ import { ElicitationDock } from "./chat/ElicitationDock";
 import { NativeApprovalCard } from "./chat/NativeApprovalCard";
 import { OuterConsole } from "./OuterConsole";
 import { TooltipProvider } from "./ui/tooltip";
+import { DesktopActionConfirmation } from "./DesktopActionConfirmation";
+import { TaskComposer } from "./TaskComposer";
+import { ProjectSettingsForm } from "./ProjectSettingsForm";
+import { agentReadiness } from "../test/agent-readiness-fixtures";
 
-vi.mock("../hooks/useWorkspaceQuery", () => ({
+vi.mock("../hooks/useWorkspaceQuery", async (original) => ({
+	...(await original<typeof import("../hooks/useWorkspaceQuery")>()),
 	useWorkspaceQuery: () => ({
 		data: [
 			{ id: "a", name: "Alpha", sessions: [] },
@@ -72,21 +78,6 @@ vi.mock("./settings/ProjectAgentRoleControls", () => ({
 vi.mock("./settings/SettingsOptionMenu", () => ({
 	SettingsOptionMenu: () => null,
 }));
-vi.mock("../lib/api-client", async (original) => ({
-	...(await original<typeof import("../lib/api-client")>()),
-	apiClient: {
-		GET: vi.fn(async () => ({ data: {} })),
-		POST: vi.fn(() => {
-			throw new Error("legacy write forbidden");
-		}),
-		PATCH: vi.fn(() => {
-			throw new Error("legacy write forbidden");
-		}),
-		DELETE: vi.fn(() => {
-			throw new Error("legacy write forbidden");
-		}),
-	},
-}));
 
 type HTTPResult = {
 	status: number;
@@ -98,6 +89,12 @@ type Receipt = {
 	state: string;
 };
 type Stats = {
+	workers: Array<{
+		id: string;
+		projectId: string;
+		displayName: string;
+		metadata: { prompt: string };
+	}>;
 	launches: number;
 	sends: number;
 	approvals: number;
@@ -197,6 +194,63 @@ async function backend() {
 }
 
 function desktop(b: Awaited<ReturnType<typeof backend>>) {
+	// Every ordinary renderer request also reaches the disposable real router.
+	// Metadata catalogs are fixtures; no network, daemon or provider is touched.
+	setApiBaseUrl("http://127.0.0.1:9999");
+	vi.stubGlobal(
+		"fetch",
+		async (input: Request | URL | string, init?: RequestInit) => {
+			const url = new URL(
+				input instanceof Request ? input.url : String(input)
+			);
+			const method =
+				input instanceof Request
+					? input.method
+					: (init?.method ?? "GET");
+			if (method === "GET" && url.pathname === "/api/v1/agents/readiness")
+				return Response.json({
+					agents: [agentReadiness("codex", "Codex")],
+				});
+			if (method === "GET" && url.pathname.endsWith("/models"))
+				return Response.json({
+					agentId: "codex",
+					models: [],
+					selectionMode: "catalog",
+					allowCustom: true,
+					customModelEntry: "direct",
+					refreshRecommended: false,
+				});
+			if (
+				method === "GET" &&
+				url.pathname === "/api/v1/agents/auth-plans"
+			)
+				return Response.json({ plans: [] });
+			if (method === "GET" && url.pathname === "/api/v1/settings")
+				return Response.json({
+					defaultSessionMode: "chat",
+					chatHarnesses: ["codex"],
+					cloudEnabled: false,
+					localEnabled: true,
+				});
+			const body =
+				input instanceof Request
+					? await input.clone().text()
+					: init?.body;
+			const response = await b.http(url.pathname + url.search, {
+				...init,
+				method,
+				body,
+				headers:
+					input instanceof Request
+						? Object.fromEntries(input.headers)
+						: init?.headers,
+			});
+			return new Response(response.body || null, {
+				status: response.status,
+				headers: response.headers,
+			});
+		}
+	);
 	const handlers = new Map<
 		string,
 		(event: IpcMainInvokeEvent, ...args: unknown[]) => unknown
@@ -296,7 +350,14 @@ function mount(component = <OuterConsole />, entry = "/outer") {
 		defaultOptions: { queries: { retry: false, gcTime: 0 } },
 	});
 	clients.push(client);
-	const root = createRootRoute({ component: Outlet });
+	const root = createRootRoute({
+		component: () => (
+			<>
+				<Outlet />
+				<DesktopActionConfirmation />
+			</>
+		),
+	});
 	const outer = createRoute({
 		getParentRoute: () => root,
 		path: "/outer",
@@ -326,7 +387,161 @@ afterEach(() => {
 	cleanup();
 	for (const client of clients.splice(0)) client.clear();
 	vi.clearAllMocks();
+	vi.unstubAllGlobals();
+	setApiBaseUrl(null);
 });
+
+it.skipIf(!process.env.AO_OUTER_DESKTOP_TEST_BINARY)(
+	"New Task, standalone task and Project Settings require the exact native confirmation after enrollment",
+	async () => {
+		const b = await backend();
+		const d = desktop(b);
+		try {
+			let ui = mount();
+			await screen.findByRole("button", { name: "Set up outer Chat" });
+			await userEvent.type(
+				screen.getByLabelText("Test model choice"),
+				"chosen-model"
+			);
+			expect((await d.gesture("Set up outer Chat")).ok).toBe(true);
+			await userEvent.click(
+				await screen.findByRole("checkbox", { name: "Alpha a" })
+			);
+			expect((await d.gesture("Save exact scope")).ok).toBe(true);
+			ui.unmount();
+
+			const onCreated = vi.fn();
+			ui = mount(<TaskComposer projectId="a" onCreated={onCreated} />);
+			await userEvent.type(
+				await screen.findByLabelText("Task"),
+				"Read the selected Project reports"
+			);
+			await userEvent.click(
+				await screen.findByRole("button", { name: "Start task" })
+			);
+			await screen.findByRole("dialog", {
+				name: "Confirm desktop action",
+			});
+			expect(
+				screen.getByRole("dialog", { name: "Confirm desktop action" })
+			).toHaveTextContent("Read the selected Project reports");
+			expect((await b.stats()).workers).toHaveLength(0);
+			// Scripted renderer clicks can only display the frozen request.
+			await userEvent.click(
+				screen.getByRole("button", { name: "Confirm action" })
+			);
+			expect((await b.stats()).workers).toHaveLength(0);
+			expect(onCreated).not.toHaveBeenCalled();
+			expect(await d.gesture("Confirm action")).toMatchObject({
+				ok: true,
+				record: { status: 202 },
+			});
+			await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+			expect((await b.stats()).workers).toMatchObject([
+				{
+					projectId: "a",
+					metadata: { prompt: "Read the selected Project reports" },
+				},
+			]);
+			ui.unmount();
+
+			ui = mount(
+				<TaskComposer
+					projectId="__standalone__"
+					onCreated={onCreated}
+				/>
+			);
+			await userEvent.type(
+				await screen.findByLabelText("Task"),
+				"A standalone human task"
+			);
+			await waitFor(() =>
+				expect(
+					screen.getByRole("button", { name: "Start task" })
+				).toBeEnabled()
+			);
+			await userEvent.click(
+				screen.getByRole("button", { name: "Start task" })
+			);
+			await screen.findByRole("dialog", {
+				name: "Confirm desktop action",
+			});
+			expect((await b.stats()).workers).toHaveLength(1);
+			expect(await d.gesture("Confirm action")).toMatchObject({
+				ok: true,
+				record: { status: 201 },
+			});
+			await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(2));
+			expect((await b.stats()).workers).toHaveLength(2);
+			ui.unmount();
+
+			ui = mount(<ProjectSettingsForm projectId="a" section="general" />);
+			await userEvent.click(
+				await screen.findByRole("button", {
+					name: "Edit Project name",
+				})
+			);
+			const name = screen.getByRole("textbox", { name: "Project name" });
+			await userEvent.clear(name);
+			await userEvent.type(name, "Human renamed Project");
+			await screen.findByRole(
+				"dialog",
+				{ name: "Confirm desktop action" },
+				{ timeout: 5000 }
+			);
+			const project = async () =>
+				JSON.parse((await b.http("/api/v1/projects/a")).body).project;
+			expect((await project()).name).toBe("A");
+			await userEvent.click(
+				screen.getByRole("button", { name: "Confirm action" })
+			);
+			expect((await project()).name).toBe("A");
+			expect((await d.gesture("Confirm action")).ok).toBe(true);
+			await waitFor(async () =>
+				expect((await project()).name).toBe("Human renamed Project")
+			);
+			ui.unmount();
+
+			// Identical public calls without a native gesture remain held.
+			for (const [path, method, body] of [
+				[
+					"/api/v1/orchestrators/delegate",
+					"POST",
+					{
+						projectId: "a",
+						brief: "Read the selected Project reports",
+						agent: "codex",
+					},
+				],
+				[
+					"/api/v1/sessions",
+					"POST",
+					{
+						kind: "worker",
+						harness: "codex",
+						prompt: "A standalone human task",
+					},
+				],
+				[
+					"/api/v1/projects/a",
+					"PUT",
+					{ displayName: "Human renamed Project", config: {} },
+				],
+			] as const)
+				expect(
+					(await b.http(path, { method, body: JSON.stringify(body) }))
+						.status
+				).toBe(409);
+			expect((await b.stats()).workers).toHaveLength(2);
+			expect(await b.stats()).toMatchObject({ launches: 1, sends: 0 });
+		} finally {
+			cleanup();
+			d.registration.dispose();
+			await b.finish();
+		}
+	},
+	40_000
+);
 
 it.skipIf(!process.env.AO_OUTER_DESKTOP_TEST_BINARY)(
 	"preserves authority and receipts through the desktop to SQLite workflow without native computation on reopen",

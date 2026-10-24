@@ -4,6 +4,7 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import type { QueryClient } from "@tanstack/react-query";
 import { captureRendererEvent, routeSurface } from "../lib/telemetry";
 import { useKeybindingsStore } from "../stores/keybindings-store";
+import { DesktopActionConfirmation } from "../components/DesktopActionConfirmation";
 
 export const Route = createRootRouteWithContext<{
 	queryClient: QueryClient;
@@ -28,6 +29,7 @@ function RootComponent() {
 	return (
 		<TooltipProvider>
 			<Outlet />
+			<DesktopActionConfirmation />
 		</TooltipProvider>
 	);
 }

@@ -1,0 +1,786 @@
+{
+  "DELETE /api/v1/agents/accounts/{accountId}": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "DELETE /api/v1/agents/codex/accounts/{accountId}": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "DELETE /api/v1/automations/{automationId}": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "DELETE /api/v1/awake/history": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "DELETE /api/v1/cues/{cueId}": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "DELETE /api/v1/github/pat": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "DELETE /api/v1/mobile/devices/{installId}": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "DELETE /api/v1/notifications": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "DELETE /api/v1/notifications/{id}": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "DELETE /api/v1/projects/{id}": {
+    "operation": "project.remove",
+    "mode": "confirm"
+  },
+  "DELETE /api/v1/push/devices/{token}": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "DELETE /api/v1/push/pairings/{id}": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "DELETE /api/v1/sessions/{sessionId}/artifact-files": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "DELETE /api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "DELETE /api/v1/sessions/{sessionId}/interface-transition": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "DELETE /api/v1/sessions/{sessionId}/pin": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "DELETE /api/v1/sessions/{sessionId}/preview": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "DELETE /api/v1/sessions/{sessionId}/preview/app/*": {
+    "operation": "session.scoped",
+    "mode": "held"
+  },
+  "DELETE /api/v1/sessions/{sessionId}/preview/server": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "DELETE /api/v1/shell-terminals/{handleId}": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "DELETE /api/v1/task-preparations/{token}": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "PATCH /api/v1/automations/{automationId}": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "PATCH /api/v1/cues/{cueId}": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "PATCH /api/v1/mobile/devices/{installId}": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "PATCH /api/v1/notifications/{id}": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "PATCH /api/v1/projects/{id}/permissions": {
+    "operation": "project.permissions",
+    "mode": "confirm"
+  },
+  "PATCH /api/v1/reviews/{reviewId}/conversation/settings": {
+    "operation": "settings",
+    "mode": "confirm"
+  },
+  "PATCH /api/v1/sessions/{sessionId}": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "PATCH /api/v1/sessions/{sessionId}/auto-inject-ci": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "PATCH /api/v1/sessions/{sessionId}/auto-inject-review": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "PATCH /api/v1/sessions/{sessionId}/conversation/config-options/{configId}": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "PATCH /api/v1/sessions/{sessionId}/conversation/settings": {
+    "operation": "settings",
+    "mode": "confirm"
+  },
+  "PATCH /api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/label": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "PATCH /api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/settings": {
+    "operation": "settings",
+    "mode": "confirm"
+  },
+  "PATCH /api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "PATCH /api/v1/sessions/{sessionId}/merge-policy": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "PATCH /api/v1/sessions/{sessionId}/preview/app/*": {
+    "operation": "session.scoped",
+    "mode": "held"
+  },
+  "PATCH /api/v1/settings/chat-hibernation": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "PATCH /api/v1/settings/cloud-offering": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "PATCH /api/v1/settings/harness-defaults/{agent}": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "PATCH /api/v1/settings/session-interface": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "PATCH /api/v1/settings/version-refresh": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "PATCH /api/v1/shell-terminals/{handleId}": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "POST /api/v1/agents/accounts/login": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/agents/accounts/login/{operationId}/cancel": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/agents/accounts/login/{operationId}/verify": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/agents/accounts/{accountId}/default": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/agents/accounts/{accountId}/login": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/agents/accounts/{accountId}/reset-credit": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/agents/codex/account-switches": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/agents/codex/accounts/ensure": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/agents/codex/accounts/login-operations/{operationId}/cancel": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/agents/codex/accounts/login-operations/{operationId}/verify": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/agents/codex/accounts/login-terminal": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/agents/codex/accounts/{accountId}/login-terminal": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/agents/codex/accounts/{accountId}/logout": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/agents/codex/accounts/{accountId}/reset-credit/consume": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/agents/readiness/ensure": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "POST /api/v1/agents/refresh": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/agents/{agent}/auth": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/agents/{agent}/install": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/agents/{agent}/install/cancel": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/agents/{agent}/logout": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/agents/{agent}/models/refresh": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/agents/{agent}/probe": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/agents/{agent}/verify": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/automations": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/awake/downloads": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/awake/low-power/authorize": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/awake/low-power/revoke": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/awake/recover": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/awake/resume": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/awake/sessions": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/awake/sessions/{awakeId}/end": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/awake/sessions/{awakeId}/extend": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/awake/stop": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/browser/commands": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/cues/{cueId}/invoke": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/dev/import-projects": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/import": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/imports/prepare-git": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/imports/validate": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/library/operations": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/multica/restart": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/multica/start": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/multica/stop": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/notifications/clear-through": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/notifications/read-all": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/orchestrators": {
+    "operation": "spawn",
+    "mode": "confirm"
+  },
+  "POST /api/v1/orchestrators/delegate": {
+    "operation": "spawn",
+    "mode": "confirm"
+  },
+  "POST /api/v1/projects": {
+    "operation": "project.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/projects/clone": {
+    "operation": "project.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/projects/clone/cleanup": {
+    "operation": "project.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/projects/clone/prepare": {
+    "operation": "project.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/projects/containers": {
+    "operation": "project.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/projects/initialize": {
+    "operation": "project.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/projects/{id}/tasks/prepare": {
+    "operation": "project.scoped",
+    "mode": "held"
+  },
+  "POST /api/v1/projects/{projectId}/cues": {
+    "operation": "project.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/prs/{id}/merge": {
+    "operation": "pr.merge",
+    "mode": "confirm"
+  },
+  "POST /api/v1/prs/{id}/resolve-comments": {
+    "operation": "pr.resolve",
+    "mode": "confirm"
+  },
+  "POST /api/v1/push/devices": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/reports": {
+    "operation": "report.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/reports/{reportId}/resolve": {
+    "operation": "report.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/reviews/{reviewId}/conversation/approvals/{requestId}/resolve": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "POST /api/v1/reviews/{reviewId}/conversation/inputs/{requestId}/resolve": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "POST /api/v1/reviews/{reviewId}/conversation/interrupt": {
+    "operation": "interrupt",
+    "mode": "confirm"
+  },
+  "POST /api/v1/reviews/{reviewId}/conversation/messages": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "POST /api/v1/reviews/{reviewSessionID}/activity": {
+    "operation": "review.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/runs": {
+    "operation": "run.create",
+    "mode": "confirm"
+  },
+  "POST /api/v1/runs/{runId}/advance": {
+    "operation": "run.advance",
+    "mode": "confirm"
+  },
+  "POST /api/v1/runs/{runId}/attention": {
+    "operation": "run.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/runs/{runId}/evidence": {
+    "operation": "run.evidence",
+    "mode": "confirm"
+  },
+  "POST /api/v1/runs/{runId}/monitor": {
+    "operation": "run.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions": {
+    "operation": "spawn",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/cleanup": {
+    "operation": "session.scoped",
+    "mode": "held"
+  },
+  "POST /api/v1/sessions/{sessionId}/activity": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/activity/codewhale": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/agent-browser/*": {
+    "operation": "session.scoped",
+    "mode": "held"
+  },
+  "POST /api/v1/sessions/{sessionId}/agent-switches/{switchId}/handoff": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/agent-switches/{switchId}/recover": {
+    "operation": "switch.recover",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/artifact-versions/restore": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/artifact-versions/sync": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/attachments": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/chat-view": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/approvals/{requestId}/resolve": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/branches/{branchId}/activate": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/compact": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/inputs/{requestId}/resolve": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/interrupt": {
+    "operation": "interrupt",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/mcp/reload": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/messages": {
+    "operation": "send",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/prompt-suggestion": {
+    "operation": "conversation.held",
+    "mode": "held"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/queue/reorder": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/side-chats": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/approvals/{requestId}/resolve": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/compact": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/inputs/{requestId}/resolve": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/interrupt": {
+    "operation": "interrupt",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/messages": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/recover": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}/cancel": {
+    "operation": "queue.cancel",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}/retry": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/skills/refresh": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/steer": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/steer-or-send": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/turns/{turnId}/cancel": {
+    "operation": "queue.cancel",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/turns/{turnId}/edit": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/turns/{turnId}/queue/edit": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/turns/{turnId}/retry": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/conversation/turns/{turnId}/steer": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/exit-agent": {
+    "operation": "exit",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/interface-transition": {
+    "operation": "switch",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/kill": {
+    "operation": "kill",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/pin": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/pr/claim": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/preview": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/preview/app/*": {
+    "operation": "session.scoped",
+    "mode": "held"
+  },
+  "POST /api/v1/sessions/{sessionId}/preview/server": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/renders": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/renders/check": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/renders/{renderId}/artifact": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/restore": {
+    "operation": "restore",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/resume-agent": {
+    "operation": "resume",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/reviews/cancel": {
+    "operation": "review.cancel",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/reviews/comments/resolve": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/reviews/kill": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/reviews/rerequest": {
+    "operation": "review.trigger",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/reviews/restore": {
+    "operation": "review.restore",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/reviews/submit": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/reviews/switch": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/reviews/trigger": {
+    "operation": "review.trigger",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/rollback": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/send": {
+    "operation": "send",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/switch-agent": {
+    "operation": "switch",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/workspace/diffs": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/shell-terminals": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "POST /api/v1/side-chats/launch/claim": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/side-chats/launch/retire": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/side-chats/launch/state": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/system/github-auth/terminal": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/system/install/{target}": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "PUT /api/v1/agents/accounts/sessions/{sessionId}": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "PUT /api/v1/awake/rules": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "PUT /api/v1/awake/settings": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "PUT /api/v1/github/pat": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "PUT /api/v1/projects/{id}": {
+    "operation": "project.settings",
+    "mode": "confirm"
+  },
+  "PUT /api/v1/projects/{id}/config": {
+    "operation": "project.config",
+    "mode": "confirm"
+  },
+  "PUT /api/v1/sessions/{sessionId}/artifact-files": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "PUT /api/v1/sessions/{sessionId}/auto-review": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "PUT /api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/draft": {
+    "operation": "conversation.held",
+    "mode": "held"
+  },
+  "PUT /api/v1/sessions/{sessionId}/conversation/title": {
+    "operation": "conversation.held",
+    "mode": "confirm"
+  },
+  "PUT /api/v1/sessions/{sessionId}/interface-transition/{transitionId}/notice-acknowledgement": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "PUT /api/v1/sessions/{sessionId}/preview/app/*": {
+    "operation": "session.scoped",
+    "mode": "held"
+  },
+  "PUT /api/v1/sessions/{sessionId}/reviewer": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "PUT /api/v1/sessions/{sessionId}/workspace/file": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  }
+}

@@ -4,6 +4,7 @@ import type { DaemonStatus } from "../../shared/daemon-status";
 import { daemonFailureMessage } from "./daemon-failure";
 import { captureRendererEvent } from "./telemetry";
 import { captureApiErrorToSentry } from "./sentry";
+import { prepareDesktopConfirmation, confirmHeldDesktopRequest } from "./outer-desktop-confirmation";
 
 function devApiBaseUrl(): string {
 	return typeof window === "undefined" ? "http://127.0.0.1:3001" : window.location.origin;
@@ -303,8 +304,10 @@ async function runtimeFetch(input: Request): Promise<Response> {
 	};
 
 	let response: Response;
+	const desktopRequest = prepareDesktopConfirmation(input);
 	try {
 		response = await send();
+		if (baseUrl === runtimeApiBaseUrl) response = await confirmHeldDesktopRequest(await desktopRequest, response, input.signal);
 	} catch (error) {
 		// Caller-initiated aborts (unmounted components cancelling queries) are not failures.
 		if (!(error instanceof DOMException && error.name === "AbortError")) {
@@ -339,6 +342,10 @@ async function runtimeFetch(input: Request): Promise<Response> {
 	}
 	return response;
 }
+
+// Raw local-daemon clients use the same exact native confirmation path as
+// openapi-fetch. This function grants no authority to an HTTP caller.
+export { runtimeFetch as fetchDesktopDaemon };
 
 export const apiClient = createClient<paths>({
 	baseUrl: initialApiBaseUrl,

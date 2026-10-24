@@ -188,6 +188,15 @@ func (s *Store) CheckOuterOperation(ctx context.Context, operation string, proje
 		}
 		return domain.ErrOuterHeld
 	}
+	// A native Project control cannot widen into another Project merely because
+	// that destination is outside the outer allowlist. Child lifecycle effects
+	// retain the approved Project and re-resolve every durable session owner.
+	if a, native := domain.OuterNativeActionFrom(ctx); native && a.ProjectID != "" && a.ProjectID != project {
+		if err := s.AppendOuterAudit(ctx, domain.OuterAudit{Operation: operation, State: "held", Reason: "wrong_project_native_action", SessionID: session, ProjectID: string(project)}); err != nil {
+			return err
+		}
+		return domain.ErrOuterHeld
+	}
 	guarded := operation == "native_only" || operation == "unclassified" || string(project) == b.AnchorProjectID || slices.Contains(b.ProjectIDs, string(project)) || (project == "" && session == "")
 	if !guarded {
 		return nil

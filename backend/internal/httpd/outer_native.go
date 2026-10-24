@@ -97,7 +97,7 @@ func mountOuterNative(r chi.Router, svc *outer.Service, authority *delegationaut
 			return
 		}
 		req = req.WithContext(domain.WithOuterNativeAction(req.Context(), domain.OuterNativeAction{Operation: "outer.native", ActionID: in.ID}))
-		if err := svc.RecordNativeAction(req.Context(), in.ID, raw); err != nil {
+		if err := svc.RecordNativeAction(req.Context(), in.ID, outerNativeJournal(in, raw)); err != nil {
 			reject()
 			return
 		}
@@ -147,16 +147,26 @@ func controlOuterNative(w http.ResponseWriter, req *http.Request, router chi.Rou
 		return
 	}
 	route, ok := outerNativeControls[in.Action]
+	forwardBody := in.Body
+	var desktop outerDesktopRequest
+	if in.Action == "desktop.control" {
+		var err error
+		route, desktop, err = resolveOuterDesktop(in)
+		ok = err == nil
+		forwardBody = desktop.Payload
+	}
 	if !ok || len(in.TargetID) > 256 || len(in.PendingID) > 256 {
 		reject()
 		return
 	}
 	path := route.Path
-	if strings.Count(path, "%s") > 0 {
+	if in.Action != "desktop.control" && strings.Count(path, "%s") > 0 {
 		path = strings.Replace(path, "%s", url.PathEscape(in.TargetID), 1)
 	}
-	path = strings.Replace(path, "%s", url.PathEscape(in.PendingID), 1)
-	forward, err := http.NewRequestWithContext(req.Context(), route.Method, "http://127.0.0.1/api/v1"+path, bytes.NewReader(in.Body))
+	if in.Action != "desktop.control" {
+		path = strings.Replace(path, "%s", url.PathEscape(in.PendingID), 1)
+	}
+	forward, err := http.NewRequestWithContext(req.Context(), route.Method, "http://127.0.0.1/api/v1"+path, bytes.NewReader(forwardBody))
 	if err != nil {
 		reject()
 		return
@@ -177,6 +187,12 @@ func controlOuterNative(w http.ResponseWriter, req *http.Request, router chi.Rou
 		return
 	}
 	if bound && string(project) == b.AnchorProjectID {
+		// The shared desktop transport cannot issue outer turns, steers,
+		// replies or lifecycle actions. Those retain their dedicated bindings.
+		if in.Action == "desktop.control" {
+			reject()
+			return
+		}
 		if session != b.SessionID || b.HistoryHeld {
 			reject()
 			return
@@ -201,8 +217,18 @@ func controlOuterNative(w http.ResponseWriter, req *http.Request, router chi.Rou
 	forward = forward.WithContext(ctx)
 	forward.RemoteAddr = req.RemoteAddr
 	forward.Header.Set("content-type", "application/json")
+	if desktop.AttachmentUpload {
+		forward.Header.Set("X-AO-Attachment-Upload", "1")
+	}
 	recorder := &outerNativeRecorder{header: make(http.Header)}
 	router.ServeHTTP(recorder, forward)
+	if in.Action == "desktop.control" {
+		completed = recorder.status >= 200 && recorder.status < 300
+		writeDelegationJournalResponse(w, req, authority, map[string]any{
+			"status": recorder.status, "body": string(recorder.body),
+		})
+		return
+	}
 	if recorder.status < 200 || recorder.status >= 300 {
 		reject()
 		return

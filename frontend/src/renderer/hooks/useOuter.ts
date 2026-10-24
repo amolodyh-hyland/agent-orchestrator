@@ -37,6 +37,7 @@ export function useOuterNativeAction(
 	const [refresh, setRefresh] = useState(0);
 	const [entry, setEntry] = useState<{ raw: string; stage: OuterStage }>();
 	const [result, setResult] = useState<OuterResult>();
+	const [heldRaw, setHeldRaw] = useState<string>();
 	const resultRef = useRef(onResult);
 	resultRef.current = onResult;
 	useEffect(() => {
@@ -50,13 +51,17 @@ export function useOuterNativeAction(
 			.stage(slot, JSON.parse(raw) as OuterNativeDraft)
 			.catch(() => null)
 			.then((stage) => {
-				if (!stage) return;
+				if (!stage) {
+					if (!cancelled) setHeldRaw(raw);
+					return;
+				}
 				id = stage.id;
 				if (cancelled) {
 					void bridge.cancel(stage.id);
 					return;
 				}
 				setEntry({ raw, stage });
+				setHeldRaw(undefined);
 				setResult(undefined);
 				knownStages.current.set(stage.id, { raw, revision });
 				if (knownStages.current.size > 64) {
@@ -100,6 +105,7 @@ export function useOuterNativeAction(
 	const ready = entry?.raw === raw && entry.stage.expiresAt > Date.now();
 	return {
 		ready,
+		held: heldRaw === raw && raw !== "",
 		result,
 		attributes: {
 			"data-outer-stage-id": ready ? entry.stage.id : undefined,

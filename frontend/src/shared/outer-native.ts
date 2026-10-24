@@ -25,6 +25,7 @@ export type OuterReadResponse = {
 }[keyof OuterReadData];
 
 export type OuterControlAction =
+	| "desktop.control"
 	| "session.spawn"
 	| "orchestrator.ensure"
 	| "session.send"

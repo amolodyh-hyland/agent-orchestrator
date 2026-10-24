@@ -108,6 +108,7 @@ describe("exact native action staging", () => {
 		expect(hook.result.current.ready).toBe(false);
 		expect(Object.keys(hook.result.current).sort()).toEqual([
 			"attributes",
+			"held",
 			"ready",
 			"result",
 		]);

@@ -656,7 +656,7 @@ func (s *Service) SpawnOrchestrator(
 		retireCtx := context.WithoutCancel(ctx)
 		for _, orch := range existing {
 			_ = s.sendRetireNotice(retireCtx, orch.ID)
-			if err := s.manager.RetireForReplacement(retireCtx, orch.ID); err != nil {
+			if err := s.manager.RetireForReplacement(nativeProjectLifecycleEffect(retireCtx, projectID, orch.ID, "retire"), orch.ID); err != nil {
 				return domain.Session{}, toAPIError(err)
 			}
 		}
@@ -1188,7 +1188,7 @@ func (s *Service) TeardownProject(ctx context.Context, project domain.ProjectID)
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			if _, err := s.Kill(ctx, recs[i].ID); err != nil {
+			if _, err := s.Kill(nativeProjectLifecycleEffect(ctx, project, recs[i].ID, "kill"), recs[i].ID); err != nil {
 				errs[i] = err
 			}
 		}(i)
@@ -1199,8 +1199,25 @@ func (s *Service) TeardownProject(ctx context.Context, project domain.ProjectID)
 			return err
 		}
 	}
-	_, err = s.Cleanup(ctx, project)
+	_, err = s.Cleanup(nativeProjectLifecycleEffect(ctx, project, "", "cleanup"), project)
 	return err
+}
+
+// These are the finite child effects of clean replacement and Project removal,
+// not reusable lifecycle authority. Resolve each session inside the approved
+// Project and preserve the parent's immutable native action ID. The manager
+// still checks actual durable ownership before every effect.
+func nativeProjectLifecycleEffect(ctx context.Context, project domain.ProjectID, session domain.SessionID, effect string) context.Context {
+	a, native := domain.OuterNativeActionFrom(ctx)
+	if !native || a.ProjectID != project || a.SessionID != "" {
+		return ctx
+	}
+	allowed := (a.Operation == "spawn" && effect == "retire") || (a.Operation == "project.remove" && (effect == "kill" || effect == "cleanup"))
+	if !allowed {
+		return ctx
+	}
+	a.Operation, a.SessionID = effect, session
+	return domain.WithOuterNativeAction(ctx, a)
 }
 
 // List returns sessions as enriched display models after applying API filters.
