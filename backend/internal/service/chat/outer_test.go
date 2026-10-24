@@ -9,6 +9,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/outer"
+	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
@@ -237,6 +238,59 @@ func TestOuterPromptSuggestionsDoNotStartBackgroundTurns(t *testing.T) {
 	if called || h.conv.sendCallCount() != 1 {
 		t.Fatal("prompt suggestion started a new model turn")
 	}
+}
+
+func TestOuterScheduledReportsStayInertWhileBoundSendsDrainExactlyOnce(t *testing.T) {
+	h, service := outerHarness(t)
+	ctx := context.Background()
+	seedChatReport(t, h, "outer-incoming-report")
+	delivery := &reportChatDelivery{h: h}
+	coordinator := reportsvc.NewCoordinator(reportsvc.CoordinatorDeps{Store: h.st, Delivery: delivery, Now: h.now, RetryDelay: time.Second})
+	h.svc.SetReportCoordinator(coordinator)
+	if _, err := coordinator.RunDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertReportState(t, h.st, "outer-incoming-report", domain.ReportPending)
+	if delivery.calls != 1 || h.conv.sendCallCount() != 0 {
+		t.Fatal("scheduled report submitted a turn", delivery.calls, h.conv.sendCallCount())
+	}
+	if incoming, err := h.st.OuterEvidence(ctx, testSession); err != nil || len(incoming) != 1 || !incoming[0].Source.Unknown {
+		t.Fatal("scheduled report did not remain labeled inert evidence", incoming, err)
+	}
+	first, err := service.Send(outerSendContext(t, h, service, "first-human-send"), "First exact question")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondContext := outerSendContext(t, h, service, "second-human-send")
+	second, err := service.Send(secondContext, "Second exact question")
+	if err != nil || second.TurnID == "" || !second.AttemptedAt.IsZero() || h.conv.sendCallCount() != 1 {
+		t.Fatal("bound second Send was not queued", second, err)
+	}
+	h.advance(time.Second)
+	if _, err := coordinator.RunDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if h.conv.sendCallCount() != 1 {
+		t.Fatal("report delivery woke or steered the busy outer")
+	}
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1", ProviderEventID: "native-start", NativeAcceptance: true},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", ProviderEventID: "native-end", NativeSettlement: true, TurnState: domain.TurnStateCompleted},
+	)
+	h.awaitSnapshot(t, func(store.ConversationSnapshot) bool { return h.conv.sendCallCount() == 2 })
+	if got := h.conv.sentTexts(); len(got) != 2 || got[0] != "First exact question" || got[1] != "Second exact question" {
+		t.Fatal("reports were silently added to an approved request", got)
+	}
+	if receipt, err := h.st.GetOuterRequest(ctx, first.Request.ID); err != nil || receipt.State != "settled" {
+		t.Fatal("first native settlement was not reconciled", receipt, err)
+	}
+	if receipt, err := h.st.GetOuterRequest(ctx, second.Request.ID); err != nil || receipt.AttemptedAt.IsZero() {
+		t.Fatal("queue drain lost the second exact authority", receipt, err)
+	}
+	if _, err := service.Send(secondContext, "Second exact question"); err != nil || h.conv.sendCallCount() != 2 {
+		t.Fatal("queued human request replayed", err)
+	}
+	assertReportState(t, h.st, "outer-incoming-report", domain.ReportPending)
 }
 
 func TestOuterSendHoldsChangedPreGestureSnapshot(t *testing.T) {
