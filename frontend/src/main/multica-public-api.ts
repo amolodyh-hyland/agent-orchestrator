@@ -1,3 +1,5 @@
+import { delegationResult } from "./multica-result-model";
+import type { PublicDelegation } from "./multica-public-api-model";
 import type { DelegationConfirmationGuard, DelegationSendGuard } from "./multica-delegation-policy";
 import { createHash } from "node:crypto";
 import { validateMulticaServerUrl, type MulticaServer } from "../shared/multica";
@@ -10,7 +12,7 @@ export type PublicApiFailureCode =
 	| "credential_required" | "unsupported_credential" | "invalid_token" | "scoped_token_required" | "insufficient_scope"
 	| "workspace_binding_required" | "workspace_id_required" | "not_found" | "unauthorized" | "forbidden"
 	| "runtime_binding_changed" | "idempotency_conflict" | "revision_conflict" | "target_unavailable" | "runtime_unsupported" | "invocation_not_allowed" | "feature_disabled"
-	| "rate_limited" | "server_error" | "request_failed" | "redirect" | "bad_response" | "timeout" | "unreachable";
+	| "result_unavailable" | "rate_limited" | "server_error" | "request_failed" | "redirect" | "bad_response" | "timeout" | "unreachable";
 
 export type PublicApiResult<T> = { ok: true; data: T } | { ok: false; code: PublicApiFailureCode; status?: number; retryAfterMs?: number };
 export type PublicApiPage = { limit?: number; cursor?: string };
@@ -33,7 +35,7 @@ const MAX_RETRY_AFTER_MS = 60_000;
 const REMOTE_CODES: readonly PublicApiFailureCode[] = [
 	"invalid_request", "credential_required", "unsupported_credential", "invalid_token", "scoped_token_required", "insufficient_scope",
 	"workspace_binding_required", "workspace_id_required", "not_found", "unauthorized", "forbidden", "runtime_binding_changed",
-	"idempotency_conflict", "revision_conflict", "target_unavailable", "runtime_unsupported", "invocation_not_allowed", "feature_disabled",
+	"result_unavailable", "idempotency_conflict", "revision_conflict", "target_unavailable", "runtime_unsupported", "invocation_not_allowed", "feature_disabled",
 ];
 
 function failure(code: PublicApiFailureCode): { ok: false; code: PublicApiFailureCode } {
@@ -110,7 +112,7 @@ export function createMulticaPublicApi(options: PublicApiOptions) {
 		} catch { return false; }
 	};
 
-	async function request<T>(method: "GET" | "POST", path: string, parse: (value: unknown) => T, body?: CreatePublicDelegation, idempotencyKey?: string, ifMatch?: string, beforeSend?: DelegationSendGuard, confirmationCurrent?: DelegationConfirmationGuard): Promise<PublicApiResult<T>> {
+	async function request<T>(method: "GET" | "POST", path: string, parse: (value: unknown) => T, body?: CreatePublicDelegation, idempotencyKey?: string, ifMatch?: string, beforeSend?: DelegationSendGuard, confirmationCurrent?: DelegationConfirmationGuard, resultRevision?: string): Promise<PublicApiResult<T>> {
 		if (!current()) return failure("connection_changed");
 		if (blockedUntil > now()) return { ...failure("rate_limited"), retryAfterMs: blockedUntil - now() };
 		let token: string;
@@ -133,8 +135,9 @@ export function createMulticaPublicApi(options: PublicApiOptions) {
 			const headers: Record<string, string> = { Accept: "application/json", Authorization: `Bearer ${token}`, "X-Workspace-ID": binding.workspaceId };
 			if (idempotencyKey !== undefined) headers["Idempotency-Key"] = idempotencyKey;
 			if (ifMatch !== undefined) headers["If-Match"] = ifMatch;
+			if (resultRevision !== undefined) headers["X-Result-Revision"] = resultRevision;
 			if (body) headers["Content-Type"] = "application/json";
-			if (body) {
+			if (body || path.endsWith("/result")) {
 				let code: unknown;
 				try { code = await beforeSend?.(); } catch { code = "policy_unavailable"; }
 				if (code !== null) return failure(code === "policy_denied" || code === "policy_runtime_unknown" || code === "policy_location_unsafe" ? code : "policy_unavailable");
@@ -246,6 +249,13 @@ export function createMulticaPublicApi(options: PublicApiOptions) {
 				return result;
 			});
 		}),
+		getDelegationResult: (expected: PublicDelegation, confirmed: boolean, beforeSend: DelegationSendGuard, confirmationCurrent: DelegationConfirmationGuard, resultRevision?: string) => run(async () => {
+            if (confirmed !== true || !confirmationCurrent()) return failure("confirmation_required");
+            if (!delegationsEnabled()) return failure("delegations_disabled");
+            const snapshot = delegation(expected, binding.workspaceId);
+            if (!snapshot.terminal || !/^[a-f0-9]{64}$/.test(snapshot.revision) || (resultRevision !== undefined && !/^[a-f0-9]{64}$/.test(resultRevision))) return failure("invalid_request");
+            return request("GET", `/delegations/${snapshot.delegation_id}/result`, v => delegationResult(v, snapshot), undefined, undefined, `"${snapshot.revision}"`, beforeSend, confirmationCurrent, resultRevision);
+        }),
 		cancelDelegation: (id: string, confirmed: boolean, revision?: string, confirmationCurrent?: DelegationConfirmationGuard) => run(async () => {
 			if (confirmed !== true) return failure("confirmation_required");
 			const expected = uuid(id);

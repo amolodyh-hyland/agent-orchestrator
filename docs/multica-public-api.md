@@ -96,3 +96,7 @@ Validation from `frontend/`:
 npm run typecheck
 npm test -- src/main/multica
 ```
+
+The specialist-answer import is a separate result scope and two-step native
+consent flow. See [the result contract](multica-delegation-contract.md#specialist-text-result-v1-wi-fac-08).
+The status API remains a safe projection and contains no result body.

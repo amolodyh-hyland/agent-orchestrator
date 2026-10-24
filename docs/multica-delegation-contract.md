@@ -63,3 +63,41 @@ unauthorized writes, checks cancellation revision/terminal races and asserts one
 admission and one execution. The package's existing test setup requires a reachable
 migrated database; a “Skipping tests” message from that setup is not a pass of the
 contract scenarios. No migration is introduced by this work.
+
+## Specialist text result v1 (WI-FAC-08)
+
+`test/contracts/multica-delegation-result-v1.json` is byte-identical to Multica's
+`server/pkg/publicapi/v1/testdata/multica-delegation-result-v1.json`. Set
+`MULTICA_RESULT_CONTRACT_FIXTURE` for the frontend result suite and
+`AO_RESULT_CONTRACT_FIXTURE` for Multica's contract suite to check the pair.
+The separate member `GET /api/v1/delegations/{id}/result` operation requires
+`delegations:results:read`, requester/workspace authorization and an exact terminal
+status revision in `If-Match`. `X-Result-Revision` pins an answer on import.
+The existing status DTO is unchanged. V1 contains at most 32768 UTF-8 text bytes,
+producer/task/delegation/workspace identities, terminal revision/time, SHA-256,
+byte count and a snapshot revision. Snapshot revision hashes compact JSON in the
+published DTO field order with an empty revision field and Go JSON escaping.
+The client and ledger validate the bytes and both digests independently.
+
+In **Run evidence**, enter a run bound to the selected delegation and choose
+**Preview specialist result scope**. The metadata preview reads no result body.
+A trusted click and native approval permit retrieval into a plain-text preview.
+A second trusted click and native approval permit copying that exact text into
+local run evidence. Copy re-reads the result with the pinned revision and current
+PAT, rechecks policy, connection, run version and digest, then appends an immutable
+receipt. Cancellation, expiry, changed bindings or revoked credentials require a
+fresh preview. The source journal, not renderer input, selects the delegation.
+
+Result-read and result-import request `task_result` with `result_read` and
+`result_import` respectively. Existing brief-only managed policies deny both.
+Unsupported or malformed managed-policy responses fail closed. Personal absence
+remains supported. Runtime class stays unknown unless independently resolved;
+managed policies therefore cannot silently infer local execution.
+
+The preview and receipt label every answer as untrusted, including prompt
+injection. Only text is rendered; no Markdown, links, attachments, shell commands,
+continuation or execution actions are interpreted. The flow never sends a session
+turn. Each later continuation still needs its own human approval. No file,
+history, repository, branch or remote-upload operation is provided. Recognizable
+credentials, paths, URLs and control data are refused; arbitrary prose still
+requires human review for confidentiality. No raw result enters operational logs.

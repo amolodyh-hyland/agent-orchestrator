@@ -1173,7 +1173,12 @@ async function createWindowInternal(): Promise<void> {
 		readSettings: () => readMulticaSettings(browserProfileStateDir()),
 		daemonOrigin: () => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null,
 		fetch: (url, init) => net.fetch(url instanceof URL ? url.href : url, init),
-		confirmEnable: async () => {
+		confirmResult: async (detail) => {
+            if (!mainWindow || mainWindow.isDestroyed()) return false;
+            const result=await dialog.showMessageBox(mainWindow,{type:"question",title:"Specialist text result",message:"Approve this exact text-result step?",detail,buttons:["Cancel","Approve step"],defaultId:0,cancelId:0,noLink:true});
+            return result.response===1;
+        },
+        confirmEnable: async () => {
 			if (!mainWindow || mainWindow.isDestroyed()) return false;
 			const result = await dialog.showMessageBox(mainWindow, { type: "question", title: "Enable confirmed Multica delegation",
 				message: "Allow confirmed delegation?",
