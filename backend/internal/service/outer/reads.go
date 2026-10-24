@@ -76,6 +76,9 @@ func (s *Service) View(ctx context.Context) (View, error) {
 		return v, err
 	}
 	for _, r := range receipts {
+		if !native(ctx, "outer.read") && (r.Request.SessionID != b.SessionID || r.Request.ScopeRevision != b.ScopeRevision) {
+			continue
+		}
 		if r.AttemptedAt.IsZero() && (b.Paused || b.HistoryHeld || b.SessionID != r.Request.SessionID || b.Revision != r.Request.BindingRevision || !s.now().Before(r.Request.ExpiresAt)) {
 			r.State = "held"
 		}
@@ -139,12 +142,16 @@ func (s *Service) Read(ctx context.Context, project, kind string, limit int) ([]
 }
 
 func (s *Service) checkReader(ctx context.Context) error {
+	if native(ctx, "outer.read") {
+		return nil
+	}
 	if caller, scoped := domain.OuterCallerFrom(ctx); scoped {
 		if err := s.store.CheckOuterReadCaller(ctx, caller); err != nil {
 			return s.denied(ctx, "outer.read", "caller_scope_or_generation_held", string(caller.ProjectID))
 		}
+		return nil
 	}
-	return nil
+	return s.denied(ctx, "outer.read", "reader_authority_required", "")
 }
 
 func (s *Service) denied(ctx context.Context, operation, reason, project string) error {

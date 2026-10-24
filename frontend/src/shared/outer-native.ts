@@ -1,7 +1,28 @@
+import type { components } from "../api/schema";
+
 export const OUTER_STAGE = "outer:stage";
 export const OUTER_CANCEL = "outer:cancel";
 export const OUTER_USER_ACTION = "outer:userAction";
 export const OUTER_RESULT = "outer:result";
+export const OUTER_READ = "outer:read";
+
+export type OuterReadQuery =
+	| { projection: "view" }
+	| {
+			projection: "facts";
+			projectId: string;
+			kind: "reports" | "sessions" | "runs";
+			limit: number;
+	  }
+	| { projection: "audit"; after: number; limit: number };
+export type OuterReadData = {
+	view: components["schemas"]["OuterView"];
+	facts: components["schemas"]["OuterFactsResponse"];
+	audit: components["schemas"]["OuterAuditResponse"];
+};
+export type OuterReadResponse = {
+	[K in keyof OuterReadData]: { projection: K; data: OuterReadData[K] };
+}[keyof OuterReadData];
 
 export type OuterControlAction =
 	| "session.spawn"
@@ -67,6 +88,7 @@ export type OuterResult = {
 	record?: unknown;
 };
 export type OuterNativeBridge = {
+	read(query: OuterReadQuery): Promise<OuterReadResponse | null>;
 	stage(slot: string, draft: OuterNativeDraft): Promise<OuterStage | null>;
 	cancel(id: string): Promise<void>;
 	onResult(listener: (result: OuterResult) => void): () => void;

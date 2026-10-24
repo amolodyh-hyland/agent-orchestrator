@@ -71,6 +71,7 @@ func mountOuterNative(r chi.Router, svc *outer.Service, authority *delegationaut
 	if svc == nil {
 		return
 	}
+	mountOuterRead(r, svc, authority)
 	r.Post("/internal/outer/native", func(w http.ResponseWriter, req *http.Request) {
 		reject := func() {
 			_ = svc.Deny(req.Context(), "outer.native", "unbound_stale_or_unsupported_native_action", "")

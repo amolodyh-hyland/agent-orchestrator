@@ -422,7 +422,7 @@ func TestOuterNativePendingReplyAndSettlementNeedExactOriginalTurn(t *testing.T)
 	if rows, err := h.st.OuterCapacity(ctx); err != nil || len(rows) != 0 {
 		t.Fatal("native settlement did not release", rows, err)
 	}
-	events, err := s.Audit(ctx, 0, 100)
+	events, err := s.Audit(domain.WithOuterNativeAction(ctx, domain.OuterNativeAction{Operation: "outer.read"}), 0, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,7 +438,7 @@ func TestOuterNativePendingReplyAndSettlementNeedExactOriginalTurn(t *testing.T)
 }
 func outerSendContext(t *testing.T, h *harness, service *outer.Service, key string) context.Context {
 	t.Helper()
-	view, err := service.View(context.Background())
+	view, err := service.View(domain.WithOuterNativeAction(context.Background(), domain.OuterNativeAction{Operation: "outer.read"}))
 	if err != nil || view.Binding == nil || view.Session == nil {
 		t.Fatal("pre-Send snapshot unavailable", err)
 	}

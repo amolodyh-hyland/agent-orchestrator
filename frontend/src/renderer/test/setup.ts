@@ -383,7 +383,7 @@ if (typeof window !== "undefined") {
 			get: async () => ({ ...DEFAULT_UI_SETTINGS }),
 			set: async (settings) => coerceUiSettings({ ...DEFAULT_UI_SETTINGS, ...settings }),
 		},
-		outer: { stage: vi.fn(async () => null), cancel: vi.fn(async () => undefined), onResult: vi.fn(() => () => undefined) },
+		outer: { read: vi.fn(async () => null), stage: vi.fn(async () => null), cancel: vi.fn(async () => undefined), onResult: vi.fn(() => () => undefined) },
 		factoryRun: { preview: vi.fn(async () => null), cancel: vi.fn(async () => undefined), onResult: vi.fn(() => () => undefined) },
 		multicaDelegation: {
 			settings: async () => ({ enabled: false }),

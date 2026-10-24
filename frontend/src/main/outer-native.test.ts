@@ -8,6 +8,7 @@ import {
 	OUTER_USER_ACTION,
 	OUTER_CANCEL,
 	OUTER_RESULT,
+	OUTER_READ,
 	installOuterUserAction,
 	type OuterStage,
 } from "../shared/outer-native";
@@ -39,9 +40,19 @@ function fixture() {
 		const proof = (init.headers as Record<string, string>)[
 			"X-AO-Delegation-MAC"
 		];
-		expect(proof).toBe(authority.outerRequestMAC(body));
+		const reading = String(_url).endsWith("/internal/outer/read");
+		expect(proof).toBe(
+			reading
+				? authority.outerReadRequestMAC(body)
+				: authority.outerRequestMAC(body)
+		);
 		submitted.push(JSON.parse(body) as Record<string, unknown>);
-		const raw = JSON.stringify({ record: { state: "queued" } });
+		const query = JSON.parse(body) as { projection?: string };
+		const raw = JSON.stringify({
+			record: reading
+				? { projection: query.projection, data: { observed: true } }
+				: { state: "queued" },
+		});
 		return new Response(raw, {
 			headers: {
 				"X-AO-Delegation-Response-MAC": createHmac("sha256", key)
@@ -82,6 +93,8 @@ function fixture() {
 		)) as OuterStage;
 	return {
 		handlers,
+		authority,
+		key,
 		shell,
 		event,
 		submitted,
@@ -231,7 +244,7 @@ describe("outer native human issuance", () => {
 		])
 			expect(await f.stage(bad)).toBeNull();
 		expect([...f.handlers.keys()].sort()).toEqual(
-			[OUTER_STAGE, OUTER_CANCEL, OUTER_USER_ACTION].sort()
+			[OUTER_STAGE, OUTER_CANCEL, OUTER_USER_ACTION, OUTER_READ].sort()
 		);
 	});
 	it("does not turn scripted DOM clicks or Enter into a native human action", () => {
@@ -248,4 +261,101 @@ describe("outer native human issuance", () => {
 		expect(invoke).not.toHaveBeenCalled();
 		button.remove();
 	});
+});
+
+describe("trusted passive outer projections", () => {
+	it("uses only the private read purpose and grants no Send authority", async () => {
+		const f = fixture();
+		f.shell.isFocused.mockReturnValue(false);
+		const result = await f.handlers.get(OUTER_READ)!(f.event, {
+			projection: "view",
+		});
+		expect(result).toEqual({
+			projection: "view",
+			data: { observed: true },
+		});
+		expect(f.submitted).toHaveLength(1);
+		expect(f.submitted[0]).toEqual({
+			projection: "view",
+			nonce: expect.any(String),
+			expires: expect.any(Number),
+		});
+		expect(f.shell.send).not.toHaveBeenCalled();
+		expect(f.fetcher.mock.calls[0][0]).toBe(
+			"http://127.0.0.1:9999/internal/outer/read"
+		);
+		const proof = (
+			f.fetcher.mock.calls[0][1].headers as Record<string, string>
+		)["X-AO-Delegation-MAC"];
+		expect(proof).not.toBe(
+			f.authority.outerRequestMAC(String(f.fetcher.mock.calls[0][1].body))
+		);
+	});
+
+	it("rejects other senders, subframes, oversized projections and generic URL requests", async () => {
+		const f = fixture();
+		for (const event of [
+			{ ...f.event, sender: { id: 12 } },
+			{ ...f.event, senderFrame: {} },
+		]) {
+			expect(
+				await f.handlers.get(OUTER_READ)!(event as IpcMainInvokeEvent, {
+					projection: "view",
+				})
+			).toBeNull();
+		}
+		for (const query of [
+			{ projection: "view", operation: "send" },
+			{ projection: "view", path: "/api/v1/sessions" },
+			{ projection: "facts", projectId: "a", kind: "files", limit: 1 },
+			{ projection: "facts", projectId: "a", kind: "reports", limit: 51 },
+			{ projection: "audit", after: -1, limit: 100 },
+			{ projection: "audit", after: 0, limit: 101 },
+		])
+			expect(
+				await f.handlers.get(OUTER_READ)!(f.event, query)
+			).toBeNull();
+		expect(f.fetcher).not.toHaveBeenCalled();
+	});
+
+	it.each(["navigation", "origin", "bad-response"])(
+		"holds stale or unverified passive data after %s",
+		async (reason) => {
+			const f = fixture();
+			let finish!: (value: Response) => void;
+			f.fetcher.mockImplementationOnce(
+				() =>
+					new Promise<Response>((resolve) => {
+						finish = resolve;
+					})
+			);
+			const reading = f.handlers.get(OUTER_READ)!(f.event, {
+				projection: "audit",
+				after: 0,
+				limit: 20,
+			});
+			const init = f.fetcher.mock.calls[0][1];
+			const proof = (init.headers as Record<string, string>)[
+				"X-AO-Delegation-MAC"
+			];
+			const raw = JSON.stringify({
+				record: { projection: "audit", data: { events: [] } },
+			});
+			const mac = createHmac("sha256", f.key)
+				.update(`journal-response-v1:${proof}:${raw}`)
+				.digest("hex");
+			if (reason === "navigation") f.registration.invalidate();
+			if (reason === "origin") f.setOrigin("http://127.0.0.1:9998");
+			finish(
+				new Response(raw, {
+					headers: {
+						"X-AO-Delegation-Response-MAC":
+							reason === "bad-response" ? "forged" : mac,
+					},
+				})
+			);
+			expect(await reading).toBeNull();
+			expect(f.shell.send).not.toHaveBeenCalled();
+		}
+	);
 });

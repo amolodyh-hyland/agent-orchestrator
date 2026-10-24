@@ -174,7 +174,7 @@ func TestOuterSetupSingletonAndReducedScope(t *testing.T) {
 	if err := st.CheckOuterOperation(context.Background(), "spawn", "a", ""); err != nil {
 		t.Fatal("removed project workflow changed", err)
 	}
-	events, err := svc.Audit(context.Background(), 0, 1000)
+	events, err := svc.Audit(action("outer.read"), 0, 1000)
 	if err != nil || len(events) < 5 {
 		t.Fatal("audit", events, err)
 	}

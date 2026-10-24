@@ -150,7 +150,7 @@ func TestOuterNativeScopeRequiresPrivateExactMACAndRejectsReplay(t *testing.T) {
 }
 
 func TestOuterReadProjectionsRejectProjectLocalAndReplacedOwners(t *testing.T) {
-	router, st, svc, anchor, worker, _ := outerHTTPFixture(t)
+	router, st, svc, anchor, worker, key := outerHTTPFixture(t)
 	ctx := context.Background()
 	localToken, err := st.IssueOuterCaller(ctx, worker)
 	if err != nil {
@@ -170,6 +170,9 @@ func TestOuterReadProjectionsRejectProjectLocalAndReplacedOwners(t *testing.T) {
 		return response.Code
 	}
 	for _, path := range []string{"/api/v1/outer", "/api/v1/outer/audit", "/api/v1/outer/facts?projectId=selected&kind=reports&limit=1"} {
+		if code := read(path, ""); code != 409 {
+			t.Fatal("omitting the credential exposed cross-project projections", path, code)
+		}
 		if code := read(path, localToken); code != 409 {
 			t.Fatal("project-local caller obtained outer context", path, code)
 		}
@@ -186,8 +189,11 @@ func TestOuterReadProjectionsRejectProjectLocalAndReplacedOwners(t *testing.T) {
 	if err := st.SaveOuterBinding(ctx, b, 1, domain.OuterAudit{Operation: "scope"}); err != nil {
 		t.Fatal(err)
 	}
-	if read("/api/v1/outer", outerToken) != 409 || read("/api/v1/outer", "") != 200 {
-		t.Fatal("held native history resumed reads or desktop observation was blocked")
+	if read("/api/v1/outer", outerToken) != 409 || read("/api/v1/outer", "") != 409 {
+		t.Fatal("held native history or anonymous caller resumed reads")
+	}
+	if status, _ := submitOuterRead(t, router, key, nativeOuterRead{Projection: "view"}); status != http.StatusOK {
+		t.Fatal("trusted passive desktop observation was blocked", status)
 	}
 	replacement, err := st.CreateSession(ctx, domain.SessionRecord{ProjectID: "anchor", Kind: domain.KindOrchestrator, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, Metadata: domain.SessionMetadata{ControllerGeneration: "replacement"}})
 	if err != nil {

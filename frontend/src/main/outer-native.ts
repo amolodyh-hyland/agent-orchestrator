@@ -5,8 +5,11 @@ import {
 	OUTER_CANCEL,
 	OUTER_USER_ACTION,
 	OUTER_RESULT,
+	OUTER_READ,
 	type OuterNativeDraft,
 	type OuterStage,
+	type OuterReadQuery,
+	type OuterReadResponse,
 } from "../shared/outer-native";
 import type { MainProcessDelegationAuthority } from "./multica-delegation-authority";
 
@@ -131,6 +134,72 @@ function validDraft(value: unknown): value is OuterNativeDraft {
 	}
 }
 
+function validRead(value: unknown): value is OuterReadQuery {
+	if (!value || typeof value !== "object" || Array.isArray(value))
+		return false;
+	const v = value as Record<string, unknown>;
+	const keys = Object.keys(v).sort().join(",");
+	if (v.projection === "view") return keys === "projection";
+	if (v.projection === "facts")
+		return (
+			keys === "kind,limit,projectId,projection" &&
+			typeof v.projectId === "string" &&
+			v.projectId.trim().length > 0 &&
+			v.projectId.length <= 256 &&
+			["reports", "sessions", "runs"].includes(String(v.kind)) &&
+			Number.isSafeInteger(v.limit) &&
+			Number(v.limit) >= 1 &&
+			Number(v.limit) <= 50
+		);
+	return (
+		v.projection === "audit" &&
+		keys === "after,limit,projection" &&
+		Number.isSafeInteger(v.after) &&
+		Number(v.after) >= 0 &&
+		Number.isSafeInteger(v.limit) &&
+		Number(v.limit) >= 1 &&
+		Number(v.limit) <= 100
+	);
+}
+
+async function verifiedOuterRecord(
+	response: Response,
+	mac: string,
+	authority: MainProcessDelegationAuthority
+): Promise<unknown> {
+	if (!response.ok || !response.body) throw new Error("outer_held");
+	const reader = response.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			size += value.byteLength;
+			if (size > 4 << 20) throw new Error("outer_held");
+			chunks.push(value);
+		}
+	} finally {
+		await reader.cancel().catch(() => undefined);
+		reader.releaseLock();
+	}
+	const raw = new TextDecoder("utf-8", { fatal: true }).decode(
+		Buffer.concat(chunks)
+	);
+	if (
+		!authority.verifyResponseMAC(
+			raw,
+			mac,
+			response.headers.get("X-AO-Delegation-Response-MAC")
+		)
+	)
+		throw new Error("outer_held");
+	const result: unknown = JSON.parse(raw);
+	if (!result || typeof result !== "object" || !("record" in result))
+		throw new Error("outer_held");
+	return result.record;
+}
+
 export function registerOuterNative(options: {
 	ipcMain: Pick<IpcMain, "handle" | "removeHandler">;
 	shellWebContents: Pick<
@@ -158,12 +227,16 @@ export function registerOuterNative(options: {
 		}
 	>();
 	let disposed = false;
+	let navigationEpoch = 0;
 	const trusted = (e: IpcMainInvokeEvent) =>
 		!disposed &&
 		!shell.isDestroyed() &&
 		e.sender.id === shell.id &&
 		e.senderFrame === shell.mainFrame;
-	const invalidate = () => entries.clear();
+	const invalidate = () => {
+		entries.clear();
+		navigationEpoch++;
+	};
 	const navigation = (
 		_e: unknown,
 		_url: string,
@@ -173,6 +246,64 @@ export function registerOuterNative(options: {
 		if (main) invalidate();
 	};
 	shell.on("did-start-navigation", navigation);
+	options.ipcMain.handle(OUTER_READ, async (event, query: unknown) => {
+		if (!trusted(event) || !validRead(query)) return null;
+		const origin = options.origin();
+		const epoch = navigationEpoch;
+		if (!origin) return null;
+		try {
+			const url = new URL(origin);
+			if (
+				url.protocol !== "http:" ||
+				url.hostname !== "127.0.0.1" ||
+				url.username ||
+				url.password ||
+				url.pathname !== "/" ||
+				url.search ||
+				url.hash
+			)
+				return null;
+			const body = JSON.stringify({
+				...query,
+				nonce: randomUUID(),
+				expires: Date.now() + 9000,
+			});
+			const mac = options.authority.outerReadRequestMAC(body);
+			const response = await options.fetch(
+				`${url.origin}/internal/outer/read`,
+				{
+					method: "POST",
+					body,
+					redirect: "error",
+					credentials: "omit",
+					signal: AbortSignal.timeout(10_000),
+					headers: {
+						"content-type": "application/json",
+						"X-AO-Delegation-MAC": mac,
+					},
+				}
+			);
+			const record = await verifiedOuterRecord(
+				response,
+				mac,
+				options.authority
+			);
+			if (
+				!trusted(event) ||
+				navigationEpoch !== epoch ||
+				origin !== options.origin() ||
+				!record ||
+				typeof record !== "object" ||
+				!("projection" in record) ||
+				record.projection !== query.projection ||
+				!("data" in record)
+			)
+				return null;
+			return record as OuterReadResponse;
+		} catch {
+			return null;
+		}
+	});
 	options.ipcMain.handle(
 		OUTER_STAGE,
 		(event, slot: unknown, value: unknown) => {
@@ -278,39 +409,17 @@ export function registerOuterNative(options: {
 					},
 				}
 			);
-			if (!response.ok || !response.body) throw new Error("outer_held");
-			const reader = response.body.getReader();
-			const chunks: Uint8Array[] = [];
-			let size = 0;
-			try {
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-					size += value.byteLength;
-					if (size > 4 << 20) throw new Error("outer_held");
-					chunks.push(value);
-				}
-			} finally {
-				await reader.cancel().catch(() => undefined);
-				reader.releaseLock();
-			}
-			const raw = new TextDecoder("utf-8", { fatal: true }).decode(
-				Buffer.concat(chunks)
+			const record = await verifiedOuterRecord(
+				response,
+				mac,
+				options.authority
 			);
-			if (
-				!options.authority.verifyResponseMAC(
-					raw,
-					mac,
-					response.headers.get("X-AO-Delegation-Response-MAC")
-				)
-			)
-				throw new Error("outer_held");
 			if (trusted(event))
 				shell.send(OUTER_RESULT, {
 					id,
 					ok: true,
 					uncertain: false,
-					record: (JSON.parse(raw) as { record: unknown }).record,
+					record,
 				});
 		} catch {
 			if (trusted(event))
@@ -327,7 +436,12 @@ export function registerOuterNative(options: {
 			disposed = true;
 			invalidate();
 			shell.removeListener("did-start-navigation", navigation);
-			for (const c of [OUTER_STAGE, OUTER_CANCEL, OUTER_USER_ACTION])
+			for (const c of [
+				OUTER_STAGE,
+				OUTER_CANCEL,
+				OUTER_USER_ACTION,
+				OUTER_READ,
+			])
 				options.ipcMain.removeHandler(c);
 		},
 	};

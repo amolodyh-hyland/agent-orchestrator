@@ -38,8 +38,13 @@ their caller generation. Queued requests hold if a labeled session revision,
 report projection or run version changes before submission.
 
 Project-local credentials cannot read the outer's cross-project projections.
-Outer reads require the current native owner and hold retained/replaced history;
-the desktop's passive projections keep the existing local read trust. An incoming
+Outer reads require the current native owner and hold retained/replaced history.
+Anonymous requests and project-local credentials cannot obtain these projections.
+The desktop uses a separate bounded preload/main read channel and a private,
+purpose-separated request and response MAC. That passive authority cannot issue
+a human request or authorize a turn. Current outer runtimes receive only current
+scope receipts and audit rows; the trusted desktop retains historical visibility.
+An incoming
 sender's known identity does not establish its content provenance: it remains
 labeled unknown and inert. These credentials do not isolate same-account clients.
 

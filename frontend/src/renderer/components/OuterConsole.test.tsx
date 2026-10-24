@@ -12,6 +12,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../lib/bridge";
 import { OuterConsole } from "./OuterConsole";
+import type { OuterReadResponse } from "../../shared/outer-native";
 
 const mocks = vi.hoisted(() => ({
 	get: vi.fn(),
@@ -88,7 +89,17 @@ beforeEach(() => {
 		digest: "exact-digest",
 		expiresAt: Date.now() + 120_000,
 	}));
-	mocks.get.mockImplementation(async (path, options) => {
+	mocks.get.mockImplementation(() => {
+		throw new Error("Anonymous outer HTTP is forbidden");
+	});
+	const projectionData = async (
+		path: string,
+		options?: {
+			params: {
+				query: { projectId: string; kind: string; limit: number };
+			};
+		}
+	) => {
 		if (path === "/api/v1/outer")
 			return {
 				data: {
@@ -166,7 +177,7 @@ beforeEach(() => {
 				},
 			};
 		if (path === "/api/v1/outer/facts") {
-			const { projectId, kind, limit } = options.params.query;
+			const { projectId, kind, limit } = options!.params.query;
 			expect(limit).toBe(20);
 			const count = manySessions && kind === "sessions" ? 20 : 1;
 			return {
@@ -192,6 +203,20 @@ beforeEach(() => {
 			};
 		}
 		throw new Error(`Unexpected read ${path}`);
+	};
+	vi.mocked(aoBridge.outer.read).mockImplementation(async (query) => {
+		const path =
+			query.projection === "view"
+				? "/api/v1/outer"
+				: `/api/v1/outer/${query.projection}`;
+		const result = await projectionData(
+			path,
+			query.projection === "facts" ? { params: { query } } : undefined
+		);
+		return {
+			projection: query.projection,
+			data: result.data,
+		} as unknown as OuterReadResponse;
 	});
 });
 
@@ -204,15 +229,8 @@ function assertPassive() {
 	expect(mocks.post).not.toHaveBeenCalled();
 	expect(mocks.patch).not.toHaveBeenCalled();
 	expect(mocks.del).not.toHaveBeenCalled();
-	expect(
-		mocks.get.mock.calls.every(([path]) =>
-			[
-				"/api/v1/outer",
-				"/api/v1/outer/facts",
-				"/api/v1/outer/audit",
-			].includes(path)
-		)
-	).toBe(true);
+	expect(mocks.get).not.toHaveBeenCalled();
+	expect(aoBridge.outer.read).toHaveBeenCalledWith({ projection: "view" });
 }
 
 describe("Outer console", () => {
@@ -263,9 +281,12 @@ describe("Outer console", () => {
 			screen.getByRole("button", { name: "Save exact scope" })
 		);
 		expect(
-			mocks.get.mock.calls
-				.filter(([path]) => path === "/api/v1/outer/facts")
-				.every(([, options]) => options.params.query.projectId === "a")
+			vi
+				.mocked(aoBridge.outer.read)
+				.mock.calls.every(
+					([query]) =>
+						query.projection !== "facts" || query.projectId === "a"
+				)
 		).toBe(true);
 		expect(localStorage.getItem("ao.cockpit.project-ids")).toBe('["b"]');
 		assertPassive();

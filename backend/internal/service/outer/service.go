@@ -228,5 +228,33 @@ func (s *Service) Audit(ctx context.Context, after int64, limit int) ([]domain.O
 	if err := s.store.AppendOuterAudit(ctx, domain.OuterAudit{Operation: "outer.audit.read", State: "observed"}); err != nil {
 		return nil, err
 	}
-	return s.store.PageOuterAudit(ctx, after, limit)
+	rows, err := s.store.PageOuterAudit(ctx, after, limit)
+	if err != nil || native(ctx, "outer.read") {
+		return rows, err
+	}
+	b, found, err := s.store.OuterBinding(ctx)
+	if err != nil || !found {
+		return nil, domain.ErrOuterHeld
+	}
+	visible := make([]domain.OuterAudit, 0, len(rows))
+	for _, event := range rows {
+		if event.SessionID != b.SessionID && !slices.Contains(b.ProjectIDs, event.ProjectID) {
+			continue
+		}
+		if event.ProjectID != "" && event.ProjectID != b.AnchorProjectID && !slices.Contains(b.ProjectIDs, event.ProjectID) {
+			continue
+		}
+		allowed := true
+		for _, source := range event.Sources {
+			for _, project := range append(append([]string{}, source.Sources...), source.ProjectID) {
+				if project != "" && !slices.Contains(b.ProjectIDs, project) {
+					allowed = false
+				}
+			}
+		}
+		if allowed {
+			visible = append(visible, event)
+		}
+	}
+	return visible, nil
 }

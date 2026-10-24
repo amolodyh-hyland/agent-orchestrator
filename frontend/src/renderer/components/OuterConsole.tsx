@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useOuterView } from "../hooks/useOuter";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
-import { apiClient } from "../lib/api-client";
+import { readOuter } from "../lib/outer-read";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
@@ -65,15 +65,16 @@ export function OuterConsole() {
 	}, [view.refetch, workspace.refetch]);
 	const facts = useQueries({
 		queries: (binding?.projectIds ?? []).flatMap((projectId) =>
-			["reports", "sessions", "runs"].map((kind) => ({
+			(["reports", "sessions", "runs"] as const).map((kind) => ({
 				queryKey: ["outer-facts", binding?.revision, projectId, kind],
 				queryFn: async () => {
-					const { data, error } = await apiClient.GET(
-						"/api/v1/outer/facts",
-						{ params: { query: { projectId, kind, limit: 20 } } }
-					);
-					if (error) throw error;
-					return data?.facts ?? [];
+					const data = await readOuter({
+						projection: "facts",
+						projectId,
+						kind,
+						limit: 20,
+					});
+					return data.facts;
 				},
 				refetchInterval: 30_000,
 			}))
@@ -83,11 +84,12 @@ export function OuterConsole() {
 		queryKey: ["outer-audit", after],
 		enabled: Boolean(binding),
 		queryFn: async () => {
-			const { data, error } = await apiClient.GET("/api/v1/outer/audit", {
-				params: { query: { after, limit: 100 } },
+			const data = await readOuter({
+				projection: "audit",
+				after,
+				limit: 100,
 			});
-			if (error) throw error;
-			return data?.events ?? [];
+			return data.events;
 		},
 		refetchInterval: 10_000,
 	});

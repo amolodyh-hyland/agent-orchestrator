@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { apiClient } from "../lib/api-client";
+import { readOuter } from "../lib/outer-read";
 import { aoBridge } from "../lib/bridge";
 import type {
 	OuterNativeDraft,
@@ -11,11 +11,7 @@ import type {
 export function useOuterView() {
 	return useQuery({
 		queryKey: ["outer"],
-		queryFn: async () => {
-			const result = await apiClient.GET("/api/v1/outer");
-			if (result.error) throw result.error;
-			return result.data;
-		},
+		queryFn: () => readOuter({ projection: "view" }),
 		refetchInterval: 5_000,
 	});
 }
