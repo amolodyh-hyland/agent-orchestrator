@@ -62,3 +62,18 @@ visible draft without submitting it or requiring another edit.
 The journal covers logical operations and observable native invocation events.
 It does not claim syscall coverage, same-account process isolation, a spending
 cap, or a hard host-wide concurrency cap. Native permissions remain authoritative.
+
+`npm --prefix frontend run test:outer-integration` exercises the renderer,
+private main-process handlers, real HTTP router/services and disposable SQLite
+with a race-enabled fake provider. It covers setup/settings, exact Chat Send,
+native pending replies, affected-Project audit, fresh reduced-scope replacement,
+uncertain receipts and passive restart. The OS gesture is simulated at the
+private preload boundary; separate preload tests reject scripted DOM events.
+The fixture starts no daemon, listener, installed application or model process.
+
+`httpd/outer_ownership_test.go` applies behavioral negative and supported-caller
+matrices to the protected route manifest, including actual durable ownership and
+the automation deletion controller. `cli/outer_caller_e2e_test.go` carries the
+owned launch credential through the CLI transport to real report persistence,
+rejects forged/missing/stale and cross-Project callers, and preserves inert
+daemon report production. Unsupported controls remain held across that inventory.
