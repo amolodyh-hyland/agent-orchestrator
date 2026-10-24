@@ -34,8 +34,9 @@ type OuterFactsQuery struct {
 
 // OuterAuditQuery selects an exclusive timeline cursor and page bound.
 type OuterAuditQuery struct {
-	After int64 `query:"after" json:"after"`
-	Limit int   `query:"limit" json:"limit"`
+	After     int64  `query:"after" json:"after"`
+	Limit     int    `query:"limit" json:"limit"`
+	ProjectID string `query:"projectId" json:"projectId,omitempty"`
 }
 
 // Register mounts the passive outer projections.
@@ -86,7 +87,13 @@ func (c *OuterController) audit(w http.ResponseWriter, r *http.Request) {
 	if limit == 0 {
 		limit = 50
 	}
-	v, err := c.Svc.Audit(r.Context(), after, limit)
+	var v []domain.OuterAudit
+	var err error
+	if project := r.URL.Query().Get("projectId"); project != "" {
+		v, err = c.Svc.AuditProject(r.Context(), project, after, limit)
+	} else {
+		v, err = c.Svc.Audit(r.Context(), after, limit)
+	}
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return

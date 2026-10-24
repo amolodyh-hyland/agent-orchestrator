@@ -50,7 +50,7 @@ let historyHeld: boolean;
 let manySessions: boolean;
 const clients: QueryClient[] = [];
 
-function mount() {
+function mount(entry = "/outer") {
 	const client = new QueryClient({
 		defaultOptions: { queries: { retry: false, gcTime: 0 } },
 	});
@@ -60,6 +60,12 @@ function mount() {
 		getParentRoute: () => root,
 		path: "/outer",
 		component: OuterConsole,
+		validateSearch: (search: Record<string, unknown>) => ({
+			auditProjectId:
+				typeof search.auditProjectId === "string"
+					? search.auditProjectId
+					: undefined,
+		}),
 	});
 	const chat = createRoute({
 		getParentRoute: () => root,
@@ -68,7 +74,7 @@ function mount() {
 	});
 	const router = createRouter({
 		routeTree: root.addChildren([outer, chat]),
-		history: createMemoryHistory({ initialEntries: ["/outer"] }),
+		history: createMemoryHistory({ initialEntries: [entry] }),
 	});
 	return render(
 		<QueryClientProvider client={client}>
@@ -234,6 +240,45 @@ function assertPassive() {
 }
 
 describe("Outer console", () => {
+	it("opens a removed Project's retained audit without changing scope or resuming history", async () => {
+		selected = ["b"];
+		historyHeld = true;
+		mount("/outer?auditProjectId=a");
+		await screen.findByText(/Affected Project: Alpha · a/);
+		await waitFor(() =>
+			expect(aoBridge.outer.read).toHaveBeenCalledWith({
+				projection: "audit",
+				projectId: "a",
+				after: 0,
+				limit: 100,
+			})
+		);
+		expect(screen.getByText(/exact authority absent/)).toBeVisible();
+		expect(
+			screen.getByRole("checkbox", { name: "Alpha a" })
+		).not.toBeChecked();
+		expect(
+			vi
+				.mocked(aoBridge.outer.stage)
+				.mock.calls.every(
+					([, draft]) =>
+						draft.operation !== "control" ||
+						draft.control.action !== "session.resume"
+				)
+		).toBe(true);
+		await userEvent.click(
+			screen.getByRole("link", { name: "All outer events" })
+		);
+		await waitFor(() =>
+			expect(aoBridge.outer.read).toHaveBeenCalledWith({
+				projection: "audit",
+				after: 0,
+				limit: 100,
+			})
+		);
+		assertPassive();
+	});
+
 	it("opens and refreshes passively with bounded labeled facts, inert evidence and retained uncertainty", async () => {
 		const user = userEvent.setup();
 		mount();

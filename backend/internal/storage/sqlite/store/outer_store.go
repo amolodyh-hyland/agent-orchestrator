@@ -61,6 +61,27 @@ func appendOuterAudit(ctx context.Context, q *gen.Queries, e domain.OuterAudit) 
 		e.At = time.Now().UTC()
 	}
 	e.InstructionRevision = domain.OuterInstructionRevision
+	projects := append([]string{}, e.ProjectIDs...)
+	projects = append(projects, e.ProjectID)
+	sources := e.Sources
+	if e.RequestID != "" {
+		request, err := q.GetOuterRequest(ctx, e.RequestID)
+		if err == nil {
+			var bound domain.OuterRequest
+			if err := json.Unmarshal([]byte(request.Document), &bound); err != nil {
+				return err
+			}
+			sources = append(append([]domain.OuterSource{}, sources...), bound.Sources...)
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+	}
+	for _, source := range sources {
+		projects = append(projects, source.ProjectID)
+		projects = append(projects, source.Sources...)
+	}
+	slices.Sort(projects)
+	e.ProjectIDs = slices.DeleteFunc(slices.Compact(projects), func(id string) bool { return id == "" })
 	data, err := json.Marshal(e)
 	if err != nil {
 		return err
@@ -79,6 +100,24 @@ func (s *Store) AppendOuterAudit(ctx context.Context, e domain.OuterAudit) error
 func (s *Store) PageOuterAudit(ctx context.Context, after int64, limit int) ([]domain.OuterAudit, error) {
 	limit = min(max(limit, 1), 100)
 	rows, err := s.conversationReader(ctx).PageOuterAudit(ctx, gen.PageOuterAuditParams{AfterSequence: after, PageSize: int64(limit)})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.OuterAudit, 0, len(rows))
+	for _, row := range rows {
+		var e domain.OuterAudit
+		if err := json.Unmarshal([]byte(row.Document), &e); err != nil {
+			return nil, err
+		}
+		e.Sequence = row.Sequence
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+// PageOuterProjectAudit selects affected-Project events before applying the page bound.
+func (s *Store) PageOuterProjectAudit(ctx context.Context, project string, after int64, limit int) ([]domain.OuterAudit, error) {
+	rows, err := s.conversationReader(ctx).PageOuterProjectAudit(ctx, gen.PageOuterProjectAuditParams{ProjectID: project, AfterSequence: after, PageSize: int64(min(max(limit, 1), 100))})
 	if err != nil {
 		return nil, err
 	}

@@ -14,7 +14,7 @@ export type OuterReadQuery =
 			kind: "reports" | "sessions" | "runs";
 			limit: number;
 	  }
-	| { projection: "audit"; after: number; limit: number };
+	| { projection: "audit"; after: number; limit: number; projectId?: string };
 export type OuterReadData = {
 	view: components["schemas"]["OuterView"];
 	facts: components["schemas"]["OuterFactsResponse"];

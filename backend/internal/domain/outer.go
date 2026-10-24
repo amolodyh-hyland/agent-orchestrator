@@ -209,6 +209,7 @@ type OuterAudit struct {
 	RequestID           string        `json:"requestId,omitempty"`
 	SessionID           SessionID     `json:"sessionId,omitempty"`
 	ProjectID           string        `json:"projectId,omitempty"`
+	ProjectIDs          []string      `json:"projectIds,omitempty"`
 	Generation          string        `json:"generation,omitempty"`
 	Digest              string        `json:"digest,omitempty"`
 	ReceiptID           string        `json:"receiptId,omitempty"`

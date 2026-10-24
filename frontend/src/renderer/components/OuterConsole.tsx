@@ -1,5 +1,5 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, useSearch } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useOuterView } from "../hooks/useOuter";
@@ -15,6 +15,7 @@ import type { ApprovalMode } from "../types/conversation";
 
 export function OuterConsole() {
 	const { t } = useTranslation();
+	const { auditProjectId } = useSearch({ strict: false });
 	const view = useOuterView();
 	const binding = view.data?.binding;
 	const workspace = useWorkspaceQuery({ includeCloud: false });
@@ -49,6 +50,7 @@ export function OuterConsole() {
 	const [after, setAfter] = useState(0);
 	const [selectedSession, setSelectedSession] = useState("");
 	const [selectedRequest, setSelectedRequest] = useState("");
+	useEffect(() => setAfter(0), [auditProjectId]);
 	useEffect(() => {
 		if (!binding) return;
 		setIDs(binding.projectIds);
@@ -81,13 +83,14 @@ export function OuterConsole() {
 		),
 	});
 	const audit = useQuery({
-		queryKey: ["outer-audit", after],
+		queryKey: ["outer-audit", auditProjectId, after],
 		enabled: Boolean(binding),
 		queryFn: async () => {
 			const data = await readOuter({
 				projection: "audit",
 				after,
 				limit: 100,
+				...(auditProjectId ? { projectId: auditProjectId } : {}),
 			});
 			return data.events;
 		},
@@ -565,14 +568,40 @@ export function OuterConsole() {
 							<h2 className="mb-2 font-medium">
 								{t("outer.audit")}
 							</h2>
+							{auditProjectId ? (
+								<p className="mb-2 text-xs">
+									{t("outer.auditProject", {
+										project:
+											projects.find(
+												(p) => p.id === auditProjectId
+											)?.name ??
+											t("outer.projectUnavailable"),
+										id: auditProjectId,
+									})}{" "}
+									<Link
+										to="/outer"
+										search={{}}
+										preload={false}
+										className="underline"
+									>
+										{t("outer.auditAll")}
+									</Link>
+								</p>
+							) : null}
+							{audit.isError ? (
+								<p role="alert">{t("outer.auditError")}</p>
+							) : null}
 							{audit.data?.map((e) => (
 								<p
 									key={e.id}
 									className="break-all py-1 text-xs"
 								>
 									{e.sequence} · {e.at} · {e.operation} ·{" "}
-									{e.state} · {e.requestId} · {e.projectId} ·{" "}
-									{e.reason}
+									{e.state} · {e.requestId} ·{" "}
+									{(e.projectIds ?? [e.projectId])
+										.filter(Boolean)
+										.join(", ")}{" "}
+									· {e.reason}
 								</p>
 							))}
 							<div className="mt-2 flex gap-2">

@@ -264,6 +264,24 @@ describe("outer native human issuance", () => {
 });
 
 describe("trusted passive outer projections", () => {
+	it("binds a bounded affected-Project audit filter to its private read", async () => {
+		const f = fixture();
+		expect(
+			await f.handlers.get(OUTER_READ)!(f.event, {
+				projection: "audit",
+				projectId: "removed-project",
+				after: 4,
+				limit: 20,
+			})
+		).not.toBeNull();
+		expect(f.submitted[0]).toMatchObject({
+			projection: "audit",
+			projectId: "removed-project",
+			after: 4,
+			limit: 20,
+		});
+		expect(f.shell.send).not.toHaveBeenCalled();
+	});
 	it("uses only the private read purpose and grants no Send authority", async () => {
 		const f = fixture();
 		f.shell.isFocused.mockReturnValue(false);
@@ -311,6 +329,7 @@ describe("trusted passive outer projections", () => {
 			{ projection: "facts", projectId: "a", kind: "reports", limit: 51 },
 			{ projection: "audit", after: -1, limit: 100 },
 			{ projection: "audit", after: 0, limit: 101 },
+			{ projection: "audit", projectId: "", after: 0, limit: 20 },
 		])
 			expect(
 				await f.handlers.get(OUTER_READ)!(f.event, query)

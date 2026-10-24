@@ -44,6 +44,10 @@ The desktop uses a separate bounded preload/main read channel and a private,
 purpose-separated request and response MAC. That passive authority cannot issue
 a human request or authorize a turn. Current outer runtimes receive only current
 scope receipts and audit rows; the trusted desktop retains historical visibility.
+Each Project cockpit links to its bounded affected-Project timeline. That filter
+includes request-bound native events and scope removals, and remains available to
+the trusted desktop after removal from the outer allowlist. Opening it changes no
+scope and starts no conversation.
 An incoming
 sender's known identity does not establish its content provenance: it remains
 labeled unknown and inert. These credentials do not isolate same-account clients.

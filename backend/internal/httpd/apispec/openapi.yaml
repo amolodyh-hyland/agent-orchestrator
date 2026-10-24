@@ -4254,6 +4254,10 @@ paths:
         name: limit
         schema:
           type: integer
+      - in: query
+        name: projectId
+        schema:
+          type: string
       responses:
         "200":
           content:
@@ -19387,6 +19391,10 @@ components:
           type: string
         projectId:
           type: string
+        projectIds:
+          items:
+            type: string
+          type: array
         reason:
           type: string
         receiptId:

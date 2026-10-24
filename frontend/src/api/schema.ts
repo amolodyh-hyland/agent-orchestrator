@@ -6823,6 +6823,7 @@ export interface components {
             instructionRevision: string;
             operation: string;
             projectId?: string;
+            projectIds?: string[];
             reason?: string;
             receiptId?: string;
             requestId?: string;
@@ -14352,6 +14353,7 @@ export interface operations {
             query?: {
                 after?: number;
                 limit?: number;
+                projectId?: string;
             };
             header?: never;
             path?: never;

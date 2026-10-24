@@ -153,7 +153,11 @@ function validRead(value: unknown): value is OuterReadQuery {
 		);
 	return (
 		v.projection === "audit" &&
-		keys === "after,limit,projection" &&
+		(keys === "after,limit,projection" ||
+			(keys === "after,limit,projectId,projection" &&
+				typeof v.projectId === "string" &&
+				v.projectId.trim().length > 0 &&
+				v.projectId.length <= 256)) &&
 		Number.isSafeInteger(v.after) &&
 		Number(v.after) >= 0 &&
 		Number.isSafeInteger(v.limit) &&

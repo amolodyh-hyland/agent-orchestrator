@@ -62,12 +62,16 @@ func mountOuterRead(router chi.Router, svc *outer.Service, authority *delegation
 			facts, err = svc.Read(ctx, in.ProjectID, in.Kind, in.Limit)
 			value = map[string]any{"facts": facts}
 		case "audit":
-			if in.ProjectID != "" || in.Kind != "" || in.After < 0 || in.Limit < 1 || in.Limit > 100 {
+			if in.Kind != "" || in.After < 0 || in.Limit < 1 || in.Limit > 100 {
 				reject()
 				return
 			}
 			var events []domain.OuterAudit
-			events, err = svc.Audit(ctx, in.After, in.Limit)
+			if in.ProjectID == "" {
+				events, err = svc.Audit(ctx, in.After, in.Limit)
+			} else {
+				events, err = svc.AuditProject(ctx, in.ProjectID, in.After, in.Limit)
+			}
 			value = map[string]any{"events": events}
 		default:
 			reject()

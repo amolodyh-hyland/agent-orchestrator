@@ -235,6 +235,32 @@ func TestOuterAuditFailureRollsBackAuthorityAndAppendOnlyJournal(t *testing.T) {
 	}
 }
 
+func TestOuterAffectedProjectAuditIncludesBoundNativeEventsAndFiltersBeforePaging(t *testing.T) {
+	f := newOuterJournal(t)
+	ctx := context.Background()
+	r := f.request(t, "project-audit-request", domain.OuterSource{Kind: "human_input", Sources: []string{"a", "b"}, Unknown: true})
+	initial, err := f.st.PageOuterProjectAudit(ctx, "a", 0, 100)
+	if err != nil || len(initial) == 0 || initial[0].Operation != "outer.send" {
+		t.Fatal("bound request missing from affected Project", initial, err)
+	}
+	after := initial[len(initial)-1].Sequence
+	for range 110 {
+		if err := f.st.AppendOuterAudit(ctx, domain.OuterAudit{Operation: "unrelated", ProjectID: "outside", State: "held"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.st.AppendOuterAudit(ctx, domain.OuterAudit{Operation: "native.tool", RequestID: r.ID, SessionID: r.SessionID, State: "observed", ReceiptID: "native-receipt"}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := f.st.PageOuterProjectAudit(ctx, "a", after, 1)
+	if err != nil || len(rows) != 1 || rows[0].Operation != "native.tool" || rows[0].ReceiptID != "native-receipt" || !slices.Equal(rows[0].ProjectIDs, []string{"a", "b"}) {
+		t.Fatal("bound native activity lost affected Projects", rows, err)
+	}
+	if rows, err := f.st.PageOuterProjectAudit(ctx, "outside", 0, 500); err != nil || len(rows) != 100 {
+		t.Fatal("project page was unbounded", len(rows), err)
+	}
+}
+
 func TestOuterNativeActionJournalIsExactImmutableAndAtomicWithAudit(t *testing.T) {
 	f := newOuterJournal(t)
 	ctx := domain.WithOuterNativeAction(context.Background(), domain.OuterNativeAction{ActionID: "native-human-action-1"})

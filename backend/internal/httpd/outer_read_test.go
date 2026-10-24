@@ -101,6 +101,7 @@ func TestOuterScopedAuditExcludesOtherProjectsAndRemovedSources(t *testing.T) {
 		{Operation: "other-private", ProjectID: "other", State: "held"},
 		{Operation: "other-private", ProjectID: "other", SessionID: anchor, State: "held"},
 		{Operation: "old-source-private", SessionID: anchor, State: "observed", Sources: []domain.OuterSource{{ProjectID: "other", Sources: []string{"other"}}}},
+		{Operation: "old-source-private", SessionID: anchor, State: "observed", ProjectIDs: []string{"other"}},
 	} {
 		if err := st.AppendOuterAudit(ctx, event); err != nil {
 			t.Fatal(err)
@@ -127,5 +128,44 @@ func TestOuterScopedAuditExcludesOtherProjectsAndRemovedSources(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("current selected-project audit was unavailable")
+	}
+}
+
+func TestOuterAffectedProjectTimelineSurvivesScopeRemovalOnTrustedDesktopOnly(t *testing.T) {
+	router, st, svc, anchor, _, key := outerHTTPFixture(t)
+	ctx := context.Background()
+	if err := st.AppendOuterAudit(ctx, domain.OuterAudit{Operation: "selected-held-action", ProjectID: "selected", SessionID: anchor, State: "held"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AppendOuterAudit(ctx, domain.OuterAudit{Operation: "unrelated-private", ProjectID: "other", State: "held"}); err != nil {
+		t.Fatal(err)
+	}
+	b, _, err := svc.Binding(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	native := domain.WithOuterNativeAction(ctx, domain.OuterNativeAction{Operation: "outer.scope", ActionID: "scope-removal"})
+	if _, err := svc.SetScope(native, b.Revision, []string{}, false, true); err != nil {
+		t.Fatal(err)
+	}
+	status, body := submitOuterRead(t, router, key, nativeOuterRead{Projection: "audit", ProjectID: "selected", Limit: 100})
+	if status != http.StatusOK || !strings.Contains(string(body), "selected-held-action") || !strings.Contains(string(body), "scope-removal") || strings.Contains(string(body), "unrelated-private") {
+		t.Fatal("affected Project lost retained events or received unrelated events", status, string(body))
+	}
+	for _, path := range []string{"/api/v1/outer/audit?projectId=selected", "/api/v1/outer/audit?projectId=other"} {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusConflict {
+			t.Fatal("Project filter bypassed read authority", path, response.Code)
+		}
+	}
+	if _, err := svc.AuditProject(ctx, "selected", 0, 100); err == nil {
+		t.Fatal("anonymous internal Project read inherited desktop authority")
+	}
+	if requests, err := st.ListOuterHostRequests(ctx); err != nil || len(requests) != 0 {
+		t.Fatal("timeline navigation issued a human request", requests, err)
+	}
+	if capacity, err := st.OuterCapacity(ctx); err != nil || len(capacity) != 0 {
+		t.Fatal("timeline navigation admitted computation", capacity, err)
 	}
 }

@@ -21,6 +21,7 @@ type Store interface {
 	SaveOuterBinding(context.Context, domain.OuterBinding, int64, domain.OuterAudit) error
 	AppendOuterAudit(context.Context, domain.OuterAudit) error
 	PageOuterAudit(context.Context, int64, int) ([]domain.OuterAudit, error)
+	PageOuterProjectAudit(context.Context, string, int64, int) ([]domain.OuterAudit, error)
 	GetProject(context.Context, string) (domain.ProjectRecord, bool, error)
 	UpsertProject(context.Context, domain.ProjectRecord) error
 	GetSession(context.Context, domain.SessionID) (domain.SessionRecord, bool, error)
@@ -204,6 +205,7 @@ func (s *Service) SetScope(ctx context.Context, expected int64, ids []string, pa
 			return b, domain.ErrOuterHeld
 		}
 	}
+	affected := append(append([]string{}, b.ProjectIDs...), ids...)
 	for _, old := range b.ProjectIDs {
 		if !slices.Contains(ids, old) {
 			b.HistoryHeld = true
@@ -216,7 +218,7 @@ func (s *Service) SetScope(ctx context.Context, expected int64, ids []string, pa
 	b.Revision++
 	b.Paused = paused
 	b.ForegroundReserve = foreground
-	err = s.store.SaveOuterBinding(ctx, b, expected, domain.OuterAudit{Operation: "outer.scope", State: "recorded", Reason: "pending authority invalidated; reduced scope requires a fresh conversation"})
+	err = s.store.SaveOuterBinding(ctx, b, expected, domain.OuterAudit{Operation: "outer.scope", State: "recorded", ProjectIDs: affected, Reason: "pending authority invalidated; reduced scope requires a fresh conversation"})
 	return b, err
 }
 
@@ -229,6 +231,31 @@ func (s *Service) Audit(ctx context.Context, after int64, limit int) ([]domain.O
 		return nil, err
 	}
 	rows, err := s.store.PageOuterAudit(ctx, after, limit)
+	return s.visibleAudit(ctx, rows, err)
+}
+
+// AuditProject retains the affected Project's timeline after scope removal.
+func (s *Service) AuditProject(ctx context.Context, project string, after int64, limit int) ([]domain.OuterAudit, error) {
+	if err := s.checkReader(ctx); err != nil {
+		return nil, err
+	}
+	if _, found, err := s.store.GetProject(ctx, project); err != nil || !found {
+		return nil, domain.ErrOuterHeld
+	}
+	if !native(ctx, "outer.read") {
+		b, found, err := s.store.OuterBinding(ctx)
+		if err != nil || !found || !slices.Contains(b.ProjectIDs, project) {
+			return nil, domain.ErrOuterHeld
+		}
+	}
+	if err := s.store.AppendOuterAudit(ctx, domain.OuterAudit{Operation: "outer.audit.read", State: "observed", ProjectID: project}); err != nil {
+		return nil, err
+	}
+	rows, err := s.store.PageOuterProjectAudit(ctx, project, after, limit)
+	return s.visibleAudit(ctx, rows, err)
+}
+
+func (s *Service) visibleAudit(ctx context.Context, rows []domain.OuterAudit, err error) ([]domain.OuterAudit, error) {
 	if err != nil || native(ctx, "outer.read") {
 		return rows, err
 	}
@@ -245,6 +272,11 @@ func (s *Service) Audit(ctx context.Context, after int64, limit int) ([]domain.O
 			continue
 		}
 		allowed := true
+		for _, project := range event.ProjectIDs {
+			if project != b.AnchorProjectID && !slices.Contains(b.ProjectIDs, project) {
+				allowed = false
+			}
+		}
 		for _, source := range event.Sources {
 			for _, project := range append(append([]string{}, source.Sources...), source.ProjectID) {
 				if project != "" && !slices.Contains(b.ProjectIDs, project) {

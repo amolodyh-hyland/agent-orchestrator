@@ -71,6 +71,52 @@ func (q *Queries) PageOuterAudit(ctx context.Context, arg PageOuterAuditParams) 
 	return items, nil
 }
 
+const pageOuterProjectAudit = `-- name: PageOuterProjectAudit :many
+SELECT sequence,document FROM outer_audit
+WHERE sequence > ?1 AND (
+  json_extract(document,'$.projectId')=?2
+  OR EXISTS (SELECT 1 FROM json_each(document,'$.projectIds') WHERE value=?2)
+  OR EXISTS (SELECT 1 FROM json_each(document,'$.sources') AS source
+    WHERE json_extract(source.value,'$.projectId')=?2
+    OR EXISTS (SELECT 1 FROM json_each(source.value,'$.sources') WHERE value=?2))
+)
+ORDER BY sequence LIMIT ?3
+`
+
+type PageOuterProjectAuditParams struct {
+	AfterSequence int64
+	ProjectID     string
+	PageSize      int64
+}
+
+type PageOuterProjectAuditRow struct {
+	Sequence int64
+	Document string
+}
+
+func (q *Queries) PageOuterProjectAudit(ctx context.Context, arg PageOuterProjectAuditParams) ([]PageOuterProjectAuditRow, error) {
+	rows, err := q.db.QueryContext(ctx, pageOuterProjectAudit, arg.AfterSequence, arg.ProjectID, arg.PageSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PageOuterProjectAuditRow{}
+	for rows.Next() {
+		var i PageOuterProjectAuditRow
+		if err := rows.Scan(&i.Sequence, &i.Document); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const saveOuterBinding = `-- name: SaveOuterBinding :execrows
 INSERT INTO outer_binding(singleton,revision,document) VALUES(1,?1+1,?2)
 ON CONFLICT(singleton) DO UPDATE SET revision=excluded.revision,document=excluded.document
