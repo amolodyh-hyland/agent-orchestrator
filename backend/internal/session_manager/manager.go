@@ -1170,6 +1170,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 	}
 	id := rec.ID
+	if err := m.enrollOuterSpawn(ctx, cfg, id); err != nil {
+		return domain.SessionRecord{}, 0, 0, err
+	}
 	// A claimed preparation was created as a TUI session with no issue; the
 	// requested mode, kind and issue only land when it is promoted below. Resolve
 	// context against those effective values so chat and issue attachments are
@@ -1430,6 +1433,12 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// provisioning, attachments. From here the two modes launch different
 	// controllers, and exactly one of them runs.
 	if mode == domain.SessionModeChat {
+		if cfg.OuterActionID != "" {
+			if err := domain.CheckOuterOperation(ctx, m.store, "spawn", cfg.ProjectID, ""); err != nil {
+				return domain.SessionRecord{}, 0, 0, err
+			}
+			prompt = ""
+		}
 		rec, err = m.launchChatController(ctx, chatSpawn{
 			cfg:              cfg,
 			project:          project,

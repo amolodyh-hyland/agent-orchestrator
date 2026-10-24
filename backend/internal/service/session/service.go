@@ -1821,3 +1821,14 @@ func (s *Service) harnessSignals(h domain.AgentHarness) bool {
 	}
 	return s.signalCapable(h)
 }
+
+// StopOuterWorker uses the preserving lifecycle adapter and its final native guard.
+func (s *Service) StopOuterWorker(ctx context.Context, id domain.SessionID, admit func(context.Context) (func(), error)) error {
+	manager, ok := s.manager.(interface {
+		StopOuterWorker(context.Context, domain.SessionID, func(context.Context) (func(), error)) error
+	})
+	if !ok {
+		return domain.ErrOuterHeld
+	}
+	return manager.StopOuterWorker(ctx, id, admit)
+}

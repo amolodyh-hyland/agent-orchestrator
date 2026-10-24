@@ -1947,6 +1947,9 @@ func (m *Manager) MarkTerminated(ctx context.Context, id domain.SessionID) error
 // guessing - the package's stated bias is to spare on ambiguity, not to reap on
 // it.
 func (m *Manager) reapSessionContainers(ctx context.Context, id domain.SessionID) {
+	if participant, err := domain.IsOuterParticipant(ctx, m.store, id); err != nil || participant {
+		return
+	}
 	if m.containers == nil {
 		return
 	}

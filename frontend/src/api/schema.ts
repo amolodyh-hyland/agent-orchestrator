@@ -1785,6 +1785,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/outer/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Seal concrete requested actions without executing them */
+        post: operations["proposeOuterPlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects": {
         parameters: {
             query?: never;
@@ -6814,6 +6831,33 @@ export interface components {
             projectId: string;
             projectName?: string;
         };
+        OuterActionPlan: {
+            actions: components["schemas"]["OuterPlannedAction"][];
+            /** Format: date-time */
+            createdAt: string;
+            epoch: string;
+            id: string;
+            request: components["schemas"]["OuterRequest"];
+            sources: components["schemas"]["OuterSource"][];
+        };
+        OuterActionReceipt: {
+            /** Format: date-time */
+            attemptedAt: string;
+            /** Format: date-time */
+            completedAt: string;
+            id: string;
+            sessionId: string;
+            state: string;
+        };
+        OuterActionSpec: {
+            branch?: string;
+            config: components["schemas"]["AgentConfig"];
+            dependsOn: number[];
+            operation: string;
+            projectId: string;
+            sessionId?: string;
+            text?: string;
+        };
         OuterAudit: {
             /** Format: date-time */
             at: string;
@@ -6881,6 +6925,54 @@ export interface components {
         OuterFactsResponse: {
             facts: components["schemas"]["OuterFact"][];
         };
+        OuterPlanProposal: {
+            actions: components["schemas"]["OuterActionSpec"][];
+            requestId: string;
+            sourceProjects: string[];
+        };
+        OuterPlanReceipt: {
+            actions: components["schemas"]["OuterActionReceipt"][];
+            /** Format: date-time */
+            approvedAt: string;
+            digest: string;
+            /** Format: date-time */
+            expiresAt: string;
+            plan: components["schemas"]["OuterActionPlan"];
+        };
+        OuterPlannedAction: {
+            controllerGeneration: string;
+            conversationId: string;
+            id: string;
+            projectLabel: string;
+            /** Format: int64 */
+            projectRevision: number;
+            providerConversationId: string;
+            spec: components["schemas"]["OuterActionSpec"];
+            targetDigest: string;
+        };
+        OuterRequest: {
+            /** Format: int64 */
+            bindingRevision: number;
+            controllerGeneration: string;
+            conversationId: string;
+            epoch: string;
+            /** Format: date-time */
+            expiresAt: string;
+            humanMessage: string;
+            id: string;
+            /** Format: date-time */
+            issuedAt: string;
+            ownerSessionId?: string;
+            payload: string;
+            payloadDigest: string;
+            planId?: string;
+            providerConversationId: string;
+            /** Format: int64 */
+            scopeRevision: number;
+            sessionId: string;
+            settingsDigest: string;
+            sources: components["schemas"]["OuterSource"][];
+        };
         OuterRequestView: {
             /** Format: date-time */
             acceptedAt: string;
@@ -6926,10 +7018,12 @@ export interface components {
             unknown: boolean;
         };
         OuterView: {
+            actionsEnabled: boolean;
             binding: null | components["schemas"]["OuterBinding"];
             capacity: null | components["schemas"]["DomainOuterCapacityObservation"];
             incoming: components["schemas"]["OuterEvidence"][];
             limitations: string[];
+            plans: components["schemas"]["OuterPlanReceipt"][];
             requests: components["schemas"]["OuterRequestView"][];
             reservations: components["schemas"]["OuterCapacity"][];
             session: null | components["schemas"]["OuterSessionView"];
@@ -14419,6 +14513,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OuterFactsResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    proposeOuterPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OuterPlanProposal"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OuterPlanReceipt"];
                 };
             };
             /** @description Conflict */

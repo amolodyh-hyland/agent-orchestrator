@@ -50,6 +50,11 @@ func (s *Service) acquireFeedbackInput(ctx context.Context, id domain.SessionID,
 func (c *Controller) acquireFeedbackInput(ctx context.Context, msg ports.ChatUserMessage, action string) (func(), error) {
 	// Outer authority must be the last admission: other guards may wait long
 	// enough for its exact request deadline to pass.
+	if controlled, err := domain.IsOuterParticipant(ctx, c.store, c.sessionID); err != nil {
+		return nil, err
+	} else if controlled {
+		return c.acquireOuterInput(ctx, msg, action)
+	}
 	feedbackRelease := func() {}
 	if c.reviewID != "" || c.feedbackInput == nil {
 		if err := domain.CheckFactoryFeedback(ctx, c.store, c.sessionID); err != nil {

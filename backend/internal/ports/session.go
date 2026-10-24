@@ -18,6 +18,7 @@ var ErrActivityProjectionContention = errors.New("activity projection contention
 type SpawnConfig struct {
 	// Set only by the private outer lifecycle service. A reduced scope starts a
 	// fresh generation without replacing any real Project's coordinator.
+	OuterActionID   string
 	OuterGeneration int64
 	ProjectID       domain.ProjectID
 	IssueID         domain.IssueID

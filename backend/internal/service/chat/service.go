@@ -439,6 +439,16 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			return nil, domain.ErrOuterHeld
 		}
 	}
+	if participant, err := domain.IsOuterParticipant(ctx, s.store, cfg.SessionID); err != nil {
+		return nil, err
+	} else if participant && !cfg.ReconnectOnly {
+		if _, ok := domain.OuterExecutionFrom(ctx); !ok {
+			return nil, domain.ErrOuterHeld
+		}
+		if err := domain.CheckOuterOperation(ctx, s.store, "spawn", cfg.ProjectID, ""); err != nil {
+			return nil, err
+		}
+	}
 	owner := conversationOwner(cfg)
 	if owner.Kind == domain.ConversationOwnerReview {
 		cfg.ReadOnly = true
@@ -1758,12 +1768,28 @@ func (s *Service) AbortChatHandoff(id domain.SessionID) {
 
 // Stop closes a session's controller. Safe to call for a session that has none.
 func (s *Service) Stop(ctx context.Context, id domain.SessionID) error {
+	return s.stopWithAdmission(ctx, id, nil)
+}
+
+// StopChatWithAdmission rechecks the exact stop after waiting for controller ownership.
+func (s *Service) StopChatWithAdmission(ctx context.Context, id domain.SessionID, admit func(context.Context) (func(), error)) error {
+	return s.stopWithAdmission(ctx, id, admit)
+}
+
+func (s *Service) stopWithAdmission(ctx context.Context, id domain.SessionID, admit func(context.Context) (func(), error)) error {
 	owner := domain.SessionConversationOwner(id)
 	gate := s.controllerGate(owner)
 	if err := gate.lock(ctx); err != nil {
 		return err
 	}
 	defer gate.unlock()
+	if admit != nil {
+		release, err := admit(ctx)
+		if err != nil {
+			return err
+		}
+		release()
+	}
 	// Each side is marked closed before its host stops, and a host that fails to
 	// stop stays queued for the periodic cleanup retry. Stopping the main chat
 	// (Exit agent, agent switch, spawn rollback) must not depend on it.
@@ -1785,6 +1811,13 @@ func (s *Service) Stop(ctx context.Context, id domain.SessionID) error {
 		s.mu.Unlock()
 		var stopErr error
 		if s.stopProviderHost != nil {
+			if admit != nil {
+				release, err := admit(ctx)
+				if err != nil {
+					return err
+				}
+				defer release()
+			}
 			stopErr = s.stopProviderHost(ctx, id)
 		}
 		return errors.Join(stopErr, s.clearHibernation(ctx, id))
@@ -1793,18 +1826,28 @@ func (s *Service) Stop(ctx context.Context, id domain.SessionID) error {
 	preserved := controller.preserveProviderOnStop
 	hibernating := controller.handoff == controllerHandoffHibernate
 	controller.mu.Unlock()
+	stopHost := func() error {
+		if admit != nil {
+			release, err := admit(ctx)
+			if err != nil {
+				return err
+			}
+			defer release()
+		}
+		return s.stopProviderHost(ctx, id)
+	}
 	var hostErr error
 	if hibernating && s.stopProviderHost != nil {
 		// Hibernate may already have consumed the adapter's close-once guard.
 		// Explicit Kill can still retry authenticated shutdown of this owner.
-		hostErr = s.stopProviderHost(ctx, id)
+		hostErr = stopHost()
 	}
-	err := errors.Join(hostErr, controller.Terminate(ctx))
+	err := errors.Join(hostErr, controller.terminateWithAdmission(ctx, admit))
 	if preserved && !hibernating && s.stopProviderHost != nil {
 		// Close may already have retired this handle (for example after a failed
 		// projection). Explicit Stop targets current session ownership under the
 		// start/stop gate; a stale handle's Terminate must not target a replacement.
-		err = errors.Join(err, s.stopProviderHost(ctx, id))
+		err = errors.Join(err, stopHost())
 	}
 
 	// Keep the only handle to a controller whose event stream has not ended. A

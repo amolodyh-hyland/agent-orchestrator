@@ -21,7 +21,7 @@ func (s *Service) SetOuterAdmission(a OuterAdmission) {
 	s.mu.Unlock()
 }
 func (s *Service) acquireOuterInput(ctx context.Context, id domain.SessionID, msg ports.ChatUserMessage, action string) (func(), error) {
-	bound, err := domain.IsOuter(ctx, s.store, id)
+	bound, err := domain.IsOuterControlledSession(ctx, s.store, id)
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +37,7 @@ func (s *Service) acquireOuterInput(ctx context.Context, id domain.SessionID, ms
 	return a.AcquireOuterInput(ctx, id, msg, action)
 }
 func (c *Controller) acquireOuterInput(ctx context.Context, msg ports.ChatUserMessage, action string) (func(), error) {
-	bound, err := domain.IsOuter(ctx, c.store, c.sessionID)
+	bound, err := domain.IsOuterControlledSession(ctx, c.store, c.sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +96,7 @@ func (s *Service) DeliverOuterSend(ctx context.Context, id domain.SessionID, tex
 	return c.Send(ctx, ports.ChatUserMessage{Text: text, ClientMessageID: key, Origin: domain.MessageOriginHuman})
 }
 func (c *Controller) auditOuterEvent(ctx context.Context, event ports.ChatEvent) error {
-	bound, err := domain.IsOuter(ctx, c.store, c.sessionID)
+	bound, err := domain.IsOuterControlledSession(ctx, c.store, c.sessionID)
 	if err != nil || !bound {
 		return err
 	}
@@ -134,11 +134,11 @@ func (c *Controller) auditOuterEvent(ctx context.Context, event ports.ChatEvent)
 			return err
 		}
 	}
-	return audit.AppendOuterAudit(ctx, domain.OuterAudit{Operation: "native." + string(event.Kind), State: "observed", RequestID: request, SessionID: c.sessionID, Generation: c.generation, Digest: domain.OuterDigest([]any{event.Kind, event.ProviderTurnID, event.ProviderItemID}), ReceiptID: turn, Reason: "native invocation metadata only; raw output retained in transcript"})
+	return audit.AppendOuterAudit(ctx, domain.OuterAudit{Operation: "native." + string(event.Kind), State: "observed", RequestID: request, SessionID: c.sessionID, ProjectID: string(c.conversation.ProjectID), Generation: c.generation, Digest: domain.OuterDigest([]any{event.Kind, event.ProviderTurnID, event.ProviderItemID}), ReceiptID: turn, Reason: "native invocation metadata only; raw output retained in transcript"})
 }
 
 func (c *Controller) checkOuterReply(ctx context.Context, id, kind string) error {
-	bound, err := domain.IsOuter(ctx, c.store, c.sessionID)
+	bound, err := domain.IsOuterControlledSession(ctx, c.store, c.sessionID)
 	if err != nil || !bound {
 		return err
 	}

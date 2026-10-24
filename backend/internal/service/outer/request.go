@@ -102,7 +102,11 @@ func (s *Service) AcquireOuterInput(ctx context.Context, id domain.SessionID, ms
 		release()
 		return nil, err
 	}
-	if !found || b.Paused || b.HistoryHeld || b.SessionID != id || b.Revision != r.BindingRevision || b.ScopeRevision != r.ScopeRevision || r.Epoch != s.epoch || !s.now().Before(r.ExpiresAt) || !receipt.AttemptedAt.IsZero() {
+	owner := id
+	if r.PlanID != "" {
+		owner = r.OwnerSessionID
+	}
+	if !found || b.Paused || b.HistoryHeld || b.SessionID != owner || b.Revision != r.BindingRevision || b.ScopeRevision != r.ScopeRevision || r.Epoch != s.epoch || !s.now().Before(r.ExpiresAt) || !receipt.AttemptedAt.IsZero() {
 		return fail("stale_or_used_authority")
 	}
 	if r.SessionID != id || msg.Text != r.Payload || domain.OuterDigest(msg.Text) != r.PayloadDigest || msg.Origin != domain.MessageOriginHuman || len(msg.Content) > 0 || len(msg.Excerpts) > 0 || len(msg.NativeSkills) > 0 || msg.Continuation || msg.ReportBatchID != "" {

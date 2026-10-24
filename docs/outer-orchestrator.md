@@ -1,4 +1,4 @@
-# Outer orchestrator M1
+# Outer orchestrator M1 and M2
 
 The host binding uses an ordinary orchestrator in its own repository-free Project.
 Explicit desktop setup selects the existing Codex Chat settings. Setup and passive
@@ -14,8 +14,8 @@ binding, append-only timeline, exact requests, scope credentials and reservation
 Existing run records, report receipts and factory feedback holds remain independent.
 
 Only a focused trusted desktop Send may issue one exact human request. Public
-authorship fields are labels. Alternate outer input, active steering, promotion to
-steering and cross-project mutations remain held. Queueing a bound Send does not
+authorship fields are labels. Alternate outer input, active steering and promotion
+to steering remain held. Cross-project actions use the finite M2 adapters below. Queueing a bound Send does not
 extend its two-minute submission deadline. Restoring observation never grants a
 new turn or replays an uncertain submission.
 
@@ -105,3 +105,91 @@ The desktop integration also mounts the actual task composer and settings form,
 uses the ordinary API client through the real router, and confirms that enrolled
 Project and standalone tasks and Project settings need the exact native gesture.
 Scripted confirmation clicks and identical anonymous REST requests stay held.
+
+
+## M2 confirmed actions
+
+`AO_OUTER_M2_ACTIONS=1` opts a separately launched build into the three adapters.
+The default is off. This setting does not start a turn, approve a plan, install
+anything or activate another interface. Existing launch settings and native
+permission gates still apply.
+
+The outer uses `ao outer view` to inspect its current request and
+`ao outer plan --file manifest.json` to propose concrete instances. The CLI carries
+the owned scope credential; environment identity labels grant no authority.
+There is no CLI approval command. A proposal is inert and is sealed once for its
+original human request. The desktop obtains the actual sealed journal through
+its private read channel, displays the original request, full ordered manifest,
+identities, settings, sources, destinations and digest, then asks for one native
+confirmation. Execution permission and source clarification/disclosure consent
+are separately audited within that interaction. Decline permanently cancels
+that manifest. Changed content requires a new human request.
+
+The finite operations are `send`, `spawn`, `kill` and `retire`:
+
+- `send` names an existing eligible Codex Chat project coordinator and exact
+  plain text. It never ensures, restores or resumes the target.
+- `spawn` names one Project, exact new task branch, plain text and explicit
+  model, effort and permissions. The existing manager creates the owned task
+  worktree, enrolls the worker before launch, and starts Chat without an opening
+  turn. The separate exact approved turn uses the ordinary controller afterward.
+  Projects with setup commands or shared symlink provisioning hold this adapter;
+  they cannot become an implicit installation or heavy-job path.
+- `kill` and `retire` name an already participating worker and stop only that
+  execution. Worktrees, artifacts, restore inventory and containers are retained.
+  Neither action authorizes cleanup, a replacement or a later continuation.
+
+Example proposal (the model and identities must match the intended real targets):
+
+```json
+{
+  "requestId": "exact-current-human-request-id",
+  "sourceProjects": ["source-project-id", "destination-project-id"],
+  "actions": [
+    {
+      "operation": "send",
+      "projectId": "destination-project-id",
+      "sessionId": "exact-existing-coordinator-id",
+      "text": "Exact outgoing content",
+      "config": {},
+      "dependsOn": []
+    }
+  ]
+}
+```
+
+Dependencies are one-based indexes of earlier manifest entries. The maximum is
+16 concrete operations; there are no wildcard or future targets. The passive
+view bounds full manifests to the eight most recent plans; older journals and
+receipts remain retained. An action can wait in the existing Chat queue, but its
+two-minute submission deadline starts at native confirmation and never extends.
+
+Migration 0233 adds immutable plans, action attempts and retained participant
+snapshots. It reuses the monitoring participant vocabulary and holds feedback,
+review starts, automatic spawning and alternate input for enrolled executions.
+Existing confirmed factory-run review gates remain independent: a generic M2
+send cannot replace an exact-head review continuation approval. Unsupported
+steer, terminal, ensure/delegate, restore/resume, review and release adapters
+remain held.
+
+Every continuation has its own immutable request and turn link. Final eager and
+deferred writes recheck scope, pause, current owner, settings, sources, epoch,
+expiry and station admission. New workers reserve a background station before
+launch and retain it through uncertain submission. The same 2-station/1-heavy
+accounting and foreground reservation apply. No plan grants a child execution
+or feedback turn. Selected-project reads retain transitive imported sources;
+removing a source holds reimport through another Project's retained content.
+
+The existing native acceptance and settlement hooks update the original request
+and action receipts. Submission is single use even when its result is unknown;
+late native acceptance may reconcile the original handle after expiry. Restart
+never replays an action or revives its authority. Unknown reservations remain
+visible until exact settlement evidence. Partial completion is visible and
+uncompleted dependencies hold; independent listed actions can proceed within
+their original authority and capacity. Results and feedback never wake the outer.
+
+Focused coverage includes real router/controller/storage paths with synthetic
+providers, both final transport seams, omitted/forged authority, sealed-plan
+changes, concurrent/replayed approval, queue expiry, pause/settings/generation
+changes, source removal, unknown receipts, preserving stop and held adapters.
+No model or provider call is needed for these checks.

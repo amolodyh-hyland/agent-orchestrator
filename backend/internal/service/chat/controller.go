@@ -1869,6 +1869,9 @@ func (c *Controller) checkFactoryMessage(ctx context.Context, msg ports.ChatUser
 		return outerErr
 	}
 	outerRelease()
+	if participant, err := domain.IsOuterControlledSession(ctx, c.store, c.sessionID); err != nil || participant {
+		return err
+	}
 	err := domain.CheckFactoryFeedback(ctx, c.store, c.sessionID)
 	if err == nil {
 		return nil
@@ -1894,7 +1897,7 @@ func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (p
 	var ref ports.ChatTurnRef
 	// A review conversation is read-only whatever its mode, so it never steps down.
 	fallback := permissionFallback{enabled: !c.permissionFallbackOff && c.reviewID == "", log: c.log, session: c.sessionID, stage: "turn"}
-	outerTarget, outerErr := domain.IsOuter(ctx, c.store, c.sessionID)
+	outerTarget, outerErr := domain.IsOuterControlledSession(ctx, c.store, c.sessionID)
 	if outerErr != nil {
 		return ref, outerErr
 	}
@@ -2967,8 +2970,18 @@ func (c *Controller) Close(ctx context.Context) error {
 // Terminate closes the controller and explicitly destroys a persistent provider
 // host. Daemon shutdown uses Close so the host survives; user/session teardown
 // and controller replacement use Terminate.
-func (c *Controller) Terminate(ctx context.Context) error {
+func (c *Controller) Terminate(ctx context.Context) error { return c.terminateWithAdmission(ctx, nil) }
+
+func (c *Controller) terminateWithAdmission(ctx context.Context, admit func(context.Context) (func(), error)) error {
 	c.mu.Lock()
+	if admit != nil {
+		release, err := admit(ctx)
+		if err != nil {
+			c.mu.Unlock()
+			return err
+		}
+		defer release()
+	}
 	c.explicitClose = true
 	if c.forkCancel != nil {
 		c.forkCancel()

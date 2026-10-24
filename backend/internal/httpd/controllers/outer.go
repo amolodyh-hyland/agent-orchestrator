@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -41,6 +42,7 @@ type OuterAuditQuery struct {
 
 // Register mounts the passive outer projections.
 func (c *OuterController) Register(r chi.Router) {
+	r.Post("/outer/plans", c.proposePlan)
 	r.Get("/outer", c.view)
 	r.Get("/outer/facts", c.facts)
 	r.Get("/outer/audit", c.audit)
@@ -99,4 +101,23 @@ func (c *OuterController) audit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	envelope.WriteJSON(w, 200, OuterAuditResponse{Events: v})
+}
+
+func (c *OuterController) proposePlan(w http.ResponseWriter, r *http.Request) {
+	if !c.ready(w, r) {
+		return
+	}
+	var in domain.OuterPlanProposal
+	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10))
+	d.DisallowUnknownFields()
+	if d.Decode(&in) != nil {
+		envelope.WriteAPIError(w, r, 409, "conflict", "OUTER_HELD", "Exact bounded proposal required", nil)
+		return
+	}
+	plan, err := c.Svc.ProposePlan(r.Context(), in)
+	if err != nil {
+		envelope.WriteAPIError(w, r, 409, "conflict", "OUTER_HELD", "Plan held; inspect target, source clarification and participant controls", nil)
+		return
+	}
+	envelope.WriteJSON(w, 200, plan)
 }
