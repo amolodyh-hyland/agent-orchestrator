@@ -1,8 +1,6 @@
 package httpd
 
 import (
-	"bytes"
-	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -66,45 +64,8 @@ func outerGuard(router chi.Router, svc *outer.Service) func(http.Handler) http.H
 			if !classified {
 				op = "unclassified"
 			}
-			var project domain.ProjectID
-			var session domain.SessionID
-			resolved := false
-			idKind := "project"
-			if strings.HasPrefix(pattern, "/api/v1/prs/") {
-				idKind = "pr"
-			}
-			for _, item := range []struct{ Key, Kind string }{{"sessionId", "session"}, {"projectId", "project"}, {"id", idKind}, {"reviewId", "review"}, {"runId", "run"}, {"prId", "pr"}} {
-				id := match.URLParam(item.Key)
-				if id == "" {
-					continue
-				}
-				project, session, err = svc.ResolveTarget(ctx, item.Kind, id)
-				resolved = true
-				break
-			}
-			var body map[string]json.RawMessage
-			if !resolved && r.Body != nil {
-				raw, e := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
-				if e != nil {
-					err = domain.ErrOuterHeld
-				} else {
-					r.Body = io.NopCloser(bytes.NewReader(raw))
-					_ = json.Unmarshal(raw, &body)
-				}
-				for _, entry := range []struct{ Key, Kind string }{{"sessionId", "session"}, {"projectId", "project"}} {
-					value := body[entry.Key]
-					if len(value) == 0 {
-						continue
-					}
-					var id string
-					if json.Unmarshal(value, &id) != nil {
-						err = domain.ErrOuterHeld
-						break
-					}
-					project, session, err = svc.ResolveTarget(ctx, entry.Kind, id)
-					break
-				}
-			}
+			project, session, targetErr := resolveOuterRouteTarget(w, r, match, pattern, svc)
+			err = targetErr
 			if a, ok := domain.OuterNativeActionFrom(ctx); ok && ctx.Value(outerNativeRelayKey{}) == true {
 				if project == a.ProjectID && session == a.SessionID {
 					op = a.Operation
@@ -200,8 +161,8 @@ var outerMutationManifest = map[string]string{
 	"POST /api/v1/notifications/read-all":                                                              "native_only",
 	"DELETE /api/v1/notifications/{id}":                                                                "native_only",
 	"PATCH /api/v1/notifications/{id}":                                                                 "native_only",
-	"POST /api/v1/orchestrators":                                                                       "native_only",
-	"POST /api/v1/orchestrators/delegate":                                                              "native_only",
+	"POST /api/v1/orchestrators":                                                                       "session.scoped",
+	"POST /api/v1/orchestrators/delegate":                                                              "session.scoped",
 	"POST /api/v1/projects":                                                                            "project.scoped",
 	"POST /api/v1/projects/clone":                                                                      "project.scoped",
 	"POST /api/v1/projects/clone/cleanup":                                                              "project.scoped",

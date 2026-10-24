@@ -155,21 +155,17 @@ func controlOuterNative(w http.ResponseWriter, req *http.Request, router chi.Rou
 		path = strings.Replace(path, "%s", url.PathEscape(in.TargetID), 1)
 	}
 	path = strings.Replace(path, "%s", url.PathEscape(in.PendingID), 1)
-	var project domain.ProjectID
-	var session domain.SessionID
-	var err error
-	if route.Owner == "body" {
-		var body struct {
-			ProjectID domain.ProjectID `json:"projectId"`
-		}
-		if json.Unmarshal(in.Body, &body) != nil || body.ProjectID == "" {
-			reject()
-			return
-		}
-		project, session, err = svc.ResolveTarget(req.Context(), "project", string(body.ProjectID))
-	} else {
-		project, session, err = svc.ResolveTarget(req.Context(), route.Owner, in.TargetID)
+	forward, err := http.NewRequestWithContext(req.Context(), route.Method, "http://127.0.0.1/api/v1"+path, bytes.NewReader(in.Body))
+	if err != nil {
+		reject()
+		return
 	}
+	match := chi.NewRouteContext()
+	if !router.Match(match, route.Method, forward.URL.Path) {
+		reject()
+		return
+	}
+	project, session, err := resolveOuterRouteTarget(w, forward, match, match.RoutePattern(), svc)
 	if err != nil {
 		reject()
 		return
@@ -201,11 +197,7 @@ func controlOuterNative(w http.ResponseWriter, req *http.Request, router chi.Rou
 	completed := false
 	defer func() { _ = finish(completed) }()
 	ctx = context.WithValue(ctx, chi.RouteCtxKey, nil)
-	forward, err := http.NewRequestWithContext(ctx, route.Method, "http://127.0.0.1/api/v1"+path, bytes.NewReader(in.Body))
-	if err != nil {
-		reject()
-		return
-	}
+	forward = forward.WithContext(ctx)
 	forward.RemoteAddr = req.RemoteAddr
 	forward.Header.Set("content-type", "application/json")
 	recorder := &outerNativeRecorder{header: make(http.Header)}

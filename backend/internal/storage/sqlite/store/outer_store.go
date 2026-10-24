@@ -149,7 +149,7 @@ func (s *Store) CheckOuterOperation(ctx context.Context, operation string, proje
 		}
 		return domain.ErrOuterHeld
 	}
-	guarded := string(project) == b.AnchorProjectID || slices.Contains(b.ProjectIDs, string(project)) || (project == "" && session == "")
+	guarded := operation == "native_only" || operation == "unclassified" || string(project) == b.AnchorProjectID || slices.Contains(b.ProjectIDs, string(project)) || (project == "" && session == "")
 	if !guarded {
 		return nil
 	}
