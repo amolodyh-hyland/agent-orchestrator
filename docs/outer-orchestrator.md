@@ -190,6 +190,9 @@ removing a source holds reimport through another Project's retained content.
 Confirmed worker branches must be new and retain the sealed name in every
 repository. Local or remote collisions hold before worktree creation; allocation
 never substitutes a suffix or checks out a branch that appeared during a race.
+If a later repository fails, completed worktrees remain intact and their inventory
+and root path are persisted before the unstarted worker is marked terminated,
+including after request cancellation or restart.
 Reads exceeding 1,000 imported source records per Project hold rather than
 discarding labels from the history.
 

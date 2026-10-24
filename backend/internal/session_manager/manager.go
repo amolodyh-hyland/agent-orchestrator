@@ -1378,7 +1378,11 @@ func (m *Manager) spawn(ctx context.Context, cfg ports.SpawnConfig, mayHaveStart
 	}
 	if err != nil {
 		if ws.Path != "" {
-			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, prep != nil, false)
+			if cfg.OuterActionID != "" {
+				m.markSpawnFailedTerminatedAfterFailure(ctx, id, false)
+			} else {
+				m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, prep != nil, false)
+			}
 		} else {
 			// No worktree exists, so the seed row can be discarded.
 			m.rollbackSpawnSeedRowAfterFailure(ctx, id)
@@ -2162,14 +2166,25 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 		Repos:         childRepos,
 		Assets:        assets,
 	})
-	if err != nil && (cfg.TaskPreparation == "" || len(info.Worktrees) == 0) {
+	// Confirmed spawns retain completed checkouts after a later repository fails.
+	// Record their inventory even when the original request was canceled.
+	retainInventory := cfg.TaskPreparation != "" || cfg.OuterActionID != ""
+	if err != nil && (!retainInventory || len(info.Worktrees) == 0 && info.Root.Path == "") {
 		return ports.WorkspaceInfo{}, nil, err
 	}
 	persistCtx := ctx
-	if cfg.TaskPreparation != "" {
+	if retainInventory {
 		var cancel context.CancelFunc
 		persistCtx, cancel = spawnRollbackContext(ctx)
 		defer cancel()
+	}
+	if cfg.OuterActionID != "" && info.Root.Path != "" {
+		updated, recordErr := m.store.SetSessionNamedWorkspace(persistCtx, id, "", info.Root.Branch, info.Root.Path, info.Root.RepoPath, m.clock())
+		if recordErr != nil {
+			err = errors.Join(err, recordErr)
+		} else if !updated {
+			err = errors.Join(err, errors.New("record confirmed workspace: session ownership changed"))
+		}
 	}
 	var previousRows []domain.SessionWorktreeRecord
 	if cfg.TaskPreparation != "" {
@@ -2203,8 +2218,8 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 			WorktreePath: wt.Path,
 			State:        "active",
 		}); storeErr != nil {
-			if cfg.TaskPreparation != "" {
-				return info.Root, &info, errors.Join(err, fmt.Errorf("record prepared workspace worktree %q: %w", wt.RepoName, storeErr))
+			if retainInventory {
+				return info.Root, &info, errors.Join(err, fmt.Errorf("record workspace worktree %q: %w", wt.RepoName, storeErr))
 			}
 			cleanupCtx, cancel := spawnRollbackContext(ctx)
 			cleanupErr := workspaceProject.DestroyWorkspaceProject(cleanupCtx, info)
