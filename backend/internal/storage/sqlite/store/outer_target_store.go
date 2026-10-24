@@ -51,9 +51,9 @@ func (s *Store) ResolveOuterTarget(ctx context.Context, kind, id string) (domain
 		}
 		if !found && kind == "pr" {
 			if num, e := strconv.Atoi(id); e == nil {
-				count, err := s.CountActivePRsByNumber(ctx, num)
-				if err != nil {
-					return "", "", err
+				count, countErr := s.CountActivePRsByNumber(ctx, num)
+				if countErr != nil {
+					return "", "", countErr
 				}
 				if count > 1 {
 					return "", "", domain.ErrOuterHeld
