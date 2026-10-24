@@ -1,10 +1,14 @@
 // @vitest-environment node
+import { createHmac } from "node:crypto";
+import type { IpcMainInvokeEvent } from "electron";
+import { createMainProcessDelegationAuthority } from "./multica-delegation-authority";
+import { RESULT_PREVIEW, RESULT_CLICK } from "../shared/specialist-result";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createMulticaPublicApi } from "./multica-public-api";
 import { delegationResult } from "./multica-result-model";
-import { createResultImportFlow, type ResultContext } from "./specialist-result-import";
+import { createResultImportFlow, registerResultImport, type ResultContext } from "./specialist-result-import";
 import type { MulticaCredentials } from "./multica-credentials";
 import type { PublicDelegation } from "./multica-public-api-model";
 import { resolveMulticaServer } from "../shared/multica";
@@ -37,4 +41,22 @@ it("does not restore an invalidated preview after a delayed metadata request",as
  const flow=createResultImportFlow({context:()=>new Promise(resolve=>{release=resolve;}),client:async()=>f.client,policy:f.policy,save:f.save,confirm:f.confirm,enabled:()=>true});
  const preview=flow.preview("run");flow.invalidate();release(f.context);
  expect(await preview).toBeNull();expect(f.fetcher).not.toHaveBeenCalled();
+});
+
+
+it("rejects foreign frames, unfocused clicks and forged native result requests",async()=>{
+ const f=setup();const key=Buffer.alloc(32,7);const authority=createMainProcessDelegationAuthority(key);
+ const handlers=new Map<string,(event:IpcMainInvokeEvent,...args:unknown[])=>unknown>();
+ const shell={id:7,mainFrame:{},isDestroyed:()=>false,isFocused:vi.fn(()=>true),send:vi.fn(),on:vi.fn(),removeListener:vi.fn()};
+ const event={sender:{id:7},senderFrame:shell.mainFrame} as unknown as IpcMainInvokeEvent;
+ const fetcher=async(_url:unknown,init?:RequestInit)=>{const mac=authority.runRequestMAC(String(init?.body));const raw=JSON.stringify({record:f.context});const proof=createHmac("sha256",key).update(`journal-response-v1:${mac}:${raw}`).digest("hex");return new Response(raw,{headers:{"X-AO-Delegation-Response-MAC":proof}});};
+ const registration=registerResultImport({ipcMain:{handle:(channel,callback)=>{handlers.set(channel,callback);},removeHandler:vi.fn()},shellWebContents:shell as unknown as Parameters<typeof registerResultImport>[0]["shellWebContents"],authority,origin:()=>"http://127.0.0.1:9999",fetch:fetcher as typeof fetch,client:async()=>f.client,policy:f.policy,enabled:()=>true,confirm:f.confirm});
+ const preview=await handlers.get(RESULT_PREVIEW)!(event,"run") as import("../shared/specialist-result").ResultPreview;
+ const input={id:preview.id,digest:preview.digest};
+ await handlers.get(RESULT_CLICK)!({...event,senderFrame:{}} as IpcMainInvokeEvent,input);
+ shell.isFocused.mockReturnValue(false);await handlers.get(RESULT_CLICK)!(event,input);
+ shell.isFocused.mockReturnValue(true);await handlers.get(RESULT_CLICK)!(event,{...input,approved:true});
+ expect(f.confirm).not.toHaveBeenCalled();expect(f.fetcher).not.toHaveBeenCalled();
+ f.confirm.mockResolvedValue(false);await handlers.get(RESULT_CLICK)!(event,input);
+ expect(f.confirm).toHaveBeenCalledOnce();expect(f.fetcher).not.toHaveBeenCalled();registration.dispose();
 });
