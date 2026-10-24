@@ -1,6 +1,10 @@
 {
+	"outer.plans": "Requested action plans",
+	"outer.plansDisabled": "Confirmed actions are held in this build configuration.",
+	"outer.planManifest": "Exact sealed manifest",
+	"outer.confirmPlan": "Review exact plan",
 	"outer.title": "Outer orchestrator",
-	"outer.help": "Ask questions about selected Projects in the main Codex Chat. Each Send is one human request. Cross-project changes are held in M1.",
+	"outer.help": "Ask questions about selected Projects in the main Codex Chat. Each Send is one human request. Supported cross-project actions require an exact native plan confirmation.",
 	"outer.setup": "Set up outer Chat",
 	"outer.saveSettings": "Apply exact settings",
 	"outer.replyCancel": "Cancel",

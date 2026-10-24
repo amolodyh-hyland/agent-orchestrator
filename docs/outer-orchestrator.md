@@ -123,7 +123,9 @@ its private read channel, displays the original request, full ordered manifest,
 identities, settings, sources, destinations and digest, then asks for one native
 confirmation. Execution permission and source clarification/disclosure consent
 are separately audited within that interaction. Decline permanently cancels
-that manifest. Changed content requires a new human request.
+that manifest. Changed content requires a new human request. The outer console
+keeps selected-project lifecycle shortcuts held; confirmed plans are its only
+cross-project action surface.
 
 The finite operations are `send`, `spawn`, `kill` and `retire`:
 

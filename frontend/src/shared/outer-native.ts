@@ -57,6 +57,7 @@ export type OuterSendExpectation = {
 	settingsDigest: string;
 };
 export type OuterNativeDraft =
+	| { operation: "plan"; planId: string; digest: string }
 	| { operation: "setup"; config: Record<string, unknown> }
 	| {
 			operation: "scope";

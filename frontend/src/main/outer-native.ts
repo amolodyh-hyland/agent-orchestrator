@@ -47,6 +47,13 @@ function validDraft(value: unknown): value is OuterNativeDraft {
 	const v = value as Record<string, unknown>;
 	const keys = Object.keys(v).sort().join(",");
 	switch (v.operation) {
+		case "plan":
+			return (
+				keys === "digest,operation,planId" &&
+				typeof v.planId === "string" &&
+				v.planId.length >= 16 && v.planId.length <= 128 &&
+				typeof v.digest === "string" && /^[a-f0-9]{64}$/.test(v.digest)
+			);
 		case "send": {
 			if (
 				!v.expected ||
@@ -229,6 +236,7 @@ export function registerOuterNative(options: {
 	authority: MainProcessDelegationAuthority;
 	origin: () => string | null;
 	fetch: typeof fetch;
+	confirmPlan?: (detail: string) => Promise<boolean>;
 }) {
 	const shell = options.shellWebContents;
 	const entries = new Map<
@@ -401,8 +409,44 @@ export function registerOuterNative(options: {
 		const id = entry.stage.id;
 		let attempted = false;
 		try {
+			let cancelled = false;
+			if (entry.draft.operation === "plan") {
+				const epoch = navigationEpoch;
+				const readBody = JSON.stringify({
+					projection: "view", nonce: randomUUID(), expires: Date.now() + 9000,
+				});
+				const readMAC = options.authority.outerReadRequestMAC(readBody);
+				const preview = await options.fetch(`${entry.origin}/internal/outer/read`, {
+					method: "POST", body: readBody, redirect: "error", credentials: "omit",
+					signal: AbortSignal.timeout(10_000),
+					headers: { "content-type": "application/json", "X-AO-Delegation-MAC": readMAC },
+				});
+				const record = await verifiedOuterRecord(preview, readMAC, options.authority) as OuterReadResponse;
+				if (record.projection !== "view" || !record.data.actionsEnabled)
+					throw new Error("outer_held");
+				const draft = entry.draft;
+				const plan = record.data.plans.find((p) => p.plan.id === draft.planId && p.digest === draft.digest);
+				if (!plan || new Date(plan.approvedAt).getFullYear() > 1970 || new Date(plan.expiresAt).getFullYear() > 1970)
+					throw new Error("outer_held");
+				const detail = JSON.stringify({
+					request: plan.plan.request.humanMessage,
+					outerSessionId: plan.plan.request.sessionId,
+					generation: plan.plan.request.controllerGeneration,
+					scopeRevision: plan.plan.request.scopeRevision,
+					digest: plan.digest,
+					operationCount: plan.plan.actions.length,
+					sourceClarificationAndDisclosure: plan.plan.sources,
+					actions: plan.plan.actions,
+					submissionDeadline: "Two minutes after confirmation. Each turn is single use; no follow-up authority.",
+				}, null, 2);
+				cancelled = !(await options.confirmPlan?.(detail));
+				if (!trusted(event) || !shell.isFocused() || epoch !== navigationEpoch ||
+					entry.origin !== options.origin() || entry.stage.expiresAt <= Date.now())
+					throw new Error("outer_held");
+			}
 			const body = JSON.stringify({
 				...entry.draft,
+				...(cancelled ? { operation: "plan.cancel" } : {}),
 				id,
 				nonce: randomUUID(),
 				expires: Date.now() + 9000,

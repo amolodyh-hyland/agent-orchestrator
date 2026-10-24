@@ -48,7 +48,6 @@ export function OuterConsole() {
 	const [valid, setValid] = useState(true);
 	const [status, setStatus] = useState("");
 	const [after, setAfter] = useState(0);
-	const [selectedSession, setSelectedSession] = useState("");
 	const [selectedRequest, setSelectedRequest] = useState("");
 	useEffect(() => setAfter(0), [auditProjectId]);
 	useEffect(() => {
@@ -369,81 +368,44 @@ export function OuterConsole() {
 														)}
 													</p>
 												) : null}
-												{f.source.kind ===
-												"sessions" ? (
-													<div className="flex gap-2 pt-1">
-														<Button
-															size="sm"
-															variant="ghost"
-															onClick={() =>
-																setSelectedSession(
-																	f.source.id
-																)
-															}
-														>
-															{t(
-																"outer.sessionControls"
-															)}
-														</Button>
-														{selectedSession ===
-														f.source.id ? (
-															<>
-																<OuterNativeButton
-																	size="sm"
-																	variant="outline"
-																	draft={{
-																		operation:
-																			"control",
-																		control:
-																			{
-																				action: "session.kill",
-																				targetId:
-																					f
-																						.source
-																						.id,
-																				body: {},
-																			},
-																	}}
-																	onResult={
-																		result
-																	}
-																>
-																	{t(
-																		"outer.stopSession"
-																	)}
-																</OuterNativeButton>
-																<OuterNativeButton
-																	size="sm"
-																	variant="outline"
-																	draft={{
-																		operation:
-																			"control",
-																		control:
-																			{
-																				action: "session.resume",
-																				targetId:
-																					f
-																						.source
-																						.id,
-																				body: {},
-																			},
-																	}}
-																	onResult={
-																		result
-																	}
-																>
-																	{t(
-																		"outer.resumeSession"
-																	)}
-																</OuterNativeButton>
-															</>
-														) : null}
-													</div>
-												) : null}
+
 											</article>
 										))
 									)}
 								</div>
+							))}
+						</section>
+						<section className="space-y-3">
+							<h2 className="font-medium">{t("outer.plans")}</h2>
+							{!view.data?.actionsEnabled ? <p>{t("outer.plansDisabled")}</p> : null}
+							{view.data?.plans?.map((plan) => (
+								<article key={plan.plan.id} className="border-b border-border py-2">
+									<p className="break-all text-xs">
+										{plan.plan.id} · {plan.plan.actions.length} · {plan.digest}
+									</p>
+									<p className="whitespace-pre-wrap">{plan.plan.request.humanMessage}</p>
+									<details>
+										<summary>{t("outer.planManifest")}</summary>
+										<pre className="whitespace-pre-wrap break-all text-xs">
+											{JSON.stringify(plan.plan, null, 2)}
+										</pre>
+									</details>
+									{plan.actions.map((action) => (
+										<p key={action.id} className="text-xs">
+											{action.id} · {action.sessionId} · {action.state}
+										</p>
+									))}
+									{new Date(plan.approvedAt).getFullYear() < 1971 &&
+									new Date(plan.expiresAt).getFullYear() < 1971 ? (
+										<OuterNativeButton
+											disabled={!view.data?.actionsEnabled || binding.paused || binding.historyHeld}
+											draft={{ operation: "plan", planId: plan.plan.id, digest: plan.digest }}
+											onResult={result}
+										>
+											{t("outer.confirmPlan")}
+										</OuterNativeButton>
+									) : null}
+								</article>
 							))}
 						</section>
 						<section>
