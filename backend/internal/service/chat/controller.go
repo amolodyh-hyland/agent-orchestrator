@@ -2266,6 +2266,7 @@ func (c *Controller) drainLocked(ctx context.Context, allowDispatch bool) error 
 			Content:         content,
 			Origin:          queued.Origin,
 			ClientMessageID: queued.ClientMessageID,
+			SenderSessionID: queued.SenderSessionID, SenderProjectID: queued.SenderProjectID, SenderDisplayName: queued.SenderDisplayName,
 		}
 		if err := c.checkFactoryMessage(ctx, queuedMessage); err != nil {
 			if errors.Is(err, domain.ErrFactoryFeedbackHeld) || errors.Is(err, domain.ErrOuterHeld) {
@@ -2973,14 +2974,17 @@ func (c *Controller) Close(ctx context.Context) error {
 func (c *Controller) Terminate(ctx context.Context) error { return c.terminateWithAdmission(ctx, nil) }
 
 func (c *Controller) terminateWithAdmission(ctx context.Context, admit func(context.Context) (func(), error)) error {
-	c.mu.Lock()
 	if admit != nil {
 		release, err := admit(ctx)
 		if err != nil {
-			c.mu.Unlock()
 			return err
 		}
 		defer release()
+		if !c.mu.TryLock() {
+			return domain.ErrOuterHeld
+		}
+	} else {
+		c.mu.Lock()
 	}
 	c.explicitClose = true
 	if c.forkCancel != nil {

@@ -119,7 +119,7 @@ func TestOuterPlanExactTurnReceiptRecoveryAndProvenance(t *testing.T) {
 	if err := f.st.CreateOuterRequest(native, request); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.st.AppendUserMessage(native, c.ID, target.ID, a.ControllerGeneration, domain.ConversationMessage{ID: "m2-message", ClientMessageID: a.ID, Text: a.Spec.Text, Origin: domain.MessageOriginHuman}, "m2-turn", f.now); err != nil {
+	if _, err := f.st.AppendUserMessage(native, c.ID, target.ID, a.ControllerGeneration, domain.ConversationMessage{ID: "m2-message", ClientMessageID: a.ID, Text: a.Spec.Text, Origin: domain.MessageOriginAutomation}, "m2-turn", f.now); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.st.AttemptOuterRequest(ctx, a.ID, p.Epoch, f.now); err != nil {

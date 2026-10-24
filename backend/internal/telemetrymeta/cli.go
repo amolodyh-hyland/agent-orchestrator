@@ -80,6 +80,9 @@ var legacyActorlessSystemCLICommands = map[string]struct{}{
 }
 
 var legacyActorlessUserCLICommands = map[string]struct{}{
+	"ao outer":                    {},
+	"ao outer view":               {},
+	"ao outer plan":               {},
 	"ao report status":            {},
 	"ao report resolve":           {},
 	"ao run":                      {},

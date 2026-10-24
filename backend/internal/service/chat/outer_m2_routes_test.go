@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log/slog"
+	"net/http"
 
 	"context"
 	"net/http/httptest"
@@ -14,12 +15,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/delegationauth"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	"github.com/google/uuid"
 )
 
 func TestOuterM2RoutesSeparateScopeProposalAndNativeExecution(t *testing.T) {
@@ -41,7 +43,7 @@ func TestOuterM2RoutesSeparateScopeProposalAndNativeExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 	call := func(path, body, credential, proof string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest("POST", "http://127.0.0.1"+path, strings.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1"+path, strings.NewReader(body))
 		req.RemoteAddr = "127.0.0.1:23456"
 		req.Header.Set("X-AO-Scope-Credential", credential)
 		req.Header.Set("X-AO-Delegation-MAC", proof)

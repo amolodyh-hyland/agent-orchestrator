@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"time"
 
@@ -93,7 +94,50 @@ func (s *Service) DeliverOuterSend(ctx context.Context, id domain.SessionID, tex
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}
-	return c.Send(ctx, ports.ChatUserMessage{Text: text, ClientMessageID: key, Origin: domain.MessageOriginHuman})
+	msg := ports.ChatUserMessage{Text: text, ClientMessageID: key, Origin: domain.MessageOriginHuman}
+	if journal, ok := s.store.(interface {
+		GetOuterRequest(context.Context, string) (domain.OuterRequestReceipt, error)
+	}); ok {
+		r, err := journal.GetOuterRequest(ctx, key)
+		if err != nil {
+			return domain.ConversationTurn{}, err
+		}
+		if r.Request.PlanID != "" {
+			policy, ok := s.store.(domain.OuterPolicy)
+			if !ok {
+				return domain.ConversationTurn{}, domain.ErrOuterHeld
+			}
+			b, found, err := policy.OuterBinding(ctx)
+			if err != nil || !found {
+				return domain.ConversationTurn{}, domain.ErrOuterHeld
+			}
+			labels := map[string]string{}
+			for _, source := range r.Request.Sources {
+				for _, project := range source.Sources {
+					if _, exists := labels[project]; !exists {
+						labels[project] = project
+					}
+				}
+				if source.ProjectID != "" {
+					label := source.Label
+					if label == "" {
+						label = source.ProjectID
+					}
+					labels[source.ProjectID] = label + " [" + source.ProjectID + "]"
+				}
+			}
+			sources := make([]string, 0, len(labels))
+			for _, label := range labels {
+				sources = append(sources, label)
+			}
+			slices.Sort(sources)
+			msg.Origin = domain.MessageOriginAutomation
+			msg.SenderSessionID = string(r.Request.OwnerSessionID)
+			msg.SenderProjectID = b.AnchorProjectID
+			msg.SenderDisplayName = "Outer / request " + r.Request.ID + " / sources " + strings.Join(sources, ", ")
+		}
+	}
+	return c.Send(ctx, msg)
 }
 func (c *Controller) auditOuterEvent(ctx context.Context, event ports.ChatEvent) error {
 	bound, err := domain.IsOuterControlledSession(ctx, c.store, c.sessionID)

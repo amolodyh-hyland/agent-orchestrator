@@ -6942,11 +6942,15 @@ export interface components {
         OuterPlannedAction: {
             controllerGeneration: string;
             conversationId: string;
+            harness: string;
             id: string;
+            mode: string;
+            permissionCeiling: string;
             projectLabel: string;
             /** Format: int64 */
             projectRevision: number;
             providerConversationId: string;
+            settings: components["schemas"]["DomainConversationSettings"];
             spec: components["schemas"]["OuterActionSpec"];
             targetDigest: string;
         };

@@ -1,4 +1,8 @@
 {
+	"outer.plans": "Planes de acciones solicitadas",
+	"outer.plansDisabled": "Las acciones confirmadas están bloqueadas en esta configuración.",
+	"outer.planManifest": "Manifiesto exacto sellado",
+	"outer.confirmPlan": "Revisar el plan exacto",
 	"library.bindingState": "Vínculo actual: {{id}} · {{state}} · {{hash}}",
 	"library.bindingEnabled": "Activado",
 	"library.bindingDisabled": "Desactivado",

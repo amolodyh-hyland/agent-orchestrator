@@ -429,12 +429,17 @@ export function registerOuterNative(options: {
 				if (!plan || new Date(plan.approvedAt).getFullYear() > 1970 || new Date(plan.expiresAt).getFullYear() > 1970)
 					throw new Error("outer_held");
 				const detail = JSON.stringify({
+					requestId: plan.plan.request.id,
+					planId: plan.plan.id,
 					request: plan.plan.request.humanMessage,
 					outerSessionId: plan.plan.request.sessionId,
 					generation: plan.plan.request.controllerGeneration,
 					scopeRevision: plan.plan.request.scopeRevision,
 					digest: plan.digest,
 					operationCount: plan.plan.actions.length,
+					outerSettings: record.data.session,
+					admission: { stations: 2, heavyJobs: 1, foregroundReserve: record.data.binding?.foregroundReserve },
+					separateGates: "Publishing, installation, spending and managed-policy requirements remain separate; this plan grants none.",
 					sourceClarificationAndDisclosure: plan.plan.sources,
 					actions: plan.plan.actions,
 					submissionDeadline: "Two minutes after confirmation. Each turn is single use; no follow-up authority.",
@@ -460,7 +465,7 @@ export function registerOuterNative(options: {
 					body,
 					redirect: "error",
 					credentials: "omit",
-					signal: AbortSignal.timeout(10_000),
+					signal: AbortSignal.timeout(entry.draft.operation === "plan" ? 180_000 : 10_000),
 					headers: {
 						"content-type": "application/json",
 						"X-AO-Delegation-MAC": mac,

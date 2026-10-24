@@ -1,4 +1,8 @@
 {
+	"outer.plans": "请求的操作计划",
+	"outer.plansDisabled": "此构建配置暂不开放已确认的操作。",
+	"outer.planManifest": "已封存的精确操作清单",
+	"outer.confirmPlan": "审核精确计划",
 	"library.bindingState": "当前绑定：{{id}} · {{state}} · {{hash}}",
 	"library.bindingEnabled": "已启用",
 	"library.bindingDisabled": "已停用",

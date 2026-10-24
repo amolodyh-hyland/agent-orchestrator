@@ -193,7 +193,7 @@ func (s *Store) CheckOuterOperation(ctx context.Context, operation string, proje
 		return domain.ErrOuterHeld
 	}
 	if scoped && caller.Outer {
-		if err := s.AppendOuterAudit(ctx, domain.OuterAudit{Operation: operation, State: "held", Reason: "M1 cross-project mutations disabled", SessionID: caller.SessionID, ProjectID: string(project)}); err != nil {
+		if err := s.AppendOuterAudit(ctx, domain.OuterAudit{Operation: operation, State: "held", Reason: "sealed native plan required for outer mutations", SessionID: caller.SessionID, ProjectID: string(project)}); err != nil {
 			return err
 		}
 		return domain.ErrOuterHeld

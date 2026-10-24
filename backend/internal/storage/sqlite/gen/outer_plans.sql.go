@@ -217,10 +217,14 @@ func (q *Queries) InsertOuterPlanAction(ctx context.Context, arg InsertOuterPlan
 }
 
 const isOuterParticipant = `-- name: IsOuterParticipant :one
-SELECT EXISTS(SELECT 1 FROM outer_participants WHERE session_id=?)
+SELECT EXISTS(
+ SELECT 1 FROM outer_participants p JOIN sessions owner ON owner.id=p.session_id
+ JOIN sessions target ON target.id=?1
+ WHERE p.session_id=target.id OR (target.kind='orchestrator' AND owner.project_id=target.project_id)
+)
 `
 
-func (q *Queries) IsOuterParticipant(ctx context.Context, sessionID string) (bool, error) {
+func (q *Queries) IsOuterParticipant(ctx context.Context, sessionID domain.SessionID) (bool, error) {
 	row := q.db.QueryRowContext(ctx, isOuterParticipant, sessionID)
 	var exists bool
 	err := row.Scan(&exists)

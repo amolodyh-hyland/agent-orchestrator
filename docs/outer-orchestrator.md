@@ -169,6 +169,10 @@ two-minute submission deadline starts at native confirmation and never extends.
 Migration 0233 adds immutable plans, action attempts and retained participant
 snapshots. It reuses the monitoring participant vocabulary and holds feedback,
 review starts, automatic spawning and alternate input for enrolled executions.
+A worker-only plan also enrolls its existing project report recipients before
+launch; later coordinators in that Project inherit the same continuation hold.
+Outgoing messages display the outer request and immutable source labels at the
+destination, including after a queued delivery, without changing approved text.
 Existing confirmed factory-run review gates remain independent: a generic M2
 send cannot replace an exact-head review continuation approval. Unsupported
 steer, terminal, ensure/delegate, restore/resume, review and release adapters

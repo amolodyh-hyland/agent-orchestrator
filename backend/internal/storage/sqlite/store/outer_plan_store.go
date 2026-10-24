@@ -12,7 +12,7 @@ import (
 
 // IsOuterParticipant reads durable enrollment without resuming an execution.
 func (s *Store) IsOuterParticipant(ctx context.Context, id domain.SessionID) (bool, error) {
-	return s.conversationReader(ctx).IsOuterParticipant(ctx, string(id))
+	return s.conversationReader(ctx).IsOuterParticipant(ctx, id)
 }
 
 func outerPlan(row gen.OuterActionPlan) (domain.OuterPlanReceipt, error) {
@@ -131,7 +131,7 @@ func validateOuterPlannedTarget(ctx context.Context, q *gen.Queries, a domain.Ou
 			return domain.ErrOuterHeld
 		}
 	} else {
-		held, err := q.IsOuterParticipant(ctx, string(r.ID))
+		held, err := q.IsOuterParticipant(ctx, r.ID)
 		if err != nil {
 			return err
 		}
@@ -280,22 +280,43 @@ func (s *Store) EnrollOuterParticipant(ctx context.Context, plan, id string, ses
 			return err
 		}
 		r := rowToRecord(row)
-		policies, err := q.FactoryMonitorPolicies(ctx, session)
+		count, err := q.BindOuterPlanAction(ctx, gen.BindOuterPlanActionParams{ID: id, SessionID: string(session)})
 		if err != nil {
 			return err
 		}
-		snapshot := domain.RunParticipantSnapshot{SessionID: session, AutoReview: r.AutoReviewEnabled, AutoInjectReview: r.AutoInjectReview, AutoInjectCI: r.AutoInjectCI, FeedbackPolicies: policies, ReportRoute: "display_only", CapturedAt: now}
-		data, err := json.Marshal(snapshot)
+		if count != 1 {
+			return domain.ErrOuterHeld
+		}
+		ids, err := q.FactoryMonitorParticipants(ctx, gen.FactoryMonitorParticipantsParams{ProjectID: &r.ProjectID, WorkerID: session})
 		if err != nil {
 			return err
 		}
-		if _, err := q.BindOuterPlanAction(ctx, gen.BindOuterPlanActionParams{ID: id, SessionID: string(session)}); err != nil {
-			return err
+		if !slices.Contains(ids, session) {
+			ids = append(ids, session)
 		}
-		if err := q.EnrollOuterParticipant(ctx, gen.EnrollOuterParticipantParams{SessionID: string(session), ActionID: id, Snapshot: string(data), EnrolledAt: now}); err != nil {
-			return err
+		for _, participant := range ids {
+			row, err := q.GetSession(ctx, participant)
+			if err != nil {
+				return err
+			}
+			owner := rowToRecord(row)
+			policies, err := q.FactoryMonitorPolicies(ctx, participant)
+			if err != nil {
+				return err
+			}
+			snapshot := domain.RunParticipantSnapshot{SessionID: participant, AutoReview: owner.AutoReviewEnabled, AutoInjectReview: owner.AutoInjectReview, AutoInjectCI: owner.AutoInjectCI, FeedbackPolicies: policies, ReportRoute: "display_only", CapturedAt: now}
+			data, err := json.Marshal(snapshot)
+			if err != nil {
+				return err
+			}
+			if err := q.EnrollOuterParticipant(ctx, gen.EnrollOuterParticipantParams{SessionID: string(participant), ActionID: id, Snapshot: string(data), EnrolledAt: now}); err != nil {
+				return err
+			}
+			if err := appendOuterAudit(ctx, q, domain.OuterAudit{Operation: "outer.participant", State: "enrolled", SessionID: participant, ProjectID: string(owner.ProjectID), ReceiptID: id, Digest: domain.OuterDigest(snapshot), Reason: "feedback and cascades held; independent review gates retained"}); err != nil {
+				return err
+			}
 		}
-		return appendOuterAudit(ctx, q, domain.OuterAudit{Operation: "outer.participant", State: "enrolled", SessionID: session, ProjectID: string(r.ProjectID), ReceiptID: id, Digest: domain.OuterDigest(snapshot), Reason: "feedback and cascades held; independent review gates retained"})
+		return nil
 	})
 }
 

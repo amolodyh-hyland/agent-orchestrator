@@ -19699,7 +19699,13 @@ components:
           type: string
         conversationId:
           type: string
+        harness:
+          type: string
         id:
+          type: string
+        mode:
+          type: string
+        permissionCeiling:
           type: string
         projectLabel:
           type: string
@@ -19708,11 +19714,17 @@ components:
           type: integer
         providerConversationId:
           type: string
+        settings:
+          $ref: '#/components/schemas/DomainConversationSettings'
         spec:
           $ref: '#/components/schemas/OuterActionSpec'
         targetDigest:
           type: string
       required:
+      - harness
+      - mode
+      - settings
+      - permissionCeiling
       - id
       - spec
       - projectLabel

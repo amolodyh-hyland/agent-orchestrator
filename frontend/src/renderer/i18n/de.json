@@ -1,4 +1,8 @@
 {
+	"outer.plans": "Angeforderte Aktionspläne",
+	"outer.plansDisabled": "Bestätigte Aktionen sind in dieser Build-Konfiguration gesperrt.",
+	"outer.planManifest": "Exaktes versiegeltes Manifest",
+	"outer.confirmPlan": "Exakten Plan prüfen",
 	"library.bindingState": "Aktuelle Bindung: {{id}} · {{state}} · {{hash}}",
 	"library.bindingEnabled": "Aktiviert",
 	"library.bindingDisabled": "Deaktiviert",

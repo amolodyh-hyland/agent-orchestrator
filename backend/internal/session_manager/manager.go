@@ -2761,6 +2761,11 @@ func (m *Manager) RequestKill(ctx context.Context, id domain.SessionID) (KillRes
 }
 
 func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundCleanup bool) (KillResult, error) {
+	if participant, err := domain.IsOuterParticipant(ctx, m.store, id); err != nil {
+		return KillResult{}, err
+	} else if participant {
+		return KillResult{}, domain.ErrOuterHeld
+	}
 	// Teardown deliberately stops riding the caller's context. Kill runs a
 	// sequence (stop the agent, tear the controller down, mark the row
 	// terminated, drop the worktree) where being cancelled partway leaves a session
@@ -5655,6 +5660,9 @@ func (m *Manager) isWorkspaceInUse(ctx context.Context, projectID domain.Project
 // call) — most commonly because a scoped shell terminal could not be
 // confirmed closed, so reclaiming would pull the ground out from under it.
 func (m *Manager) cleanupOne(ctx context.Context, rec domain.SessionRecord, ws ports.WorkspaceInfo) (ports.WorkspaceReclaim, string) {
+	if err := domain.HoldOuterTarget(ctx, m.store, rec.ID, "cleanup"); err != nil {
+		return ports.WorkspaceReclaimRemoved, "outer participant artifacts retained"
+	}
 	{
 		release := m.acquireWorkspaceGate(rec.ProjectID)
 

@@ -126,7 +126,19 @@ func HoldOuterTarget(ctx context.Context, store any, id SessionID, operation str
 	if audit, ok := store.(interface {
 		AppendOuterAudit(context.Context, OuterAudit) error
 	}); ok {
-		if err := audit.AppendOuterAudit(ctx, OuterAudit{Operation: operation, State: "held", Reason: "unsupported_outer_input", SessionID: id}); err != nil {
+		event := OuterAudit{Operation: operation, State: "held", Reason: "unsupported_outer_input", SessionID: id}
+		if reader, ok := store.(interface {
+			GetSession(context.Context, SessionID) (SessionRecord, bool, error)
+		}); ok {
+			record, found, err := reader.GetSession(ctx, id)
+			if err != nil {
+				return err
+			}
+			if found {
+				event.ProjectID = string(record.ProjectID)
+			}
+		}
+		if err := audit.AppendOuterAudit(ctx, event); err != nil {
 			return err
 		}
 	}

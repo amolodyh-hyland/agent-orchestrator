@@ -601,8 +601,11 @@ type ConversationDiffFile struct {
 // delivered, so the queue survives a daemon restart as data rather than living
 // only in a controller's memory.
 type QueuedTurn struct {
-	TurnID string
-	Text   string
+	SenderSessionID   string
+	SenderProjectID   string
+	SenderDisplayName string
+	TurnID            string
+	Text              string
 	// ClientMessageID is carried through to the provider so a dispatch retried
 	// after a crash cannot produce a second provider turn.
 	ClientMessageID string

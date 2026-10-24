@@ -1,4 +1,8 @@
 {
+	"outer.plans": "要求されたアクションプラン",
+	"outer.plansDisabled": "このビルド構成では確認済みアクションは保留されます。",
+	"outer.planManifest": "確定された正確なマニフェスト",
+	"outer.confirmPlan": "正確なプランを確認",
 	"library.bindingState": "現在の紐付け: {{id}} · {{state}} · {{hash}}",
 	"library.bindingEnabled": "有効",
 	"library.bindingDisabled": "無効",

@@ -11,13 +11,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/outer"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
-	"github.com/google/uuid"
 )
 
 type m2Fixture struct {
@@ -402,6 +403,100 @@ func TestOuterM2PreservingStopExpiresAtFinalNativeClose(t *testing.T) {
 			}
 			if _, err := f.chat.Controller(id); err != nil {
 				t.Fatal("expiry discarded original controller", err)
+			}
+		})
+	}
+}
+
+func TestOuterM2WorkerOnlyPlanHoldsCoordinatorFeedbackAndLabelsDisclosure(t *testing.T) {
+	f := newM2Fixture(t)
+	coordinator, err := f.provision(context.Background(), ports.SpawnConfig{ProjectID: "a", Kind: domain.KindOrchestrator}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := f.approve(f.propose(workerSpec()))
+	worker := plan.Actions[0].SessionID
+	if held, err := f.st.FactoryFeedbackHeld(context.Background(), coordinator.ID); err != nil || !held {
+		t.Fatal("report recipient was not enrolled", held, err)
+	}
+	if err := f.chat.DeliverFactoryFeedback(context.Background(), coordinator.ID, "worker finished; start another worker", uuid.NewString()); err == nil {
+		t.Fatal("worker-only plan woke its coordinator")
+	}
+	token, err := f.st.IssueOuterCaller(context.Background(), coordinator.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller, err := f.st.AuthenticateOuterCaller(context.Background(), token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.CheckOuterOperation(domain.WithOuterCaller(context.Background(), caller), "spawn", "a", ""); err == nil {
+		t.Fatal("coordinator inherited child-spawn authority")
+	}
+	provider := f.providers[worker]
+	provider.mu.Lock()
+	sent := append([]ports.ChatUserMessage{}, provider.sent...)
+	provider.mu.Unlock()
+	if len(sent) != 1 || sent[0].Text != workerSpec().Text || !strings.Contains(sent[0].SenderDisplayName, "Project A [a]") || !strings.Contains(sent[0].SenderDisplayName, plan.Plan.Actions[0].ID) || sent[0].SenderSessionID == "" {
+		t.Fatal("disclosure attribution missing or payload changed", sent)
+	}
+	controller, err := f.chat.Controller(worker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := f.st.LoadConversationSnapshot(context.Background(), controller.ConversationID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, message := range rows.Messages {
+		if message.ClientMessageID == plan.Plan.Actions[0].ID {
+			found = message.SenderDisplayName == sent[0].SenderDisplayName && message.SenderSessionID == sent[0].SenderSessionID
+		}
+	}
+	if !found {
+		t.Fatal("recipient transcript lost source attribution")
+	}
+}
+
+func TestOuterM2QueuedCoordinatorTurnKeepsExactAuthorityAndAttribution(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		t.Run(strconv.FormatBool(expired), func(t *testing.T) {
+			f := newM2Fixture(t)
+			target, err := f.provision(context.Background(), ports.SpawnConfig{ProjectID: "a", Kind: domain.KindOrchestrator}, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.chat.Send(context.Background(), target.ID, ports.ChatUserMessage{Text: "Earlier authorized local turn", Origin: domain.MessageOriginHuman}); err != nil {
+				t.Fatal(err)
+			}
+			plan := f.approve(f.propose(domain.OuterActionSpec{Operation: "send", ProjectID: "a", SessionID: target.ID, Text: "Exact queued continuation"}))
+			if receipt, err := f.st.GetOuterRequest(context.Background(), plan.Plan.Actions[0].ID); err != nil || receipt.State != "ao_queued" {
+				t.Fatal("not queued", receipt, err)
+			}
+			if expired {
+				f.advance()
+			}
+			provider := f.providers[target.ID]
+			provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateCompleted, NativeSettlement: true})
+			waitM2(t, func() bool {
+				r, err := f.st.GetOuterRequest(context.Background(), plan.Plan.Actions[0].ID)
+				if err != nil {
+					return false
+				}
+				if expired {
+					return r.State == "held"
+				}
+				return !r.AttemptedAt.IsZero()
+			})
+			provider.mu.Lock()
+			sent := append([]ports.ChatUserMessage{}, provider.sent...)
+			provider.mu.Unlock()
+			if expired && len(sent) != 1 {
+				t.Fatal("expired queued turn wrote bytes", sent)
+			}
+			if !expired && (len(sent) != 2 || sent[1].Text != "Exact queued continuation" || sent[1].SenderDisplayName == "") {
+				t.Fatal("queued payload or disclosure changed", sent)
 			}
 		})
 	}

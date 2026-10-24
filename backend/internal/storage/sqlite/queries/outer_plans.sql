@@ -21,7 +21,11 @@ UPDATE outer_plan_actions SET completed_at=sqlc.arg(completed_at),state=sqlc.arg
 -- name: EnrollOuterParticipant :exec
 INSERT INTO outer_participants(session_id,action_id,snapshot,enrolled_at) VALUES(?,?,?,?) ON CONFLICT(session_id) DO NOTHING;
 -- name: IsOuterParticipant :one
-SELECT EXISTS(SELECT 1 FROM outer_participants WHERE session_id=?);
+SELECT EXISTS(
+ SELECT 1 FROM outer_participants p JOIN sessions owner ON owner.id=p.session_id
+ JOIN sessions target ON target.id=sqlc.arg(session_id)
+ WHERE p.session_id=target.id OR (target.kind='orchestrator' AND owner.project_id=target.project_id)
+);
 -- name: AdoptOuterCapacity :execrows
 UPDATE outer_capacity SET session_id=sqlc.arg(session_id),generation=sqlc.arg(generation) WHERE request_id=sqlc.arg(request_id) AND released_at IS NULL AND session_id='';
 -- name: AcceptOuterPlanActions :exec

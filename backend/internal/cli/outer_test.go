@@ -28,7 +28,7 @@ func TestOuterPlanCLIOnlyStagesExactManifest(t *testing.T) {
 			return w.Result(), nil
 		}
 		calls++
-		if r.Method != "POST" || r.URL.Path != "/api/v1/outer/plans" {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/outer/plans" {
 			t.Error("unexpected execution route", r.Method, r.URL.Path)
 		}
 		body, _ := io.ReadAll(r.Body)

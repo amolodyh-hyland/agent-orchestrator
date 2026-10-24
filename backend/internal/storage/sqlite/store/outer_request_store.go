@@ -375,7 +375,7 @@ func linkOuterRequest(ctx context.Context, q *gen.Queries, session domain.Sessio
 	if err != nil {
 		return err
 	}
-	participant, err := q.IsOuterParticipant(ctx, string(session))
+	participant, err := q.IsOuterParticipant(ctx, session)
 	if err != nil {
 		return err
 	}
@@ -395,7 +395,11 @@ func linkOuterRequest(ctx context.Context, q *gen.Queries, session domain.Sessio
 		return err
 	}
 	r := receipt.Request
-	if r.ControllerGeneration != generation || r.ConversationID != conversation || msg.Text != r.Payload || msg.Origin != domain.MessageOriginHuman || msg.DeliveryContentJSON != "" || msg.Continuation {
+	expectedOrigin := domain.MessageOriginHuman
+	if r.PlanID != "" {
+		expectedOrigin = domain.MessageOriginAutomation
+	}
+	if r.ControllerGeneration != generation || r.ConversationID != conversation || msg.Text != r.Payload || msg.Origin != expectedOrigin || msg.DeliveryContentJSON != "" || msg.Continuation {
 		return domain.ErrOuterHeld
 	}
 	if err := validateOuterRequest(ctx, q, r, now); err != nil {

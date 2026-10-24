@@ -59,14 +59,18 @@ type OuterPlanProposal struct {
 
 // OuterPlannedAction freezes one concrete target and its effective identity.
 type OuterPlannedAction struct {
-	ID                     string          `json:"id"`
-	Spec                   OuterActionSpec `json:"spec"`
-	ProjectLabel           string          `json:"projectLabel"`
-	ProjectRevision        int64           `json:"projectRevision"`
-	TargetDigest           string          `json:"targetDigest"`
-	ControllerGeneration   string          `json:"controllerGeneration"`
-	ProviderConversationID string          `json:"providerConversationId"`
-	ConversationID         string          `json:"conversationId"`
+	Harness                AgentHarness         `json:"harness"`
+	Mode                   SessionMode          `json:"mode"`
+	Settings               ConversationSettings `json:"settings"`
+	PermissionCeiling      PermissionMode       `json:"permissionCeiling"`
+	ID                     string               `json:"id"`
+	Spec                   OuterActionSpec      `json:"spec"`
+	ProjectLabel           string               `json:"projectLabel"`
+	ProjectRevision        int64                `json:"projectRevision"`
+	TargetDigest           string               `json:"targetDigest"`
+	ControllerGeneration   string               `json:"controllerGeneration"`
+	ProviderConversationID string               `json:"providerConversationId"`
+	ConversationID         string               `json:"conversationId"`
 }
 
 // OuterActionPlan seals the complete original request, sources and action set.

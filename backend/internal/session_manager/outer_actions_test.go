@@ -85,6 +85,9 @@ func TestOuterM2ManagerStopPreservesWorktreeAndArtifacts(t *testing.T) {
 				t.Fatal("unbound stop")
 			}
 			ctx := domain.WithOuterExecution(context.Background(), domain.OuterExecution{PlanID: "plan", ActionID: "stop"})
+			if _, err := m.Kill(ctx, id); err == nil {
+				t.Fatal("legacy kill allowed artifact cleanup")
+			}
 			policy.hold = true
 			if err := m.StopOuterWorker(ctx, id, nil); err == nil {
 				t.Fatal("stale stop authority")
@@ -99,6 +102,12 @@ func TestOuterM2ManagerStopPreservesWorktreeAndArtifacts(t *testing.T) {
 			rec := st.sessions[id]
 			if !rec.IsTerminated || rec.Metadata.WorkspacePath != "/owned/worktree" || rec.Metadata.ArtifactDir != "/owned/artifacts" {
 				t.Fatal("preservation lost", rec)
+			}
+			if _, reason := m.cleanupOne(context.Background(), rec, ports.WorkspaceInfo{Path: rec.Metadata.WorkspacePath}); reason == "" {
+				t.Fatal("later cleanup discarded participant artifacts")
+			}
+			if m.workspace.(*fakeWorkspace).destroyed != 0 {
+				t.Fatal("participant cleanup reached filesystem")
 			}
 		})
 	}

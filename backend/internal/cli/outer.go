@@ -27,7 +27,7 @@ func newOuterCommand(c *commandContext) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		defer input.Close()
+		defer func() { _ = input.Close() }()
 		raw, err := io.ReadAll(io.LimitReader(input, 128<<10+1))
 		if err != nil {
 			return err

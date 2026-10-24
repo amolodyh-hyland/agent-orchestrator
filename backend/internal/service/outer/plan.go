@@ -6,9 +6,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	"github.com/google/uuid"
 )
 
 type actionStore interface {
@@ -99,6 +100,8 @@ func (s *Service) ProposePlan(ctx context.Context, in domain.OuterPlanProposal) 
 			return domain.OuterPlanReceipt{}, domain.ErrOuterHeld
 		}
 		a := domain.OuterPlannedAction{ID: uuid.NewString(), Spec: spec, ProjectLabel: project.DisplayName, ProjectRevision: project.Revision}
+		a.Harness = domain.HarnessCodex
+		a.Mode = domain.SessionModeChat
 		switch spec.Operation {
 		case "send", "kill", "retire":
 			if spec.SessionID == "" || spec.Branch != "" || domain.OuterDigest(spec.Config) != domain.OuterDigest(domain.AgentConfig{}) {
@@ -113,6 +116,8 @@ func (s *Service) ProposePlan(ctx context.Context, in domain.OuterPlanProposal) 
 				return domain.OuterPlanReceipt{}, domain.ErrOuterHeld
 			}
 			a.TargetDigest = domain.OuterSettingsDigest(rec, conv, project)
+			a.Settings = conv.Settings
+			a.PermissionCeiling = rec.Metadata.PermissionCeiling
 			a.ControllerGeneration = rec.Metadata.ControllerGeneration
 			a.ProviderConversationID = rec.Metadata.ProviderConversationID
 			a.ConversationID = conv.ID
@@ -137,6 +142,8 @@ func (s *Service) ProposePlan(ctx context.Context, in domain.OuterPlanProposal) 
 				return domain.OuterPlanReceipt{}, err
 			}
 			a.TargetDigest = domain.OuterDigest(project)
+			a.Settings = domain.ConversationSettings{Model: spec.Config.Model, ReasoningEffort: spec.Config.Effort, ApprovalMode: spec.Config.Permissions}
+			a.PermissionCeiling = spec.Config.Permissions
 		default:
 			return domain.OuterPlanReceipt{}, domain.ErrOuterHeld
 		}

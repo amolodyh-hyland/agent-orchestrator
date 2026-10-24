@@ -1,4 +1,8 @@
 {
+	"outer.plans": "요청한 작업 계획",
+	"outer.plansDisabled": "이 빌드 구성에서는 승인된 작업이 보류됩니다.",
+	"outer.planManifest": "확정된 정확한 실행 명세",
+	"outer.confirmPlan": "정확한 계획 검토",
 	"library.bindingState": "현재 연결: {{id}} · {{state}} · {{hash}}",
 	"library.bindingEnabled": "활성화",
 	"library.bindingDisabled": "비활성화",
