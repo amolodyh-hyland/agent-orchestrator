@@ -21,9 +21,10 @@ func TestOuterSpawnServicePreservesDefinitiveNoStartAcrossAPIErrorMapping(t *tes
 			st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
 			manager := &fakeCommander{spawnErr: ports.ErrUnsupportedEffort}
 			deps := Deps{Store: st, Manager: manager}
-			if phase == "preflight" {
+			switch phase {
+			case "preflight":
 				deps.AgentReadiness = &fakeAgentReadiness{err: errors.New("unavailable")}
-			} else if phase == "manager_no_start" {
+			case "manager_no_start":
 				manager.spawnErr = errors.Join(manager.spawnErr, domain.ErrOuterSpawnNotStarted)
 			}
 			_, _, _, err := NewWithDeps(deps).Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex, OuterActionID: "exact-spawn"})

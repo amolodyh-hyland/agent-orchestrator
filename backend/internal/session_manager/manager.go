@@ -1454,8 +1454,8 @@ func (m *Manager) spawn(ctx context.Context, cfg ports.SpawnConfig, mayHaveStart
 			}
 			prompt = ""
 		}
-		*mayHaveStarted = true
 		rec, err = m.launchChatController(ctx, chatSpawn{
+			mayHaveStarted:   mayHaveStarted,
 			cfg:              cfg,
 			project:          project,
 			projectKind:      projectKind,
