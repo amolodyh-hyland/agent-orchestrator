@@ -55,6 +55,7 @@ type SessionReader interface {
 type Service struct {
 	libraryAdmission       LibraryAdmission
 	feedbackAdmission      FeedbackAdmission
+	outerAdmission         OuterAdmission
 	store                  Store
 	reader                 SnapshotReader
 	pageReader             SnapshotPageReader
@@ -409,6 +410,35 @@ func (s *Service) settleOrphanedWork(ctx context.Context, session domain.Session
 // conversation: presenting unrelated history as continuous is worse than an error
 // the user can act on.
 func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, error) {
+	bound, outerErr := domain.IsOuter(ctx, s.store, cfg.SessionID)
+	if outerErr != nil {
+		return nil, outerErr
+	}
+	if bound && !cfg.ReconnectOnly {
+		a, ok := domain.OuterNativeActionFrom(ctx)
+		if !ok || (a.Operation != "spawn" && a.Operation != "resume" && a.Operation != "restore") {
+			return nil, domain.ErrOuterHeld
+		}
+		policy, ok := s.store.(domain.OuterPolicy)
+		if !ok {
+			return nil, domain.ErrOuterHeld
+		}
+		b, found, err := policy.OuterBinding(ctx)
+		if err != nil || !found || cfg.Harness != domain.HarnessCodex || conversationOwner(cfg).Kind != domain.ConversationOwnerSession {
+			return nil, domain.ErrOuterHeld
+		}
+		if a.Operation == "spawn" {
+			if s.sessions == nil {
+				return nil, domain.ErrOuterHeld
+			}
+			r, found, err := s.sessions.GetSession(ctx, cfg.SessionID)
+			if err != nil || !found || r.Metadata.OuterGeneration != b.Generation || a.ProjectID != r.ProjectID {
+				return nil, domain.ErrOuterHeld
+			}
+		} else if a.SessionID != cfg.SessionID || b.SessionID != cfg.SessionID || b.HistoryHeld {
+			return nil, domain.ErrOuterHeld
+		}
+	}
 	owner := conversationOwner(cfg)
 	if owner.Kind == domain.ConversationOwnerReview {
 		cfg.ReadOnly = true
@@ -764,6 +794,32 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		}
 	}
 
+	generation := strings.TrimSpace(cfg.ControllerGeneration)
+	if generation == "" {
+		generation = s.newID()
+	}
+	issueEnv := func(ctx context.Context, env map[string]string) (map[string]string, error) {
+		if owner.Kind == domain.ConversationOwnerSession {
+			if issuer, ok := s.store.(interface {
+				IssueOuterCallerGeneration(context.Context, domain.SessionID, string, string) (string, error)
+			}); ok {
+				token, err := issuer.IssueOuterCallerGeneration(ctx, cfg.SessionID, "chat", generation)
+				if err != nil {
+					return nil, err
+				}
+				env = maps.Clone(env)
+				if env == nil {
+					env = map[string]string{}
+				}
+				env["AO_SCOPE_CREDENTIAL"] = token
+			}
+		}
+		return env, nil
+	}
+	cfg.Env, err = issueEnv(ctx, cfg.Env)
+	if err != nil {
+		return nil, err
+	}
 	var prepareEnv func(context.Context) (map[string]string, error)
 	if cfg.PrepareControllerEnv != nil {
 		prepareEnv = func(prepareCtx context.Context) (map[string]string, error) {
@@ -771,7 +827,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			if prepareErr != nil {
 				return nil, fmt.Errorf("prepare chat controller environment: %w", prepareErr)
 			}
-			return env, nil
+			return issueEnv(prepareCtx, env)
 		}
 	}
 
@@ -971,10 +1027,6 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	// pending provider boundary claims it in ControllerReady's atomic ownership
 	// commit instead, so a failed provider connect or callback cannot split the
 	// session owner from the conversation head.
-	generation := strings.TrimSpace(cfg.ControllerGeneration)
-	if generation == "" {
-		generation = s.newID()
-	}
 	if providerBoundaryID == "" {
 		if owner.Kind == domain.ConversationOwnerReview {
 			claimed, claimErr := s.store.ClaimReviewChatController(ctx, owner.ID, conv.ProviderConversationID(), generation, s.now())
@@ -1038,6 +1090,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
 	controller.libraryInput = s.acquireLibraryInput
 	controller.feedbackInput = s.acquireFeedbackInput
+	controller.outerInput = s.acquireOuterInput
 	controller.skillView = s.librarySkillView
 	controller.skillCurrent = s.skillControllerCurrent
 	controller.permissionFallbackOff = cfg.DisablePermissionFallback
@@ -1344,6 +1397,9 @@ func (s *Service) Send(
 	id domain.SessionID,
 	msg ports.ChatUserMessage,
 ) (domain.ConversationTurn, error) {
+	if err := domain.HoldOuterIncoming(ctx, s.store, id, "chat.send", msg.Text); err != nil {
+		return domain.ConversationTurn{}, err
+	}
 	if err := domain.CheckFactoryFeedback(ctx, s.store, id); err != nil {
 		return domain.ConversationTurn{}, err
 	}
@@ -2391,6 +2447,9 @@ func (s *Service) SetConfigOption(
 	configID string,
 	value ports.ChatConfigOptionValue,
 ) ([]ports.ChatConfigOption, error) {
+	if err := s.holdUnapprovedContinuation(ctx, id); err != nil {
+		return nil, err
+	}
 	record, err := s.requireChatSession(ctx, id)
 	if err != nil {
 		return nil, err
@@ -2588,6 +2647,9 @@ func (s *Service) SetTurnSettings(
 	id domain.SessionID,
 	settings domain.ConversationSettings,
 ) (domain.ConversationSettings, error) {
+	if err := domain.CheckOuterOperation(ctx, s.store, "settings", "", id); err != nil {
+		return domain.ConversationSettings{}, err
+	}
 	if _, err := s.requireChatSession(ctx, id); err != nil {
 		return domain.ConversationSettings{}, err
 	}

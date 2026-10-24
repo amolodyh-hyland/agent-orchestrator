@@ -526,6 +526,7 @@ function useSelection() {
 	const goHome = useCallback(() => void navigate({ to: "/" }), [navigate]);
 	const goAutomations = useCallback(() => void navigate({ to: "/automations" }), [navigate]);
 	const goCockpit = useCallback(() => void navigate({ to: "/cockpit" }), [navigate]);
+	const goOuter = useCallback(() => void navigate({ to: "/outer" }), [navigate]);
 	const goArtifacts = useCallback(() => void navigate({ to: "/artifacts" }), [navigate]);
 	const goStandaloneBoard = useCallback(() => void navigate({ to: "/sessions" }), [navigate]);
 	const goGlobalSettings = useCallback(() => openGlobalSettings(), [openGlobalSettings]);
@@ -553,6 +554,8 @@ function useSelection() {
 		isAutomations: pathname === "/automations",
 		isArtifacts: pathname === "/artifacts",
 		isCockpit: pathname === "/cockpit",
+		isOuter: pathname === "/outer",
+		goOuter,
 		goCockpit,
 		activeRemoteHostId: params.hostId,
 		activeRemoteProjectId: params.hostId ? params.projectId : undefined,
@@ -570,7 +573,7 @@ function useSelection() {
 		goSettings,
 		goProject,
 		goSession,
-	}), [goCockpit, goArtifacts, goAutomations, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
+	}), [goOuter, goCockpit, goArtifacts, goAutomations, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
 }
 
 // Colour tracks the session's board section, preserving SCM state while the
@@ -1025,6 +1028,7 @@ export function Sidebar({
 					</SidebarGroup>
 				) : null}
 				<SidebarMenu className="mb-3 gap-0.5 group-data-[collapsible=icon]:gap-1">
+					<SidebarMenuItem><SidebarTopNavRow active={selection.isOuter} icon={<PanelsTopLeft aria-hidden="true" />} label={t("outer.title")} onClick={selection.goOuter} tooltip={isCollapsed?t("outer.title"):undefined}/></SidebarMenuItem>
 					<SidebarMenuItem>
 						<SidebarTopNavRow
 							active={selection.isCockpit}
@@ -2426,7 +2430,7 @@ const SessionRow = memo(function SessionRow({
 	const suppressTouchOpenRef = useRef(false);
 	const hoverTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 	const observationOnly = useRouterState({
-		select: (state) => state.location.pathname === "/cockpit" || state.location.search?.observation === true,
+		select: (state) => state.location.pathname === "/cockpit" || state.location.pathname === "/outer" || state.location.search?.observation === true,
 	});
 	const canPrefetch = !observationOnly && session.mode === "chat" && !session.cloud && !session.hostId && !active && !listIsDragging && !reorder?.isDragging;
 	// Pending callbacks must see the current route even when queued by an older render.

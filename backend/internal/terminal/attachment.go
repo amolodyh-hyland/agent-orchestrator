@@ -44,13 +44,15 @@ const (
 // onExit fires at most once, when the attach loop gives up (runtime dead,
 // attach failure cap) — never on close().
 type attachment struct {
-	id     string
-	handle ports.RuntimeHandle
-	src    Source
-	log    *slog.Logger
-	onOpen func()
-	onData func(data []byte)
-	onExit func()
+	inputCredential string
+	id              string
+	handle          ports.RuntimeHandle
+	src             Source
+	log             *slog.Logger
+	onOpen          func()
+	onData          func(data []byte)
+	onExit          func()
+	inputAllowed    func() bool
 
 	maxReattach int
 	resetGrace  time.Duration
@@ -252,6 +254,10 @@ func (a *attachment) writeLeased(p []byte, release func()) error {
 		return nil
 	}
 	a.mu.Unlock()
+	if a.inputAllowed != nil && !a.inputAllowed() {
+		releaseInput(release)
+		return errors.New("terminal: input held")
+	}
 	_, err := pty.Write(chunk)
 	releaseInput(release)
 	return err
@@ -319,6 +325,10 @@ func (a *attachment) setPTY(p ports.Stream) bool {
 		a.mu.Unlock()
 
 		for i, input := range pending {
+			if a.inputAllowed != nil && !a.inputAllowed() {
+				releaseInput(input.release)
+				continue
+			}
 			_, err := p.Write(input.data)
 			releaseInput(input.release)
 			if err != nil {

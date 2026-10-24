@@ -150,6 +150,7 @@ func normalizeNotification(n notification, now time.Time) []ports.ChatEvent {
 		}
 		ev := ports.ChatEvent{
 			Kind:                   ports.ChatEventTurnCompleted,
+			NativeSettlement:       true,
 			ProviderTurnID:         firstNonEmpty(p.Turn.ID, turnIDFallback(n.Params)),
 			ProviderConversationID: p.ThreadID,
 			TurnState:              turnStateFrom(string(p.Turn.Status)),

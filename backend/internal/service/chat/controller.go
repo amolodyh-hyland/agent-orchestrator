@@ -200,6 +200,7 @@ func interfaceHandoff(policy domain.SessionInterfaceTransitionPolicy) controller
 type Controller struct {
 	libraryInput  func(context.Context, domain.SessionID, string) (func(), error)
 	feedbackInput func(context.Context, domain.SessionID, ports.ChatUserMessage, string) (func(), error)
+	outerInput    func(context.Context, domain.SessionID, ports.ChatUserMessage, string) (func(), error)
 	sessionID     domain.SessionID
 	reviewID      string
 	conversation  domain.ConversationRecord
@@ -1353,6 +1354,7 @@ func reconcileNativeHistory(
 		}
 		if event.ProviderTurnID != candidate.providerTurnID {
 			event.NativeAcceptance = false
+			event.NativeSettlement = false
 		}
 		event.ProviderTurnID = candidate.providerTurnID
 		// A replay may have no portable turn-outcome field. Preserve AO's stronger
@@ -1462,6 +1464,11 @@ func (c *Controller) sendLocked(
 	msg ports.ChatUserMessage,
 	queueWhenBusy bool,
 ) (domain.ConversationTurn, error) {
+	outerRelease, outerErr := c.acquireOuterInput(ctx, msg, "enqueue")
+	if outerErr != nil {
+		return domain.ConversationTurn{}, outerErr
+	}
+	outerRelease()
 	if msg.ClientPayloadHash == "" {
 		var err error
 		msg.ClientPayloadHash, err = clientPayloadHash(msg)
@@ -1585,6 +1592,9 @@ func (c *Controller) sendLocked(
 // the chain A -> B -> C is built from distinct sources, never by re-sending A.
 // The current next-turn settings apply.
 func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.ConversationTurn, error) {
+	if err := domain.HoldOuterTarget(ctx, c.store, c.sessionID, "retry"); err != nil {
+		return domain.ConversationTurn{}, err
+	}
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 	if c.handoffActive() {
@@ -1750,6 +1760,11 @@ func (c *Controller) Settings() domain.ConversationSettings {
 // The row is written first: if that fails, the in-memory copy must not move, or a
 // restart would silently revert a choice the user watched take effect.
 func (c *Controller) SetSettings(ctx context.Context, settings domain.ConversationSettings) error {
+	if settings != c.Settings() {
+		if err := domain.CheckOuterOperation(ctx, c.store, "settings", "", c.sessionID); err != nil {
+			return err
+		}
+	}
 	if err := c.store.SetConversationSettings(ctx, c.conversation.ID, settings, c.now()); err != nil {
 		return fmt.Errorf("record conversation settings: %w", err)
 	}
@@ -1837,6 +1852,7 @@ func (c *Controller) busy() bool {
 // behavior the session was launched with.
 func (c *Controller) inheritPermissionFallback(source *Controller) {
 	c.permissionFallbackOff = source.permissionFallbackOff
+	c.outerInput = source.outerInput
 	c.onPermissionsChanged = source.onPermissionsChanged
 }
 
@@ -1847,6 +1863,12 @@ func (c *Controller) inheritPermissionFallback(source *Controller) {
 // A turn the provider refused over its permission mode did not start, so
 // asking again cannot run the work twice.
 func (c *Controller) checkFactoryMessage(ctx context.Context, msg ports.ChatUserMessage) error {
+	msg.Settings = c.turnSettings()
+	outerRelease, outerErr := c.acquireOuterInput(ctx, msg, "prepare")
+	if outerErr != nil {
+		return outerErr
+	}
+	outerRelease()
 	err := domain.CheckFactoryFeedback(ctx, c.store, c.sessionID)
 	if err == nil {
 		return nil
@@ -1872,11 +1894,20 @@ func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (p
 	var ref ports.ChatTurnRef
 	// A review conversation is read-only whatever its mode, so it never steps down.
 	fallback := permissionFallback{enabled: !c.permissionFallbackOff && c.reviewID == "", log: c.log, session: c.sessionID, stage: "turn"}
+	outerTarget, outerErr := domain.IsOuter(ctx, c.store, c.sessionID)
+	if outerErr != nil {
+		return ref, outerErr
+	}
+	if outerTarget {
+		fallback.enabled = false
+	}
 	outcome, err := fallback.run(ctx, requested, func(mode ports.PermissionMode) error {
 		attempt := msg
 		attempt.Settings.Approval = mode
 		var sendErr error
-		attempt, sendErr = c.resolveSkillMessage(ctx, attempt)
+		if !outerTarget {
+			attempt, sendErr = c.resolveSkillMessage(ctx, attempt)
+		}
 		if sendErr != nil {
 			return sendErr
 		}
@@ -1892,12 +1923,30 @@ func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (p
 		if _, deferred := c.conv.(ports.ChatDeferredTurnStarter); deferred {
 			action = "prepare"
 		}
+		guarded, eagerAdmission := c.conv.(ports.ChatTurnAdmissionSender)
+		if eagerAdmission {
+			action = "prepare"
+		}
+		if outerTarget && !eagerAdmission {
+			if _, safeDeferred := c.conv.(ports.ChatDeferredTurnAdmissionStarter); !safeDeferred {
+				release()
+				return domain.ErrOuterHeld
+			}
+		}
 		feedbackRelease, feedbackErr := c.acquireFeedbackInput(ctx, attempt, action)
 		if feedbackErr != nil {
 			release()
 			return feedbackErr
 		}
-		ref, sendErr = c.conv.SendTurn(ctx, attempt)
+		if eagerAdmission {
+			feedbackRelease()
+			ref, sendErr = guarded.SendTurnWithAdmission(ctx, attempt, func(writeCtx context.Context) (func(), error) {
+				return c.acquireFeedbackInput(writeCtx, attempt, "next_turn")
+			})
+			feedbackRelease = func() {}
+		} else {
+			ref, sendErr = c.conv.SendTurn(ctx, attempt)
+		}
 		feedbackRelease()
 		release()
 		if sendErr == nil {
@@ -2216,7 +2265,7 @@ func (c *Controller) drainLocked(ctx context.Context, allowDispatch bool) error 
 			ClientMessageID: queued.ClientMessageID,
 		}
 		if err := c.checkFactoryMessage(ctx, queuedMessage); err != nil {
-			if errors.Is(err, domain.ErrFactoryFeedbackHeld) {
+			if errors.Is(err, domain.ErrFactoryFeedbackHeld) || errors.Is(err, domain.ErrOuterHeld) {
 				if settleErr := c.store.SettleTurnByID(ctx, queued.TurnID, domain.TurnStateFailed, err.Error(), c.now()); settleErr != nil {
 					return settleErr
 				}
@@ -2465,6 +2514,9 @@ func (c *Controller) waitForBranchHandoff() {
 // Resolve answers a pending approval. The provider is told first: if it rejects
 // the decision, AO must not have already recorded the approval as answered.
 func (c *Controller) Resolve(ctx context.Context, requestID string, decision ports.ChatDecision) error {
+	if err := c.checkOuterReply(ctx, requestID, "approval"); err != nil {
+		return err
+	}
 	if err := c.conv.ResolveRequest(ctx, requestID, decision); err != nil {
 		return fmt.Errorf("resolve request %s: %w", requestID, err)
 	}
@@ -2485,6 +2537,9 @@ func (c *Controller) ResolveInput(
 	requestID string,
 	response ports.ChatInputResponse,
 ) error {
+	if err := c.checkOuterReply(ctx, requestID, "input"); err != nil {
+		return err
+	}
 	responder, ok := c.conv.(ports.ChatInputResponder)
 	if !ok {
 		return fmt.Errorf("%w: structured input", ports.ErrChatUnsupported)
@@ -2534,6 +2589,9 @@ var ErrCompactionWhileBusy = errors.New("cannot compact while a turn is in fligh
 // The lock is released as soon as the provider accepts. Until its turn-started
 // event commits, compactionPending keeps sends queued and idle hibernation out.
 func (c *Controller) Compact(ctx context.Context) (ports.ChatCompactionResult, error) {
+	if err := domain.HoldOuterTarget(ctx, c.store, c.sessionID, "compact"); err != nil {
+		return ports.ChatCompactionResult{}, err
+	}
 	compactor, ok := c.conv.(ports.ChatCompactor)
 	if !ok || !c.Capabilities().Has(ports.ChatCapabilityCompaction) {
 		return ports.ChatCompactionResult{}, ErrCompactionUnsupported
@@ -2621,6 +2679,9 @@ func (c *Controller) HandoffInterruptedTurn() string {
 //     "no active turn" would leave the user staring at a Working bar they cannot
 //     dismiss. Reconcile the durable row instead.
 func (c *Controller) Interrupt(ctx context.Context) error {
+	if err := domain.CheckOuterOperation(ctx, c.store, "interrupt", "", c.sessionID); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	c.interrupts++
 	if c.forkCancel != nil {
@@ -2813,6 +2874,9 @@ func (c *Controller) awaitTurnAcknowledged(ctx context.Context, turn string) boo
 // cannot start between the check and the provider call. That is the difference
 // between refusing a rollback and racing one.
 func (c *Controller) Rollback(ctx context.Context, turnID string) (int, error) {
+	if err := domain.HoldOuterTarget(ctx, c.store, c.sessionID, "rollback"); err != nil {
+		return 0, err
+	}
 	rollbacker, ok := c.conv.(ports.ChatRollbacker)
 	if !ok {
 		return 0, ErrRollbackUnsupported
@@ -3129,6 +3193,9 @@ func (c *Controller) projectEvent(ctx context.Context, event ports.ChatEvent) (b
 	if event.NativeAcceptance {
 		record["nativeAcceptance"] = true
 	}
+	if event.NativeSettlement {
+		record["nativeSettlement"] = true
+	}
 	record["diff"] = event.Diff
 	dropEmptyArchiveFields(record)
 	if event.Input != nil {
@@ -3205,6 +3272,9 @@ func (c *Controller) applyCommittedTurnLifecycle(event ports.ChatEvent) bool {
 }
 
 func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
+	if err := c.auditOuterEvent(ctx, event); err != nil {
+		return err
+	}
 	now := c.now()
 
 	switch event.Kind {
@@ -3946,6 +4016,9 @@ var ErrMCPReloadUnsupported = errors.New("chat driver cannot reload MCP servers"
 // the turn themselves rather than discovering afterwards from the timeline that
 // their request failed for a reason they caused.
 func (c *Controller) ReloadMCPServers(ctx context.Context) ([]domain.ConversationMCPServer, error) {
+	if err := domain.HoldOuterTarget(ctx, c.store, c.sessionID, "mcp.reload"); err != nil {
+		return nil, err
+	}
 	reloader, ok := c.conv.(ports.ChatMCPReloader)
 	if !ok {
 		return nil, ErrMCPReloadUnsupported

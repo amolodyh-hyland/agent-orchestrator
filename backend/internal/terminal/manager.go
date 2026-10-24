@@ -145,6 +145,40 @@ func (m *Manager) acquireSessionInput(id string) (func(), bool) {
 	return lease.AcquireSessionInput(domain.SessionID(id))
 }
 
+func (m *Manager) revalidateInput(id string) bool {
+	m.inputLeaseMu.RLock()
+	lease := m.inputLease
+	m.inputLeaseMu.RUnlock()
+	if guard, ok := lease.(interface{ RevalidateSessionInput(domain.SessionID) bool }); ok {
+		return guard.RevalidateSessionInput(domain.SessionID(id))
+	}
+	return true
+}
+
+func (m *Manager) acquireTerminalInput(id, token string) (func(), bool) {
+	m.inputLeaseMu.RLock()
+	lease := m.inputLease
+	m.inputLeaseMu.RUnlock()
+	if scoped, ok := lease.(interface {
+		AcquireTerminalInput(domain.SessionID, string) (func(), bool)
+	}); ok {
+		return scoped.AcquireTerminalInput(domain.SessionID(id), token)
+	}
+	return m.acquireSessionInput(id)
+}
+
+func (m *Manager) revalidateTerminalInput(id, token string) bool {
+	m.inputLeaseMu.RLock()
+	lease := m.inputLease
+	m.inputLeaseMu.RUnlock()
+	if scoped, ok := lease.(interface {
+		RevalidateTerminalInput(domain.SessionID, string) bool
+	}); ok {
+		return scoped.RevalidateTerminalInput(domain.SessionID(id), token)
+	}
+	return m.revalidateInput(id)
+}
+
 // NewManager builds a Manager. src opens attach Streams; events feeds the session
 // channel (may be nil to disable it). A nil logger falls back to slog.Default.
 func NewManager(src Source, events EventSource, log *slog.Logger, opts ...Option) *Manager {
@@ -212,6 +246,12 @@ func (m *Manager) writeInput(terminalID string, a *attachment, raw []byte, relea
 	libraryBlocked := m.libraryInputBlocked[terminalID] > 0
 	m.libraryInputMu.Unlock()
 	if lane.blocked > 0 || libraryBlocked {
+		release()
+		return
+	}
+	// The original lease already holds library admission. Revalidate ownership
+	// without taking a second read lock, which can deadlock behind a writer.
+	if (a.inputAllowed != nil && !a.inputAllowed()) || (a.inputAllowed == nil && !m.revalidateInput(terminalID)) {
 		release()
 		return
 	}
@@ -443,13 +483,19 @@ func (c *connState) handle(msg clientMsg) {
 func (c *connState) handleTerminal(msg clientMsg) {
 	switch msg.Type {
 	case msgOpen:
-		c.openTerminal(msg.ID, msg.Rows, msg.Cols, msg.Role)
+		c.openTerminalAuthorized(msg.ID, msg.Rows, msg.Cols, msg.Role, msg.Authority)
 	case msgData:
 		raw, err := base64.StdEncoding.DecodeString(msg.Data)
 		if err != nil {
 			return
 		}
-		release, ok := c.mgr.acquireSessionInput(msg.ID)
+		var release func()
+		var ok bool
+		a := c.lookup(msg.ID)
+		if a != nil && a.inputCredential != msg.Authority {
+			return
+		}
+		release, ok = c.mgr.acquireTerminalInput(msg.ID, msg.Authority)
 		if !ok {
 			c.enqueue(serverMsg{Ch: chTerminal, ID: msg.ID, Type: msgError, Error: "session input is held by session policy or an exclusive operation"})
 			return
@@ -473,7 +519,7 @@ func (c *connState) handleTerminal(msg clientMsg) {
 // are the client's grid from the open frame; the manager arbitrates the shared
 // PTY size from it (see joinTerminal) and applies it to the Stream. role marks
 // the client primary/secondary for that arbitration (empty = primary).
-func (c *connState) openTerminal(id string, rows, cols uint16, role string) {
+func (c *connState) openTerminalAuthorized(id string, rows, cols uint16, role, credential string) {
 	if id == "" {
 		c.enqueue(serverMsg{Ch: chTerminal, Type: msgError, Error: "missing terminal id"})
 		return
@@ -509,6 +555,10 @@ func (c *connState) openTerminal(id string, rows, cols uint16, role string) {
 			c.enqueue(serverMsg{Ch: chTerminal, ID: id, Type: msgExited})
 		},
 		c.mgr.log)
+	a.inputCredential = credential
+	a.inputAllowed = func() bool {
+		return c.mgr.revalidateTerminalInput(id, credential)
+	}
 	c.mu.Lock()
 	c.terms[id] = a
 	c.mu.Unlock()

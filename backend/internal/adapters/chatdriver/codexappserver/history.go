@@ -196,10 +196,11 @@ func (c *conversation) ReadHistory(ctx context.Context) ([]ports.ChatEvent, erro
 		}
 
 		completed := ports.ChatEvent{
-			Kind:            ports.ChatEventTurnCompleted,
-			ProviderEventID: historyEventID(c.threadID, turn.ID, "completed"),
-			ProviderTurnID:  turn.ID,
-			TurnState:       state,
+			Kind:             ports.ChatEventTurnCompleted,
+			NativeSettlement: true,
+			ProviderEventID:  historyEventID(c.threadID, turn.ID, "completed"),
+			ProviderTurnID:   turn.ID,
+			TurnState:        state,
 		}
 		if turn.Error != nil {
 			completed.Err = codexProviderFailure(*turn.Error)

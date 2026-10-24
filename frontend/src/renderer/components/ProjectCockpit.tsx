@@ -100,6 +100,7 @@ export function ProjectCockpit() {
 							<div className="flex flex-wrap items-baseline justify-between gap-2">
 								<h2 className="min-w-0 break-words font-medium">{project.name}</h2>
 								<Link className="text-muted-foreground underline hover:text-foreground" to="/projects/$projectId" params={{ projectId: id }} search={{ observation: true }} preload={false}>{t("cockpit.projectBoard")}</Link>
+								<Link className="text-muted-foreground underline hover:text-foreground" to="/outer" search={{ auditProjectId: id }} preload={false}>{t("outer.projectAudit")}</Link>
 							</div>
 							<p className="break-all text-xs text-muted-foreground">{id}</p>
 							<p className="text-xs text-muted-foreground">{t("cockpit.observed", { timestamp: timestamp(workspaceQuery.dataUpdatedAt) })}</p>

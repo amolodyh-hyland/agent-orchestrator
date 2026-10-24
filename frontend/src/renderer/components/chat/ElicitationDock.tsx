@@ -1,9 +1,11 @@
+import { useTranslation } from "react-i18next";
 import { useId, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { ExternalLink, Loader2 } from "lucide-react";
 import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
 import type { ConversationActivity } from "../../types/conversation";
 import { ACCENT_ACTION_PILL, QUIET_ACTION_PILL } from "./action-pill";
+import { NativeInputActionButton, type NativeReplyTarget } from "../OuterNativeButton";
 
 type InputAction = "accept" | "decline" | "cancel";
 type InputValue = string | number | boolean | string[];
@@ -19,7 +21,9 @@ type PropertyEntry = [string, Record<string, unknown>];
 export function ElicitationDock({
 	activity,
 	onResolve,
+	nativeTarget,
 }: {
+	nativeTarget?: NativeReplyTarget;
 	activity: ConversationActivity;
 	onResolve?: (
 		requestId: string,
@@ -28,7 +32,7 @@ export function ElicitationDock({
 	) => Promise<unknown> | void;
 }) {
 	const requestId = activity.requestId;
-	const unavailable = !requestId || !onResolve;
+	const unavailable = !requestId || (!onResolve && !nativeTarget);
 	const [submitting, setSubmitting] = useState(false);
 	const [error, setError] = useState<string>();
 
@@ -53,9 +57,9 @@ export function ElicitationDock({
 			className="elicitation-dock overflow-hidden rounded-[var(--radius-chat-composer)] border border-border-strong bg-surface shadow-sm"
 		>
 			{activity.detail?.inputMode === "url" ? (
-				<URLRequest activity={activity} disabled={submitting || unavailable} onResolve={resolve} />
+				<URLRequest activity={activity} nativeTarget={nativeTarget} disabled={submitting || unavailable} onResolve={resolve} />
 			) : (
-				<FormRequest activity={activity} disabled={submitting || unavailable} onResolve={resolve} />
+				<FormRequest activity={activity} nativeTarget={nativeTarget} disabled={submitting || unavailable} onResolve={resolve} />
 			)}
 
 			{error ? (
@@ -89,15 +93,22 @@ function URLRequest({
 	activity,
 	disabled,
 	onResolve,
+	nativeTarget,
 }: {
+	nativeTarget?: NativeReplyTarget;
 	activity: ConversationActivity;
 	disabled: boolean;
-	onResolve: (action: InputAction, content?: Record<string, unknown>) => Promise<void>;
+	onResolve: (
+		action: InputAction,
+		content?: Record<string, unknown>
+	) => Promise<void>;
 }) {
 	const rawURL = activity.detail?.url ?? "";
 	const parsed = safeExternalURL(rawURL);
 	const [opening, setOpening] = useState(false);
 	const [openError, setOpenError] = useState<string>();
+	const [opened, setOpened] = useState(false);
+	const { t } = useTranslation();
 
 	async function consent() {
 		if (!parsed || opening) return;
@@ -107,7 +118,8 @@ function URLRequest({
 			// Opening is the consented action. Tell the provider only after Electron
 			// accepted it, so an OS-level refusal is never reported as success.
 			await aoBridge.app.openExternal(parsed.href);
-			await onResolve("accept");
+			if (nativeTarget) setOpened(true);
+			else await onResolve("accept");
 		} catch {
 			setOpenError("The link could not be opened. Nothing was approved.");
 		} finally {
@@ -121,31 +133,85 @@ function URLRequest({
 			{parsed ? (
 				<div className="flex min-h-10 min-w-0 items-center gap-2.5 px-3 py-2">
 					<div className="min-w-0 flex-1">
-						<p className="truncate text-xs leading-relaxed text-foreground">{parsed.hostname}</p>
+						<p className="truncate text-xs leading-relaxed text-foreground">
+							{parsed.hostname}
+						</p>
 						<p className="mt-0.5 break-all font-mono text-caption leading-relaxed text-muted-foreground">
 							{parsed.href}
 						</p>
 					</div>
 				</div>
 			) : (
-				<p role="alert" className="px-3 py-2 text-xs leading-snug text-destructive">
-					The provider supplied an unsafe or invalid URL. It was not opened.
+				<p
+					role="alert"
+					className="px-3 py-2 text-xs leading-snug text-destructive"
+				>
+					The provider supplied an unsafe or invalid URL. It was not
+					opened.
 				</p>
 			)}
 			{openError ? (
-				<p role="alert" className="px-3 pb-1 text-xs leading-snug text-destructive">
+				<p
+					role="alert"
+					className="px-3 pb-1 text-xs leading-snug text-destructive"
+				>
 					{openError}
 				</p>
 			) : null}
 			<DockFooter>
 				<div className="flex items-center gap-1.5">
-					<button type="button" className={QUIET_ACTION_PILL} disabled={disabled} onClick={() => onResolve("cancel")}>
-						Cancel
-					</button>
-					<button type="button" className={QUIET_ACTION_PILL} disabled={disabled} onClick={() => onResolve("decline")}>
-						Decline
-					</button>
+					{nativeTarget ? (
+						<>
+							<NativeInputActionButton
+								target={nativeTarget}
+								requestId={activity.requestId!}
+								action="cancel"
+								variant="ghost"
+								size="sm"
+							>
+								{t("outer.replyCancel")}
+							</NativeInputActionButton>
+							<NativeInputActionButton
+								target={nativeTarget}
+								requestId={activity.requestId!}
+								action="decline"
+								variant="ghost"
+								size="sm"
+							>
+								{t("outer.replyDecline")}
+							</NativeInputActionButton>
+						</>
+					) : (
+						<>
+							<button
+								type="button"
+								className={QUIET_ACTION_PILL}
+								disabled={disabled}
+								onClick={() => onResolve("cancel")}
+							>
+								Cancel
+							</button>
+							<button
+								type="button"
+								className={QUIET_ACTION_PILL}
+								disabled={disabled}
+								onClick={() => onResolve("decline")}
+							>
+								Decline
+							</button>
+						</>
+					)}
 				</div>
+				{nativeTarget && opened ? (
+					<NativeInputActionButton
+						target={nativeTarget}
+						requestId={activity.requestId!}
+						action="accept"
+						size="sm"
+					>
+						{t("outer.replyContinue")}
+					</NativeInputActionButton>
+				) : null}
 				<button
 					type="button"
 					className={ACCENT_ACTION_PILL}
@@ -153,7 +219,10 @@ function URLRequest({
 					onClick={() => void consent()}
 				>
 					{opening ? (
-						<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
+						<Loader2
+							aria-hidden="true"
+							className="size-3.5 animate-spin"
+						/>
 					) : (
 						<ExternalLink aria-hidden="true" className="size-3.5" />
 					)}
@@ -168,21 +237,41 @@ function FormRequest({
 	activity,
 	disabled,
 	onResolve,
+	nativeTarget,
 }: {
+	nativeTarget?: NativeReplyTarget;
 	activity: ConversationActivity;
 	disabled: boolean;
-	onResolve: (action: InputAction, content?: Record<string, unknown>) => Promise<void>;
+	onResolve: (
+		action: InputAction,
+		content?: Record<string, unknown>
+	) => Promise<void>;
 }) {
+	const { t } = useTranslation();
 	const schema = activity.detail?.schema;
-	const properties = useMemo(() => Object.entries(schema?.properties ?? {}), [schema?.properties]);
-	const questionGroups = useMemo(() => claudeQuestionGroups(properties), [properties]);
-	const required = useMemo(() => new Set(schema?.required ?? []), [schema?.required]);
-	const [values, setValues] = useState<Record<string, InputValue>>(() => initialValues(properties));
+	const properties = useMemo(
+		() => Object.entries(schema?.properties ?? {}),
+		[schema?.properties]
+	);
+	const questionGroups = useMemo(
+		() => claudeQuestionGroups(properties),
+		[properties]
+	);
+	const required = useMemo(
+		() => new Set(schema?.required ?? []),
+		[schema?.required]
+	);
+	const [values, setValues] = useState<Record<string, InputValue>>(() =>
+		initialValues(properties)
+	);
 	const [missing, setMissing] = useState<Set<string>>(new Set());
 	const [activeQuestion, setActiveQuestion] = useState(0);
 	const visibleProperties = questionGroups?.[activeQuestion] ?? properties;
-	const hasPreviousQuestion = questionGroups !== undefined && activeQuestion > 0;
-	const hasNextQuestion = questionGroups !== undefined && activeQuestion < questionGroups.length - 1;
+	const hasPreviousQuestion =
+		questionGroups !== undefined && activeQuestion > 0;
+	const hasNextQuestion =
+		questionGroups !== undefined &&
+		activeQuestion < questionGroups.length - 1;
 	const headerId = useId();
 
 	// Claude puts a single prompt in message and each prompt of a multi-question
@@ -191,8 +280,10 @@ function FormRequest({
 	const prompt = question?.[1].description;
 	const title = question
 		? (typeof prompt === "string" && prompt.trim() ? prompt : undefined) ??
-			(questionGroups?.length === 1 ? activity.detail?.message : undefined) ??
-			propertyLabel(question)
+		  (questionGroups?.length === 1
+				? activity.detail?.message
+				: undefined) ??
+		  propertyLabel(question)
 		: activity.detail?.message ?? schema?.title ?? activity.summary;
 	const pager =
 		questionGroups && questionGroups.length > 1
@@ -204,7 +295,7 @@ function FormRequest({
 		const absent = new Set(
 			visibleProperties
 				.filter(([name]) => required.has(name) && isEmpty(values[name]))
-				.map(([name]) => name),
+				.map(([name]) => name)
 		);
 		setMissing(absent);
 		if (absent.size > 0) return;
@@ -212,16 +303,24 @@ function FormRequest({
 			setActiveQuestion((current) => current + 1);
 			return;
 		}
-		void onResolve("accept", values);
+		if (!nativeTarget) void onResolve("accept", values);
 	}
 
 	return (
 		<form onSubmit={submit}>
 			<DockHeader id={headerId} title={title} pager={pager} />
 			{!questionGroups && schema?.description ? (
-				<p className="px-3 pb-1 text-caption leading-relaxed text-muted-foreground">{schema.description}</p>
+				<p className="px-3 pb-1 text-caption leading-relaxed text-muted-foreground">
+					{schema.description}
+				</p>
 			) : null}
-			<div className={cn(questionGroups ? "flex flex-col" : "flex flex-col gap-3 px-3 pb-1")}>
+			<div
+				className={cn(
+					questionGroups
+						? "flex flex-col"
+						: "flex flex-col gap-3 px-3 pb-1"
+				)}
+			>
 				{visibleProperties.map(([name, property], index) => (
 					<FormField
 						key={name}
@@ -233,10 +332,15 @@ function FormRequest({
 						disabled={disabled}
 						// Inside a Claude question the header is the prompt, so the first
 						// field borrows it as its accessible name instead of printing it.
-						labelledBy={questionGroups && index === 0 ? headerId : undefined}
+						labelledBy={
+							questionGroups && index === 0 ? headerId : undefined
+						}
 						rows={Boolean(questionGroups)}
 						onChange={(value) => {
-							setValues((current) => ({ ...current, [name]: value }));
+							setValues((current) => ({
+								...current,
+								[name]: value,
+							}));
 							setMissing((current) => {
 								if (!current.has(name)) return current;
 								const next = new Set(current);
@@ -249,12 +353,47 @@ function FormRequest({
 			</div>
 			<DockFooter>
 				<div className="flex items-center gap-1.5">
-					<button type="button" className={QUIET_ACTION_PILL} disabled={disabled} onClick={() => onResolve("cancel")}>
-						Cancel
-					</button>
-					<button type="button" className={QUIET_ACTION_PILL} disabled={disabled} onClick={() => onResolve("decline")}>
-						Skip
-					</button>
+					{nativeTarget ? (
+						<>
+							<NativeInputActionButton
+								target={nativeTarget}
+								requestId={activity.requestId!}
+								action="cancel"
+								variant="ghost"
+								size="sm"
+							>
+								{t("outer.replyCancel")}
+							</NativeInputActionButton>
+							<NativeInputActionButton
+								target={nativeTarget}
+								requestId={activity.requestId!}
+								action="decline"
+								variant="ghost"
+								size="sm"
+							>
+								{t("outer.replyDecline")}
+							</NativeInputActionButton>
+						</>
+					) : (
+						<>
+							<button
+								type="button"
+								className={QUIET_ACTION_PILL}
+								disabled={disabled}
+								onClick={() => onResolve("cancel")}
+							>
+								Cancel
+							</button>
+							<button
+								type="button"
+								className={QUIET_ACTION_PILL}
+								disabled={disabled}
+								onClick={() => onResolve("decline")}
+							>
+								Skip
+							</button>
+						</>
+					)}
 				</div>
 				<div className="flex items-center gap-1.5">
 					{hasPreviousQuestion ? (
@@ -270,15 +409,45 @@ function FormRequest({
 							Back
 						</button>
 					) : null}
-					<button type="submit" className={cn(ACCENT_ACTION_PILL, "min-w-20 justify-center")} disabled={disabled}>
-						{disabled ? (
-							<Loader2 aria-label="Sending answer" className="size-3.5 animate-spin" />
-						) : hasNextQuestion ? (
-							"Next"
-						) : (
-							"Continue"
-						)}
-					</button>
+					{nativeTarget && !hasNextQuestion ? (
+						<NativeInputActionButton
+							target={nativeTarget}
+							requestId={activity.requestId!}
+							action="accept"
+							content={values}
+							disabled={
+								disabled ||
+								properties.some(
+									([name]) =>
+										required.has(name) &&
+										isEmpty(values[name])
+								)
+							}
+							size="sm"
+						>
+							{t("outer.replyContinue")}
+						</NativeInputActionButton>
+					) : (
+						<button
+							type="submit"
+							className={cn(
+								ACCENT_ACTION_PILL,
+								"min-w-20 justify-center"
+							)}
+							disabled={disabled}
+						>
+							{disabled ? (
+								<Loader2
+									aria-label="Sending answer"
+									className="size-3.5 animate-spin"
+								/>
+							) : hasNextQuestion ? (
+								"Next"
+							) : (
+								"Continue"
+							)}
+						</button>
+					)}
 				</div>
 			</DockFooter>
 		</form>

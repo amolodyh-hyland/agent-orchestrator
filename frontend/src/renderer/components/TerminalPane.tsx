@@ -1,4 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { useOuterView } from "../hooks/useOuter";
+import { setOuterTerminalAuthority } from "../lib/outer-terminal";
+import { OuterNativeButton } from "./OuterNativeButton";
 import { RotateCcw } from "lucide-react";
 import {
 	createContext,
@@ -1191,6 +1194,10 @@ function AttachedTerminal({
 		);
 	}, [attachSession?.cloud, hasAttached, hasVisibleContent, initFailed, onTerminalContentReadyChange, replayPaintPending, replaySettled, state]);
 	const handleId = shellTerminalHandleId ?? attachSession?.terminalHandleId;
+	const outerView = useOuterView();
+	const outerBinding = outerView.data?.binding;
+	const outerInputHeld = Boolean(outerBinding && session?.workspaceId === outerBinding.anchorProjectId);
+	const guardedTerminal = Boolean(outerBinding && session?.workspaceId && outerBinding.projectIds.includes(session.workspaceId) && !session.hostId && !session.cloud);
 	const handleRetry = useCallback(() => {
 		// Re-attach from scratch: resets the connect-failure counter and starts a
 		// fresh connection attempt once the user has fixed their network policy.
@@ -1360,6 +1367,13 @@ function AttachedTerminal({
 
 	return (
 		<div className="terminal-surface flex h-full min-h-0 flex-col" data-testid="session-terminal">
+			{outerInputHeld ? <p className="px-3 py-2 text-xs text-muted-foreground">{t("outer.terminalHeld")}</p> : guardedTerminal && handleId ? <div className="flex items-center gap-3 px-3 py-2 text-xs">
+				<OuterNativeButton size="sm" variant="outline" draft={{operation:"control",control:{action:"terminal.bind",targetId:handleId,body:{}}}} onResult={(result)=>{
+					const value = result.record as {handleId?:string;authority?:string} | undefined;
+					if (result.ok && value?.handleId === handleId && value.authority) setOuterTerminalAuthority(handleId,value.authority);
+				}}>{t("outer.enableTerminal")}</OuterNativeButton>
+				<span>{t("outer.terminalGrant")}</span>
+			</div> : null}
 			{showEndedState && (
 				<TerminalEndedStrip
 					canRestore={canRestoreSession}

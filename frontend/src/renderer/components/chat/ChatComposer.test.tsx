@@ -11,6 +11,7 @@ import { ChatComposer } from "./ChatComposer";
 import { sendReferenceToChat } from "../../lib/chat-context-bus";
 import { attachmentURL } from "./messageAttachments";
 import { getApiBaseUrl } from "../../lib/api-client";
+import { aoBridge } from "../../lib/bridge";
 import { TooltipProvider } from "../ui/tooltip";
 import type { ChatSkill } from "../../types/conversation";
 import {
@@ -64,6 +65,35 @@ function renderComposer(props: Partial<Parameters<typeof ChatComposer>[0]> = {})
 	render(<ChatComposer onSend={onSend} {...props} />);
 	return { onSend, field: screen.getByLabelText("Message the agent") as HTMLElement };
 }
+
+it("stages an existing visible draft when the outer binding arrives after typing", async () => {
+	const expected = {bindingRevision:2,scopeRevision:2,controllerGeneration:"native-generation",settingsDigest:"a".repeat(64)};
+	const stage = vi.mocked(aoBridge.outer.stage).mockResolvedValue({id:"late-stage",digest:"exact",expiresAt:Date.now()+120_000});
+	stage.mockClear();
+	const onSend = vi.fn();
+	const view = render(<ChatComposer onSend={onSend} />);
+	await typeInLexicalEditor(screen.getByLabelText("Message the agent"), "Already visible question");
+	expect(stage).not.toHaveBeenCalled();
+	view.rerender(<ChatComposer onSend={onSend} nativeSession={{sessionId:"outer",outer:true,expected}} />);
+	await waitFor(() => expect(stage).toHaveBeenCalledWith(expect.any(String), {operation:"send",sessionId:"outer",text:"Already visible question",expected}));
+	await waitFor(() => expect(screen.getByRole("button", {name:"Send message"})).toHaveAttribute("data-outer-stage-id", "late-stage"));
+	expect(screen.getByRole("button", {name:"Inline code"})).not.toHaveAttribute("data-outer-stage-id");
+	expect(screen.getByRole("button", {name:"Inline code"})).not.toHaveAttribute("data-outer-stage-digest");
+	expect(onSend).not.toHaveBeenCalled();
+});
+
+it("stages outer Send with the visible scope and settings snapshot without a renderer submission", async () => {
+	const expected = {bindingRevision:2,scopeRevision:2,controllerGeneration:"native-generation",settingsDigest:"a".repeat(64)};
+	const stage = vi.spyOn(aoBridge.outer,"stage").mockResolvedValue({id:"native-send",digest:"exact",expiresAt:Date.now()+120_000});
+	const onSend = vi.fn();
+	try {
+		const {field} = renderComposer({onSend,nativeSession:{sessionId:"outer",outer:true,expected}});
+		await typeInComposer(field,"Exact visible question");
+		await waitFor(()=>expect(stage).toHaveBeenCalledWith(expect.any(String),{operation:"send",sessionId:"outer",text:"Exact visible question",expected}));
+		fireEvent.submit(field.closest("form")!);
+		expect(onSend).not.toHaveBeenCalled();
+	} finally {stage.mockRestore();}
+});
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;

@@ -974,6 +974,9 @@ func New(d Deps) *Manager {
 // materialization fails the still-seed row is deleted outright; a later failure
 // parks the row as terminated and rolls back what was built.
 func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+	if err := domain.CheckOuterOperation(ctx, m.store, "spawn", cfg.ProjectID, ""); err != nil {
+		return domain.SessionRecord{}, 0, 0, err
+	}
 	if cfg.RequestedOutput == domain.RequestedOutputArtifact && m.artifactDir("") == "" {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ErrArtifactOutputUnavailable)
 	}
@@ -1581,6 +1584,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	}
 
 	metadata := domain.SessionMetadata{
+		OuterGeneration:           rec.Metadata.OuterGeneration,
 		Permissions:               rec.Metadata.Permissions,
 		Branch:                    ws.Branch,
 		WorkspacePath:             ws.Path,
@@ -2731,6 +2735,9 @@ type KillResult struct {
 
 // Kill waits for workspace retirement for internal callers that depend on it.
 func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
+	if err := domain.CheckOuterOperation(ctx, m.store, "kill", "", id); err != nil {
+		return false, err
+	}
 	result, err := m.kill(ctx, id, false)
 	return result.Freed, err
 }
@@ -2738,6 +2745,9 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 // RequestKill stops the agent and persists terminal intent before returning.
 // Configured cleanup commands use the daemon's existing background workers.
 func (m *Manager) RequestKill(ctx context.Context, id domain.SessionID) (KillResult, error) {
+	if err := domain.CheckOuterOperation(ctx, m.store, "kill", "", id); err != nil {
+		return KillResult{}, err
+	}
 	return m.kill(ctx, id, true)
 }
 
@@ -2944,6 +2954,9 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 // This deliberately does not write a session_worktrees row: those rows are
 // boot-restore markers, and a replaced orchestrator must stay terminated.
 func (m *Manager) RetireForReplacement(ctx context.Context, id domain.SessionID) error {
+	if err := domain.CheckOuterOperation(ctx, m.store, "retire", "", id); err != nil {
+		return err
+	}
 	if err := m.beginAgentOperation(ctx, id, agentOperationRetire); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
 			err = ErrSwitchInProgress
@@ -3124,6 +3137,9 @@ func (m *Manager) retireWorkspaceProjectForReplacement(ctx context.Context, rec 
 // runs before any durable session write, so a failure never resurrects the row
 // or destroys the worktree (it may hold the agent's prior work).
 func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (RestoreResult, error) {
+	if err := domain.CheckOuterOperation(ctx, m.store, "restore", "", id); err != nil {
+		return RestoreResult{}, err
+	}
 	if err := m.beginAgentOperation(ctx, id, agentOperationRestore); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
 			err = ErrSwitchInProgress
@@ -3197,6 +3213,9 @@ func (m *Manager) relaunchRestoredSession(ctx context.Context, rec domain.Sessio
 // terminal identity, and provider-native conversation remain available for an
 // exact ResumeAgentWithMode call.
 func (m *Manager) ExitAgent(ctx context.Context, id domain.SessionID) (domain.SessionRecord, error) {
+	if err := domain.CheckOuterOperation(ctx, m.store, "exit", "", id); err != nil {
+		return domain.SessionRecord{}, err
+	}
 	if err := m.beginAgentOperation(ctx, id, agentOperationExit); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
 			err = ErrAgentExitInProgress
@@ -3396,6 +3415,9 @@ func (m *Manager) WakeHibernatedChat(ctx context.Context, id domain.SessionID) e
 // identity and never changes the durable terminated flag as an intermediate
 // step.
 func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) (result RestoreResult, err error) {
+	if err := domain.CheckOuterOperation(ctx, m.store, "resume", "", id); err != nil {
+		return RestoreResult{}, err
+	}
 	return m.resumeAgentWithMode(ctx, id, false)
 }
 
@@ -5071,6 +5093,9 @@ func (m *Manager) SendWithOptions(ctx context.Context, id domain.SessionID, mess
 // Chat callers must reconcile native acceptance separately. Supported TUIs correlate
 // the durable ID through UserPromptSubmit; a pane write alone never qualifies.
 func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message, clientMessageID string) error {
+	if err := domain.HoldOuterIncoming(ctx, m.store, id, "semantic_send", message); err != nil {
+		return err
+	}
 	if err := domain.CheckFactoryFeedback(ctx, m.store, id); err != nil {
 		return err
 	}
@@ -5168,6 +5193,12 @@ func (m *Manager) InterruptTUI(ctx context.Context, id domain.SessionID) error {
 // retries. Ordinary callers leave it empty; the outbox preserves the key across
 // restart, rollback, and even a second overlapping handoff.
 func (m *Manager) send(ctx context.Context, id domain.SessionID, message, clientMessageID string, options ports.MessageDeliveryOptions) error {
+	if err := domain.HoldOuterIncoming(ctx, m.store, id, "send", message); err != nil {
+		return err
+	}
+	if err := domain.CheckOuterOperation(ctx, m.store, "send", "", id); err != nil {
+		return err
+	}
 	if err := domain.CheckFactoryFeedback(ctx, m.store, id); err != nil {
 		return err
 	}
@@ -5497,6 +5528,9 @@ type CleanupResult struct {
 // whose teardown is refused (uncommitted work) is never forced; it is reported
 // in Skipped with the reason so the refusal is visible instead of silent.
 func (m *Manager) Cleanup(ctx context.Context, project domain.ProjectID) (CleanupResult, error) {
+	if err := domain.CheckOuterOperation(ctx, m.store, "cleanup", project, ""); err != nil {
+		return CleanupResult{}, err
+	}
 	recs, err := m.cleanupRecords(ctx, project)
 	if err != nil {
 		return CleanupResult{}, fmt.Errorf("cleanup %s: %w", project, err)
@@ -5745,7 +5779,7 @@ func seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now t
 		// Resolved before this point and persisted here. There is no UPDATE
 		// statement that can change it afterwards.
 		Mode:              domain.NormalizeSessionMode(cfg.RequestedMode),
-		Metadata:          domain.SessionMetadata{Permissions: permissions, PermissionCeiling: permissions},
+		Metadata:          domain.SessionMetadata{Permissions: permissions, PermissionCeiling: permissions, OuterGeneration: cfg.OuterGeneration},
 		RequestedOutput:   cfg.RequestedOutput,
 		OutputType:        domain.SessionOutputNone,
 		AutoReviewEnabled: projectConfig.AutoReview,
@@ -5968,6 +6002,15 @@ func (m *Manager) buildSpawnTexts(ctx context.Context, cfg ports.SpawnConfig, se
 // agent runs as a chat session, the only mode with the html tools and ao render.
 // requestedOutput is the deliverable requested at spawn.
 func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID, requestedOutput domain.RequestedOutput, chat bool) (string, error) {
+	if policy, ok := m.store.(domain.OuterPolicy); ok {
+		binding, found, err := policy.OuterBinding(ctx)
+		if err != nil {
+			return "", err
+		}
+		if found && string(projectID) == binding.AnchorProjectID {
+			return domain.OuterStandingInstructions, nil
+		}
+	}
 	project, err := m.loadProject(ctx, projectID)
 	if err != nil {
 		return "", err
@@ -6309,6 +6352,7 @@ func (m *Manager) runtimeEnv(id domain.SessionID, project domain.ProjectID, issu
 func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string, accountID string) (map[string]string, error) {
 	caseInsensitive := envKeysCaseInsensitive
 	env := spawnEnvForOS(id, project, issue, m.dataDir, projectEnv, caseInsensitive)
+	deleteProtectedEnv(env, "AO_SCOPE_CREDENTIAL", caseInsensitive)
 	// Project configuration must never redirect AO-owned hook callbacks to a
 	// different daemon. New receives the resolved absolute path in production;
 	// the environment fallback keeps focused embedders and tests compatible.
@@ -7177,6 +7221,15 @@ func (m *Manager) wrapAgentProcessWithLaunchID(agent ports.Agent, id domain.Sess
 	// Without this env value an old source hook can overwrite the target's
 	// native session id after an in-place switch.
 	env[EnvRuntimeLaunchID] = launchID
+	if issuer, ok := m.store.(interface {
+		IssueOuterCallerGeneration(context.Context, domain.SessionID, string, string) (string, error)
+	}); ok {
+		token, err := issuer.IssueOuterCallerGeneration(context.Background(), id, "runtime", launchID)
+		if err != nil {
+			return nil, err
+		}
+		setProtectedEnv(env, "AO_SCOPE_CREDENTIAL", token, envKeysCaseInsensitive)
+	}
 	if augmenter, ok := agent.(ports.AgentRuntimeLaunchEnv); ok {
 		augmenter.AugmentRuntimeLaunchEnv(env, m.dataDir, id, launchID)
 	}

@@ -162,6 +162,12 @@ func (m *Manager) StartInterfaceTransition(
 	policy domain.SessionInterfaceTransitionPolicy,
 	historyPolicy domain.SessionInterfaceTransitionHistoryPolicy,
 ) (domain.SessionInterfaceTransition, error) {
+	if err := domain.HoldOuterTarget(ctx, m.store, id, "interface_transition"); err != nil {
+		return domain.SessionInterfaceTransition{}, err
+	}
+	if err := domain.CheckOuterOperation(ctx, m.store, "switch", "", id); err != nil {
+		return domain.SessionInterfaceTransition{}, err
+	}
 	if !target.Valid() {
 		return domain.SessionInterfaceTransition{}, fmt.Errorf("target mode %q is invalid", target)
 	}

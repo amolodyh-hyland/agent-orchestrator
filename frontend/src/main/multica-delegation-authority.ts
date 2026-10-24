@@ -8,6 +8,8 @@ export function createMainProcessDelegationAuthority(secret: Uint8Array) {
 	const key = Buffer.from(secret);
 	const mac = (subject: string) => createHmac("sha256", key).update(subject).digest("hex");
 	return Object.freeze({
+		outerRequestMAC: (body: string) => mac(`outer-native-v1:${body}`),
+		outerReadRequestMAC: (body: string) => mac(`outer-read-v1:${body}`),
 		runRequestMAC: (body: string) => mac(`factory-run-v1:${body}`),
 		requestMAC: (body: string) => mac(`journal-v1:${body}`),
 		verifyResponseMAC: (body: string, requestMAC: string, proof: string | null) => {

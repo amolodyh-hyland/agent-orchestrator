@@ -35,6 +35,9 @@ func (s *Service) SetPromptSuggestionRunner(run func(context.Context, domain.Ses
 
 // PromptSuggestion generates an optional next human message outside the user's conversation.
 func (s *Service) PromptSuggestion(ctx context.Context, id domain.SessionID, turnID string) (string, error) {
+	if err := s.holdUnapprovedContinuation(ctx, id); err != nil {
+		return "", err
+	}
 	snapshot, err := s.promptSuggestionSnapshot(ctx, id, turnID)
 	if err != nil {
 		return "", err

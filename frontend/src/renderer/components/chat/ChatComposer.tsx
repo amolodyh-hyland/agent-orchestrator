@@ -1,4 +1,6 @@
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
+import { useOuterNativeAction } from "../../hooks/useOuter";
+import type { OuterSendExpectation } from "../../../shared/outer-native";
 /**
  * The Chat composer.
  *
@@ -209,6 +211,7 @@ export type ChatComposerHandle = {
 };
 
 export const ChatComposer = memo(function ChatComposer({
+	nativeSession,
 	focusRef,
 	onSend,
 	busy,
@@ -267,6 +270,7 @@ export const ChatComposer = memo(function ChatComposer({
 	sentMessages,
 	sentMessagesScope,
 }: {
+	nativeSession?: { sessionId: string; outer: boolean; expected?: OuterSendExpectation };
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 	/** This conversation's sent human messages, oldest first, recalled with Up and Down. */
 	sentMessages?: readonly string[];
@@ -449,6 +453,10 @@ export const ChatComposer = memo(function ChatComposer({
 	// The DOM event is the source of truth while React catches up with the draft
 	// transition. This keeps Enter-after-fast-typing from observing stale state.
 	const textRef = useRef("");
+	const [nativeText, setNativeText] = useState("");
+	useEffect(() => {
+		if (nativeSession) setNativeText(textRef.current);
+	}, [nativeSession?.sessionId]);
 	const queuedSelectionCleared = useRef(false);
 	const preservedSkillToken = useRef<string | undefined>(undefined);
 	const selectedSkill = useRef<ComposerSkillSelection | undefined>(draftScope ? readChatSessionDraft(draftScope).composer.skillSelection : undefined);
@@ -845,6 +853,7 @@ export const ChatComposer = memo(function ChatComposer({
 		selectedSkill.current = undefined;
 		historyBrowse.current = null;
 		textRef.current = "";
+		setNativeText("");
 		hasTextRef.current = false;
 		setHasText(false);
 		setTrigger(undefined);
@@ -941,6 +950,14 @@ export const ChatComposer = memo(function ChatComposer({
 			fileAttachments,
 		],
 	);
+	const nativeAction = useOuterNativeAction(nativeSession && (!nativeSession.outer || nativeSession.expected) && nativeText.trim() && !disabled && !staged && contextReferences.length === 0 && !editingQueuedTurnId
+		? nativeSession.outer
+			? { operation: "send", sessionId: nativeSession.sessionId, text: nativeText.trim(), expected:nativeSession.expected! }
+			: { operation: "control", control: { action: "chat.send", targetId: nativeSession.sessionId, body: { text: nativeText.trim() } } }
+		: undefined, (result) => {
+		if (result.ok && textRef.current === nativeText) clearAcceptedDraft(composerRevision.current);
+		if (!result.ok) setSendError("outer.sendHeld");
+	});
 
 	const acceptAndClearDurableDelivery = useCallback(
 		(delivery: ChatComposerDelivery, mutationToken?: ChatDraftMutationToken) => {
@@ -1148,6 +1165,7 @@ export const ChatComposer = memo(function ChatComposer({
 		if (historyBrowse.current && snapshot.text !== historyBrowse.current.shown) historyBrowse.current = null;
 		const previousText = textRef.current;
 		textRef.current = snapshot.text;
+		if (nativeSession) setNativeText(snapshot.text);
 		if (selectedSkill.current && !selectedTokenPresent(snapshot.text, selectedSkill.current.selection.token)) {
 			selectedSkill.current = undefined;
 			queuedSelectionCleared.current = true;
@@ -1178,7 +1196,7 @@ export const ChatComposer = memo(function ChatComposer({
 			dismissedKeyRef.current = null;
 			setDismissedKey(null);
 		}
-	}, [onQueuedDraftChange, optimisticSend, persistComposerText]);
+	}, [onQueuedDraftChange, optimisticSend, persistComposerText, nativeSession]);
 	// A walk holds one branch's prompts. Once another branch or conversation is
 	// active they are abandoned history, so put the user's own draft back.
 	const walkedScope = useRef(sentMessagesScope);
@@ -1285,6 +1303,7 @@ export const ChatComposer = memo(function ChatComposer({
 
 	function submit(event?: FormEvent, forceSteer?: boolean): Promise<void> {
 		event?.preventDefault();
+		if (nativeSession) return Promise.resolve();
 		// React cannot publish the next busy prop until after this event returns. A
 		// second Enter in that gap joins the accepted submission instead of opening a
 		// second transport whose local admission rejection would look like a real
@@ -1914,6 +1933,8 @@ export const ChatComposer = memo(function ChatComposer({
 	return withQueueStack(
 		<form
 			ref={formRef}
+			{...(nativeSession ? nativeAction.attributes : {})}
+			aria-disabled={nativeSession ? !nativeAction.ready || !sendActionEnabled : undefined}
 			// Cmd/Ctrl steering remains available as a quiet power-user action.
 			onSubmit={(event) => void submit(event, steersDraft)}
 				onDragOver={(event) => {
@@ -2222,10 +2243,11 @@ export const ChatComposer = memo(function ChatComposer({
 							<TooltipTrigger asChild>
 								<span className="inline-flex">
 									<Button
+										{...(nativeSession ? nativeAction.attributes : {})}
 										type={canStopTurn || canContinueTurn ? "button" : "submit"}
 										variant="ghost"
 										size="icon-sm"
-										disabled={canStopTurn ? false : canContinueTurn ? continuing : !sendActionEnabled}
+										disabled={nativeSession ? !sendActionEnabled || !nativeAction.ready : canStopTurn ? false : canContinueTurn ? continuing : !sendActionEnabled}
 										onClick={canStopTurn ? onInterrupt : canContinueTurn ? continueTurn : undefined}
 										aria-label={canStopTurn ? "Stop turn" : canContinueTurn ? "Continue turn" : sendActionLabel}
 										className={cn(

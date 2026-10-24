@@ -191,6 +191,9 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 	if sideID := os.Getenv("AO_SIDE_CONVERSATION_ID"); sideID != "" {
 		req.Header.Set("X-AO-Side-Conversation", sideID)
 	}
+	if credential := os.Getenv("AO_SCOPE_CREDENTIAL"); credential != "" {
+		req.Header.Set("X-AO-Scope-Credential", credential)
+	}
 
 	// Reuse the injected client's transport (keeps it stubbable in tests) but
 	// give daemon API calls far more headroom than the 2s status-probe timeout.

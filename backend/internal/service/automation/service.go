@@ -86,6 +86,9 @@ type UpdateInput struct {
 
 // Create validates, canonicalizes, and persists an automation definition.
 func (s *Service) Create(ctx context.Context, input CreateInput) (domain.Automation, error) {
+	if err := domain.CheckOuterOperation(ctx, s.store, "native_only", input.ProjectID, ""); err != nil {
+		return domain.Automation{}, err
+	}
 	if s.store == nil {
 		return domain.Automation{}, apierr.Internal("AUTOMATION_CREATE_FAILED", "Failed to create automation")
 	}
@@ -197,6 +200,9 @@ func (s *Service) Update(ctx context.Context, id domain.AutomationID, input Upda
 	if err != nil {
 		return domain.Automation{}, err
 	}
+	if err := domain.CheckOuterOperation(ctx, s.store, "native_only", rec.ProjectID, ""); err != nil {
+		return domain.Automation{}, err
+	}
 	if input.DisplayName != nil {
 		rec.DisplayName = strings.TrimSpace(*input.DisplayName)
 		if rec.DisplayName == "" || utf8.RuneCountInString(rec.DisplayName) > maxDisplayNameRunes {
@@ -269,6 +275,9 @@ func (s *Service) Update(ctx context.Context, id domain.AutomationID, input Upda
 // Delete removes a definition and its run history. Linked sessions survive by
 // the database foreign-key contract.
 func (s *Service) Delete(ctx context.Context, id domain.AutomationID) error {
+	if err := domain.CheckOuterResource(ctx, s.store, "native_only", "automation", string(id)); err != nil {
+		return err
+	}
 	ok, err := s.store.DeleteAutomation(ctx, id)
 	if err != nil {
 		return apierr.Internal("AUTOMATION_DELETE_FAILED", "Failed to delete automation")

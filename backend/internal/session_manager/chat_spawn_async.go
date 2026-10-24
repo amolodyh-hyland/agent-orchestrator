@@ -79,6 +79,15 @@ func (m *Manager) beginAsyncChatSpawn(ctx context.Context, in asyncChatSpawn) (d
 	}
 	in.record = rec
 	bg, cancel := context.WithTimeout(m.backgroundContext, asyncChatSpawnBudget)
+	// Carry only the authenticated operation/caller identity across this owned
+	// launch. The background lifetime is independent of the HTTP request; it
+	// must not turn an exact native setup into an unbound legacy start.
+	if action, ok := domain.OuterNativeActionFrom(ctx); ok {
+		bg = domain.WithOuterNativeAction(bg, action)
+	}
+	if caller, ok := domain.OuterCallerFrom(ctx); ok {
+		bg = domain.WithOuterCaller(bg, caller)
+	}
 	run := &asyncChatSpawnRun{cancel: cancel, done: make(chan struct{})}
 	m.asyncChatSpawnsMu.Lock()
 	m.asyncChatSpawns[id] = run
@@ -111,6 +120,14 @@ const asyncChatSpawnBudget = 10 * time.Minute
 // completeAsyncChatSpawn keeps the visible session and queue on failure.
 func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn) {
 	id := in.record.ID
+	operation := "spawn"
+	if in.retry {
+		operation = "resume"
+	}
+	if err := domain.CheckOuterOperation(ctx, m.store, operation, in.cfg.ProjectID, id); err != nil {
+		m.failAsyncChatSpawn(ctx, id, err)
+		return
+	}
 	totalStarted := time.Now()
 	taskName, cancelNaming := m.startTaskNaming(ctx, in.cfg, in.record, in.project.Config)
 	defer cancelNaming()

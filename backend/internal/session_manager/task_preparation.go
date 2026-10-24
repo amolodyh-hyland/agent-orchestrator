@@ -37,6 +37,9 @@ type taskPreparation struct {
 // worktree work. Provider startup and project post-create commands still wait
 // for an explicit Start Task action.
 func (m *Manager) PrepareTaskWorkspace(ctx context.Context, project domain.ProjectRecord) (domain.TaskPreparationToken, error) {
+	if err := domain.CheckOuterOperation(ctx, m.store, "spawn", domain.ProjectID(project.ID), ""); err != nil {
+		return "", err
+	}
 	if project.ID == "" {
 		return "", nil
 	}

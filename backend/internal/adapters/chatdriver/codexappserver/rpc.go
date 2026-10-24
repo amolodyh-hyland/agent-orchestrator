@@ -311,6 +311,10 @@ func (c *conn) answer(req serverRequest) {
 }
 
 func (c *conn) write(v any) error {
+	return c.writeWithAdmission(context.Background(), v, nil)
+}
+
+func (c *conn) writeWithAdmission(ctx context.Context, v any, acquire func(context.Context) (func(), error)) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return fmt.Errorf("encode frame: %w", err)
@@ -319,6 +323,16 @@ func (c *conn) write(v any) error {
 
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if acquire != nil {
+		release, err := acquire(ctx)
+		if err != nil {
+			return err
+		}
+		defer release()
+	}
 	if _, err := c.w.Write(b); err != nil {
 		return fmt.Errorf("write frame: %w", err)
 	}
@@ -328,6 +342,10 @@ func (c *conn) write(v any) error {
 // request sends a client->server request and waits for its response. The caller's
 // context bounds the wait; a late response is discarded by deliver.
 func (c *conn) request(ctx context.Context, method string, params, out any) error {
+	return c.requestWithAdmission(ctx, method, params, out, nil)
+}
+
+func (c *conn) requestWithAdmission(ctx context.Context, method string, params, out any, acquire func(context.Context) (func(), error)) error {
 	id := c.nextID.Add(1)
 	ch := make(chan frame, 1)
 
@@ -343,7 +361,7 @@ func (c *conn) request(ctx context.Context, method string, params, out any) erro
 	if params != nil {
 		payload["params"] = params
 	}
-	if err := c.write(payload); err != nil {
+	if err := c.writeWithAdmission(ctx, payload, acquire); err != nil {
 		c.mu.Lock()
 		delete(c.pending, id)
 		c.mu.Unlock()

@@ -19,6 +19,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/presence"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/factoryrun"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/outer"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
@@ -26,6 +27,7 @@ import (
 
 // APIDeps bundles every service the API layer's controllers depend on.
 type APIDeps struct {
+	Outer                   *outer.Service
 	MulticaDelegationPolicy DelegationPolicyResolver
 
 	MulticaDelegations MulticaDelegationJournal
@@ -131,6 +133,7 @@ func normalizeAPIDeps(deps APIDeps, log *slog.Logger) APIDeps {
 // API owns one controller per resource and is the single Register call the
 // router invokes to mount the /api/v1 surface.
 type API struct {
+	outer         *controllers.OuterController
 	cfg           config.Config
 	deps          APIDeps
 	agents        *controllers.AgentsController
@@ -178,8 +181,9 @@ func NewAPI(cfg config.Config, deps APIDeps) *API {
 // errors, so their logs use the same configured handler as the rest of HTTP.
 func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 	return &API{
-		cfg:  cfg,
-		deps: deps,
+		outer: &controllers.OuterController{Svc: deps.Outer},
+		cfg:   cfg,
+		deps:  deps,
 		agents: &controllers.AgentsController{
 			Catalog: deps.Agents,
 		},
@@ -284,6 +288,7 @@ func (a *API) Register(root chi.Router) {
 			a.notifications.Register(r)
 			a.reports.Register(r)
 			a.factoryRuns.Register(r)
+			a.outer.Register(r)
 			a.push.Register(r)
 			a.imports.Register(r)
 			a.fs.Register(r)

@@ -25,7 +25,8 @@ function mount() {
 	const root = createRootRoute({ component: Outlet });
 	const cockpit = createRoute({ getParentRoute: () => root, path: "/cockpit", component: ProjectCockpit });
 	const board = createRoute({ getParentRoute: () => root, path: "/projects/$projectId", component: () => <p>Source board</p> });
-	const router = createRouter({ routeTree: root.addChildren([cockpit, board]), history: createMemoryHistory({ initialEntries: ["/cockpit"] }) });
+	const outer = createRoute({ getParentRoute: () => root, path: "/outer", component: () => <p>Retained outer timeline</p>, validateSearch: (search: Record<string, unknown>) => ({ auditProjectId: search.auditProjectId }) });
+	const router = createRouter({ routeTree: root.addChildren([cockpit, board, outer]), history: createMemoryHistory({ initialEntries: ["/cockpit"] }) });
 	const view = render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>);
 	return { ...view, client, router };
 }
@@ -61,6 +62,18 @@ function assertReadOnly() {
 }
 
 describe("Project cockpit", () => {
+	it("links to the affected Project timeline passively without granting outer scope", async () => {
+		localStorage.setItem(COCKPIT_SELECTION_KEY, '["a"]');
+		const { router } = mount();
+		const link = await screen.findByRole("link", { name: "Outer action timeline" });
+		expect(link).toHaveAttribute("href", "/outer?auditProjectId=a");
+		await userEvent.click(link);
+		await screen.findByText("Retained outer timeline");
+		expect(router.state.location.search).toEqual({ auditProjectId: "a" });
+		expect(localStorage.getItem(COCKPIT_SELECTION_KEY)).toBe('["a"]');
+		assertReadOnly();
+	});
+
 	it("requires selection, reads only selected reports, and shows source times, claims and missing/stale coordinators", async () => {
 		const user = userEvent.setup();
 		mount();

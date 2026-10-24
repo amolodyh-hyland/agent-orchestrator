@@ -2,6 +2,9 @@ import type { ComposerSkillSelection } from "../../lib/chat-skill-selection";
 import type { ChatSkillSelection, ChatSkillCatalog } from "../../types/conversation";
 import { TurnWorkSummary } from "./TurnWorkSummary";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
+import { useOuterView } from "../../hooks/useOuter";
+import { OuterNativeButton } from "../OuterNativeButton";
+import { NativeApprovalCard } from "./NativeApprovalCard";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
 import { useTabListTabStop } from "../../hooks/useTabListTabStop";
@@ -751,7 +754,15 @@ function ChatWorkspaceContent({
 }) {
 	const draftScopeKey = chatDraftScopeKey(draftScope);
 	const uiSessionId = draftScope.sessionId;
+	const outerView = useOuterView();
+	const binding = outerView.data?.binding;
+	const outerSession = Boolean(binding && (binding.sessionId === snapshot.sessionId || session?.workspaceId === binding.anchorProjectId));
+	const scopedSession = outerSession || Boolean(binding && session?.workspaceId && binding.projectIds.includes(session.workspaceId));
 	const activeRemoteHostId = remoteHostId ?? session?.hostId;
+	const nativeExpectation = binding && outerView.data?.session ? {bindingRevision:binding.revision,scopeRevision:binding.scopeRevision,controllerGeneration:outerView.data.session.controllerGeneration,settingsDigest:outerView.data.session.settingsDigest} : undefined;
+	const nativeSession = scopedSession && !activeRemoteHostId && !session?.cloud ? { sessionId: snapshot.sessionId, outer: outerSession, expected:outerSession?nativeExpectation:undefined } : undefined;
+	const nativeReplyTarget = nativeSession ? {sessionId:snapshot.sessionId,generation:outerSession?outerView.data?.session?.controllerGeneration ?? "":""} : undefined;
+	const [nativeSettings,setNativeSettings] = useState<TurnSettings>();
 	const remoteCreateMux = useMemo(
 		() => assetBaseUrl ? () => createTerminalMux(muxUrlFromApiBase(assetBaseUrl)) : undefined,
 		[assetBaseUrl],
@@ -1366,8 +1377,8 @@ function ChatWorkspaceContent({
 			settingsReady && (onChooseSettings || onChooseConfigOption) ? (
 				<TurnSettingsBar
 					models={models ?? []}
-					settings={stableSettings}
-					onRememberPermissions={onRememberPermissions}
+					settings={nativeSettings ?? stableSettings}
+					onRememberPermissions={nativeSession ? undefined : onRememberPermissions}
 					rememberPermissionsPending={rememberPermissionsPending}
 					rememberPermissionsError={rememberPermissionsError}
 					rememberedPermissionMode={rememberedPermissionMode}
@@ -1376,11 +1387,11 @@ function ChatWorkspaceContent({
 					approvalModes={approvalModes}
 					cloudSession={Boolean(session?.cloud)}
 					reroute={stableModelReroute}
-					onChange={newWorkDisabled ? undefined : onChooseSettings}
+					onChange={newWorkDisabled ? undefined : nativeSession ? setNativeSettings : onChooseSettings}
 					configOptions={configOptions ?? []}
-					onChangeConfigOption={newWorkDisabled ? undefined : onChooseConfigOption}
+					onChangeConfigOption={newWorkDisabled || nativeSession ? undefined : onChooseConfigOption}
 					configPending={configOptionPending}
-					autoSelectEffortOnOpen={snapshot.items.length === 0 && !turn}
+					autoSelectEffortOnOpen={!nativeSession && snapshot.items.length === 0 && !turn}
 					error={configOptionError}
 					// Turn settings require a live controller even while messages can queue.
 				// A background resume keeps the controls visible with their last values.
@@ -1392,10 +1403,12 @@ function ChatWorkspaceContent({
 							session?.provisionState === "provisioning" ||
 							controllerTransitioning || configOptionPending || newWorkDisabled
 						}
-				/>
+				>{nativeSession && nativeSettings ? <OuterNativeButton size="sm" variant="outline" draft={{operation:"control",control:{action:"chat.settings",targetId:nativeSession.sessionId,body:nativeSettings}}} onResult={(result)=>{if(result.ok)setNativeSettings(undefined);}}>{t("outer.saveSettings")}</OuterNativeButton>:null}</TurnSettingsBar>
 			) : null,
 		[
 			settingsReady,
+			nativeSession,
+			nativeSettings,
 			configOptionError,
 			configOptionPending,
 			configOptions,
@@ -1422,21 +1435,21 @@ function ChatWorkspaceContent({
 	const composerApproval = useMemo(
 		() =>
 			stablePendingApproval ? (
-				<ApprovalCard
+				nativeReplyTarget ? <NativeApprovalCard activity={stablePendingApproval} target={nativeReplyTarget}/> : <ApprovalCard
 					activity={stablePendingApproval}
 					onDecide={onDecide}
 					busy={busy}
 					embedded
 				/>
 			) : undefined,
-		[busy, onDecide, stablePendingApproval],
+		[busy, onDecide, stablePendingApproval,nativeReplyTarget],
 	);
 	const composerElicitation = useMemo(
 		() =>
 			stablePendingUserInput ? (
-				<ElicitationDock activity={stablePendingUserInput} onResolve={onResolveInput} />
+				<ElicitationDock activity={stablePendingUserInput} nativeTarget={nativeReplyTarget} onResolve={onResolveInput} />
 			) : undefined,
-		[onResolveInput, stablePendingUserInput],
+		[onResolveInput, stablePendingUserInput,nativeReplyTarget],
 	);
 	const canSteerQueuedMessage =
 		Boolean(onSteer) && can(snapshot, "steer") && turn?.state === "running";
@@ -1806,6 +1819,7 @@ function ChatWorkspaceContent({
 										active={!workspaceActiveTabKey && !reviewerActive && !shellActive}
 									/>
 									<ChatComposer
+										nativeSession={nativeSession}
 										onSelectAnnotation={navigateToAnnotation}
 										focusRef={composerFocusRef}
 										key={`${draftScopeKey}:${draftPersistenceAvailable ? "saved" : "memory"}:${queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
@@ -1816,7 +1830,7 @@ function ChatWorkspaceContent({
 										sentMessages={sentMessages}
 										sentMessagesScope={`${snapshot.conversationId}:${snapshot.activeBranchId ?? ""}`}
 										draftSeed={composerDraftSeed}
-										promptSuggestion={!queueEdit && !composerApproval && !composerElicitation && !turn &&
+										promptSuggestion={!nativeSession && !queueEdit && !composerApproval && !composerElicitation && !turn &&
 											!busy && !sendPending && !steerPending && !agentInputDisabled && !newWorkDisabled &&
 											!controllerTransitioning && !loadingQuietly && !agentResuming &&
 											!workspaceActiveTabKey && !reviewerActive && !shellActive && snapshot.controller.state === "ready"
@@ -1833,8 +1847,8 @@ function ChatWorkspaceContent({
 										queuedDraftScope={queueEdit ? draftScope : undefined}
 										onQueuedAttachmentsChange={changeQueuedStagedAttachments}
 										onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
-										onInterrupt={turn && !newWorkDisabled ? stableInterrupt : undefined}
-										onContinue={canContinue && !queueEdit ? onContinueTurn : undefined}
+										onInterrupt={turn && !newWorkDisabled && !nativeSession ? stableInterrupt : undefined}
+										onContinue={canContinue && !queueEdit && !nativeSession ? onContinueTurn : undefined}
 										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
 										settings={<><ContextMeter usage={snapshot.usage} />{composerSettings}</>}
 										busy={busy}
@@ -1862,25 +1876,25 @@ function ChatWorkspaceContent({
 										// message, and the generic placeholder makes a still-empty composer
 										// look like a regression.
 										emptyPlaceholder={conversationEmpty ? (artifactSession ? t("chat.welcome.artifactPlaceholder") : emptyChatPlaceholder) : undefined}
-										skills={skills}
-										skillCatalog={skillCatalog}
-										onResolveSkills={onResolveSkills}
+										skills={nativeSession ? [] : skills}
+										skillCatalog={nativeSession ? undefined : skillCatalog}
+										onResolveSkills={nativeSession ? undefined : onResolveSkills}
 										filePaths={filePaths}
 										filePathsTruncated={filePathsTruncated}
-										onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
-										onChooseFolder={newWorkDisabled ? undefined : onChooseFolder}
+										onStageAttachments={newWorkDisabled || nativeSession ? undefined : onStageAttachments}
+										onChooseFolder={newWorkDisabled || nativeSession ? undefined : onChooseFolder}
 										nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
 										autoFocus={!reviewerActive}
 										autoFocusKey={draftScope.sessionId}
 										// Steering is only meaningful into a turn that is running. A queued turn
 										// has not reached the provider, so there is nothing to steer.
-										onSteer={newWorkDisabled ? undefined : steer}
+										onSteer={newWorkDisabled || nativeSession ? undefined : steer}
 										showSteerButton={showSteerButton}
-										canSteer={Boolean(onSteer) && turn?.state === "running"}
+										canSteer={!nativeSession && Boolean(onSteer) && turn?.state === "running"}
 										sendPending={sendPending || agentResuming}
 										steerPending={steerPending}
 										steerRefusal={steerRefusal}
-										onCompact={newWorkDisabled || snapshot.controller.state === "hibernated" ? undefined : onCompact}
+										onCompact={newWorkDisabled || nativeSession || snapshot.controller.state === "hibernated" ? undefined : onCompact}
 										compacting={compacting}
 										compactUnavailable={compactUnavailable}
 										compactBlocked={Boolean(turn)}

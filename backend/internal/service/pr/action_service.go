@@ -123,6 +123,9 @@ func NewActionService(deps ActionDeps) *ActionService {
 // Merge re-fetches authoritative SCM state and then squash-merges only the
 // exact head the user saw. The provider repeats the SHA guard atomically.
 func (s *ActionService) Merge(ctx context.Context, request MergeRequest) (MergeResult, error) {
+	if err := domain.CheckOuterResource(ctx, s.store, "pr.merge", "pr", request.PRID); err != nil {
+		return MergeResult{}, err
+	}
 	prNumber, err := parsePRNumber(request.PRID)
 	if err != nil || strings.TrimSpace(request.PRURL) == "" {
 		return MergeResult{}, fmt.Errorf("%w: invalid pull request identity", ErrInvalidPR)
@@ -304,6 +307,9 @@ func scmRepoForPR(pr domain.PullRequest) (ports.SCMRepo, bool) {
 // may still be used when it is present in a partial listing, while unknown IDs
 // are rejected because the response cannot prove their membership.
 func (s *ActionService) ResolveComments(ctx context.Context, prID string, commentIDs []string) (ResolveResult, error) {
+	if err := domain.CheckOuterResource(ctx, s.store, "pr.resolve", "pr", prID); err != nil {
+		return ResolveResult{}, err
+	}
 	if s.resolve == nil || s.reader == nil || s.resolver == nil || s.threadWriter == nil {
 		return ResolveResult{}, errors.New("pr: resolve-comments action is not configured")
 	}

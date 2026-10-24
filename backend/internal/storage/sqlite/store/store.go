@@ -7,6 +7,8 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
@@ -20,11 +22,12 @@ import (
 // CDC is captured by DB triggers (migration 0001), NOT by this layer: the store
 // never writes change_log, it only reads it for the CDC poller.
 type Store struct {
-	writeDB *sql.DB
-	readDB  *sql.DB
-	qw      *gen.Queries // bound to the single writer connection
-	qr      *gen.Queries // bound to the reader pool
-	writeMu *contextMutex
+	writeDB            *sql.DB
+	readDB             *sql.DB
+	qw                 *gen.Queries // bound to the single writer connection
+	qr                 *gen.Queries // bound to the reader pool
+	writeMu            *contextMutex
+	outerTerminalEpoch string
 
 	agentSwitchFailureEventMetadata *domain.AgentSwitchEventMetadata
 	agentSwitchFailureEventEncoder  ports.AgentSwitchFailureEventEncoder
@@ -95,6 +98,7 @@ func NewStore(writeDB, readDB *sql.DB) *Store {
 		qw:                       gen.New(writeDB),
 		qr:                       gen.New(readDB),
 		writeMu:                  newContextMutex(),
+		outerTerminalEpoch:       uuid.NewString(),
 		agentSwitchFailureCommit: func(tx *sql.Tx) error { return tx.Commit() },
 	}
 }

@@ -16,8 +16,11 @@ var ErrActivityProjectionContention = errors.New("activity projection contention
 // SpawnConfig is the request to start a new session: which project/issue, which
 // agent harness, and the branch/prompt the agent launches with.
 type SpawnConfig struct {
-	ProjectID domain.ProjectID
-	IssueID   domain.IssueID
+	// Set only by the private outer lifecycle service. A reduced scope starts a
+	// fresh generation without replacing any real Project's coordinator.
+	OuterGeneration int64
+	ProjectID       domain.ProjectID
+	IssueID         domain.IssueID
 	// AutomationRunID makes one scheduled occurrence idempotent across daemon
 	// restarts. Ordinary interactive spawns leave this unset.
 	AutomationRunID *domain.AutomationRunID

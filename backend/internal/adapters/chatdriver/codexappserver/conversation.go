@@ -106,6 +106,7 @@ type conversation struct {
 }
 
 var _ ports.ChatConversation = (*conversation)(nil)
+var _ ports.ChatTurnAdmissionSender = (*conversation)(nil)
 var _ ports.ChatProviderHibernator = (*conversation)(nil)
 
 // Asserted here so a refactor cannot silently drop model listing: the service
@@ -316,6 +317,10 @@ func (c *conversation) emit(ev ports.ChatEvent) {
 
 // SendTurn delivers one message to the provider.
 func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) (ports.ChatTurnRef, error) {
+	return c.SendTurnWithAdmission(ctx, msg, nil)
+}
+
+func (c *conversation) SendTurnWithAdmission(ctx context.Context, msg ports.ChatUserMessage, acquire func(context.Context) (func(), error)) (ports.ChatTurnRef, error) {
 	if strings.TrimSpace(msg.Text) == "" {
 		// There is no keystroke concept here: an empty message is a caller bug,
 		// not a way to nudge the agent.
@@ -356,7 +361,7 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 			ID string `json:"id"`
 		} `json:"turn"`
 	}
-	if err := c.conn.request(ctx, "turn/start", params, &resp); err != nil {
+	if err := c.conn.requestWithAdmission(ctx, "turn/start", params, &resp, acquire); err != nil {
 		if _, overridden := params["sandboxPolicy"]; overridden && !c.readOnly {
 			// Name the posture that was really sent: for a return to the default mode
 			// that is the reset posture, not the mode the user picked.

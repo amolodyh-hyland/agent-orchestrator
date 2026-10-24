@@ -127,6 +127,9 @@ func (s *Service) List(ctx context.Context, projectID string) ([]domain.FactoryR
 
 // Create snapshots owned bindings and records the initial human decision.
 func (s *Service) Create(ctx context.Context, in CreateInput) (domain.RunDetail, error) {
+	if err := domain.CheckOuterOperation(ctx, s.store, "run.create", domain.ProjectID(in.ProjectID), in.SessionID); err != nil {
+		return domain.RunDetail{}, err
+	}
 	if !bounded(in) || !decision(in.Actor, in.Decision) || in.ID == "" || len(in.ID) > 128 || in.TaskID == "" || in.PolicyDecision == "" || !domain.SHA256Digest(in.DesignDigest) || len(in.RequiredChecks) == 0 || len(in.RequiredChecks) > 50 {
 		return domain.RunDetail{}, invalid("Run id, task, approved design digest, policy decision, required checks and human decision are required")
 	}
@@ -290,6 +293,9 @@ func handoffMatches(history []domain.RunEvidence, observed []domain.RunRepoFacts
 
 // Record retains a completion or review claim even when verification holds readiness.
 func (s *Service) Record(ctx context.Context, id string, in RecordInput) (domain.RunDetail, error) {
+	if err := domain.CheckOuterResource(ctx, s.store, "run.evidence", "run", id); err != nil {
+		return domain.RunDetail{}, err
+	}
 	if !bounded(in) || !decision(in.Actor, in.Decision) || (in.Completion == nil) == (in.Review == nil) {
 		return domain.RunDetail{}, invalid("One completion or review receipt and a human decision are required")
 	}
@@ -357,6 +363,9 @@ func (s *Service) Record(ctx context.Context, id string, in RecordInput) (domain
 
 // Advance records a human decision and retains the stage if evidence is missing.
 func (s *Service) Advance(ctx context.Context, id string, in AdvanceInput) (domain.RunDetail, error) {
+	if err := domain.CheckOuterResource(ctx, s.store, "run.advance", "run", id); err != nil {
+		return domain.RunDetail{}, err
+	}
 	if !bounded(in) || !decision(in.Actor, in.Decision) {
 		return domain.RunDetail{}, invalid("A human decision is required")
 	}
@@ -615,6 +624,9 @@ func (s *Service) Preview(ctx context.Context, id, action string) (ConfirmationP
 // Confirm is a private desktop composition boundary. Never mount it on public
 // controllers: the caller must authenticate an exact request with the boot key.
 func (s *Service) Confirm(ctx context.Context, id, action string, version int64, digest string) (domain.RunDetail, error) {
+	if err := domain.CheckOuterResource(ctx, s.store, "run.confirm", "run", id); err != nil {
+		return domain.RunDetail{}, err
+	}
 	preview, err := s.Preview(ctx, id, action)
 	if err != nil {
 		return domain.RunDetail{}, err

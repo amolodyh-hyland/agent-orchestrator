@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../../lib/bridge";
@@ -296,5 +296,112 @@ describe("ElicitationDock", () => {
 		);
 		expect(screen.getByRole("alert")).toHaveTextContent(/unsafe or invalid URL/i);
 		expect(screen.getByRole("button", { name: "Open link" })).toBeDisabled();
+	});
+	it("stages the exact native form reply without submitting through the renderer callback", async () => {
+		const user = userEvent.setup();
+		const resolve = vi.fn();
+		const stage = vi
+			.spyOn(aoBridge.outer, "stage")
+			.mockResolvedValue({
+				id: "native-reply",
+				digest: "exact",
+				expiresAt: Date.now() + 120_000,
+			});
+		try {
+			const view = render(
+				<ElicitationDock
+					activity={activity({
+						inputMode: "form",
+						schema: {
+							type: "object",
+							required: ["answer"],
+							properties: {
+								answer: { type: "string", title: "Answer" },
+							},
+						},
+					})}
+					nativeTarget={{
+						sessionId: "outer",
+						generation: "generation-1",
+					}}
+					onResolve={resolve}
+				/>
+			);
+			await user.type(screen.getByRole("textbox"), "Exact human answer");
+			await waitFor(() =>
+				expect(stage).toHaveBeenCalledWith(expect.any(String), {
+					operation: "control",
+					control: {
+						action: "chat.input",
+						targetId: "outer",
+						pendingId: "request-1",
+						generation: "generation-1",
+						body: {
+							action: "accept",
+							content: { answer: "Exact human answer" },
+						},
+					},
+				})
+			);
+			fireEvent.submit(view.container.querySelector("form")!);
+			await user.click(screen.getByRole("button", { name: "Continue" }));
+			expect(resolve).not.toHaveBeenCalled();
+		} finally {
+			stage.mockRestore();
+		}
+	});
+
+	it("opens a native interaction URL without accepting the pending interaction", async () => {
+		const user = userEvent.setup();
+		const resolve = vi.fn();
+		const stage = vi
+			.spyOn(aoBridge.outer, "stage")
+			.mockResolvedValue({
+				id: "native-url",
+				digest: "exact",
+				expiresAt: Date.now() + 120_000,
+			});
+		const open = vi
+			.spyOn(aoBridge.app, "openExternal")
+			.mockResolvedValue(undefined);
+		try {
+			render(
+				<ElicitationDock
+					activity={activity({
+						inputMode: "url",
+						url: "https://example.invalid/verification",
+					})}
+					nativeTarget={{
+						sessionId: "outer",
+						generation: "generation-1",
+					}}
+					onResolve={resolve}
+				/>
+			);
+			await user.click(
+				screen.getByRole("button", { name: "Open example.invalid" })
+			);
+			await screen.findByRole("button", { name: "Continue" });
+			expect(open).toHaveBeenCalledWith(
+				"https://example.invalid/verification"
+			);
+			expect(resolve).not.toHaveBeenCalled();
+			await waitFor(() =>
+				expect(stage).toHaveBeenCalledWith(
+					expect.any(String),
+					expect.objectContaining({
+						control: expect.objectContaining({
+							action: "chat.input",
+							pendingId: "request-1",
+							generation: "generation-1",
+							body: { action: "accept" },
+						}),
+					})
+				)
+			);
+		} finally {
+			stage.mockRestore();
+			open.mockRestore();
+		}
 	});
 });

@@ -139,6 +139,9 @@ func (s *Service) Rollback(ctx context.Context, id domain.SessionID, turnID stri
 // exists so the provider call is written, tested, and honest about what it returns,
 // rather than half-wired into a UI that cannot be correct.
 func (s *Service) ForkConversation(ctx context.Context, id domain.SessionID) (string, error) {
+	if err := domain.HoldOuterTarget(ctx, s.store, id, "fork"); err != nil {
+		return "", err
+	}
 	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
 		return "", err
@@ -164,6 +167,9 @@ func (s *Service) EditMessage(
 	turnID string,
 	msg ports.ChatUserMessage,
 ) (EditMessageResult, error) {
+	if err := domain.HoldOuterTarget(ctx, s.store, id, "edit"); err != nil {
+		return EditMessageResult{}, err
+	}
 	requestJSON, err := encodeEditDeliveryRequest(turnID, msg)
 	if err != nil {
 		return EditMessageResult{}, err
@@ -831,6 +837,9 @@ func (s *Service) persistRejectedEditDelivery(
 // ActivateBranch resumes a durable provider branch in the same worktree and
 // swaps controllers without sending a new prompt.
 func (s *Service) ActivateBranch(ctx context.Context, id domain.SessionID, branchID string) (string, error) {
+	if err := domain.HoldOuterTarget(ctx, s.store, id, "branch.activate"); err != nil {
+		return "", err
+	}
 	_, release, err := s.workingController(ctx, id)
 	if err != nil {
 		return "", err

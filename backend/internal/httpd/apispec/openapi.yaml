@@ -4210,6 +4210,126 @@ paths:
       summary: Start a worker task and refine its title in the background
       tags:
       - sessions
+  /api/v1/outer:
+    get:
+      operationId: getOuter
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OuterView'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read outer binding and observation-only receipts
+      tags:
+      - outer
+  /api/v1/outer/audit:
+    get:
+      operationId: getOuterAudit
+      parameters:
+      - in: query
+        name: after
+        schema:
+          format: int64
+          type: integer
+      - in: query
+        name: limit
+        schema:
+          type: integer
+      - in: query
+        name: projectId
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OuterAuditResponse'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read a bounded outer timeline page
+      tags:
+      - outer
+  /api/v1/outer/facts:
+    get:
+      operationId: getOuterFacts
+      parameters:
+      - in: query
+        name: projectId
+        schema:
+          type: string
+      - in: query
+        name: kind
+        schema:
+          type: string
+      - in: query
+        name: limit
+        schema:
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OuterFactsResponse'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read bounded selected-project evidence with source labels
+      tags:
+      - outer
   /api/v1/projects:
     get:
       operationId: listProjects
@@ -17134,6 +17254,38 @@ components:
         reasoningEffort:
           type: string
       type: object
+    DomainOuterCapacityObservation:
+      properties:
+        background:
+          type: integer
+        foregroundReserve:
+          type: boolean
+        heavyReserved:
+          type: integer
+        observedAt:
+          format: date-time
+          type: string
+        outsideActive:
+          type: integer
+        overage:
+          type: boolean
+        reserved:
+          type: integer
+        stations:
+          type: integer
+        unknown:
+          type: integer
+      required:
+      - stations
+      - reserved
+      - outsideActive
+      - unknown
+      - heavyReserved
+      - background
+      - foregroundReserve
+      - overage
+      - observedAt
+      type: object
     DomainReviewerConfig:
       properties:
         agentConfig:
@@ -19221,6 +19373,330 @@ components:
       required:
       - id
       - projectId
+      type: object
+    OuterAudit:
+      properties:
+        at:
+          format: date-time
+          type: string
+        digest:
+          type: string
+        generation:
+          type: string
+        id:
+          type: string
+        instructionRevision:
+          type: string
+        operation:
+          type: string
+        projectId:
+          type: string
+        projectIds:
+          items:
+            type: string
+          type: array
+        reason:
+          type: string
+        receiptId:
+          type: string
+        requestId:
+          type: string
+        sequence:
+          format: int64
+          type: integer
+        sessionId:
+          type: string
+        sources:
+          items:
+            $ref: '#/components/schemas/OuterSource'
+          type: array
+        state:
+          type: string
+      required:
+      - id
+      - sequence
+      - at
+      - operation
+      - state
+      - instructionRevision
+      type: object
+    OuterAuditResponse:
+      properties:
+        events:
+          items:
+            $ref: '#/components/schemas/OuterAudit'
+          type: array
+      required:
+      - events
+      type: object
+    OuterBinding:
+      properties:
+        anchorProjectId:
+          type: string
+        foregroundReserve:
+          type: boolean
+        generation:
+          format: int64
+          type: integer
+        historyHeld:
+          type: boolean
+        instructionRevision:
+          type: string
+        paused:
+          type: boolean
+        projectIds:
+          items:
+            type: string
+          type: array
+        revision:
+          format: int64
+          type: integer
+        scopeRevision:
+          format: int64
+          type: integer
+        sessionId:
+          type: string
+      required:
+      - anchorProjectId
+      - sessionId
+      - revision
+      - scopeRevision
+      - generation
+      - projectIds
+      - paused
+      - foregroundReserve
+      - historyHeld
+      - instructionRevision
+      type: object
+    OuterCapacity:
+      properties:
+        foreground:
+          type: boolean
+        generation:
+          type: string
+        heavy:
+          type: boolean
+        releaseEvidence:
+          type: string
+        releasedAt:
+          format: date-time
+          type: string
+        requestId:
+          type: string
+        reservedAt:
+          format: date-time
+          type: string
+        sessionId:
+          type: string
+      required:
+      - requestId
+      - sessionId
+      - generation
+      - heavy
+      - foreground
+      - reservedAt
+      - releasedAt
+      - releaseEvidence
+      type: object
+    OuterEvidence:
+      properties:
+        content:
+          type: string
+        id:
+          type: string
+        recordedAt:
+          format: date-time
+          type: string
+        sessionId:
+          type: string
+        source:
+          $ref: '#/components/schemas/OuterSource'
+      required:
+      - id
+      - sessionId
+      - source
+      - content
+      - recordedAt
+      type: object
+    OuterFact:
+      properties:
+        callerState:
+          type: string
+        receipt:
+          type: string
+        source:
+          $ref: '#/components/schemas/OuterSource'
+        state:
+          type: string
+        summary:
+          type: string
+      required:
+      - source
+      - summary
+      - state
+      type: object
+    OuterFactsResponse:
+      properties:
+        facts:
+          items:
+            $ref: '#/components/schemas/OuterFact'
+          type: array
+      required:
+      - facts
+      type: object
+    OuterRequestView:
+      properties:
+        acceptedAt:
+          format: date-time
+          type: string
+        attemptedAt:
+          format: date-time
+          type: string
+        digest:
+          type: string
+        expiresAt:
+          format: date-time
+          type: string
+        id:
+          type: string
+        issuedAt:
+          format: date-time
+          type: string
+        providerTurnId:
+          type: string
+        sessionId:
+          type: string
+        settledAt:
+          format: date-time
+          type: string
+        sources:
+          items:
+            $ref: '#/components/schemas/OuterSource'
+          type: array
+        state:
+          type: string
+        submittedAt:
+          format: date-time
+          type: string
+        turnId:
+          type: string
+      required:
+      - id
+      - sessionId
+      - digest
+      - turnId
+      - providerTurnId
+      - state
+      - issuedAt
+      - expiresAt
+      - attemptedAt
+      - submittedAt
+      - acceptedAt
+      - settledAt
+      - sources
+      type: object
+    OuterSessionView:
+      properties:
+        controllerGeneration:
+          type: string
+        harness:
+          type: string
+        mode:
+          type: string
+        permissions:
+          type: string
+        settings:
+          $ref: '#/components/schemas/DomainConversationSettings'
+        settingsDigest:
+          type: string
+      required:
+      - settingsDigest
+      - harness
+      - mode
+      - controllerGeneration
+      - settings
+      - permissions
+      type: object
+    OuterSource:
+      properties:
+        digest:
+          type: string
+        id:
+          type: string
+        kind:
+          type: string
+        label:
+          type: string
+        observedAt:
+          format: date-time
+          type: string
+        projectId:
+          type: string
+        revision:
+          format: int64
+          type: integer
+        sourceAt:
+          format: date-time
+          type: string
+        sources:
+          items:
+            type: string
+          type: array
+        unknown:
+          type: boolean
+      required:
+      - projectId
+      - label
+      - kind
+      - id
+      - digest
+      - revision
+      - sourceAt
+      - observedAt
+      - sources
+      - unknown
+      type: object
+    OuterView:
+      properties:
+        binding:
+          anyOf:
+          - type: "null"
+          - $ref: '#/components/schemas/OuterBinding'
+            type: object
+        capacity:
+          anyOf:
+          - type: "null"
+          - $ref: '#/components/schemas/DomainOuterCapacityObservation'
+            type: object
+        incoming:
+          items:
+            $ref: '#/components/schemas/OuterEvidence'
+          type: array
+        limitations:
+          items:
+            type: string
+          type: array
+        requests:
+          items:
+            $ref: '#/components/schemas/OuterRequestView'
+          type: array
+        reservations:
+          items:
+            $ref: '#/components/schemas/OuterCapacity'
+          type: array
+        session:
+          anyOf:
+          - type: "null"
+          - $ref: '#/components/schemas/OuterSessionView'
+            type: object
+      required:
+      - session
+      - binding
+      - requests
+      - reservations
+      - capacity
+      - incoming
+      - limitations
       type: object
     PRReviewState:
       properties:

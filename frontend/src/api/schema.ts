@@ -1734,6 +1734,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/outer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read outer binding and observation-only receipts */
+        get: operations["getOuter"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/outer/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a bounded outer timeline page */
+        get: operations["getOuterAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/outer/facts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read bounded selected-project evidence with source labels */
+        get: operations["getOuterFacts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects": {
         parameters: {
             query?: never;
@@ -5971,6 +6022,18 @@ export interface components {
             openCodeMode?: string;
             reasoningEffort?: string;
         };
+        DomainOuterCapacityObservation: {
+            background: number;
+            foregroundReserve: boolean;
+            heavyReserved: number;
+            /** Format: date-time */
+            observedAt: string;
+            outsideActive: number;
+            overage: boolean;
+            reserved: number;
+            stations: number;
+            unknown: number;
+        };
         DomainReviewerConfig: {
             agentConfig?: components["schemas"]["AgentConfig"];
             harness: string;
@@ -6750,6 +6813,126 @@ export interface components {
             id: string;
             projectId: string;
             projectName?: string;
+        };
+        OuterAudit: {
+            /** Format: date-time */
+            at: string;
+            digest?: string;
+            generation?: string;
+            id: string;
+            instructionRevision: string;
+            operation: string;
+            projectId?: string;
+            projectIds?: string[];
+            reason?: string;
+            receiptId?: string;
+            requestId?: string;
+            /** Format: int64 */
+            sequence: number;
+            sessionId?: string;
+            sources?: components["schemas"]["OuterSource"][];
+            state: string;
+        };
+        OuterAuditResponse: {
+            events: components["schemas"]["OuterAudit"][];
+        };
+        OuterBinding: {
+            anchorProjectId: string;
+            foregroundReserve: boolean;
+            /** Format: int64 */
+            generation: number;
+            historyHeld: boolean;
+            instructionRevision: string;
+            paused: boolean;
+            projectIds: string[];
+            /** Format: int64 */
+            revision: number;
+            /** Format: int64 */
+            scopeRevision: number;
+            sessionId: string;
+        };
+        OuterCapacity: {
+            foreground: boolean;
+            generation: string;
+            heavy: boolean;
+            releaseEvidence: string;
+            /** Format: date-time */
+            releasedAt: string;
+            requestId: string;
+            /** Format: date-time */
+            reservedAt: string;
+            sessionId: string;
+        };
+        OuterEvidence: {
+            content: string;
+            id: string;
+            /** Format: date-time */
+            recordedAt: string;
+            sessionId: string;
+            source: components["schemas"]["OuterSource"];
+        };
+        OuterFact: {
+            callerState?: string;
+            receipt?: string;
+            source: components["schemas"]["OuterSource"];
+            state: string;
+            summary: string;
+        };
+        OuterFactsResponse: {
+            facts: components["schemas"]["OuterFact"][];
+        };
+        OuterRequestView: {
+            /** Format: date-time */
+            acceptedAt: string;
+            /** Format: date-time */
+            attemptedAt: string;
+            digest: string;
+            /** Format: date-time */
+            expiresAt: string;
+            id: string;
+            /** Format: date-time */
+            issuedAt: string;
+            providerTurnId: string;
+            sessionId: string;
+            /** Format: date-time */
+            settledAt: string;
+            sources: components["schemas"]["OuterSource"][];
+            state: string;
+            /** Format: date-time */
+            submittedAt: string;
+            turnId: string;
+        };
+        OuterSessionView: {
+            controllerGeneration: string;
+            harness: string;
+            mode: string;
+            permissions: string;
+            settings: components["schemas"]["DomainConversationSettings"];
+            settingsDigest: string;
+        };
+        OuterSource: {
+            digest: string;
+            id: string;
+            kind: string;
+            label: string;
+            /** Format: date-time */
+            observedAt: string;
+            projectId: string;
+            /** Format: int64 */
+            revision: number;
+            /** Format: date-time */
+            sourceAt: string;
+            sources: string[];
+            unknown: boolean;
+        };
+        OuterView: {
+            binding: null | components["schemas"]["OuterBinding"];
+            capacity: null | components["schemas"]["DomainOuterCapacityObservation"];
+            incoming: components["schemas"]["OuterEvidence"][];
+            limitations: string[];
+            requests: components["schemas"]["OuterRequestView"][];
+            reservations: components["schemas"]["OuterCapacity"][];
+            session: null | components["schemas"]["OuterSessionView"];
         };
         PRReviewState: {
             latestRun?: components["schemas"]["ReviewRun"];
@@ -14087,6 +14270,155 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getOuter: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OuterView"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getOuterAudit: {
+        parameters: {
+            query?: {
+                after?: number;
+                limit?: number;
+                projectId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OuterAuditResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getOuterFacts: {
+        parameters: {
+            query?: {
+                projectId?: string;
+                kind?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OuterFactsResponse"];
                 };
             };
             /** @description Conflict */

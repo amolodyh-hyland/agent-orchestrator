@@ -69,6 +69,7 @@ import (
 	librarysvc "github.com/aoagents/agent-orchestrator/backend/internal/service/library"
 	linkpreviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/linkpreview"
 	notificationsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/notification"
+	outersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/outer"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
@@ -631,6 +632,9 @@ func Run() error {
 	lcStack.LCM.SetSessionOperationGate(sessMgr)
 	termMgr.SetSessionInputLease(sessMgr)
 	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Logger: log, OnModelScopeChanged: agentSvc.InvalidateProjectModelCatalogs})
+	outerSvc := outersvc.New(store, projectSvc, sessionSvc)
+	outerSvc.SetTransport(chatSvc)
+	chatSvc.SetOuterAdmission(outerSvc)
 	reportSessions, ok := sessMgr.(reportSemanticSession)
 	if !ok {
 		return errors.New("wire report delivery: session manager lacks semantic send support")
@@ -998,6 +1002,7 @@ func Run() error {
 	}
 
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
+		Outer:              outerSvc,
 		Awake:              awakeSvc,
 		Library:            librarySvc,
 		Projects:           projectSvc,
