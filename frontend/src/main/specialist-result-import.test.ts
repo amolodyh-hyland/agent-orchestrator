@@ -74,3 +74,11 @@ it("requires current read permission as well as import permission before re-read
  expect(await f.flow.confirm(p.id,p.digest,()=>true)).toEqual({ok:false});
  expect(f.fetcher).toHaveBeenCalledOnce();expect(f.save).not.toHaveBeenCalled();
 });
+
+const textVectors = JSON.parse(readFileSync(resolve(process.cwd(), "../test/contracts/multica-result-text-v1.json"), "utf8")) as { refused: string[]; allowed: string[] };
+it.each(textVectors.refused)("refuses shared credential vector %s", value => {
+ expect(() => resultText(value)).toThrow();
+});
+it.each(textVectors.allowed)("accepts shared plain text vector %s", value => {
+ expect(resultText(value)).toBe(value);
+});

@@ -79,6 +79,12 @@ byte count and a snapshot revision. Snapshot revision hashes compact JSON in the
 published DTO field order with an empty revision field and Go JSON escaping.
 The client and ledger validate the bytes and both digests independently.
 
+`test/contracts/multica-result-text-v1.json` is paired with Multica's text refusal
+fixture. The server, desktop client and ledger exercise the same vectors,
+including quoted JSON/YAML/env/query credential keys and prefixed secret, token
+and key names. Set `AO_RESULT_TEXT_FIXTURE` in the server test run to check this
+pair byte for byte.
+
 In **Run evidence**, enter a run bound to the selected delegation and choose
 **Preview specialist result scope**. The metadata preview reads no result body.
 A trusted click and native approval permit retrieval into a plain-text preview.

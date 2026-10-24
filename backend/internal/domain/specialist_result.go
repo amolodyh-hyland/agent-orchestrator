@@ -46,7 +46,7 @@ type RunResultReceipt struct {
 	Result        SpecialistResult `json:"result"`
 }
 
-var unsafeSpecialistText = regexp.MustCompile(`(?i)(www\.|(?:https?|ftp|file|data|javascript|mailto|ssh|smb|tel):|(?:mul_|mat_|mcn_|mpi_|mpc_|gh[pousr]_|github_pat_|npm_|xox[baprs]-|sk-)[a-z0-9_-]+|-----BEGIN|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|\beyJ[a-z0-9_-]{10,}\.[a-z0-9_-]+\.[a-z0-9_-]+|\b(?:bearer|password|passwd|secret|api[_ -]?key|access[_ -]?token|token|authorization|credential)\s*[:= ]\s*\S+)`)
+var unsafeSpecialistText = regexp.MustCompile(`(?i)(www\.|(?:https?|ftp|file|data|javascript|mailto|ssh|smb|tel):|(?:mul_|mat_|mcn_|mpi_|mpc_|gh[pousr]_|github_pat_|npm_|xox[baprs]-|sk-)[a-z0-9_-]+|-----BEGIN|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|\beyJ[a-z0-9_-]{10,}\.[a-z0-9_-]+\.[a-z0-9_-]+|\b(?:[a-z0-9]+[_.-])*(?:bearer|password|passwd|pwd|passphrase|secrets?|tokens?|keys?|auth|authorization|credentials?|api[_ -]?key|access[_ -]?token|refresh[_ -]?token|client[_ -]?secret|private[_ -]?key|connection[_ -]?string)["']?\s*[:= ]\s*\S+)`)
 
 // Validate verifies text bounds, the safe projection and both content hashes.
 func (r SpecialistResult) Validate() error {
