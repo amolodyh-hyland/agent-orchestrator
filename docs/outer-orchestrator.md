@@ -187,6 +187,9 @@ no-start evidence. Launch uncertainty retains the original reservation.
 Foreground reservation still applies. No plan grants a child execution
 or feedback turn. Selected-project reads retain transitive imported sources;
 removing a source holds reimport through another Project's retained content.
+Confirmed worker branches must be new and retain the sealed name in every
+repository. Local or remote collisions hold before worktree creation; allocation
+never substitutes a suffix or checks out a branch that appeared during a race.
 Reads exceeding 1,000 imported source records per Project hold rather than
 discarding labels from the history.
 

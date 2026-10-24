@@ -1386,6 +1386,9 @@ func (m *Manager) spawn(ctx context.Context, cfg ports.SpawnConfig, mayHaveStart
 		}
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
 	}
+	if cfg.OuterActionID != "" && ws.Branch != cfg.Branch {
+		return domain.SessionRecord{}, 0, 0, domain.ErrOuterHeld
+	}
 	// A synchronous request is unacknowledged until launch. Record that setup
 	// has not completed before naming publishes its workspace path.
 	trackSetup := taskName != nil && cfg.ClientRequestID != ""
@@ -2099,6 +2102,7 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 			SessionPrefix: sessionPrefix(project),
 			Branch:        branch,
 			FreshBranch:   cfg.TaskPreparation != "",
+			ExactBranch:   cfg.OuterActionID != "",
 			BaseBranch:    baseBranch,
 			BaseRef:       baseRefs[filepath.Clean(project.Path)],
 		}
@@ -2151,6 +2155,7 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 		SessionPrefix: sessionPrefix(project),
 		Branch:        branch,
 		FreshBranch:   cfg.TaskPreparation != "",
+		ExactBranch:   cfg.OuterActionID != "",
 		RootRepoPath:  project.Path,
 		BaseBranch:    project.Config.WorktreeBaseBranch(),
 		BaseRef:       baseRefs[filepath.Clean(project.Path)],

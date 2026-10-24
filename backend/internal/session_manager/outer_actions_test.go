@@ -67,6 +67,9 @@ func TestOuterM2ManagerSpawnHasNoUnapprovedOpeningPrompt(t *testing.T) {
 	if rec.Metadata.Branch != cfg.Branch || rec.Metadata.WorkspacePath == "" {
 		t.Fatal("no owned task worktree", rec.Metadata)
 	}
+	if !m.workspace.(*fakeWorkspace).lastCfg.ExactBranch {
+		t.Fatal("confirmed spawn allowed branch substitution")
+	}
 	if _, _, _, err := m.Spawn(context.Background(), cfg); err == nil {
 		t.Fatal("unbound spawn")
 	}

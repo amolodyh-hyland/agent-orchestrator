@@ -275,6 +275,9 @@ func (w *Workspace) remoteExists(ctx context.Context, repo, remote string) (bool
 // Create adds a git worktree for the session under the managed root, checking
 // out the requested branch, and returns where it landed.
 func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, error) {
+	if cfg.ExactBranch {
+		cfg.FreshBranch = true
+	}
 	if err := validateConfig(cfg); err != nil {
 		return ports.WorkspaceInfo{}, err
 	}
@@ -297,6 +300,9 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 			}
 			if !exists {
 				break
+			}
+			if cfg.ExactBranch {
+				return ports.WorkspaceInfo{}, fmt.Errorf("gitworktree: confirmed branch %q already exists", cfg.Branch)
 			}
 			if suffix > 100 {
 				return ports.WorkspaceInfo{}, fmt.Errorf("gitworktree: no unused branch for %q", cfg.Branch)
@@ -334,9 +340,14 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 			return ports.WorkspaceInfo{}, err
 		}
 	}
-	baseRef, err := w.addWorktree(ctx, repo, path, cfg.Branch, cfg.BaseBranch, cfg.BaseRef, seedRef, true)
+	baseRef := cfg.BaseRef
+	if cfg.ExactBranch {
+		err = w.addNewBranchWorktree(ctx, repo, cfg.Branch, path, seedRef, false)
+	} else {
+		baseRef, err = w.addWorktree(ctx, repo, path, cfg.Branch, cfg.BaseBranch, cfg.BaseRef, seedRef, true)
+	}
 	if err != nil {
-		if cfg.FreshBranch {
+		if cfg.FreshBranch && !cfg.ExactBranch {
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
 			info := ports.WorkspaceInfo{Path: path, Branch: cfg.Branch, BaseSHA: seedSHA, BaseRef: cfg.BaseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID, RepoPath: repo}
@@ -394,6 +405,9 @@ func (w *Workspace) rollbackPreparedAdd(ctx context.Context, info ports.Workspac
 // one branch name; if the requested branch already exists in any repo, one
 // suffixed branch that is free in every repo is selected and used everywhere.
 func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.WorkspaceProjectConfig) (ports.WorkspaceProjectInfo, error) {
+	if cfg.ExactBranch {
+		cfg.FreshBranch = true
+	}
 	if err := validateWorkspaceProjectConfig(cfg); err != nil {
 		return ports.WorkspaceProjectInfo{}, err
 	}
@@ -416,10 +430,11 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 	}
 	repos := make([]workspaceProjectRepo, 0, len(cfg.Repos)+1)
 	repos = append(repos, workspaceProjectRepo{
-		name:       domain.RootWorkspaceRepoName,
-		repoPath:   rootRepo,
-		outputPath: rootPath,
-		baseBranch: cfg.BaseBranch,
+		name:        domain.RootWorkspaceRepoName,
+		exactBranch: cfg.ExactBranch,
+		repoPath:    rootRepo,
+		outputPath:  rootPath,
+		baseBranch:  cfg.BaseBranch,
 	})
 	for _, child := range cfg.Repos {
 		repoPath, err := physicalAbs(child.RepoPath)
@@ -439,6 +454,7 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 		}
 		repos = append(repos, workspaceProjectRepo{
 			name:         child.Name,
+			exactBranch:  cfg.ExactBranch,
 			relativePath: rel,
 			repoPath:     repoPath,
 			outputPath:   outPath,
@@ -458,6 +474,9 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 		if !ok {
 			continue
 		}
+		if cfg.ExactBranch {
+			return ports.WorkspaceProjectInfo{}, fmt.Errorf("gitworktree: confirmed worktree path %q already exists", repo.outputPath)
+		}
 		if record.Branch != requestedBranch {
 			return ports.WorkspaceProjectInfo{}, fmt.Errorf(
 				"gitworktree: managed path %q already contains branch %q, want %q",
@@ -474,7 +493,15 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 		}
 	}
 	branch := requestedBranch
-	if !recovering {
+	if cfg.ExactBranch {
+		free, err := w.workspaceProjectBranchFree(ctx, repos, requestedBranch, true)
+		if err != nil {
+			return ports.WorkspaceProjectInfo{}, err
+		}
+		if !free {
+			return ports.WorkspaceProjectInfo{}, fmt.Errorf("gitworktree: confirmed branch %q already exists", requestedBranch)
+		}
+	} else if !recovering {
 		branch, err = w.workspaceProjectBranch(ctx, repos, requestedBranch, cfg.FreshBranch)
 		if err != nil {
 			return ports.WorkspaceProjectInfo{}, err
@@ -516,6 +543,9 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 	touched := make([]ports.WorkspaceRepoInfo, 0, len(repos))
 	out := ports.WorkspaceProjectInfo{Worktrees: make([]ports.WorkspaceRepoInfo, 0, len(repos))}
 	fail := func(cause error) (ports.WorkspaceProjectInfo, error) {
+		if cfg.ExactBranch {
+			return out, cause
+		}
 		if cfg.FreshBranch {
 			return w.rollbackWorkspaceProjectPreparation(ctx, out, touched, cause)
 		}
@@ -1703,6 +1733,7 @@ func (w *Workspace) addNewBranchWorktree(ctx context.Context, repo, branch, path
 }
 
 type workspaceProjectRepo struct {
+	exactBranch  bool
 	name         string
 	relativePath string
 	repoPath     string
@@ -1782,6 +1813,12 @@ func (w *Workspace) createWorkspaceProjectRepo(ctx context.Context, repo workspa
 	baseSHA, err := w.revParse(ctx, repo.repoPath, baseRef)
 	if err != nil {
 		return "", err
+	}
+	if repo.exactBranch {
+		if err := w.addNewBranchWorktree(ctx, repo.repoPath, branch, repo.outputPath, seedRef, false); err != nil {
+			return "", err
+		}
+		return baseSHA, nil
 	}
 	// addWorktree handles both the ordinary new-branch path and a preparation
 	// recovered after a daemon crash left this branch or registration behind.
