@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createMulticaPublicApi } from "./multica-public-api";
-import { delegationResult } from "./multica-result-model";
+import { delegationResult, resultText } from "./multica-result-model";
 import { createResultImportFlow, registerResultImport, type ResultContext } from "./specialist-result-import";
 import type { MulticaCredentials } from "./multica-credentials";
 import type { PublicDelegation } from "./multica-public-api-model";
@@ -59,4 +59,9 @@ it("rejects foreign frames, unfocused clicks and forged native result requests",
  expect(f.confirm).not.toHaveBeenCalled();expect(f.fetcher).not.toHaveBeenCalled();
  f.confirm.mockResolvedValue(false);await handlers.get(RESULT_CLICK)!(event,input);
  expect(f.confirm).toHaveBeenCalledOnce();expect(f.fetcher).not.toHaveBeenCalled();registration.dispose();
+});
+
+
+it("refuses recognizable credentials in otherwise bounded plain text",()=>{
+ for(const value of ["token=private","AKIA1234567890ABCDEF","npm_private","mailto:person@example.test","data:text,private"]){expect(()=>resultText(value)).toThrow();}
 });

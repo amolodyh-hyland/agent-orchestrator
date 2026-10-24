@@ -8,7 +8,7 @@ export type PublicDelegationResult = {
 };
 export function resultText(value: unknown): string {
  const s = text(value, MAX_RESULT_BYTES);
- if (!s.trim() || /[\\/\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/u.test(s) || /(?:www\.|(?:https?|ftp|file|data|javascript|mailto|ssh|smb|tel):|(?:mul_|mat_|mcn_|mpi_|mpc_|ghp_|github_pat_|sk-)[a-z0-9_-]+|-----BEGIN|\b(?:bearer|password|passwd|secret|api[_ -]?key|access[_ -]?token)\s*[:= ]\s*\S+)/i.test(s) || Buffer.from(s).toString("utf8") !== s) throw new Error("unsafe result");
+ if (!s.trim() || /[\\/\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/u.test(s) || /(?:www\.|(?:https?|ftp|file|data|javascript|mailto|ssh|smb|tel):|(?:mul_|mat_|mcn_|mpi_|mpc_|gh[pousr]_|github_pat_|npm_|xox[baprs]-|sk-)[a-z0-9_-]+|-----BEGIN|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|\beyJ[a-z0-9_-]{10,}\.[a-z0-9_-]+\.[a-z0-9_-]+|\b(?:bearer|password|passwd|secret|api[_ -]?key|access[_ -]?token|token|authorization|credential)\s*[:= ]\s*\S+)/i.test(s) || Buffer.from(s).toString("utf8") !== s) throw new Error("unsafe result");
  return s;
 }
 export const resultHash = (value: string) => createHash("sha256").update(value).digest("hex");

@@ -43,7 +43,7 @@ type RunResultReceipt struct {
 	Result        SpecialistResult `json:"result"`
 }
 
-var unsafeSpecialistText = regexp.MustCompile(`(?i)(www\.|(?:https?|ftp|file|data|javascript|mailto|ssh|smb|tel):|(?:mul_|mat_|mcn_|mpi_|mpc_|ghp_|github_pat_|sk-)[a-z0-9_-]+|-----BEGIN|\b(?:bearer|password|passwd|secret|api[_ -]?key|access[_ -]?token)\s*[:= ]\s*\S+)`)
+var unsafeSpecialistText = regexp.MustCompile(`(?i)(www\.|(?:https?|ftp|file|data|javascript|mailto|ssh|smb|tel):|(?:mul_|mat_|mcn_|mpi_|mpc_|gh[pousr]_|github_pat_|npm_|xox[baprs]-|sk-)[a-z0-9_-]+|-----BEGIN|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|\beyJ[a-z0-9_-]{10,}\.[a-z0-9_-]+\.[a-z0-9_-]+|\b(?:bearer|password|passwd|secret|api[_ -]?key|access[_ -]?token|token|authorization|credential)\s*[:= ]\s*\S+)`)
 
 func (r SpecialistResult) Validate() error {
 	invalid := errors.New("invalid specialist result")
