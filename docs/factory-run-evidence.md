@@ -342,6 +342,12 @@ text bytes, digest, snapshot revision, and separate fresh read/import consent ID
 and timestamps. Version comparison and append are transactional. A changed answer
 requires a fresh receipt; a stale or replayed approval cannot overwrite history.
 
+Later native stage confirmations show bounded source/consent metadata, terminal
+revision, snapshot revision, SHA-256 and byte count for each current specialist
+receipt. Their confirmation digest seals this metadata projection. The answer
+body is omitted from stage dialogs, including for a maximum-size 32768-byte
+import; the full untrusted text remains unchanged in ledger history.
+
 This receipt does not advance readiness or stages, satisfy checks/review evidence,
 or submit a continuation. Imported content is untrusted evidence. See
 [multica-delegation-contract.md](multica-delegation-contract.md#specialist-text-result-v1-wi-fac-08)

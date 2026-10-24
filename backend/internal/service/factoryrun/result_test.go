@@ -122,3 +122,102 @@ func TestResultImportRejectsConsentDigestAndBindingChanges(t *testing.T) {
 		})
 	}
 }
+
+func TestMaxSizeResultImportThenNativeStageAdvance(t *testing.T) {
+	f, in := resultSetup(t)
+	// Confirm creation first, so the imported receipt is still current at advance.
+	run, err := f.svc.Get(f.ctx, "result-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run = f.confirm(run, "evidence")
+	binding, err := f.svc.ResultContext(f.ctx, run.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.ExpectedVersion, in.ContextDigest = binding.Version, binding.Digest
+	r := &in.Receipt.Result
+	r.Text, r.ByteCount, r.Revision = strings.Repeat("x", 32768), 32768, ""
+	sum := sha256.Sum256([]byte(r.Text))
+	r.Digest = hex.EncodeToString(sum[:])
+	raw, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum = sha256.Sum256(raw)
+	r.Revision = hex.EncodeToString(sum[:])
+	imported, err := f.svc.ImportResult(f.ctx, run.Run.ID, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := f.svc.Preview(f.ctx, run.Run.ID, "advance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err = json.MarshalIndent(preview, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) > 16000 || strings.Contains(string(raw), `"text"`) || strings.Contains(string(raw), r.Text) {
+		t.Fatal("stage preview contains unbounded specialist body", len(raw))
+	}
+	var wire struct {
+		Detail struct {
+			Evidence []struct {
+				SpecialistResult *struct {
+					Untrusted bool `json:"untrusted"`
+					Result    struct {
+						Digest    string `json:"digest"`
+						Revision  string `json:"revision"`
+						ByteCount int    `json:"byte_count"`
+					} `json:"result"`
+				} `json:"specialistResult"`
+			} `json:"evidence"`
+		} `json:"detail"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, e := range wire.Detail.Evidence {
+		if e.SpecialistResult == nil {
+			continue
+		}
+		found = true
+		meta := e.SpecialistResult
+		if !meta.Untrusted || meta.Result.ByteCount != 32768 || meta.Result.Digest != r.Digest || meta.Result.Revision != r.Revision {
+			t.Fatal("stage preview lost snapshot binding")
+		}
+	}
+	if !found {
+		t.Fatal("stage preview omitted imported receipt")
+	}
+	// The very same metadata projection is sealed by the confirmation digest.
+	digest := preview.Digest
+	preview.Digest = ""
+	raw, err = json.Marshal(preview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum = sha256.Sum256(raw)
+	if digest != hex.EncodeToString(sum[:]) {
+		t.Fatal("preview digest did not bind metadata projection")
+	}
+	advanced, err := f.svc.Confirm(f.ctx, run.Run.ID, "advance", imported.Run.Version, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if advanced.Run.Stage != "implementation" {
+		t.Fatalf("max size import blocked advance: %+v", advanced)
+	}
+	history, err := f.db.ListRunEvidence(f.ctx, run.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range history {
+		if e.Kind == "specialist_result" && e.SpecialistResult != nil && e.SpecialistResult.Result == *r {
+			return
+		}
+	}
+	t.Fatal("confirmation projection changed the full ledger receipt")
+}
