@@ -76,6 +76,9 @@ it("stages an existing visible draft when the outer binding arrives after typing
 	expect(stage).not.toHaveBeenCalled();
 	view.rerender(<ChatComposer onSend={onSend} nativeSession={{sessionId:"outer",outer:true,expected}} />);
 	await waitFor(() => expect(stage).toHaveBeenCalledWith(expect.any(String), {operation:"send",sessionId:"outer",text:"Already visible question",expected}));
+	await waitFor(() => expect(screen.getByRole("button", {name:"Send message"})).toHaveAttribute("data-outer-stage-id", "late-stage"));
+	expect(screen.getByRole("button", {name:"Inline code"})).not.toHaveAttribute("data-outer-stage-id");
+	expect(screen.getByRole("button", {name:"Inline code"})).not.toHaveAttribute("data-outer-stage-digest");
 	expect(onSend).not.toHaveBeenCalled();
 });
 

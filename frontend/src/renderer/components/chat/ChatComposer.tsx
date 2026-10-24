@@ -2145,7 +2145,6 @@ export const ChatComposer = memo(function ChatComposer({
 							<TooltipTrigger asChild>
 								<span className="inline-flex">
 									<Button
-										{...(nativeSession ? nativeAction.attributes : {})}
 										type="button"
 										variant="ghost"
 										size="icon-sm"
@@ -2244,6 +2243,7 @@ export const ChatComposer = memo(function ChatComposer({
 							<TooltipTrigger asChild>
 								<span className="inline-flex">
 									<Button
+										{...(nativeSession ? nativeAction.attributes : {})}
 										type={canStopTurn || canContinueTurn ? "button" : "submit"}
 										variant="ghost"
 										size="icon-sm"
