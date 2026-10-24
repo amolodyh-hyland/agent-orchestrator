@@ -185,6 +185,8 @@ launch and retain it through uncertain submission. The same 2-station/1-heavy
 accounting and foreground reservation apply. No plan grants a child execution
 or feedback turn. Selected-project reads retain transitive imported sources;
 removing a source holds reimport through another Project's retained content.
+Reads exceeding 1,000 imported source records per Project hold rather than
+discarding labels from the history.
 
 The existing native acceptance and settlement hooks update the original request
 and action receipts. Submission is single use even when its result is unknown;

@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -193,6 +194,35 @@ func TestOuterPlanExactTurnReceiptRecoveryAndProvenance(t *testing.T) {
 	}
 	if _, err := f.st.LabelOuterFacts(ctx, newScope, "replacement-native", facts); err == nil {
 		t.Fatal("B-derived content reimported via A after removal")
+	}
+}
+
+func TestOuterPlanImportedSourceOverflowHoldsInsteadOfDroppingLabels(t *testing.T) {
+	f, _, target, _ := planJournal(t)
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", filepath.Join(f.dir, "ao.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1000)
+		INSERT INTO outer_sources(conversation_id,source_key,document)
+		SELECT ?, 'export:' || x, '{"projectId":"a","sources":["a"]}' FROM n`, target.Metadata.ProviderConversationID); err != nil {
+		t.Fatal(err)
+	}
+	facts, err := f.st.OuterFacts(ctx, "a", "sessions", 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.LabelOuterFacts(ctx, f.binding, "bounded-history", facts); err != nil {
+		t.Fatal("complete bounded import history held", err)
+	}
+	if _, err := db.Exec(`INSERT INTO outer_sources(conversation_id,source_key,document)
+		VALUES(?, 'export:1001', '{"projectId":"outside","sources":["outside"]}')`, target.Metadata.ProviderConversationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.LabelOuterFacts(ctx, f.binding, "bounded-history", facts); !errors.Is(err, domain.ErrOuterHeld) {
+		t.Fatal("truncated import history lost the excluded source", err)
 	}
 }
 

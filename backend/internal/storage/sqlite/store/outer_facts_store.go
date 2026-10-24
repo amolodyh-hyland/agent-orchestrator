@@ -127,6 +127,10 @@ func (s *Store) LabelOuterFacts(ctx context.Context, b domain.OuterBinding, conv
 			if err != nil {
 				return err
 			}
+			// A truncated import history cannot establish the complete source set.
+			if len(imported) > 1000 {
+				return domain.ErrOuterHeld
+			}
 			lineage = append(lineage, imported...)
 			for _, doc := range lineage {
 				var source domain.OuterSource

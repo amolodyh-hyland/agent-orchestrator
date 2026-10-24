@@ -32,7 +32,7 @@ UPDATE outer_capacity SET session_id=sqlc.arg(session_id),generation=sqlc.arg(ge
 UPDATE outer_plan_actions SET state='completed',completed_at=sqlc.arg(accepted_at) WHERE completed_at IS NULL
 AND id IN(SELECT id FROM outer_requests WHERE accepted_at IS NOT NULL AND json_extract(document,'$.conversationId')=sqlc.arg(conversation_id) AND provider_turn_id=sqlc.arg(provider_turn_id));
 -- name: OuterProjectImportedSources :many
-SELECT s.document FROM outer_sources s JOIN sessions t ON t.provider_conversation_id=s.conversation_id WHERE t.project_id=sqlc.arg(project_id) AND s.source_key LIKE 'export:%' ORDER BY s.rowid LIMIT 1000;
+SELECT s.document FROM outer_sources s JOIN sessions t ON t.provider_conversation_id=s.conversation_id WHERE t.project_id=sqlc.arg(project_id) AND s.source_key LIKE 'export:%' ORDER BY s.rowid LIMIT 1001;
 
 -- name: CancelOuterPlan :execrows
 UPDATE outer_action_plans SET expires_at=sqlc.arg(expires_at) WHERE id=sqlc.arg(id) AND approved_at IS NULL AND expires_at IS NULL;

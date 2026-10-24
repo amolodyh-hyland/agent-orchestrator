@@ -299,7 +299,7 @@ func (q *Queries) ListOuterPlans(ctx context.Context) ([]OuterActionPlan, error)
 }
 
 const outerProjectImportedSources = `-- name: OuterProjectImportedSources :many
-SELECT s.document FROM outer_sources s JOIN sessions t ON t.provider_conversation_id=s.conversation_id WHERE t.project_id=?1 AND s.source_key LIKE 'export:%' ORDER BY s.rowid LIMIT 1000
+SELECT s.document FROM outer_sources s JOIN sessions t ON t.provider_conversation_id=s.conversation_id WHERE t.project_id=?1 AND s.source_key LIKE 'export:%' ORDER BY s.rowid LIMIT 1001
 `
 
 func (q *Queries) OuterProjectImportedSources(ctx context.Context, projectID *domain.ProjectID) ([]string, error) {
