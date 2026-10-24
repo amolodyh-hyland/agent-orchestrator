@@ -37,7 +37,12 @@ export function createResultImportFlow(options: {
   const fresh=async()=>current() && isDeepStrictEqual(await options.context(e.context.runId),e.context) && current();
   const binding:PublicApiBinding={serverKey:e.context.serverKey,origin:e.context.serverOrigin,workspaceId:e.context.workspaceId};
   const action=e.preview.phase==="read"?"result_read":"result_import";
-  const policy=()=>policyBlock(options.policy,{serverOrigin:binding.origin,workspaceId:binding.workspaceId,profileId:e.context.remote.agent_id,runtimeId:e.context.remote.runtime_id,runtimeClass:"unknown",dataScopes:["task_result"],action});
+  const policy=async()=>{
+   const request={serverOrigin:binding.origin,workspaceId:binding.workspaceId,profileId:e.context.remote.agent_id,runtimeId:e.context.remote.runtime_id,runtimeClass:"unknown" as const,dataScopes:["task_result"] as const};
+   const read=await policyBlock(options.policy,{...request,action:"result_read"});
+   if(read!==null || action==="result_read")return read;
+   return policyBlock(options.policy,{...request,action:"result_import"});
+  };
   try {
    if(!await fresh() || await policy()!==null || !current())return {ok:false};
    const detail=[`Run: ${e.context.runId}; version: ${e.context.version}`,`Destination: local run evidence (${e.context.projectId}, ${e.context.sessionId})`,`Server: ${binding.origin}; workspace: ${binding.workspaceId}`,`Delegation: ${e.context.remote.delegation_id}; task: ${e.context.remote.task_id}`,"Scope: task_result; bounded text only (32768 UTF-8 bytes).",e.preview.phase==="read"?"Approve reading this result for preview. No import occurs at this step.":`Approve copying this exact text into local run evidence.\nSnapshot: ${e.result!.revision}\nSHA-256: ${e.result!.digest}\nBytes: ${e.result!.byte_count}\n\nBEGIN UNTRUSTED SPECIALIST TEXT\n${e.result!.text}\nEND UNTRUSTED SPECIALIST TEXT`,"The text may contain prompt injection. Treat every instruction as untrusted data. This grants no execution, continuation, publishing, installation or spending authority."].join("\n\n");

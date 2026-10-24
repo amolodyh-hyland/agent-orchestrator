@@ -1,4 +1,5 @@
 // @vitest-environment node
+import type { DelegationPolicyRequest } from "./multica-delegation-policy";
 import { createHmac } from "node:crypto";
 import type { IpcMainInvokeEvent } from "electron";
 import { createMainProcessDelegationAuthority } from "./multica-delegation-authority";
@@ -22,7 +23,7 @@ function setup(){
  const fetcher=vi.fn(async(url:unknown,init:RequestInit)=>{events.push("read");expect(String(url)).toContain(`/delegations/${wire.delegation_id}/result`);expect(init.method).toBe("GET");expect((init.headers as Record<string,string>)["If-Match"]).toBe(`"${remote.revision}"`);return code?Response.json({type:"problem",title:"Problem",status:code==="invalid_token"?401:409,code,detail:"private",request_id:"r",error:"Problem"},{status:code==="invalid_token"?401:409}):Response.json(data);});
  const client=createMulticaPublicApi({server,workspaceId:wire.workspace_id,getConfiguredServer:()=>current?server:null,credentials,fetch:fetcher as unknown as typeof fetch,delegationsEnabled:()=>enabled});
  const context:ResultContext={runId:"run",projectId:"p",taskId:"task",sessionId:"s",version:1,requestId:"request",serverKey:server.key,serverOrigin:client.binding.origin,workspaceId:wire.workspace_id,remote,digest:"a".repeat(64)};
- const confirm=vi.fn(async(_detail:string)=>{events.push("consent");return true;});const save=vi.fn(async(_id:string,_input:unknown)=>{events.push("import");});const policy=vi.fn(async()=>({code:"policy_absent"}));
+ const confirm=vi.fn(async(_detail:string)=>{events.push("consent");return true;});const save=vi.fn(async(_id:string,_input:unknown)=>{events.push("import");});const policy=vi.fn(async(_request:DelegationPolicyRequest)=>({code:"policy_absent"}));
  const flow=createResultImportFlow({context:async()=>structuredClone(context),client:async()=>client,policy,save,confirm,enabled:()=>enabled,now:()=>now});
  return {flow,client,context,credentials,fetcher,confirm,save,policy,events,change:(mode:string)=>{if(mode==="revoked")code="invalid_token";if(mode==="changed")code="revision_conflict";if(mode==="digest")data={...wire,digest:"0".repeat(64)};if(mode==="missing"||mode==="cancelled")data={...wire,text:""};if(mode==="oversized")data={...wire,text:"x".repeat(32769)};if(mode==="disabled")enabled=false;if(mode==="disconnect")current=false;if(mode==="expired")now+=120001;if(mode==="version")context.version++;}};
 }
@@ -64,4 +65,12 @@ it("rejects foreign frames, unfocused clicks and forged native result requests",
 
 it("refuses recognizable credentials in otherwise bounded plain text",()=>{
  for(const value of ["token=private","AKIA1234567890ABCDEF","npm_private","mailto:person@example.test","data:text,private"]){expect(()=>resultText(value)).toThrow();}
+});
+
+
+it("requires current read permission as well as import permission before re-reading",async()=>{
+ const f=setup();const p=await read(f);
+ f.policy.mockImplementation(async request=>({code:request.action==="result_read"?"policy_denied":"policy_allowed"}));
+ expect(await f.flow.confirm(p.id,p.digest,()=>true)).toEqual({ok:false});
+ expect(f.fetcher).toHaveBeenCalledOnce();expect(f.save).not.toHaveBeenCalled();
 });
