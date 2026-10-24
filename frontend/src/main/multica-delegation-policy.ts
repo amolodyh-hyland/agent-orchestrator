@@ -4,7 +4,7 @@ export type DelegationRuntimeClass = "local" | "remote" | "unknown";
 export type DelegationPolicyBlockCode = "policy_denied" | "policy_unavailable" | "policy_runtime_unknown" | "policy_location_unsafe";
 export type DelegationPolicyRequest = Readonly<{
 	serverOrigin: string; workspaceId: string; profileId: string; runtimeId: string;
-	runtimeClass: DelegationRuntimeClass; dataScopes: readonly ["task_brief"]; action: "delegate";
+	runtimeClass: DelegationRuntimeClass; dataScopes: readonly ["task_brief"] | readonly ["task_result"]; action: "delegate" | "result_read" | "result_import";
 }>;
 export type DelegationSendGuard = () => Promise<DelegationPolicyBlockCode | null>;
 export type DelegationConfirmationGuard = () => boolean;

@@ -1,3 +1,4 @@
+import { RESULT_PREVIEW, RESULT_CANCEL, RESULT_UPDATE, installResultUserAction, type ResultPreview, type ResultUpdate, type SpecialistResultBridge } from "./shared/specialist-result";
 import { OUTER_STAGE, OUTER_CANCEL, OUTER_RESULT, OUTER_READ, installOuterUserAction, type OuterNativeBridge, type OuterNativeDraft, type OuterStage, type OuterResult, type OuterReadQuery, type OuterReadResponse } from "./shared/outer-native";
 import { RUN_PREVIEW, RUN_CANCEL, RUN_RESULT, installRunUserAction, type RunAction, type RunPreview, type RunResult } from "./shared/factory-run-confirmation";
 import { CHOOSE_PROJECT_CONTEXT_CHANNEL, type ProjectContextLinkRequest, type ProjectContextLinkSelection } from "./shared/project-context";
@@ -787,6 +788,11 @@ const api = {
 			return () => { ipcRenderer.off(OUTER_RESULT, wrapped); };
 		},
 	} satisfies OuterNativeBridge,
+	specialistResult: {
+        preview:(runId:string)=>ipcRenderer.invoke(RESULT_PREVIEW,runId) as Promise<ResultPreview|null>,
+        cancel:(id:string)=>ipcRenderer.invoke(RESULT_CANCEL,id) as Promise<void>,
+        onUpdate:(listener:(update:ResultUpdate)=>void)=>{const wrapped=(_event:Electron.IpcRendererEvent,value:ResultUpdate)=>listener(value);ipcRenderer.on(RESULT_UPDATE,wrapped);return()=>{ipcRenderer.off(RESULT_UPDATE,wrapped);};},
+    } satisfies SpecialistResultBridge,
 	factoryRun: {
 		preview: (runId: string, action: RunAction) => ipcRenderer.invoke(RUN_PREVIEW, runId, action) as Promise<RunPreview | null>,
 		cancel: (id: string) => ipcRenderer.invoke(RUN_CANCEL, id) as Promise<void>,
@@ -1052,4 +1058,5 @@ export type AoBridge = typeof api;
 installDelegationUserAction(document, (channel, input) => ipcRenderer.invoke(channel, input));
 
 installRunUserAction(document, (channel, input) => ipcRenderer.invoke(channel, input));
+installResultUserAction(document, (channel,input)=>ipcRenderer.invoke(channel,input));
 installOuterUserAction(document, (channel, input) => ipcRenderer.invoke(channel, input));

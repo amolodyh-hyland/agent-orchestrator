@@ -151,3 +151,30 @@ func fixturePolicyFiles(roots ...string) delegationPolicyFiles {
 type protectedFixtureDirectory struct{ os.FileInfo }
 
 func (info protectedFixtureDirectory) Mode() os.FileMode { return info.FileInfo.Mode() &^ 0o022 }
+
+func TestManagedResultScopeRequiresExplicitReadAndImport(t *testing.T) {
+	for _, action := range []string{"result_read", "result_import"} {
+		t.Run(action, func(t *testing.T) {
+			opts := ResolveOptions{ConfigDir: t.TempDir(), ManagedSettingsDir: t.TempDir(), GOOS: "linux", Env: envFrom(nil)}
+			req, p := delegationPolicyFixture()
+			req.Action = action
+			req.DataScopes = []string{"task_result"}
+			check := func(want string) {
+				t.Helper()
+				raw, _ := json.Marshal(map[string]any{"aoMulticaDelegation": p})
+				writeClaudeSettingsFixture(t, filepath.Join(opts.ManagedSettingsDir, "managed-settings.json"), string(raw))
+				got := resolveFixtureDelegationPolicy(context.Background(), req, opts, time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC))
+				if got.Code != want {
+					t.Fatalf("got %s want %s", got.Code, want)
+				}
+			}
+			check("policy_denied")
+			p.Actions = []string{action}
+			check("policy_denied")
+			p.DataScopes = []string{"task_result"}
+			check("policy_allowed")
+			p.Version = 2
+			check("policy_unavailable")
+		})
+	}
+}

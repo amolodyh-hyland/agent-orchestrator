@@ -13,7 +13,7 @@ Use `ao run create --file run.json`. The request contains a caller-chosen stable
 `policyDecision` reference, nonempty `requiredChecks`, `actor`, and `decision`.
 Optional `source` fields record the exact server, workspace, issue, and revision;
 `delegationId` is an opaque reference. The existing delegation journal owns its
-payload and consent records. No brief or result body belongs in this ledger.
+payload and consent records. Briefs remain in that journal. A separate native-confirmed specialist-result import can append bounded untrusted text and its immutable snapshot receipt to the run ledger.
 
 ```json
 {
@@ -330,3 +330,25 @@ main session/runtime handles, reviewer handles (including native runtime wrapper
 and session-scoped shell handles all use their owning session. Project-only shells
 remain held for enrolled projects. Unknown or conflicting mappings fail closed;
 admission rechecks both the mapping and policy after any library wait.
+
+
+## Import an approved specialist answer
+
+WI-FAC-08 adds `specialist_result` receipts to this ledger through the private
+boot-authenticated desktop boundary. A run must name the exact source delegation
+(request ID or remote delegation ID) for the same Project/task; optional server
+and workspace bindings must agree. The receipt includes exact terminal identities,
+text bytes, digest, snapshot revision, and separate fresh read/import consent IDs
+and timestamps. Version comparison and append are transactional. A changed answer
+requires a fresh receipt; a stale or replayed approval cannot overwrite history.
+
+Later native stage confirmations show bounded source/consent metadata, terminal
+revision, snapshot revision, SHA-256 and byte count for each current specialist
+receipt. Their confirmation digest seals this metadata projection. The answer
+body is omitted from stage dialogs, including for a maximum-size 32768-byte
+import; the full untrusted text remains unchanged in ledger history.
+
+This receipt does not advance readiness or stages, satisfy checks/review evidence,
+or submit a continuation. Imported content is untrusted evidence. See
+[multica-delegation-contract.md](multica-delegation-contract.md#specialist-text-result-v1-wi-fac-08)
+for the two-step desktop workflow and paired contract validation.

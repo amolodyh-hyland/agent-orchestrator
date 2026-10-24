@@ -10,7 +10,7 @@ function fixture() {
 	const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>();
 	const shell = { id: 7, mainFrame: {}, isDestroyed: () => false, isFocused: vi.fn(() => true), send: vi.fn(), on: vi.fn(), removeListener: vi.fn() };
 	const event = { sender: { id: 7 }, senderFrame: shell.mainFrame } as unknown as IpcMainInvokeEvent;
-	const preview = { feedback: {payload: "P2-1: correct stale source",sessionId:"s",sha:"a".repeat(40),round:1,targetDigest:"b".repeat(64)}, action: "evidence", digest: "a".repeat(64), detail: { run: { id: "run", projectId: "p", sessionId: "s", version: 3, stage: "implementation" }, evidence: [{ kind: "completion", confirmed: false }], observed: [], blockers: ["human_evidence_confirmation_required"], nextAction: "hold" } };
+	const preview: Omit<RunPreview, "id" | "expiresAt"> = { feedback: {payload: "P2-1: correct stale source",sessionId:"s",sha:"a".repeat(40),round:1,targetDigest:"b".repeat(64)}, action: "evidence", digest: "a".repeat(64), detail: { run: { id: "run", projectId: "p", sessionId: "s", version: 3, stage: "implementation" }, evidence: [{ kind: "completion", confirmed: false }], observed: [], blockers: ["human_evidence_confirmation_required"], nextAction: "hold" } };
 	const operations: string[] = [];
 	const fetcher = vi.fn(async (_url: unknown, init: RequestInit) => {
 		const body = String(init.body); const input = JSON.parse(body) as { operation: string };
@@ -83,4 +83,30 @@ describe("native review findings continuation", () => {
    expect(f.operations).not.toContain("confirm");
   }finally{clock.mockRestore()}
  });
+});
+
+
+it("shows native stage consent for metadata from a maximum-size specialist import", async () => {
+ const f = fixture();
+ f.preview.action = "advance";
+ f.preview.detail.evidence = [{
+  kind: "specialist_result", confirmed: true,
+  specialistResult: {
+   untrusted: true, serverOrigin: "http://127.0.0.1:4444", requestId: "request-result",
+   readConsent: { id: "read", at: "2026-10-24T00:00:00Z" },
+   importConsent: { id: "import", at: "2026-10-24T00:00:01Z" },
+   result: { format: "text/plain", status: "completed", byte_count: 32768, digest: "c".repeat(64), revision: "d".repeat(64) },
+  },
+ }];
+ const p = await f.handlers.get(RUN_PREVIEW)!(f.event, "run", "advance") as RunPreview;
+ await f.handlers.get(RUN_CONFIRM_CLICK)!(f.event, { id: p.id, digest: p.digest });
+ expect(f.confirm).toHaveBeenCalledOnce();
+ const detail = f.confirm.mock.calls[0]![0];
+ expect(detail.length).toBeLessThan(24000);
+ expect(detail).toContain('"byte_count": 32768');
+ expect(detail).toContain("c".repeat(64));
+ expect(detail).toContain("d".repeat(64));
+ expect(detail).toContain("No execution will start or resume.");
+ expect(f.operations).toEqual(["preview", "preview", "confirm"]);
+ expect(f.shell.send).toHaveBeenCalledWith(RUN_RESULT, { previewId: p.id, ok: true });
 });

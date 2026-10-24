@@ -104,13 +104,13 @@ func resolveManagedDelegationPolicy(ctx context.Context, req DelegationPolicyReq
 				return result("policy_unavailable")
 			}
 			origin, err := url.Parse(req.ServerOrigin)
-			if err != nil || origin.Scheme != "http" && origin.Scheme != "https" || origin.Host == "" || origin.User != nil || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" || req.WorkspaceID == "" || req.ProfileID == "" || req.RuntimeID == "" || req.Action != "delegate" || len(req.DataScopes) != 1 || req.DataScopes[0] != "task_brief" {
+			if err != nil || origin.Scheme != "http" && origin.Scheme != "https" || origin.Host == "" || origin.User != nil || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" || req.WorkspaceID == "" || req.ProfileID == "" || req.RuntimeID == "" || !validDelegationDataScope(req) {
 				return result("policy_unavailable")
 			}
 			if req.RuntimeClass != "local" && req.RuntimeClass != "remote" {
 				return result("policy_runtime_unknown")
 			}
-			if !slices.Contains(p.ServerOrigins, req.ServerOrigin) || !slices.Contains(p.WorkspaceIDs, req.WorkspaceID) || !slices.Contains(p.ProfileIDs, req.ProfileID) || !slices.Contains(p.RuntimeClasses, req.RuntimeClass) || !slices.Contains(p.Actions, req.Action) || !slices.Contains(p.DataScopes, "task_brief") {
+			if !slices.Contains(p.ServerOrigins, req.ServerOrigin) || !slices.Contains(p.WorkspaceIDs, req.WorkspaceID) || !slices.Contains(p.ProfileIDs, req.ProfileID) || !slices.Contains(p.RuntimeClasses, req.RuntimeClass) || !slices.Contains(p.Actions, req.Action) || !slices.Contains(p.DataScopes, req.DataScopes[0]) {
 				code = "policy_denied"
 			}
 		}
@@ -149,4 +149,11 @@ func decodeManagedDelegationPolicy(raw []byte, policy *managedDelegationPolicy) 
 		return errors.New("invalid policy")
 	}
 	return nil
+}
+
+func validDelegationDataScope(req DelegationPolicyRequest) bool {
+	if len(req.DataScopes) != 1 {
+		return false
+	}
+	return req.Action == "delegate" && req.DataScopes[0] == "task_brief" || (req.Action == "result_read" || req.Action == "result_import") && req.DataScopes[0] == "task_result"
 }

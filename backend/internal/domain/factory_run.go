@@ -124,7 +124,7 @@ type RunEvidence struct {
 	ID                 string            `json:"id"`
 	RunID              string            `json:"runId"`
 	Version            int64             `json:"version"`
-	Kind               string            `json:"kind" enum:"created,completion,review,advance,hold"`
+	Kind               string            `json:"kind" enum:"created,completion,review,advance,hold,specialist_result"`
 	Actor              string            `json:"actor"`
 	Decision           string            `json:"decision"`
 	Stage              string            `json:"stage"`
@@ -132,6 +132,7 @@ type RunEvidence struct {
 	ConfirmationDigest string            `json:"confirmationDigest,omitempty"`
 	RecordedAt         time.Time         `json:"recordedAt"`
 	Completion         *RunCompletion    `json:"completion,omitempty"`
+	SpecialistResult   *RunResultReceipt `json:"specialistResult,omitempty"`
 	Review             *RunReviewReceipt `json:"review,omitempty"`
 	Observed           []RunRepoFacts    `json:"observed"`
 	Blockers           []string          `json:"blockers"`

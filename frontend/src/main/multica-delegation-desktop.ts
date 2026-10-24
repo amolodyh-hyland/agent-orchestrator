@@ -1,3 +1,4 @@
+import { registerResultImport } from "./specialist-result-import";
 import { isDeepStrictEqual } from "node:util";
 import { createFactoryDelegationMonitor } from "./factory-delegation-monitor";
 import { createDelegationStatusFlow } from "./multica-delegation-status";
@@ -20,6 +21,7 @@ export function registerDesktopDelegation(options: {
 	readEnabled: () => Promise<boolean>; writeEnabled: (enabled: boolean) => Promise<void>;
 	confirmCancellation: (status: DelegationStatus) => Promise<boolean>;
 	confirmEnable: () => Promise<boolean>;
+	confirmResult?: (detail:string) => Promise<boolean>;
 	fetch: typeof fetch; confirm: (preview: DelegationPreview, detail: string) => Promise<boolean>;
 }) {
 	let enabled = false;
@@ -67,13 +69,15 @@ export function registerDesktopDelegation(options: {
 		onConfirmed: (record) => { void status.status(record.projectId, record.taskId); } });
 	const ipc = registerDelegationConfirmationIpc({ ipcMain: options.ipcMain, shellWebContents: options.shellWebContents, flow, status,
 		setCredential: async (workspaceId, token) => (await (await client(workspaceId)).setToken(token)).ok });
-	const shell = options.shellWebContents;
+	const resultImport=registerResultImport({ipcMain:options.ipcMain,shellWebContents:options.shellWebContents,authority:options.authority,origin:options.daemonOrigin,fetch:options.fetch,policy:journal.evaluatePolicy,enabled:()=>enabled&&!disposed,confirm:options.confirmResult ?? (async()=>false),
+        client:async(binding)=>{await ready;const connection=await client(binding.workspaceId);if(!isDeepStrictEqual(connection.binding,binding))throw new Error("connection_changed");return connection;}});
+    const shell = options.shellWebContents;
 	const trusted = (event: IpcMainInvokeEvent) => !disposed && !shell.isDestroyed() && event.sender.id === shell.id && event.senderFrame === shell.mainFrame;
 	options.ipcMain.handle(DELEGATION_SETTINGS, async (event) => { await ready; return { enabled: trusted(event) && enabled }; });
 	options.ipcMain.handle(DELEGATION_ENABLE_CLICK, async (event, value: unknown) => {
 		if (!trusted(event) || !shell.isFocused() || typeof value !== "boolean") return;
 		if (!value) {
-			generation++; restoreEnabled = false; enabled = false; flow.invalidate(); status.revokeConfirmation();
+			generation++; restoreEnabled = false; enabled = false; flow.invalidate(); status.revokeConfirmation(); resultImport.invalidate();
 			shell.send(DELEGATION_SETTINGS_CHANGED, { enabled });
 			await options.writeEnabled(false);
 			return;
@@ -98,11 +102,11 @@ export function registerDesktopDelegation(options: {
 	shell.on("did-start-navigation", navigation);
 	return {
 		dispose() {
-			disposed = true; enabled = false; generation++; monitor.dispose(); ipc.dispose();
+			disposed = true; enabled = false; generation++; monitor.dispose(); ipc.dispose(); resultImport.dispose();
 			shell.removeListener("did-start-navigation", navigation);
 			options.ipcMain.removeHandler(DELEGATION_SETTINGS);
 			options.ipcMain.removeHandler(DELEGATION_ENABLE_CLICK);
 		},
-		invalidate() { generation++; server = null; flow.invalidate(); status.invalidate(); },
+		invalidate() { generation++; server = null; flow.invalidate(); status.invalidate(); resultImport.invalidate(); },
 	};
 }

@@ -7288,6 +7288,10 @@ export interface components {
             session: components["schemas"]["ControllersSessionView"];
             sessionId: string;
         };
+        ResultConsent: {
+            at: string;
+            id: string;
+        };
         ResumeAgentResponse: {
             ok: boolean;
             /** @enum {string} */
@@ -7395,12 +7399,13 @@ export interface components {
             decision: string;
             id: string;
             /** @enum {string} */
-            kind: "created" | "completion" | "review" | "advance" | "hold";
+            kind: "created" | "completion" | "review" | "advance" | "hold" | "specialist_result";
             observed: components["schemas"]["RunRepoFacts"][];
             /** Format: date-time */
             recordedAt: string;
             review?: components["schemas"]["RunReviewReceipt"];
             runId: string;
+            specialistResult?: components["schemas"]["RunResultReceipt"];
             stage: string;
             /** Format: int64 */
             version: number;
@@ -7522,6 +7527,14 @@ export interface components {
             nativeReceipt: string;
             /** Format: date-time */
             recordedAt: string;
+        };
+        RunResultReceipt: {
+            importConsent: components["schemas"]["ResultConsent"];
+            readConsent: components["schemas"]["ResultConsent"];
+            requestId: string;
+            result: components["schemas"]["SpecialistResult"];
+            serverOrigin: string;
+            untrusted: boolean;
         };
         RunReviewReceipt: {
             afterFingerprint: string;
@@ -8214,6 +8227,22 @@ export interface components {
             promptBytes: number;
             session: components["schemas"]["ControllersSessionView"];
             systemPromptBytes: number;
+        };
+        SpecialistResult: {
+            agent_id: string;
+            byte_count: number;
+            completed_at: string;
+            delegation_id: string;
+            digest: string;
+            format: string;
+            revision: string;
+            runtime_id: string;
+            status: string;
+            task_id: string;
+            terminal_revision: string;
+            text: string;
+            version: number;
+            workspace_id: string;
         };
         StageSessionAttachmentsRequest: {
             attachments: components["schemas"]["AttachmentInput"][];

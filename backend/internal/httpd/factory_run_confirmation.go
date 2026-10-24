@@ -34,20 +34,21 @@ func mountFactoryRunConfirmation(r chi.Router, service controllers.FactoryRunSer
 			reject()
 			return
 		}
-		raw, err := io.ReadAll(http.MaxBytesReader(w, req.Body, 4096))
+		raw, err := io.ReadAll(http.MaxBytesReader(w, req.Body, 256<<10))
 		proof := req.Header.Get("X-AO-Delegation-MAC")
 		if err != nil || !authority.AuthorizeRun(raw, proof) {
 			reject()
 			return
 		}
 		var in struct {
-			Operation       string `json:"operation"`
-			RunID           string `json:"runId"`
-			Action          string `json:"action"`
-			ExpectedVersion int64  `json:"expectedVersion"`
-			Digest          string `json:"digest"`
-			Nonce           string `json:"nonce"`
-			Expires         int64  `json:"expires"`
+			Operation       string                        `json:"operation"`
+			RunID           string                        `json:"runId"`
+			Action          string                        `json:"action"`
+			ExpectedVersion int64                         `json:"expectedVersion"`
+			Digest          string                        `json:"digest"`
+			ResultImport    *factoryrun.ResultImportInput `json:"resultImport,omitempty"`
+			Nonce           string                        `json:"nonce"`
+			Expires         int64                         `json:"expires"`
 		}
 		if domain.StrictDelegationJSON(raw, &in) != nil || !authority.ConsumeRun(in.Nonce, in.Expires) {
 			reject()
@@ -55,6 +56,30 @@ func mountFactoryRunConfirmation(r chi.Router, service controllers.FactoryRunSer
 		}
 		var value any
 		switch in.Operation {
+		case "result_context", "result_import":
+			results, supported := service.(interface {
+				ResultContext(context.Context, string) (factoryrun.ResultContext, error)
+				ImportResult(context.Context, string, factoryrun.ResultImportInput) (domain.RunDetail, error)
+			})
+			if !supported {
+				reject()
+				return
+			}
+			if in.Operation == "result_context" {
+				value, err = results.ResultContext(req.Context(), in.RunID)
+			} else {
+				if in.ResultImport == nil {
+					reject()
+					return
+				}
+				binding, readErr := results.ResultContext(req.Context(), in.RunID)
+				if readErr != nil {
+					err = readErr
+					break
+				}
+				ctx := domain.WithOuterNativeAction(req.Context(), domain.OuterNativeAction{Operation: "run.confirm", ProjectID: domain.ProjectID(binding.ProjectID), SessionID: binding.SessionID})
+				value, err = results.ImportResult(ctx, in.RunID, *in.ResultImport)
+			}
 		case "preview":
 			value, err = svc.Preview(req.Context(), in.RunID, in.Action)
 		case "confirm":
