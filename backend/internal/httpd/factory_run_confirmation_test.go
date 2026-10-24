@@ -97,3 +97,48 @@ func TestFactoryRunConfirmationPrivateAuthority(t *testing.T) {
 		t.Fatal("accepted expired request")
 	}
 }
+
+func (s *confirmedRunService) ResultContext(context.Context, string) (factoryrun.ResultContext, error) {
+	return factoryrun.ResultContext{ProjectID: "p", SessionID: "s"}, nil
+}
+func (s *confirmedRunService) ImportResult(context.Context, string, factoryrun.ResultImportInput) (domain.RunDetail, error) {
+	s.calls++
+	return domain.RunDetail{}, nil
+}
+
+func TestResultImportRequiresPrivateExactReplayProtectedAuthority(t *testing.T) {
+	key := bytes.Repeat([]byte{7}, 32)
+	authority, err := delegationauth.New(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := &confirmedRunService{}
+	router := chi.NewRouter()
+	mountFactoryRunConfirmation(router, svc, authority)
+	body, _ := json.Marshal(map[string]any{"operation": "result_import", "runId": "run", "resultImport": factoryrun.ResultImportInput{ExpectedVersion: 1}, "nonce": "single-use-native-result-import", "expires": time.Now().Add(9 * time.Second).UnixMilli()})
+	sign := func(raw []byte) string {
+		mac := hmac.New(sha256.New, key)
+		_, _ = mac.Write(append([]byte("factory-run-v1:"), raw...))
+		return hex.EncodeToString(mac.Sum(nil))
+	}
+	invoke := func(raw []byte, proof string) int {
+		req := httptest.NewRequest("POST", "http://127.0.0.1:9999/internal/factory-run-confirmation", bytes.NewReader(raw))
+		req.Header.Set("X-AO-Delegation-MAC", proof)
+		out := httptest.NewRecorder()
+		router.ServeHTTP(out, req)
+		return out.Code
+	}
+	if invoke(body, "") != 403 || svc.calls != 0 {
+		t.Fatal("unapproved result imported")
+	}
+	altered := bytes.Replace(body, []byte(`"expectedVersion":1`), []byte(`"expectedVersion":2`), 1)
+	if invoke(altered, sign(body)) != 403 {
+		t.Fatal("altered result import accepted")
+	}
+	if invoke(body, sign(body)) != 200 || svc.calls != 1 {
+		t.Fatal("private native import rejected")
+	}
+	if invoke(body, sign(body)) != 403 || svc.calls != 1 {
+		t.Fatal("replayed result imported")
+	}
+}

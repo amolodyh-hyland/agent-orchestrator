@@ -20568,6 +20568,16 @@ components:
       - restoreMode
       - session
       type: object
+    ResultConsent:
+      properties:
+        at:
+          type: string
+        id:
+          type: string
+      required:
+      - id
+      - at
+      type: object
     ResumeAgentResponse:
       properties:
         ok:
@@ -20864,6 +20874,7 @@ components:
           - review
           - advance
           - hold
+          - specialist_result
           type: string
         observed:
           items:
@@ -20876,6 +20887,8 @@ components:
           $ref: '#/components/schemas/RunReviewReceipt'
         runId:
           type: string
+        specialistResult:
+          $ref: '#/components/schemas/RunResultReceipt'
         stage:
           type: string
         version:
@@ -21209,6 +21222,28 @@ components:
       - recordedAt
       - deliveryState
       - nativeReceipt
+      type: object
+    RunResultReceipt:
+      properties:
+        importConsent:
+          $ref: '#/components/schemas/ResultConsent'
+        readConsent:
+          $ref: '#/components/schemas/ResultConsent'
+        requestId:
+          type: string
+        result:
+          $ref: '#/components/schemas/SpecialistResult'
+        serverOrigin:
+          type: string
+        untrusted:
+          type: boolean
+      required:
+      - serverOrigin
+      - requestId
+      - readConsent
+      - importConsent
+      - untrusted
+      - result
       type: object
     RunReviewReceipt:
       properties:
@@ -22977,6 +23012,52 @@ components:
       - session
       - promptBytes
       - systemPromptBytes
+      type: object
+    SpecialistResult:
+      properties:
+        agent_id:
+          type: string
+        byte_count:
+          type: integer
+        completed_at:
+          type: string
+        delegation_id:
+          type: string
+        digest:
+          type: string
+        format:
+          type: string
+        revision:
+          type: string
+        runtime_id:
+          type: string
+        status:
+          type: string
+        task_id:
+          type: string
+        terminal_revision:
+          type: string
+        text:
+          type: string
+        version:
+          type: integer
+        workspace_id:
+          type: string
+      required:
+      - version
+      - format
+      - delegation_id
+      - task_id
+      - workspace_id
+      - agent_id
+      - runtime_id
+      - status
+      - terminal_revision
+      - completed_at
+      - revision
+      - digest
+      - byte_count
+      - text
       type: object
     StageSessionAttachmentsRequest:
       properties:
