@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"slices"
 	"time"
 
@@ -331,6 +333,64 @@ func (s *Store) CompleteOuterPlanAction(ctx context.Context, id, state string, n
 			return err
 		}
 		return appendOuterAudit(ctx, q, domain.OuterAudit{Operation: "outer.action.outcome", State: state, ReceiptID: id})
+	})
+}
+
+// RecordOuterSpawnNoStart journals definitive prelaunch evidence and releases its station atomically.
+func (s *Store) RecordOuterSpawnNoStart(ctx context.Context, plan, id string, now time.Time) error {
+	e, ok := domain.OuterExecutionFrom(ctx)
+	if !ok || e.PlanID != plan || e.ActionID != id {
+		return domain.ErrOuterHeld
+	}
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "record definitive spawn no-start", func(q *gen.Queries) error {
+		row, err := q.GetOuterPlan(ctx, plan)
+		if err != nil {
+			return err
+		}
+		p, err := outerPlan(row)
+		if err != nil {
+			return err
+		}
+		index := slices.IndexFunc(p.Plan.Actions, func(a domain.OuterPlannedAction) bool { return a.ID == id && a.Spec.Operation == "spawn" })
+		if index < 0 || p.ApprovedAt.IsZero() {
+			return domain.ErrOuterHeld
+		}
+		a, err := q.GetOuterPlanAction(ctx, id)
+		if err != nil || a.PlanID != plan || !a.AttemptedAt.Valid || a.CompletedAt.Valid {
+			return domain.ErrOuterHeld
+		}
+		if _, err := q.GetOuterRequest(ctx, id); !errors.Is(err, sql.ErrNoRows) {
+			if err != nil {
+				return err
+			}
+			return domain.ErrOuterHeld
+		}
+		reservations, err := q.ListOuterCapacity(ctx)
+		if err != nil {
+			return err
+		}
+		reserved := slices.ContainsFunc(reservations, func(r gen.OuterCapacity) bool {
+			return r.RequestID == id && r.SessionID == "" && r.Generation == p.Plan.Epoch
+		})
+		if !reserved {
+			return domain.ErrOuterHeld
+		}
+		count, err := q.ReleaseOuterCapacity(ctx, gen.ReleaseOuterCapacityParams{RequestID: id, ReleasedAt: nullTime(now), ReleaseEvidence: "definitive_no_start:spawn_prelaunch_failure"})
+		if err != nil {
+			return err
+		}
+		if count != 1 {
+			return domain.ErrOuterHeld
+		}
+		if err := q.CompleteOuterPlanAction(ctx, gen.CompleteOuterPlanActionParams{ID: id, State: "not_started", CompletedAt: nullTime(now)}); err != nil {
+			return err
+		}
+		action := p.Plan.Actions[index]
+		return appendOuterAudit(ctx, q, domain.OuterAudit{Operation: "outer.spawn.no_start", State: "not_started", ReceiptID: id, RequestID: p.Plan.Request.ID, ProjectID: action.Spec.ProjectID, SessionID: domain.SessionID(a.SessionID), Reason: "definitive prelaunch failure; station released", Sources: p.Plan.Sources})
 	})
 }
 

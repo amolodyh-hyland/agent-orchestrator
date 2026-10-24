@@ -974,6 +974,15 @@ func New(d Deps) *Manager {
 // materialization fails the still-seed row is deleted outright; a later failure
 // parks the row as terminated and rolls back what was built.
 func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+	mayHaveStarted := false
+	rec, promptBytes, systemPromptBytes, err := m.spawn(ctx, cfg, &mayHaveStarted)
+	if cfg.OuterActionID != "" && err != nil && !mayHaveStarted {
+		err = errors.Join(err, domain.ErrOuterSpawnNotStarted)
+	}
+	return rec, promptBytes, systemPromptBytes, err
+}
+
+func (m *Manager) spawn(ctx context.Context, cfg ports.SpawnConfig, mayHaveStarted *bool) (domain.SessionRecord, int, int, error) {
 	if err := domain.CheckOuterOperation(ctx, m.store, "spawn", cfg.ProjectID, ""); err != nil {
 		return domain.SessionRecord{}, 0, 0, err
 	}
@@ -981,6 +990,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ErrArtifactOutputUnavailable)
 	}
 	if cfg.ClientRequestID != "" {
+		*mayHaveStarted = true
 		existing, found, err := m.store.GetSessionByClientRequestID(ctx, cfg.ClientRequestID)
 		if err != nil {
 			return domain.SessionRecord{}, 0, 0, err
@@ -989,6 +999,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			rec, err := replayClientRequest(existing, cfg.ClientRequestHash)
 			return rec, 0, 0, err
 		}
+		*mayHaveStarted = false
 	}
 	project, err := m.loadProject(ctx, cfg.ProjectID)
 	if err != nil {
@@ -1323,6 +1334,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// The attachments are named now (spawnAttachmentRefs is derived, not read
 	// from disk) so the opening prompt is complete before the files land.
 	if asyncChat {
+		*mayHaveStarted = true
 		started, promptBytes, systemPromptBytes, err := m.beginAsyncChatSpawn(ctx, asyncChatSpawn{
 			cfg:               cfg,
 			project:           project,
@@ -1439,6 +1451,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			}
 			prompt = ""
 		}
+		*mayHaveStarted = true
 		rec, err = m.launchChatController(ctx, chatSpawn{
 			cfg:              cfg,
 			project:          project,
@@ -1470,6 +1483,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		return rec, promptBytes, systemPromptBytes, nil
 	}
 
+	*mayHaveStarted = true
 	agent, ok := m.agents.Agent(cfg.Harness)
 	if !ok {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)

@@ -2,8 +2,12 @@ package domain
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// ErrOuterSpawnNotStarted identifies a definitive failure before any launch attempt.
+var ErrOuterSpawnNotStarted = errors.New("outer spawn definitively did not start")
 
 // OuterExecution identifies one daemon-owned action attempt and grants no new turn.
 type OuterExecution struct{ PlanID, ActionID string }

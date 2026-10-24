@@ -2,6 +2,7 @@ package sessionmanager
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -68,6 +69,32 @@ func TestOuterM2ManagerSpawnHasNoUnapprovedOpeningPrompt(t *testing.T) {
 	}
 	if _, _, _, err := m.Spawn(context.Background(), cfg); err == nil {
 		t.Fatal("unbound spawn")
+	}
+}
+
+func TestOuterM2ManagerSpawnDistinguishesNoStartFromUncertainLaunch(t *testing.T) {
+	for _, launching := range []bool{false, true} {
+		t.Run(map[bool]string{false: "preflight_failed", true: "launch_failed"}[launching], func(t *testing.T) {
+			launcher := &recordingLauncher{}
+			m, st, _ := newChatManager(launcher)
+			m.dataDir = t.TempDir()
+			m.store = &m2ManagerStore{fakeStore: st, participants: map[domain.SessionID]bool{}, plan: domain.OuterPlanReceipt{Plan: domain.OuterActionPlan{ID: "plan", Actions: []domain.OuterPlannedAction{{ID: "spawn", Spec: domain.OuterActionSpec{Operation: "spawn", ProjectID: string(chatTestProject)}}}}}}
+			ctx := domain.WithOuterExecution(context.Background(), domain.OuterExecution{PlanID: "plan", ActionID: "spawn"})
+			cfg := ports.SpawnConfig{ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessCodex, RequestedMode: domain.SessionModeChat, Branch: "feat/exact-owned", OuterActionID: "spawn", AgentConfig: ports.AgentConfig{Permissions: ports.PermissionModeDefault, Effort: "unsupported-effort"}}
+			launcher.preflightErr = ports.ErrUnsupportedEffort
+			if launching {
+				cfg.AgentConfig.Effort = ""
+				launcher.preflightErr = nil
+				launcher.startErr = errors.New("launch acknowledgement lost")
+			}
+			_, _, _, err := m.Spawn(ctx, cfg)
+			if err == nil || errors.Is(err, domain.ErrOuterSpawnNotStarted) == launching {
+				t.Fatal("incorrect launch certainty", err)
+			}
+			if !launching && (len(st.sessions) != 0 || len(launcher.started) != 0) {
+				t.Fatal("invalid effort created a session or launched Chat")
+			}
+		})
 	}
 }
 

@@ -29,6 +29,7 @@ type m2Fixture struct {
 	stopped          int
 	beforeSpawnWrite func(domain.SessionID)
 	beforeStopWrite  func(int)
+	spawnErr         error
 }
 
 func (f *m2Fixture) now() time.Time { f.mu.Lock(); defer f.mu.Unlock(); return f.clock }
@@ -76,6 +77,9 @@ func newM2Fixture(t *testing.T, wrap ...func(ports.ChatStartConfig, *outerDeskto
 func (f *m2Fixture) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
 	if cfg.OuterActionID == "" {
 		return f.outerDesktopFixture.Spawn(ctx, cfg)
+	}
+	if f.spawnErr != nil {
+		return domain.Session{}, 0, 0, f.spawnErr
 	}
 	if err := domain.CheckOuterOperation(ctx, f.st, "spawn", cfg.ProjectID, ""); err != nil {
 		return domain.Session{}, 0, 0, err
@@ -213,6 +217,46 @@ func (f *m2Fixture) approve(p domain.OuterPlanReceipt) domain.OuterPlanReceipt {
 
 func workerSpec() domain.OuterActionSpec {
 	return domain.OuterActionSpec{Operation: "spawn", ProjectID: "a", Branch: "feat/exact-worker", Text: "Implement this exact task", Config: domain.AgentConfig{Model: "chosen", Permissions: domain.PermissionModeDefault}}
+}
+
+func TestOuterM2FailedSpawnReleasesOnlyDefinitiveNoStart(t *testing.T) {
+	for _, definitive := range []bool{true, false} {
+		t.Run(map[bool]string{true: "no_start", false: "unknown"}[definitive], func(t *testing.T) {
+			f := newM2Fixture(t)
+			p := f.propose(workerSpec())
+			f.spawnErr = errors.New("spawn failed")
+			if definitive {
+				f.spawnErr = errors.Join(f.spawnErr, domain.ErrOuterSpawnNotStarted)
+			}
+			r := f.approve(p)
+			capacity, err := f.st.OuterCapacity(context.Background())
+			if err != nil || (len(capacity) == 0) != definitive {
+				t.Fatal("incorrect reservation recovery", capacity, err)
+			}
+			want := "unknown"
+			if definitive {
+				want = "not_started"
+			}
+			if r.Actions[0].State != want {
+				t.Fatal("incorrect action receipt", r.Actions)
+			}
+			if err := f.st.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := sqlite.Open(f.dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			capacity, err = reopened.OuterCapacity(context.Background())
+			if err != nil || (len(capacity) == 0) != definitive {
+				t.Fatal("restart changed reservation evidence", capacity, err)
+			}
+			if err := reopened.ReserveOuterCapacity(context.Background(), domain.OuterCapacity{RequestID: "next-background", Generation: "next-boot", ReservedAt: f.now()}); (err == nil) != definitive {
+				t.Fatal("foreground reserve blocked after no-start or lent on uncertainty", err)
+			}
+		})
+	}
 }
 
 func TestOuterM2CoordinatorAndSpawnActualWriteAuthority(t *testing.T) {

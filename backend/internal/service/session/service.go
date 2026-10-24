@@ -326,16 +326,24 @@ func NewWithDeps(d Deps) *Service {
 
 // Spawn creates a session and returns the API-facing read model plus
 // ephemeral prompt size measurements.
-func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
+func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result domain.Session, outPromptBytes, outSystemPromptBytes int, resultErr error) {
+	prelaunch := true
+	defer func() {
+		if cfg.OuterActionID != "" && resultErr != nil && prelaunch {
+			resultErr = errors.Join(resultErr, domain.ErrOuterSpawnNotStarted)
+		}
+	}()
 	if err := domain.CheckOuterOperation(ctx, s.store, "spawn", cfg.ProjectID, ""); err != nil {
 		return domain.Session{}, 0, 0, err
 	}
+	prelaunch = false
 	if rec, found, err := s.replayClientRequest(ctx, cfg.ClientRequestID, cfg.ClientRequestHash); err != nil {
 		return domain.Session{}, 0, 0, err
 	} else if found {
 		sess, err := s.toSession(ctx, rec)
 		return sess, 0, 0, err
 	}
+	prelaunch = true
 	if cfg.ClientRequestID != "" && cfg.Kind != domain.KindWorker {
 		return domain.Session{}, 0, 0, apierr.Invalid("CLIENT_REQUEST_WORKER_REQUIRED", "clientRequestId is supported for worker sessions only", nil)
 	}
@@ -368,6 +376,7 @@ func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 					return v, 0, 0, err
 				}
 			}
+			prelaunch = false
 			return s.spawn(ctx, cfg)
 		}
 
@@ -391,10 +400,17 @@ func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			return newestSession(existing), 0, 0, nil
 		}
 	}
+	prelaunch = false
 	return s.spawn(ctx, cfg)
 }
 
-func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
+func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (result domain.Session, outPromptBytes, outSystemPromptBytes int, resultErr error) {
+	prelaunch := true
+	defer func() {
+		if cfg.OuterActionID != "" && resultErr != nil && prelaunch {
+			resultErr = errors.Join(resultErr, domain.ErrOuterSpawnNotStarted)
+		}
+	}()
 	var project domain.ProjectRecord
 	var err error
 	if cfg.ProjectID != "" {
@@ -426,10 +442,15 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 	}
 	cfg = s.withIssueContext(ctx, cfg, project)
+	prelaunch = false
 	rec, promptBytes, systemPromptBytes, err := s.spawnWithTelemetry(ctx, cfg, project)
 	if err != nil {
 		s.invalidateAgentReadinessAfterLaunchFailure(cfg.Harness, err)
-		return domain.Session{}, 0, 0, toSpawnAPIError(err)
+		mapped := toSpawnAPIError(err)
+		if errors.Is(err, domain.ErrOuterSpawnNotStarted) {
+			mapped = errors.Join(mapped, domain.ErrOuterSpawnNotStarted)
+		}
+		return domain.Session{}, 0, 0, mapped
 	}
 	sess, err := s.toSession(ctx, rec)
 	if err != nil {
@@ -451,6 +472,9 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 	start := s.now()
 	firstSession, err := s.isFirstSession(ctx)
 	if err != nil {
+		if cfg.OuterActionID != "" {
+			err = errors.Join(err, domain.ErrOuterSpawnNotStarted)
+		}
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("count sessions: %w", err)
 	}
 	rec, promptBytes, systemPromptBytes, err := s.manager.Spawn(ctx, cfg)

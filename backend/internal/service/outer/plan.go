@@ -2,6 +2,7 @@ package outer
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ type actionStore interface {
 	EnrollOuterParticipant(context.Context, string, string, domain.SessionID, time.Time) error
 	IsOuterParticipant(context.Context, domain.SessionID) (bool, error)
 	ReserveOuterCapacity(context.Context, domain.OuterCapacity) error
+	RecordOuterSpawnNoStart(context.Context, string, string, time.Time) error
 }
 
 // WithActionsEnabled opts into the finite adapters; the default remains held.
@@ -249,6 +251,9 @@ func (s *Service) executeAction(ctx context.Context, st actionStore, p domain.Ou
 		}
 		created, _, _, err := s.sessions.Spawn(ctx, ports.SpawnConfig{ProjectID: domain.ProjectID(a.Spec.ProjectID), Kind: domain.KindWorker, Harness: domain.HarnessCodex, RequestedMode: domain.SessionModeChat, Branch: a.Spec.Branch, AgentConfig: a.Spec.Config, AgentConfigResolved: true, EffortOverride: true, ClientRequestID: a.ID, ClientRequestHash: domain.OuterDigest(a), OuterActionID: a.ID})
 		if err != nil {
+			if errors.Is(err, domain.ErrOuterSpawnNotStarted) {
+				err = errors.Join(err, st.RecordOuterSpawnNoStart(context.WithoutCancel(ctx), p.Plan.ID, a.ID, s.now().UTC()))
+			}
 			return err
 		}
 		id = created.ID
