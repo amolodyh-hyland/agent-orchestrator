@@ -48,6 +48,7 @@ const at = "2026-10-23T00:00:00Z";
 let selected: string[];
 let historyHeld: boolean;
 let manySessions: boolean;
+let setupPending: boolean;
 const clients: QueryClient[] = [];
 
 function mount(entry = "/outer") {
@@ -89,6 +90,7 @@ beforeEach(() => {
 	selected = ["a"];
 	historyHeld = false;
 	manySessions = false;
+	setupPending = false;
 	let sequence = 0;
 	vi.mocked(aoBridge.outer.stage).mockImplementation(async () => ({
 		id: `stage-${++sequence}`,
@@ -111,17 +113,22 @@ beforeEach(() => {
 				data: {
 					binding: {
 						anchorProjectId: "anchor",
-						sessionId: "outer-1",
+						sessionId: setupPending ? "" : "outer-1",
 						projectIds: selected,
 						revision: 1,
 						paused: false,
 						foregroundReserve: true,
 						historyHeld,
 					},
-					session: {
-						harness: "codex",
-						settings: { model: "chosen", approvalMode: "default" },
-					},
+					session: setupPending
+						? null
+						: {
+								harness: "codex",
+								settings: {
+									model: "chosen",
+									approvalMode: "default",
+								},
+						  },
 					requests: [
 						{
 							id: "historical-request",
@@ -240,6 +247,27 @@ function assertPassive() {
 }
 
 describe("Outer console", () => {
+	it("offers an explicit setup retry after an unavailable first launch without resuming on reopen", async () => {
+		setupPending = true;
+		mount();
+		await waitFor(() =>
+			expect(
+				screen.getByRole("button", { name: "Set up outer Chat" })
+			).toBeEnabled()
+		);
+		expect(aoBridge.outer.stage).toHaveBeenCalledWith(expect.any(String), {
+			operation: "setup",
+			config: {},
+		});
+		expect(
+			screen.queryByRole("link", { name: "Open main Chat" })
+		).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "Relaunch without sending" })
+		).not.toBeInTheDocument();
+		assertPassive();
+	});
+
 	it("opens a removed Project's retained audit without changing scope or resuming history", async () => {
 		selected = ["b"];
 		historyHeld = true;

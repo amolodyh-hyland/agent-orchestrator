@@ -5,6 +5,8 @@ Explicit desktop setup selects the existing Codex Chat settings. Setup and passi
 reads do not submit a turn. The allowlist stores immutable Project IDs independently
 of the selected-project cockpit. Removing a Project fences retained history and
 requires a fresh remaining-scope conversation; historical sessions remain guarded.
+A failed first launch retains the anchor and its saved settings. The console
+offers an explicit setup retry; passive reopen does not retry that launch.
 
 `domain/outer.go` defines the binding and authority vocabulary. `service/outer`
 owns setup, scope and observation. SQLite migrations 0229 onward retain the host

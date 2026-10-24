@@ -178,26 +178,41 @@ export function OuterConsole() {
 							<p className="break-all text-xs text-muted-foreground">
 								{binding.anchorProjectId} / {binding.sessionId}
 							</p>
-							<p>
-								{t("outer.settingsSummary", {
-									harness: view.data?.session?.harness,
-									model:
-										view.data?.session?.settings.model ||
-										t("settings.harness.models.default"),
-									effort:
-										view.data?.session?.settings
-											.reasoningEffort ||
-										t("settings.harness.models.default"),
-									permissions:
-										permissionLabels[
-											(view.data?.session?.settings
-												.approvalMode ||
-												view.data?.session
-													?.permissions ||
-												"default") as ApprovalMode
-										],
-								})}
-							</p>
+							{view.data?.session ? (
+								<p>
+									{t("outer.settingsSummary", {
+										harness: view.data?.session?.harness,
+										model:
+											view.data?.session?.settings
+												.model ||
+											t(
+												"settings.harness.models.default"
+											),
+										effort:
+											view.data?.session?.settings
+												.reasoningEffort ||
+											t(
+												"settings.harness.models.default"
+											),
+										permissions:
+											permissionLabels[
+												(view.data?.session?.settings
+													.approvalMode ||
+													view.data?.session
+														?.permissions ||
+													"default") as ApprovalMode
+											],
+									})}
+								</p>
+							) : null}
+							{!binding.sessionId ? (
+								<OuterNativeButton
+									draft={{ operation: "setup", config: {} }}
+									onResult={result}
+								>
+									{t("outer.setup")}
+								</OuterNativeButton>
+							) : null}
 							{binding.historyHeld ? (
 								<>
 									<p>{t("outer.historyHeld")}</p>

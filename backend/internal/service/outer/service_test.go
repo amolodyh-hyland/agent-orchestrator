@@ -20,16 +20,48 @@ type launcher struct {
 	calls    int
 	config   ports.SpawnConfig
 	returned *domain.Session
+	err      error
 }
 
 func (l *launcher) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
 	l.calls++
 	l.config = cfg
+	if l.err != nil {
+		return domain.Session{}, 0, 0, l.err
+	}
 	if l.returned != nil {
 		return *l.returned, 0, 0, nil
 	}
 	r, err := l.store.CreateSession(ctx, domain.SessionRecord{ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness, Mode: cfg.RequestedMode, Metadata: domain.SessionMetadata{OuterGeneration: cfg.OuterGeneration}, CreatedAt: time.Now(), UpdatedAt: time.Now()})
 	return domain.Session{SessionRecord: r}, 0, 0, err
+}
+
+func TestOuterSetupRetriesOriginalAnchorAfterUnavailableLaunch(t *testing.T) {
+	ctx := context.Background()
+	st, err := sqlite.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	l := &launcher{store: st, err: errors.New("requested harness unavailable")}
+	svc := outer.New(st, projectsvc.New(st), l)
+	config := domain.AgentConfig{Model: "chosen", Effort: "high", Permissions: domain.PermissionModeDefault}
+	if _, err := svc.Ensure(action("outer.setup"), config); err == nil {
+		t.Fatal("unavailable launch reported success")
+	}
+	b, found, err := svc.Binding(ctx)
+	if err != nil || !found || b.SessionID != "" {
+		t.Fatal("failed launch lost its recorded anchor", b, err)
+	}
+	l.err = nil
+	ready, err := svc.Ensure(action("outer.setup"), domain.AgentConfig{})
+	if err != nil || ready.SessionID == "" || ready.AnchorProjectID != b.AnchorProjectID || l.calls != 2 {
+		t.Fatal("explicit retry did not reuse the original anchor", ready, err)
+	}
+	p, found, err := st.GetProject(ctx, ready.AnchorProjectID)
+	if err != nil || !found || p.Config.Orchestrator.AgentConfig != config {
+		t.Fatal("retry changed the saved model or permissions", p, err)
+	}
 }
 
 func TestOuterReducedScopeRequiresVerifiedFreshConversation(t *testing.T) {
