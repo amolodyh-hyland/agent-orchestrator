@@ -122,7 +122,7 @@ func TestResultImportRequiresPrivateExactReplayProtectedAuthority(t *testing.T) 
 		return hex.EncodeToString(mac.Sum(nil))
 	}
 	invoke := func(raw []byte, proof string) int {
-		req := httptest.NewRequest("POST", "http://127.0.0.1:9999/internal/factory-run-confirmation", bytes.NewReader(raw))
+		req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:9999/internal/factory-run-confirmation", bytes.NewReader(raw))
 		req.Header.Set("X-AO-Delegation-MAC", proof)
 		out := httptest.NewRecorder()
 		router.ServeHTTP(out, req)

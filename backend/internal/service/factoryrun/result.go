@@ -10,6 +10,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+// ResultContext selects a run-bound delegation without reading its result body.
 type ResultContext struct {
 	RunID        string                         `json:"runId"`
 	ProjectID    string                         `json:"projectId"`
@@ -24,12 +25,14 @@ type ResultContext struct {
 	Digest       string                         `json:"digest"`
 }
 
+// ResultImportInput binds an exact consented receipt to the previewed run version.
 type ResultImportInput struct {
 	ExpectedVersion int64                   `json:"expectedVersion"`
 	ContextDigest   string                  `json:"contextDigest"`
 	Receipt         domain.RunResultReceipt `json:"receipt"`
 }
 
+// ResultContext resolves the durable source binding for a result scope preview.
 func (s *Service) ResultContext(ctx context.Context, id string) (ResultContext, error) {
 	run, err := s.store.GetFactoryRun(ctx, id)
 	if err != nil {
@@ -60,6 +63,7 @@ func (s *Service) ResultContext(ctx context.Context, id string) (ResultContext, 
 	return out, nil
 }
 
+// ImportResult appends native-approved untrusted text without advancing or continuing execution.
 func (s *Service) ImportResult(ctx context.Context, id string, in ResultImportInput) (domain.RunDetail, error) {
 	binding, err := s.ResultContext(ctx, id)
 	if err != nil {
