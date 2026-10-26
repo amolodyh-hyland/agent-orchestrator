@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Activity } from "react";
 import { aoBridge } from "../../lib/bridge";
 import type { DictationUpdate } from "../../../shared/dictation";
 import { ChatComposer } from "./ChatComposer";
@@ -19,7 +20,7 @@ afterEach(() => vi.restoreAllMocks());
 
 function setup(extra: Partial<Parameters<typeof ChatComposer>[0]> = {}) {
 	const onSend = vi.fn();
-	const view = render(<TooltipProvider><ChatComposer onSend={onSend} {...extra} /></TooltipProvider>);
+	const view = render(<TooltipProvider><Activity mode="visible"><ChatComposer onSend={onSend} {...extra} /></Activity></TooltipProvider>);
 	const field = screen.getByRole("combobox");
 	const start = async () => {
 		const mic = screen.getByRole("button", { name: "Dictate on this device" });
@@ -47,6 +48,11 @@ describe("chat dictation controls", () => {
 		expect(s.onSend).not.toHaveBeenCalled();
 		fireEvent.click(screen.getByRole("button", { name: "Stop dictation and insert text" }));
 		expect(aoBridge.dictation.stop).toHaveBeenCalledWith(id);
+		// IPC acceptance is not evidence that the native microphone has closed.
+		expect(screen.getByRole("status")).toHaveTextContent("Recording on this device");
+		act(() => emit({ id, type: "capture-stopped" }));
+		expect(screen.getByRole("status")).toHaveTextContent("Finishing dictation");
+		expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
 		act(() => emit({ id, type: "result", text: "brave " }));
 		expect(s.field).toHaveTextContent("hello brave world");
 		expect(readChatSessionDraft(scope).composer.text).toBe("hello brave world");
@@ -82,6 +88,43 @@ describe("chat dictation controls", () => {
 		setup();
 		await waitFor(() => expect(screen.getByLabelText("Dictation requires the macOS or Windows desktop app.")).toHaveAttribute("tabindex", "0"));
 		expect(screen.getByRole("button", { name: "Dictate on this device" })).toBeDisabled();
+	});
+
+	it.each([
+		["permission", "Allow microphone and speech access"],
+		["unavailable", "Install speech resources in system settings"],
+		["unsupported", "Dictation requires the macOS or Windows desktop app"],
+	] as const)("shows persistent %s recovery without opening a tooltip", async (error, text) => {
+		vi.mocked(aoBridge.dictation.availability).mockResolvedValue({ available: false, error });
+		setup();
+		const status = await screen.findByRole("status");
+		expect(status).toBeVisible();
+		expect(status).toHaveTextContent(text);
+		expect(status).toHaveAttribute("aria-live", "polite");
+		expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+		expect(aoBridge.dictation.start).not.toHaveBeenCalled();
+	});
+
+	it.each(["hidden", "inert", "aria-hidden", "display", "visibility", "activity", "unmount"])("cancels capture when controls disappear via %s", async (kind) => {
+		const s = setup();
+		await typeInLexicalEditor(s.field, "preserved draft");
+		const id = await s.start();
+		if (kind === "unmount") s.unmount();
+		else if (kind === "activity") {
+			// Activity hides retained chat tabs without unmounting their editors.
+			s.rerender(<TooltipProvider><Activity mode="hidden"><ChatComposer onSend={s.onSend} /></Activity></TooltipProvider>);
+		} else {
+			act(() => {
+				if (kind === "display") s.container.style.display = "none";
+				else if (kind === "visibility") s.container.style.visibility = "hidden";
+				else s.container.setAttribute(kind, kind === "aria-hidden" ? "true" : "");
+			});
+		}
+		await waitFor(() => expect(aoBridge.dictation.cancel).toHaveBeenCalledWith(id));
+		act(() => emit({ id, type: "result", text: "discarded speech" }));
+		expect(s.field).not.toHaveTextContent("discarded speech");
+		if (kind !== "activity" && kind !== "unmount") expect(s.field).toHaveTextContent("preserved draft");
+		expect(s.onSend).not.toHaveBeenCalled();
 	});
 
 	it("keeps native orchestrator sending disarmed while dictating", async () => {

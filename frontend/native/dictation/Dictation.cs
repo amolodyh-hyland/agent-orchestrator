@@ -1,6 +1,8 @@
 using System;
 using System.Globalization;
 using System.Linq;
+using System.IO;
+using System.Speech.AudioFormat;
 using System.Speech.Recognition;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -49,6 +51,7 @@ class Dictation
                 Emit(new { type = "error", error = "unavailable" });
                 return;
             }
+            using (var capture = new WaveInCapture())
             using (var engine = new SpeechRecognitionEngine(info))
             {
                 engine.LoadGrammar(new DictationGrammar());
@@ -75,8 +78,8 @@ class Dictation
                         else Finish(new { type = "result", text = Text.ToString() });
                     }
                 };
-                engine.SetInputToDefaultAudioDevice();
-                engine.RecognizeAsync(RecognizeMode.Multiple);
+                try { capture.Start(() => Finish(new { type = "error", error = "microphone" })); }
+                catch { Finish(new { type = "error", error = "microphone" }); return; }
                 Emit(new { type = "recording" });
                 Action stop = () =>
                 {
@@ -84,7 +87,20 @@ class Dictation
                     {
                         if (finished || stopping) return;
                         stopping = true;
-                        engine.RecognizeAsyncStop();
+                        byte[] captured;
+                        try { captured = capture.Stop(); }
+                        catch { Finish(new { type = "error", error = "microphone" }); return; }
+                        // Acknowledge only after the device is closed. Recognition
+                        // sees a frozen PCM stream and cannot accept later speech.
+                        try
+                        {
+                            Emit(new { type = "capture-stopped" });
+                            if (captured.Length == 0) { Finish(new { type = "result", text = "" }); return; }
+                            engine.SetInputToAudioStream(new MemoryStream(captured, false),
+                                new SpeechAudioFormatInfo(CaptureBuffer.SampleRate, AudioBitsPerSample.Sixteen, AudioChannel.Mono));
+                            engine.RecognizeAsync(RecognizeMode.Multiple);
+                        }
+                        catch { Finish(new { type = "error", error = "failed" }); }
                     }
                 };
                 var input = new Thread(() =>

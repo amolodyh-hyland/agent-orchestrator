@@ -34,9 +34,14 @@ describe("native dictation engine", () => {
 		const write = vi.spyOn(s.child.stdin, "write");
 		s.engine.stop();
 		expect(write).toHaveBeenCalledWith("stop\n");
+		s.line({ type: "capture-stopped" });
+		expect(s.child.kill).not.toHaveBeenCalled();
+		expect(s.emit).toHaveBeenLastCalledWith({ type: "capture-stopped" });
+		s.line({ type: "recording" }); // A late readiness event cannot reopen capture.
+		expect(s.emit).toHaveBeenCalledTimes(2);
 		s.line({ type: "result", text: "こんにちは" });
 		s.line({ type: "result", text: "late" });
-		expect(s.emit).toHaveBeenCalledTimes(2);
+		expect(s.emit).toHaveBeenCalledTimes(3);
 		expect(s.emit).toHaveBeenLastCalledWith({ type: "result", text: "こんにちは" });
 		expect(s.child.kill).toHaveBeenCalledOnce();
 	});

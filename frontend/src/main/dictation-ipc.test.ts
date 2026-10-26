@@ -32,11 +32,15 @@ describe("dictation ownership and native boundary", () => {
 		s.engines[0].emit({ type: "recording" });
 		s.command("stop");
 		expect(s.engines[0].stop).toHaveBeenCalledOnce();
+		s.engines[0].emit({ type: "capture-stopped" });
+		expect(s.owner.send).toHaveBeenLastCalledWith(DICTATION_EVENT_CHANNEL, { id: "one", type: "capture-stopped" });
+		expect(s.engines[0].cancel).not.toHaveBeenCalled();
+		expect(s.command("start", "two")).toEqual({ error: "busy" });
 		s.engines[0].emit({ type: "result", text: "draft only" });
 		expect(s.owner.send).toHaveBeenLastCalledWith(DICTATION_EVENT_CHANNEL, { id: "one", type: "result", text: "draft only" });
 		expect(s.engines[0].cancel).toHaveBeenCalledOnce();
 		s.engines[0].emit({ type: "result", text: "late" });
-		expect(s.owner.send).toHaveBeenCalledTimes(2);
+		expect(s.owner.send).toHaveBeenCalledTimes(3);
 		expect(s.command("start", "two")).toEqual({});
 		s.dispose();
 	});

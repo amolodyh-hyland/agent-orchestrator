@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { DictationAvailability, DictationBridge, DictationError } from "../../shared/dictation";
 import { aoBridge } from "../lib/bridge";
 
-type Phase = "idle" | "starting" | "recording" | "stopping";
+type Phase = "idle" | "starting" | "recording" | "stopping" | "finishing";
 
 export function useDictation({ disabled, scope, locale, onTranscript, bridge = aoBridge.dictation }: {
 	disabled: boolean;
@@ -12,6 +12,7 @@ export function useDictation({ disabled, scope, locale, onTranscript, bridge = a
 	bridge?: DictationBridge;
 }) {
 	const [availability, setAvailability] = useState<DictationAvailability>({ available: false, error: "unavailable" });
+	const [availabilityChecked, setAvailabilityChecked] = useState(false);
 	const [phase, setPhase] = useState<Phase>("idle");
 	const [error, setError] = useState<DictationError>();
 	const current = useRef<{ id: string; phase: Phase; scope: string | undefined; locale: string } | undefined>(undefined);
@@ -31,14 +32,18 @@ export function useDictation({ disabled, scope, locale, onTranscript, bridge = a
 	useEffect(() => {
 		let disposed = false;
 		setAvailability({ available: false, error: "unavailable" });
+		setAvailabilityChecked(false);
 		setError(undefined);
 		const refresh = (event?: Event) => {
 			if (current.current || event?.target instanceof Node) return;
 			void (bridge?.availability(locale) ?? Promise.resolve({ available: false, error: "unsupported" } as const))
 				.then((result) => {
-					if (!disposed) setAvailability((previous) => previous.available === result.available && (previous.available || (!result.available && previous.error === result.error)) ? previous : result);
+					if (disposed) return;
+					setAvailabilityChecked(true);
+					if (result.available) setError(undefined);
+					setAvailability((previous) => previous.available === result.available && (previous.available || (!result.available && previous.error === result.error)) ? previous : result);
 				})
-				.catch(() => { if (!disposed) setAvailability({ available: false, error: "unavailable" }); });
+				.catch(() => { if (!disposed) { setAvailabilityChecked(true); setAvailability({ available: false, error: "unavailable" }); } });
 		};
 		refresh();
 		window.addEventListener("focus", refresh);
@@ -60,6 +65,11 @@ export function useDictation({ disabled, scope, locale, onTranscript, bridge = a
 					current.current.phase = "recording";
 					setPhase("recording");
 				}
+				return;
+			}
+			if (event.type === "capture-stopped") {
+				current.current.phase = "finishing";
+				setPhase("finishing");
 				return;
 			}
 			current.current = undefined;
@@ -104,5 +114,5 @@ export function useDictation({ disabled, scope, locale, onTranscript, bridge = a
 		}
 	}, [bridge, cancel]);
 
-	return { availability, phase, active: phase !== "idle", error, start, stop, cancel, isActive: () => current.current !== undefined };
+	return { availability, availabilityChecked, phase, active: phase !== "idle", error, start, stop, cancel, isActive: () => current.current !== undefined };
 }

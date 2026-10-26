@@ -40,7 +40,7 @@ export function registerDictationIpc({ ipcMain, isTrustedSender, createEngine }:
 			try {
 				engine.start(locale, (update) => {
 					if (active !== recording) return;
-					if (update.type !== "recording") cancel();
+					if (update.type !== "recording" && update.type !== "capture-stopped") cancel();
 					if (!owner.isDestroyed()) owner.send(DICTATION_EVENT_CHANNEL, { ...update, id });
 				});
 			} catch {

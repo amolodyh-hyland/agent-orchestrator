@@ -1,4 +1,3 @@
-import type { DictationError } from "../../../shared/dictation";
 import { DictationControls, type DictationControlHandle } from "./DictationControls";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { useOuterNativeAction } from "../../hooks/useOuter";
@@ -675,7 +674,7 @@ export const ChatComposer = memo(function ChatComposer({
 	const insertDictation = useCallback((text: string) => editor.current?.insertText(text), []);
 	const dictation = useRef<DictationControlHandle>(null);
 	const [dictating, setDictating] = useState(false);
-	const [dictationError, setDictationError] = useState<DictationError>();
+	const dictationStatus = useRef<HTMLDivElement>(null);
 	const canRecoverDelivery = Boolean(
 		durableDelivery &&
 			(!busy || durableDelivery.state === "accepted") &&
@@ -2121,7 +2120,7 @@ export const ChatComposer = memo(function ChatComposer({
 					</div>
 				) : null}
 
-				{dictationError ? <p role="alert" className="px-1.5 text-xs leading-snug text-destructive">{t(`chat.dictation.error.${dictationError}`)}</p> : null}
+				<div ref={dictationStatus} aria-live="polite" aria-atomic="true" />
 				{visibleAttachmentError ? (
 					<p role="alert" className="px-1.5 text-xs leading-snug text-destructive">
 						{visibleAttachmentError}
@@ -2252,7 +2251,7 @@ export const ChatComposer = memo(function ChatComposer({
 							locale={i18n.language}
 							onTranscript={insertDictation}
 							onActiveChange={setDictating}
-							onError={setDictationError}
+							statusRef={dictationStatus}
 						/>
 						{settings}
 					</div>

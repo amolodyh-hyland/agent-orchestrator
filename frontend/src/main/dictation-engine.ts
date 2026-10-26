@@ -60,6 +60,10 @@ export class NativeDictationEngine implements DictationEngine {
 					if (this.stopping) continue;
 					if (mode === "--record") this.arm(70_000);
 					this.emit?.(event);
+				} else if (event.type === "capture-stopped") {
+					this.stopping = true;
+					this.arm(30_000);
+					this.emit?.(event);
 				} else this.finish(event);
 			}
 		});

@@ -31,6 +31,10 @@ describe("composer dictation state", () => {
 		expect(s.result.current.phase).toBe("recording");
 		await act(async () => { await s.result.current.stop(); await s.result.current.stop(); });
 		expect(s.bridge.stop).toHaveBeenCalledOnce();
+		expect(s.result.current.phase).toBe("stopping");
+		s.emit({ id, type: "capture-stopped" });
+		expect(s.result.current.phase).toBe("finishing");
+		expect(s.result.current.active).toBe(true);
 		expect(s.insert).not.toHaveBeenCalled();
 		s.emit({ id, type: "result", text: "editable draft" });
 		s.emit({ id, type: "result", text: "duplicate" });

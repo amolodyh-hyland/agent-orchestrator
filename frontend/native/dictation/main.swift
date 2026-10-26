@@ -99,6 +99,7 @@ final class Dictation {
         guard !finished, !stopping else { return }
         stopping = true
         closeMicrophone()
+        output(["type": "capture-stopped"])
         request?.endAudio()
         DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
             guard !self.finished else { return }
