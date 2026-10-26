@@ -9,14 +9,13 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Web.Script.Serialization;
 
-class Dictation
+partial class Dictation
 {
     static readonly object Gate = new object();
     static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
     static readonly ManualResetEvent Done = new ManualResetEvent(false);
     static readonly StringBuilder Text = new StringBuilder();
     static bool finished;
-    static bool stopping;
 
     static void Emit(object value)
     {
@@ -81,28 +80,15 @@ class Dictation
                 try { capture.Start(() => Finish(new { type = "error", error = "microphone" })); }
                 catch { Finish(new { type = "error", error = "microphone" }); return; }
                 Emit(new { type = "recording" });
-                Action stop = () =>
-                {
-                    lock (Gate)
-                    {
-                        if (finished || stopping) return;
-                        stopping = true;
-                        byte[] captured;
-                        try { captured = capture.Stop(); }
-                        catch { Finish(new { type = "error", error = "microphone" }); return; }
-                        // Acknowledge only after the device is closed. Recognition
-                        // sees a frozen PCM stream and cannot accept later speech.
-                        try
-                        {
-                            Emit(new { type = "capture-stopped" });
-                            if (captured.Length == 0) { Finish(new { type = "result", text = "" }); return; }
-                            engine.SetInputToAudioStream(new MemoryStream(captured, false),
-                                new SpeechAudioFormatInfo(CaptureBuffer.SampleRate, AudioBitsPerSample.Sixteen, AudioChannel.Mono));
-                            engine.RecognizeAsync(RecognizeMode.Multiple);
-                        }
-                        catch { Finish(new { type = "error", error = "failed" }); }
-                    }
-                };
+                Action stop = CreateStopHandler(Gate, () => finished, capture.Stop,
+                    () => Emit(new { type = "capture-stopped" }),
+                    captured => {
+                        if (captured.Length == 0) { Finish(new { type = "result", text = "" }); return; }
+                        engine.SetInputToAudioStream(new MemoryStream(captured, false),
+                            new SpeechAudioFormatInfo(CaptureBuffer.SampleRate, AudioBitsPerSample.Sixteen, AudioChannel.Mono));
+                        engine.RecognizeAsync(RecognizeMode.Multiple);
+                    },
+                    error => Finish(new { type = "error", error = error }));
                 var input = new Thread(() =>
                 {
                     try

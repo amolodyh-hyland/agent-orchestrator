@@ -19,5 +19,6 @@ class CaptureBufferTests
         bounded.Append(new byte[CaptureBuffer.MaxBytes + 100]);
         if (bounded.Freeze().Length != CaptureBuffer.MaxBytes) throw new Exception("Capture exceeded 60 seconds");
         Console.WriteLine("3 capture boundary checks passed without audio");
+        StopTests.Run();
     }
 }

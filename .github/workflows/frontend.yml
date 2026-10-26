@@ -45,14 +45,10 @@ jobs:
         run: |
           xcrun swiftc -module-cache-path .vite/dictation-swift-cache native/dictation/DictationLocale.swift native/dictation/LocaleTests.swift -o .vite/dictation-locale-tests
           .vite/dictation-locale-tests
-      - name: Test Windows capture boundary without audio
+      - name: Test Windows capture and production Stop without audio
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force .vite | Out-Null
-          & "$env:WINDIR/Microsoft.NET/Framework64/v4.0.30319/csc.exe" /nologo /out:.vite/capture-buffer-tests.exe native/dictation/CaptureBuffer.cs native/dictation/CaptureBufferTests.cs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & ./.vite/capture-buffer-tests.exe
+        run: ./scripts/test-dictation-windows.ps1
 
   mac-update-helper:
     # Keep this on Intel to exercise the x64 release target natively while

@@ -23,7 +23,7 @@ export function dictationBuildOptions(platform, arch, root = frontend, windowsDi
     return {
       command: path.win32.join(framework, "csc.exe"), outputDir,
       args: ["/nologo", "/target:exe", "/platform:x64", "/optimize+", `/out:${path.join(outputDir, "ao-dictation.exe")}`,
-        `/reference:${path.win32.join(framework, "WPF", "System.Speech.dll")}`, "/reference:System.Web.Extensions.dll", path.join(root, "native/dictation/CaptureBuffer.cs"), path.join(root, "native/dictation/WaveInCapture.cs"), path.join(root, "native/dictation/Dictation.cs")],
+        `/reference:${path.win32.join(framework, "WPF", "System.Speech.dll")}`, "/reference:System.Web.Extensions.dll", path.join(root, "native/dictation/CaptureBuffer.cs"), path.join(root, "native/dictation/WaveInApi.cs"), path.join(root, "native/dictation/WaveInCapture.cs"), path.join(root, "native/dictation/Dictation.Stop.cs"), path.join(root, "native/dictation/Dictation.cs")],
     };
   }
   throw new Error(`Dictation is unsupported on ${platform}`);
