@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>dev.agent-orchestrator.dictation</string>
+<key>CFBundleName</key><string>Composer Dictation</string>
+<key>NSMicrophoneUsageDescription</key><string>Record speech on this device to insert editable text into your message.</string>
+<key>NSSpeechRecognitionUsageDescription</key><string>Transcribe your speech on this device. Audio is never sent to a server.</string>
+</dict></plist>

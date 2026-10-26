@@ -495,6 +495,13 @@ if (typeof window !== "undefined") {
 			},
 			onSessionChanged: () => () => undefined,
 		},
+		dictation: {
+			availability: async () => ({ available: false, error: "unsupported" }),
+			start: async () => ({ error: "unsupported" }),
+			stop: async () => undefined,
+			cancel: async () => undefined,
+			onEvent: () => () => undefined,
+		},
 		chatAttachment: {
 			chooseFolder: async () => null,
 		},

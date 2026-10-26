@@ -3731,5 +3731,18 @@
 	"cockpit.receipts": "Native acceptance and settlement receipts",
 	"cockpit.unavailable": "Unavailable until the owning work lands.",
 	"cockpit.reportedState": "Reported state (claim): {{state}}",
-	"cockpit.recorded": "Recorded: {{timestamp}}"
+	"cockpit.recorded": "Recorded: {{timestamp}}",
+  "chat.dictation.start": "Dictate on this device",
+  "chat.dictation.stop": "Stop dictation and insert text",
+  "chat.dictation.cancel": "Cancel dictation",
+  "chat.dictation.starting": "Waiting for microphone permission…",
+  "chat.dictation.stopping": "Finishing dictation…",
+  "chat.dictation.recording": "Recording on this device…",
+  "chat.dictation.error.unsupported": "Dictation requires the macOS or Windows desktop app.",
+  "chat.dictation.error.unavailable": "On-device speech is unavailable for this language. Install speech resources in system settings, then retry.",
+  "chat.dictation.error.permission": "Allow microphone and speech access in system privacy settings, then retry.",
+  "chat.dictation.error.microphone": "No microphone is available. Check the input device and system microphone permissions.",
+  "chat.dictation.error.busy": "Another composer is using the microphone.",
+  "chat.dictation.error.timeout": "Dictation timed out. Try again.",
+  "chat.dictation.error.failed": "Dictation failed. Your draft is unchanged. Try again."
 }

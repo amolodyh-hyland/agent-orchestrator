@@ -576,3 +576,14 @@ describe("packaged native dependencies", () => {
 		expect(config.hooks?.prePackage).toBeTypeOf("function");
 	});
 });
+
+it("packages local dictation helpers only on supported desktop targets", () => {
+	expect(extraResourcesForPlatform("darwin")).toContain("dictation-helper");
+	expect(extraResourcesForPlatform("win32")).toContain("dictation-helper");
+	expect(extraResourcesForPlatform("linux")).not.toContain("dictation-helper");
+	expect(config.packagerConfig?.extendInfo).toMatchObject({
+		NSMicrophoneUsageDescription: expect.any(String),
+		NSSpeechRecognitionUsageDescription: expect.any(String),
+	});
+	expect(macSignOptionsForFile("/bundle/Contents/Resources/dictation-helper/ao-dictation").entitlements).toContain("com.apple.security.device.audio-input");
+});

@@ -524,3 +524,24 @@ describe("project context link bridge", () => {
 		expect(electronMocks.invoke).toHaveBeenCalledWith("projectContext:chooseLink", { kind: "file", title: "Link a file" });
 	});
 });
+
+it("bridges dictation commands and scopes event listener disposal", async () => {
+	const { DICTATION_CHANNEL, DICTATION_EVENT_CHANNEL } = await import("./shared/dictation");
+	const bridge = exposedBridge().dictation;
+	electronMocks.invoke.mockResolvedValue({ available: true });
+	await bridge.availability("fr");
+	expect(electronMocks.invoke).toHaveBeenLastCalledWith(DICTATION_CHANNEL, "availability", undefined, "fr");
+	await bridge.start("recording-id", "fr");
+	expect(electronMocks.invoke).toHaveBeenLastCalledWith(DICTATION_CHANNEL, "start", "recording-id", "fr");
+	await bridge.stop("recording-id");
+	expect(electronMocks.invoke).toHaveBeenLastCalledWith(DICTATION_CHANNEL, "stop", "recording-id");
+	await bridge.cancel("recording-id");
+	expect(electronMocks.invoke).toHaveBeenLastCalledWith(DICTATION_CHANNEL, "cancel", "recording-id");
+	const listener = vi.fn();
+	const dispose = bridge.onEvent(listener);
+	const eventHandler = electronMocks.listeners.get(DICTATION_EVENT_CHANNEL)!;
+	eventHandler({}, { id: "recording-id", type: "result", text: "draft" });
+	expect(listener).toHaveBeenCalledExactlyOnceWith({ id: "recording-id", type: "result", text: "draft" });
+	dispose();
+	expect(electronMocks.off).toHaveBeenCalledWith(DICTATION_EVENT_CHANNEL, eventHandler);
+});

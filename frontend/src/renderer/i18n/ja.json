@@ -3750,5 +3750,18 @@
 	"cockpit.receipts": "ネイティブ受付・終了の受領記録",
 	"cockpit.unavailable": "担当する作業が実装されるまで利用できません。",
 	"cockpit.reportedState": "申告された状態: {{state}}",
-	"cockpit.recorded": "記録日時: {{timestamp}}"
+	"cockpit.recorded": "記録日時: {{timestamp}}",
+  "chat.dictation.start": "このデバイスで音声入力",
+  "chat.dictation.stop": "音声入力を停止してテキストを挿入",
+  "chat.dictation.cancel": "音声入力をキャンセル",
+  "chat.dictation.starting": "マイクの許可を待っています…",
+  "chat.dictation.stopping": "音声入力を処理中…",
+  "chat.dictation.recording": "このデバイスで録音中…",
+  "chat.dictation.error.unsupported": "音声入力にはmacOSまたはWindowsのデスクトップアプリが必要です。",
+  "chat.dictation.error.unavailable": "この言語のオフライン音声認識は利用できません。システム設定で音声リソースをインストールしてから再試行してください。",
+  "chat.dictation.error.permission": "システムのプライバシー設定でマイクと音声認識を許可してから再試行してください。",
+  "chat.dictation.error.microphone": "マイクを利用できません。入力デバイスとシステムのマイク権限を確認してください。",
+  "chat.dictation.error.busy": "別の入力欄がマイクを使用しています。",
+  "chat.dictation.error.timeout": "音声入力がタイムアウトしました。再試行してください。",
+  "chat.dictation.error.failed": "音声入力に失敗しました。下書きは変更されていません。再試行してください。"
 }

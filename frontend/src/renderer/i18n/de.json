@@ -3750,5 +3750,18 @@
 	"cockpit.receipts": "Belege für native Annahme und Abschluss",
 	"cockpit.unavailable": "Bis zur Umsetzung der zuständigen Arbeit nicht verfügbar.",
 	"cockpit.reportedState": "Gemeldeter Zustand (Aussage): {{state}}",
-	"cockpit.recorded": "Erfasst: {{timestamp}}"
+	"cockpit.recorded": "Erfasst: {{timestamp}}",
+  "chat.dictation.start": "Auf diesem Gerät diktieren",
+  "chat.dictation.stop": "Diktat beenden und Text einfügen",
+  "chat.dictation.cancel": "Diktat abbrechen",
+  "chat.dictation.starting": "Warte auf Mikrofonberechtigung…",
+  "chat.dictation.stopping": "Diktat wird abgeschlossen…",
+  "chat.dictation.recording": "Aufnahme auf diesem Gerät…",
+  "chat.dictation.error.unsupported": "Diktieren erfordert die Desktop-App für macOS oder Windows.",
+  "chat.dictation.error.unavailable": "Lokale Spracherkennung ist für diese Sprache nicht verfügbar. Sprachressourcen in den Systemeinstellungen installieren und erneut versuchen.",
+  "chat.dictation.error.permission": "Mikrofon- und Sprachzugriff in den Datenschutzeinstellungen erlauben und erneut versuchen.",
+  "chat.dictation.error.microphone": "Kein Mikrofon verfügbar. Eingabegerät und Mikrofonberechtigungen prüfen.",
+  "chat.dictation.error.busy": "Ein anderes Eingabefeld verwendet das Mikrofon.",
+  "chat.dictation.error.timeout": "Zeitüberschreitung beim Diktieren. Erneut versuchen.",
+  "chat.dictation.error.failed": "Diktieren fehlgeschlagen. Der Entwurf ist unverändert. Erneut versuchen."
 }

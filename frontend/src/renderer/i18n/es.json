@@ -3797,5 +3797,18 @@
 	"cockpit.receipts": "Comprobantes de aceptación nativa y finalización",
 	"cockpit.unavailable": "No disponible hasta que se implemente el trabajo correspondiente.",
 	"cockpit.reportedState": "Estado informado (afirmación): {{state}}",
-	"cockpit.recorded": "Registrado: {{timestamp}}"
+	"cockpit.recorded": "Registrado: {{timestamp}}",
+  "chat.dictation.start": "Dictar en este dispositivo",
+  "chat.dictation.stop": "Detener el dictado e insertar texto",
+  "chat.dictation.cancel": "Cancelar dictado",
+  "chat.dictation.starting": "Esperando permiso del micrófono…",
+  "chat.dictation.stopping": "Finalizando dictado…",
+  "chat.dictation.recording": "Grabando en este dispositivo…",
+  "chat.dictation.error.unsupported": "El dictado requiere la aplicación de escritorio para macOS o Windows.",
+  "chat.dictation.error.unavailable": "El reconocimiento local no está disponible para este idioma. Instala los recursos de voz en los ajustes del sistema y reintenta.",
+  "chat.dictation.error.permission": "Permite el acceso al micrófono y al reconocimiento de voz en los ajustes de privacidad del sistema y reintenta.",
+  "chat.dictation.error.microphone": "No hay micrófono disponible. Revisa el dispositivo de entrada y los permisos del sistema.",
+  "chat.dictation.error.busy": "Otro editor está usando el micrófono.",
+  "chat.dictation.error.timeout": "Se agotó el tiempo del dictado. Reintenta.",
+  "chat.dictation.error.failed": "Error de dictado. El borrador no ha cambiado. Reintenta."
 }

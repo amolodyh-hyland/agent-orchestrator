@@ -1,3 +1,5 @@
+import { NativeDictationEngine, dictationHelperPath } from "./main/dictation-engine";
+import { registerDictationIpc } from "./main/dictation-ipc";
 import { registerOuterNative } from "./main/outer-native";
 import { registerFactoryRunConfirmation } from "./main/factory-run-confirmation";
 import { approveLocalServerLogs, approveLocalServerMutation } from "./main/multica-local-server-approval";
@@ -3251,6 +3253,15 @@ registerChatImageIpc({
 	dialog,
 	downloadsDirectory: () => app.getPath("downloads"),
 });
+const cancelDictation = registerDictationIpc({
+	ipcMain,
+	isTrustedSender: (id) => {
+		const sender = trustedShellWebContents.get(id);
+		return !!sender && !sender.isDestroyed();
+	},
+	createEngine: () => new NativeDictationEngine(dictationHelperPath(process.platform, app.isPackaged ? process.resourcesPath : app.getAppPath())),
+});
+app.on("will-quit", cancelDictation);
 registerChatFolderAttachmentIpc({ ipcMain, dialog, machineName: os.hostname });
 
 // A file dropped onto the terminal is delivered as raw bytes (its original path
