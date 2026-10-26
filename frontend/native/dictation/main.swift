@@ -111,7 +111,8 @@ final class Dictation {
 
 let args = CommandLine.arguments
 if args.count != 3 || !["--probe", "--record"].contains(args[1]) { exit(1) }
-guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: args[2])),
+guard let identifier = dictationLocaleIdentifier(requested: args[2], supported: SFSpeechRecognizer.supportedLocales().map { $0.identifier }, preferred: Locale.current.identifier),
+      let recognizer = SFSpeechRecognizer(locale: Locale(identifier: identifier)),
       recognizer.supportsOnDeviceRecognition, recognizer.isAvailable else {
     output(["type": "error", "error": "unavailable"])
     exit(0)

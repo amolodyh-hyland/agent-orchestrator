@@ -12,7 +12,7 @@ export function dictationBuildOptions(platform, arch, root = frontend, windowsDi
     return {
       command: "xcrun", outputDir,
       args: ["swiftc", "-target", `${cpu}-apple-macosx11.0`, "-O", "-module-cache-path", path.join(root, ".vite", "dictation-swift-cache"),
-        path.join(root, "native/dictation/main.swift"),
+        path.join(root, "native/dictation/DictationLocale.swift"), path.join(root, "native/dictation/main.swift"),
         "-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist", "-Xlinker", path.join(root, "native/dictation/info.plist"),
         "-o", path.join(outputDir, "ao-dictation")],
     };

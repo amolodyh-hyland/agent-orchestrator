@@ -40,6 +40,11 @@ jobs:
       - name: Compile Apple Silicon dictation helper
         if: runner.os == 'macOS'
         run: node scripts/build-dictation-helper.mjs --arch arm64
+      - name: Test dictation locale selection without audio
+        if: runner.os == 'macOS'
+        run: |
+          xcrun swiftc -module-cache-path .vite/dictation-swift-cache native/dictation/DictationLocale.swift native/dictation/LocaleTests.swift -o .vite/dictation-locale-tests
+          .vite/dictation-locale-tests
 
   mac-update-helper:
     # Keep this on Intel to exercise the x64 release target natively while
