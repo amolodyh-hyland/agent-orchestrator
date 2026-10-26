@@ -38,7 +38,7 @@ import type { ArtifactOpenRequest } from "./SessionArtifactsView";
 import { ShellTopbar } from "./ShellTopbar";
 import { SwitchAgentDialog } from "./SwitchAgentDialog";
 import { SessionTopbarHost } from "./SessionTopbarPortal";
-import { TerminalSwitchAgentButton } from "./TerminalSwitchAgentButton";
+import { canShowSwitchAgentAction, TerminalSwitchAgentButton } from "./TerminalSwitchAgentButton";
 import { TopbarButton } from "./TopbarButton";
 import type { SessionTabActions } from "./topbar-tabs/TopbarTab";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -1701,7 +1701,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	useEffect(() => {
 		if (handoffSwitchError) setHandoffDialogOpen(true);
 	}, [handoffSwitchError]);
-	const handoffMenuItem = useMemo(() => session && !session.cloud ? (
+	const handoffMenuItem = useMemo(() => session && !session.cloud && canShowSwitchAgentAction(session, handoffControlPresentation) ? (
 		<TerminalSwitchAgentButton
 			key={session.id}
 			variant="menu-item"
@@ -1713,19 +1713,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			switchError={handoffSwitchError}
 		/>
 	) : null, [handoffAgentSwitch, handoffControlPresentation, handoffDialogOpen, handoffSwitchError, handleHandoffDialogOpenChange, session]);
-	// Cloud sessions expose only the interface switch here; agent handoff is a
-	// local daemon feature. Hide the empty actions menu for harnesses without
-	// Chat, including when local settings identify one before transition status
-	// becomes available.
 	const sessionTabActions = useMemo<SessionTabActions>(() => {
-		if (interfaceUi.unsupported || (!interfaceUi.menuItem && !handoffMenuItem && !interfaceUi.inlineStatus)) {
+		if (!interfaceUi.menuItem && !handoffMenuItem && !interfaceUi.inlineStatus) {
 			return null;
 		}
 		return {
 			menuItems: <>{interfaceUi.menuItem}{handoffMenuItem}</>,
 			...(interfaceUi.inlineStatus ? { inlineStatus: interfaceUi.inlineStatus } : {}),
 		};
-	}, [handoffMenuItem, interfaceUi.inlineStatus, interfaceUi.menuItem, interfaceUi.unsupported]);
+	}, [handoffMenuItem, interfaceUi.inlineStatus, interfaceUi.menuItem]);
 	const sessionHeaderActions = (
 		<div
 			className="session-topbar-session-chrome flex shrink-0 items-center"

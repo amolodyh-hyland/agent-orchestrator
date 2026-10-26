@@ -23,6 +23,15 @@ type TerminalSwitchAgentButtonProps = {
 	variant?: "icon" | "menu-item";
 };
 
+export function canShowSwitchAgentAction(session: WorkspaceSession, presentation?: AgentSwitchPresentation): boolean {
+	return (
+		session.kind === "worker" &&
+		!session.isTerminated &&
+		canSwitchAgentHarness(session.provider, session.mode) &&
+		(Boolean(presentation && presentation.outcome !== "success") || sessionIsActive(session))
+	);
+}
+
 export function TerminalSwitchAgentButton({
 	agentSwitch,
 	container,
@@ -45,12 +54,7 @@ export function TerminalSwitchAgentButton({
 		if (switchError) onOpenChange?.(true);
 	}, [onOpenChange, switchError]);
 
-	if (
-		session.kind !== "worker" ||
-		session.isTerminated ||
-		!canSwitchAgentHarness(session.provider, session.mode) ||
-		(!controlPresentation && !sessionIsActive(session))
-	) {
+	if (!canShowSwitchAgentAction(session, presentation)) {
 		return null;
 	}
 

@@ -292,7 +292,8 @@ vi.mock("../hooks/useSettings", () => ({
 		error: undefined,
 	}),
 }));
-vi.mock("./TerminalSwitchAgentButton", () => ({
+vi.mock("./TerminalSwitchAgentButton", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./TerminalSwitchAgentButton")>()),
 	TerminalSwitchAgentButton: ({ variant }: { variant?: "icon" | "menu-item" }) =>
 		variant === "menu-item" ? <div role="menuitem">Switch agent</div> : <button aria-label="Switch agent" type="button" />,
 }));
@@ -4235,11 +4236,11 @@ describe("SessionView", () => {
 		expect(screen.queryByRole("menuitem", { name: /Switch to chat UI/ })).not.toBeInTheDocument();
 	});
 
-	it("keeps the interface switch and agent handoff in the tab menu for a harness in the Chat list", async () => {
+	it("keeps the interface switch and agent handoff in the tab menu for a supported harness in the Chat list", async () => {
 		settingsState.chatHarnesses = ["claude-code", "codex", "opencode"];
 		interfaceTransitionState.status = { supported: true, targetMode: "chat" };
 		const session = workerSession("sess-1");
-		session.provider = "opencode";
+		session.provider = "codex";
 		session.mode = "tui";
 
 		render(<SessionView sessionId="sess-1" />);
@@ -4247,6 +4248,40 @@ describe("SessionView", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Tab options" }));
 		expect(screen.getByRole("menuitem", { name: "Switch to chat UI" })).toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: "Switch agent" })).toBeInTheDocument();
+	});
+
+	it.each([
+		["fx", undefined],
+		["fx", { supported: false, targetMode: "chat", reasonCode: "CHAT_UNSUPPORTED" }],
+		["claude-code", { supported: false, targetMode: "chat", reasonCode: "CHAT_UNSUPPORTED" }],
+		["codex", { supported: false, targetMode: "chat", reasonCode: "CHAT_UNSUPPORTED" }],
+	] as const)("keeps harness switching available for a %s TUI worker without Chat support (%j)", async (provider, status) => {
+		settingsState.chatHarnesses = ["claude-code", "codex"];
+		interfaceTransitionState.status = status;
+		const session = workerSession("sess-1");
+		session.provider = provider;
+		session.mode = "tui";
+
+		render(<SessionView sessionId="sess-1" />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Tab options" }));
+		expect(screen.getByRole("menuitem", { name: "Switch agent" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /Switch to chat UI/ })).not.toBeInTheDocument();
+	});
+
+	it.each([
+		["unsupported harness", "sess-1", { provider: "goose" }],
+		["orchestrator", "sess-orch", {}],
+		["terminated worker", "sess-1", { isTerminated: true, status: "terminated" }],
+	] as const)("keeps agent switching unavailable for an %s without Chat support", async (_label, sessionId, overrides) => {
+		interfaceTransitionState.status = { supported: false, targetMode: "chat", reasonCode: "CHAT_UNSUPPORTED" };
+		Object.assign(workerSession(sessionId), { mode: "tui" }, overrides);
+
+		render(<SessionView sessionId={sessionId} />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Tab options" }));
+		expect(screen.queryByRole("menuitem", { name: "Switch agent" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /Switch to chat UI/ })).not.toBeInTheDocument();
 	});
 
 	it("hides unsupported agent switching from a cloud session menu", async () => {

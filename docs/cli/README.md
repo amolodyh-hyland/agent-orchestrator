@@ -98,9 +98,10 @@ paths. If `AO_SESSION_ID` is set but the session cannot be fetched, pass
 or registering a project. Standalone sessions do not support orchestrator,
 branch, issue, or PR-claim options.
 
-Agent switching is initially available only for worker sessions whose source
-and target harnesses are Claude Code or Codex. The main command
-accepts an idempotency key:
+Agent switching is available only for worker sessions whose source and target
+harnesses are Claude Code, Codex, or fx. Chat sessions require Chat support from
+both harnesses; fx switching is TUI-only. The main command accepts an idempotency
+key:
 
 ```bash
 ao session switch-agent ao-7 codex \
@@ -112,6 +113,12 @@ ao session agent-switch ls ao-7 --json
 `switch-agent` and `agent-switch ls` both support `--json`.
 The `agent-switch` command also has the `agent-switches` alias, and `ls` has the
 `list` alias.
+
+In the desktop session view, open the active task tab's **Tab options → Switch
+agent**, choose the target and optional model, then confirm with **Switch**.
+This uses the same daemon endpoint as the CLI. Progress and failures appear in
+the session, and the session state refreshes after the request. Harness switching
+remains available for supported TUI workers even when Chat UI is unavailable.
 
 `ao session handoff submit` is the internal source-agent path for optional
 semantic enrichment, not a required human step in a normal switch. It requires
