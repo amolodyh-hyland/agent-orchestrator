@@ -11,11 +11,15 @@ import "../../src/renderer/styles.css";
 
 function Fixture() {
 	const editor = useRef<ComposerEditorHandle>(null);
+	const parameters = new URLSearchParams(location.search);
 	const initial =
-		new URLSearchParams(location.search).get("text") ??
+		parameters.get("text") ??
 		"Run `npm test`.\n```typescript\n" + "const value = 1;\n".repeat(18) + "```";
 	const [wire, setWire] = useState(initial);
 	const [sent, setSent] = useState("");
+	const [menuOpen, setMenuOpen] = useState(parameters.get("popup") === "1");
+	const [activeIndex, setActiveIndex] = useState(0);
+	const options = ["src/first.ts", "src/second.ts"];
 	useEffect(() => {
 		editor.current?.setText(initial);
 	}, [initial]);
@@ -33,14 +37,22 @@ function Fixture() {
 					ref={editor}
 					label="Message"
 					placeholder="Message"
-					menuOpen={false}
+					menuOpen={menuOpen}
 					menuId="suggestions"
-					activeIndex={0}
+					activeIndex={activeIndex}
 					onChange={onChange}
-					onComplete={() => undefined}
+					onComplete={(snapshot, key) => {
+						if (!menuOpen || !snapshot.trigger || key !== "Tab") return undefined;
+						setMenuOpen(false);
+						return options[activeIndex];
+					}}
 					onEnter={onEnter}
 					onCompositionChange={() => undefined}
-					onKeyDown={() => undefined}
+					onKeyDown={(event) => {
+						if (!menuOpen || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
+						event.preventDefault();
+						setActiveIndex((index) => (index + (event.key === "ArrowDown" ? 1 : options.length - 1)) % options.length);
+					}}
 					onPaste={() => undefined}
 				/>
 			</div>
@@ -58,6 +70,15 @@ function Fixture() {
 			>
 				Code block
 			</button>
+			{menuOpen ? (
+				<ul role="listbox" id="suggestions" aria-label="Files">
+					{options.map((option, index) => (
+						<li key={option} role="option" id={`suggestions-option-${index}`} aria-selected={activeIndex === index}>
+							{option}
+						</li>
+					))}
+				</ul>
+			) : null}
 			<pre data-testid="wire">{wire}</pre>
 			<button
 				type="button"

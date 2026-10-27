@@ -300,3 +300,69 @@ for (const example of [
 		await expect(field.locator(".chat-composer-markdown-code").filter({ hasText: "!" })).toHaveCount(0);
 	});
 }
+
+
+for (const source of ["`@src`", "```ts\n@src\n```"]) {
+	test(`an OPEN completion popup owns arrows and Tab inside code: ${JSON.stringify(source)}`, async ({ page }) => {
+		await page.goto("/e2e/composer-code/harness.html?popup=1&text=" + encodeURIComponent(source));
+		const field = page.getByRole("combobox", { name: "Message", exact: true });
+		const first = page.getByRole("option", { name: "src/first.ts" });
+		const second = page.getByRole("option", { name: "src/second.ts" });
+		await expect(page.getByRole("listbox", { name: "Files" })).toBeVisible();
+		await selectVisibleText(field, 4, 4);
+		await field.press("ArrowUp");
+		await expect(second).toHaveAttribute("aria-selected", "true");
+		await field.press("ArrowDown");
+		await expect(first).toHaveAttribute("aria-selected", "true");
+		await field.press("ArrowDown");
+		await expect(second).toHaveAttribute("aria-selected", "true");
+		await expect(page.getByTestId("wire")).toHaveJSProperty("textContent", source);
+		await field.press("Tab");
+		await expect(field.locator('[data-composer-token="file"]')).toHaveAttribute("data-value", "src/second.ts");
+		await expect(page.getByRole("listbox")).toHaveCount(0);
+		await expect(field).toBeFocused();
+	});
+}
+
+for (const example of [
+	{ key: "Tab", offset: 2 },
+	{ key: "ArrowDown", offset: 5 },
+	{ key: "ArrowUp", offset: 6 },
+]) {
+	test(`native ${example.key} between adjacent blocks keeps sent Markdown and undo balanced`, async ({ page }) => {
+		const source = "```ts\nfirst\n```\n```js\nsecond\n```";
+		const separated = "```ts\nfirst\n```\n\n```js\nsecond\n```";
+		const expected = "```ts\nfirst\n```\n!\n```js\nsecond\n```";
+		await page.goto("/e2e/composer-code/harness.html?text=" + encodeURIComponent(source));
+		const field = page.getByRole("combobox", { name: "Message", exact: true });
+		await expect(field.locator(".chat-composer-code-block")).toHaveCount(2);
+		await selectVisibleText(field, example.offset, example.offset);
+		await field.press(example.key);
+		await expect(page.getByTestId("wire")).toHaveJSProperty("textContent", separated);
+		await field.pressSequentially("!");
+		await expect(page.getByTestId("wire")).toHaveJSProperty("textContent", expected);
+		await expect(field.locator(".chat-composer-code-block")).toHaveCount(2);
+		await field.press("ControlOrMeta+z");
+		await expect(page.getByTestId("wire")).toHaveJSProperty("textContent", separated);
+		await field.press("ControlOrMeta+z");
+		await expect(page.getByTestId("wire")).toHaveJSProperty("textContent", source);
+		await expect(field.locator(".chat-composer-code-block")).toHaveCount(2);
+		await field.press("ControlOrMeta+Shift+z");
+		await field.press("ControlOrMeta+Shift+z");
+		await expect(page.getByTestId("wire")).toHaveJSProperty("textContent", expected);
+		await field.press("Enter");
+		await expect(page.getByTestId("sent")).toHaveJSProperty("textContent", expected);
+	});
+}
+
+for (const source of ["```\n", "```\nvalue\n", "```\nvalue\n\n"]) {
+	test(`Tab exits from the empty final line of an open fence: ${JSON.stringify(source)}`, async ({ page }) => {
+		await page.goto("/e2e/composer-code/harness.html?text=" + encodeURIComponent(source));
+		const field = page.getByRole("combobox", { name: "Message", exact: true });
+		await expect(page.getByTestId("wire")).toHaveJSProperty("textContent", source);
+		await field.press("Tab");
+		await expect(field).toBeFocused();
+		await field.pressSequentially("!");
+		await expect(page.getByTestId("wire")).toHaveJSProperty("textContent", source + "\n```\n!");
+	});
+}

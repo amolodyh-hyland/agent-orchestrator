@@ -359,6 +359,52 @@ describe("composer code editing", () => {
 		await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(source.slice(0, offset) + "!" + source.slice(offset)));
 	});
 
+	it.each(["`@src`", "```\n@src\n```"])("leaves open-popup arrows and Tab to completion handling: %s", async (source) => {
+		const onKeyDown = vi.fn((event: import("react").KeyboardEvent<HTMLDivElement>) => event.preventDefault());
+		const { editor, field, ref, onComplete } = setup(source, { menuOpen: true, onKeyDown });
+		caret(editor, source.indexOf("@src") + 4);
+		for (const key of ["ArrowUp", "ArrowDown", "Tab"]) {
+			onKeyDown.mockClear();
+			expect(fireEvent.keyDown(field, { key })).toBe(false);
+			expect(onKeyDown).toHaveBeenCalledOnce();
+		}
+		expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ text: source }), "Tab");
+		await act(async () => editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, "!"));
+		expect(ref.current!.getSnapshot().text).toBe(source.replace("@src", "@src!"));
+	});
+
+	it.each([
+		["Tab", "first"], ["ArrowDown", "first"], ["ArrowUp", "second"],
+	])("keeps adjacent fences balanced when exiting with %s from %s", async (key, block) => {
+		const source = "```ts\nfirst\n```\n```js\nsecond\n```";
+		const separated = "```ts\nfirst\n```\n\n```js\nsecond\n```";
+		const expected = "```ts\nfirst\n```\n!\n```js\nsecond\n```";
+		const { editor, field, ref, onEnter } = setup(source);
+		caret(editor, source.indexOf(block) + (key === "ArrowUp" ? 0 : block.length));
+		fireEvent.keyDown(field, { key });
+		await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(separated));
+		await act(async () => editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, "!"));
+		await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(expected));
+		expect(field.querySelectorAll(".chat-composer-code-block")).toHaveLength(2);
+		fireEvent.keyDown(field, { key: "Enter" });
+		expect(onEnter).toHaveBeenCalledWith(expect.objectContaining({ text: expected }), expect.any(KeyboardEvent));
+		act(() => editor.dispatchCommand(UNDO_COMMAND, undefined));
+		await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(key === "ArrowUp" ? separated : source));
+		expect(field.querySelectorAll(".chat-composer-code-block")).toHaveLength(2);
+		act(() => editor.dispatchCommand(UNDO_COMMAND, undefined));
+		await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(source));
+		expect(field.querySelectorAll(".chat-composer-code-block")).toHaveLength(2);
+	});
+
+	it.each(["```\n", "```\nvalue\n", "```\nvalue\n\n"])("keeps an open fence's trailing empty line inside code until Tab: %s", async (source) => {
+		const { editor, field, ref } = setup(source);
+		expect(fireEvent.keyDown(field, { key: "Tab" })).toBe(false);
+		await act(async () => editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, "!"));
+		await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(source + "\n```\n!"));
+		expect(document.activeElement).toBe(field);
+		expect(field.querySelectorAll(".chat-composer-code-block")).toHaveLength(1);
+	});
+
 	it.each([[1, "ArrowLeft", "ArrowRight"], [6, "ArrowRight", "ArrowLeft"]])(
 		"reenters code at the same visible edge: %i",
 		async (offset, exit, enter) => {
