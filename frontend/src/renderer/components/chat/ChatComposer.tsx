@@ -1,3 +1,4 @@
+import { DictationControls, type DictationControlHandle } from "./DictationControls";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { useOuterNativeAction } from "../../hooks/useOuter";
 import type { OuterSendExpectation } from "../../../shared/outer-native";
@@ -391,7 +392,7 @@ export const ChatComposer = memo(function ChatComposer({
 	acceptedClientMessageIds?: ReadonlySet<string>;
 }) {
 	const translateDraft = useChatDraftTranslation();
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	const shortcutOverrides = useKeybindingsStore((state) => state.overrides);
 	const shortcutHint = (id: AppShortcutId) => {
 		const [primary] = effectiveShortcutBindings(id, isMacPlatform(), shortcutOverrides);
@@ -670,6 +671,10 @@ export const ChatComposer = memo(function ChatComposer({
 	const composerEditorDisabled = Boolean(
 		disabled || queuedEditRecovery || (!optimisticSend && (submitting || draftMutationPending)),
 	);
+	const insertDictation = useCallback((text: string) => editor.current?.insertText(text), []);
+	const dictation = useRef<DictationControlHandle>(null);
+	const [dictating, setDictating] = useState(false);
+	const dictationStatus = useRef<HTMLDivElement>(null);
 	const canRecoverDelivery = Boolean(
 		durableDelivery &&
 			(!busy || durableDelivery.state === "accepted") &&
@@ -718,7 +723,7 @@ export const ChatComposer = memo(function ChatComposer({
 			!acceptedClearFailed &&
 			!durableDelivery &&
 			!fileAttachments.preparing;
-	const sendActionEnabled = canSend || canRecoverDelivery;
+	const sendActionEnabled = !dictating && (canSend || canRecoverDelivery);
 	// A plain send while a turn runs is queued, so the button says so instead of
 	// looking identical to an immediate send.
 	const queuesDraft = Boolean(willQueue && !savingQueuedEdit && !queuedEditRecovery);
@@ -950,7 +955,7 @@ export const ChatComposer = memo(function ChatComposer({
 			fileAttachments,
 		],
 	);
-	const nativeAction = useOuterNativeAction(nativeSession && (!nativeSession.outer || nativeSession.expected) && nativeText.trim() && !disabled && !staged && contextReferences.length === 0 && !editingQueuedTurnId
+	const nativeAction = useOuterNativeAction(!dictating && nativeSession && (!nativeSession.outer || nativeSession.expected) && nativeText.trim() && !disabled && !staged && contextReferences.length === 0 && !editingQueuedTurnId
 		? nativeSession.outer
 			? { operation: "send", sessionId: nativeSession.sessionId, text: nativeText.trim(), expected:nativeSession.expected! }
 			: { operation: "control", control: { action: "chat.send", targetId: nativeSession.sessionId, body: { text: nativeText.trim() } } }
@@ -1303,6 +1308,7 @@ export const ChatComposer = memo(function ChatComposer({
 
 	function submit(event?: FormEvent, forceSteer?: boolean): Promise<void> {
 		event?.preventDefault();
+		if (dictation.current?.isActive()) return Promise.resolve();
 		if (nativeSession) return Promise.resolve();
 		// React cannot publish the next busy prop until after this event returns. A
 		// second Enter in that gap joins the accepted submission instead of opening a
@@ -1687,6 +1693,7 @@ export const ChatComposer = memo(function ChatComposer({
 
 	const handleEnterKey = useCallback(
 		(event: globalThis.KeyboardEvent): boolean => {
+			if (dictation.current?.isActive()) return true;
 			const liveSnapshot = editor.current?.getSnapshot();
 			if (liveSnapshot) textRef.current = liveSnapshot.text;
 			const liveTrigger = liveSnapshot?.trigger;
@@ -1728,6 +1735,12 @@ export const ChatComposer = memo(function ChatComposer({
 
 	function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
 		if (event.nativeEvent.isComposing) return;
+		if (event.key === "Escape" && dictation.current?.isActive()) {
+			event.preventDefault();
+			event.stopPropagation();
+			dictation.current?.cancel();
+			return;
+		}
 		// Enter is handled in Lexical before a newline is inserted; this handler is
 		// only for menu navigation and escape while a completion menu is open.
 		const liveSnapshot = editor.current?.getSnapshot();
@@ -2107,6 +2120,7 @@ export const ChatComposer = memo(function ChatComposer({
 					</div>
 				) : null}
 
+				<div ref={dictationStatus} aria-live="polite" aria-atomic="true" />
 				{visibleAttachmentError ? (
 					<p role="alert" className="px-1.5 text-xs leading-snug text-destructive">
 						{visibleAttachmentError}
@@ -2230,6 +2244,15 @@ export const ChatComposer = memo(function ChatComposer({
 								/>
 							</>
 						) : null}
+						<DictationControls
+							ref={dictation}
+							disabled={composerEditorDisabled || markdownPreview || isComposing || Boolean(approval)}
+							scope={`${draftScopeKey ?? boundarySessionId ?? ""}:${draftSeed?.id ?? ""}:${editingQueuedTurnId ?? ""}`}
+							locale={i18n.language}
+							onTranscript={insertDictation}
+							onActiveChange={setDictating}
+							statusRef={dictationStatus}
+						/>
 						{settings}
 					</div>
 
@@ -2247,7 +2270,7 @@ export const ChatComposer = memo(function ChatComposer({
 										type={canStopTurn || canContinueTurn ? "button" : "submit"}
 										variant="ghost"
 										size="icon-sm"
-										disabled={nativeSession ? !sendActionEnabled || !nativeAction.ready : canStopTurn ? false : canContinueTurn ? continuing : !sendActionEnabled}
+										disabled={dictating || (nativeSession ? !sendActionEnabled || !nativeAction.ready : canStopTurn ? false : canContinueTurn ? continuing : !sendActionEnabled)}
 										onClick={canStopTurn ? onInterrupt : canContinueTurn ? continueTurn : undefined}
 										aria-label={canStopTurn ? "Stop turn" : canContinueTurn ? "Continue turn" : sendActionLabel}
 										className={cn(

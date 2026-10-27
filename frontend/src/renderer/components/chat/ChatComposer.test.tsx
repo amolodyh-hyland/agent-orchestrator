@@ -1814,7 +1814,7 @@ describe("steering", () => {
 		expect(restored).toHaveTextContent("possibly delivered guidance");
 		expect(onSteer).toHaveBeenCalledTimes(1);
 		expect(screen.queryByRole("button", { name: "Retry message safely" })).not.toBeInTheDocument();
-		expect(screen.getByRole("status")).toHaveTextContent("may already have been delivered");
+		expect(screen.getByRole("status", { name: "" })).toHaveTextContent("may already have been delivered");
 		const draft = readChatSessionDraft({ sessionId, incarnation });
 		expect(draft.composer.text).toBe("possibly delivered guidance");
 		expect(draft.composer.delivery).toBeUndefined();

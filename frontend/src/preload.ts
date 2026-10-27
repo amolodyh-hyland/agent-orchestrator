@@ -1,3 +1,4 @@
+import { DICTATION_CHANNEL, DICTATION_EVENT_CHANNEL, type DictationBridge, type DictationUpdate } from "./shared/dictation";
 import { RESULT_PREVIEW, RESULT_CANCEL, RESULT_UPDATE, installResultUserAction, type ResultPreview, type ResultUpdate, type SpecialistResultBridge } from "./shared/specialist-result";
 import { OUTER_STAGE, OUTER_CANCEL, OUTER_RESULT, OUTER_READ, installOuterUserAction, type OuterNativeBridge, type OuterNativeDraft, type OuterStage, type OuterResult, type OuterReadQuery, type OuterReadResponse } from "./shared/outer-native";
 import { RUN_PREVIEW, RUN_CANCEL, RUN_RESULT, installRunUserAction, type RunAction, type RunPreview, type RunResult } from "./shared/factory-run-confirmation";
@@ -279,7 +280,20 @@ function isRendererQueuePurgeRequest(value: unknown): value is RendererTelemetry
 	return Object.keys(request).length === 1 && typeof request.requestId === "string" && request.requestId.length <= 64;
 }
 
+const dictationBridge: DictationBridge = {
+	availability: (locale) => ipcRenderer.invoke(DICTATION_CHANNEL, "availability", undefined, locale),
+	start: (id, locale) => ipcRenderer.invoke(DICTATION_CHANNEL, "start", id, locale),
+	stop: (id) => ipcRenderer.invoke(DICTATION_CHANNEL, "stop", id),
+	cancel: (id) => ipcRenderer.invoke(DICTATION_CHANNEL, "cancel", id),
+	onEvent: (listener) => {
+		const handler = (_event: Electron.IpcRendererEvent, update: DictationUpdate) => listener(update);
+		ipcRenderer.on(DICTATION_EVENT_CHANNEL, handler);
+		return () => { ipcRenderer.off(DICTATION_EVENT_CHANNEL, handler); };
+	},
+};
+
 const api = {
+	dictation: dictationBridge,
 	app: {
 		getVersion: () => ipcRenderer.invoke("app:getVersion") as Promise<string>,
 		chooseProjectContextLink: (input: ProjectContextLinkRequest) => ipcRenderer.invoke(CHOOSE_PROJECT_CONTEXT_CHANNEL, input) as Promise<ProjectContextLinkSelection | null>,

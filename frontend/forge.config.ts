@@ -91,6 +91,7 @@ export function extraResourcesForPlatform(
 		...(bundleMultica ? [MULTICA_DESKTOP_STAGE_DIR, UPDATES_DISABLED_MARKER] : []),
 		...(bundleMulticaCli ? [MULTICA_CLI_STAGE_DIR] : []),
 		...(platform === "darwin" ? ["update-helper", "wake-helper"] : []),
+		...(platform === "darwin" || platform === "win32" ? ["dictation-helper"] : []),
 		...(platform === "darwin" || platform === "linux" ? ["tmux"] : []),
 		"assets/icon.png",
 		"assets/icon.ico",
@@ -209,8 +210,7 @@ const ACP_RUNTIME_NODE_ENTITLEMENTS = [
 ];
 
 export function macSignOptionsForFile(filePath: string): { entitlements?: string[] } {
-	// Cheap gate first: optionsForFile is invoked for every Mach-O in the
-	// bundle, and only the nested Node path can need an override.
+	if (filePath.endsWith("/dictation-helper/ao-dictation")) return { entitlements: ["com.apple.security.device.audio-input", "com.apple.security.personal-information.speech-recognition"] };
 	if (!filePath.endsWith(ACP_RUNTIME_NODE_PATH)) return {};
 	// Fail closed: an unreadable or unparseable binary throws out of
 	// optionsForFile and aborts the signing pass. Never fall back to
@@ -256,6 +256,10 @@ const config: ForgeConfig = {
 		// the .node binary outside app.asar.
 		ignore: ignoreFromVitePackage,
 		appBundleId: "dev.agent-orchestrator.desktop",
+		extendInfo: {
+			NSMicrophoneUsageDescription: "Record speech on this device to insert editable text into your message.",
+			NSSpeechRecognitionUsageDescription: "Transcribe your speech on this device. Audio is never sent to a server.",
+		},
 		name: "Agent Orchestrator",
 		executableName: EXECUTABLE_NAME,
 		protocols: [AUTH_PROTOCOL],
@@ -314,6 +318,12 @@ const config: ForgeConfig = {
 				verifyMulticaCliResources(cliStageDir, platform as NodeJS.Platform);
 			}
 			await prepareNativeDependencies(platform as NodeJS.Platform, arch);
+			if (platform === "darwin" || platform === "win32") {
+				if (platform !== process.platform) throw new Error("Dictation helpers must be compiled on the target OS");
+				const dictationBuild = spawnSync(process.execPath, [path.resolve("scripts/build-dictation-helper.mjs"), "--arch", arch], { stdio: "inherit" });
+				if (dictationBuild.error) throw dictationBuild.error;
+				if (dictationBuild.status !== 0) throw new Error("Dictation helper build failed");
+			}
 			if (platform === "darwin") {
 				const helperBuild = spawnSync(process.execPath, [path.resolve("scripts/build-update-helper.mjs"), "--arch", arch], { stdio: "inherit" });
 				if (helperBuild.error) throw helperBuild.error;

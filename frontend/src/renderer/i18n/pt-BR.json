@@ -3797,5 +3797,18 @@
 	"cockpit.receipts": "Comprovantes de aceitação nativa e encerramento",
 	"cockpit.unavailable": "Indisponível até a entrega do trabalho responsável.",
 	"cockpit.reportedState": "Estado relatado (alegação): {{state}}",
-	"cockpit.recorded": "Registrado: {{timestamp}}"
+	"cockpit.recorded": "Registrado: {{timestamp}}",
+  "chat.dictation.start": "Ditar neste dispositivo",
+  "chat.dictation.stop": "Parar ditado e inserir texto",
+  "chat.dictation.cancel": "Cancelar ditado",
+  "chat.dictation.starting": "Aguardando permissão do microfone…",
+  "chat.dictation.stopping": "Finalizando ditado…",
+  "chat.dictation.recording": "Gravando neste dispositivo…",
+  "chat.dictation.error.unsupported": "O ditado requer o aplicativo para macOS ou Windows.",
+  "chat.dictation.error.unavailable": "O reconhecimento local não está disponível neste idioma. Instale os recursos de fala nas configurações do sistema e tente novamente.",
+  "chat.dictation.error.permission": "Permita o acesso ao microfone e à fala nas configurações de privacidade do sistema e tente novamente.",
+  "chat.dictation.error.microphone": "Nenhum microfone disponível. Verifique o dispositivo de entrada e as permissões do sistema.",
+  "chat.dictation.error.busy": "Outro editor está usando o microfone.",
+  "chat.dictation.error.timeout": "O ditado excedeu o tempo limite. Tente novamente.",
+  "chat.dictation.error.failed": "Falha no ditado. O rascunho não foi alterado. Tente novamente."
 }

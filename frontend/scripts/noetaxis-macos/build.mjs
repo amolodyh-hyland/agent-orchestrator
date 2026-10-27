@@ -291,7 +291,9 @@ export async function buildNoetaxis(options) {
 		if (plistRead(infoPlist, "CFBundleShortVersionString") !== version || plistRead(infoPlist, "CFBundleVersion") !== version) {
 			throw new Error("Packaged app does not contain the requested version stamp");
 		}
-		run("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", "--timestamp=none", packagedApp]);
+		const dictationHelper = path.join(resources, "dictation-helper", "ao-dictation");
+		run("/usr/bin/codesign", ["--force", "--sign", "-", "--timestamp=none", "--entitlements", path.join(frontendDir, "native/dictation/entitlements.plist"), dictationHelper]);
+		run("/usr/bin/codesign", ["--force", "--deep", "--preserve-metadata=entitlements", "--sign", "-", "--timestamp=none", packagedApp]);
 		run("/usr/bin/codesign", ["--verify", "--deep", "--strict", packagedApp]);
 		clearQuarantine(packagedApp);
 		const outputApp = path.join(outputDir, "Applications", "Agent Orchestrator.app");

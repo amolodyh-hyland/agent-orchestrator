@@ -3797,5 +3797,18 @@
 	"cockpit.receipts": "Reçus d’acceptation native et de fin d’exécution",
 	"cockpit.unavailable": "Indisponible jusqu’à la livraison du travail correspondant.",
 	"cockpit.reportedState": "État déclaré : {{state}}",
-	"cockpit.recorded": "Enregistré : {{timestamp}}"
+	"cockpit.recorded": "Enregistré : {{timestamp}}",
+  "chat.dictation.start": "Dicter sur cet appareil",
+  "chat.dictation.stop": "Arrêter la dictée et insérer le texte",
+  "chat.dictation.cancel": "Annuler la dictée",
+  "chat.dictation.starting": "En attente de l’autorisation du microphone…",
+  "chat.dictation.stopping": "Finalisation de la dictée…",
+  "chat.dictation.recording": "Enregistrement sur cet appareil…",
+  "chat.dictation.error.unsupported": "La dictée nécessite l’application de bureau macOS ou Windows.",
+  "chat.dictation.error.unavailable": "La reconnaissance locale est indisponible pour cette langue. Installez les ressources vocales dans les réglages système et réessayez.",
+  "chat.dictation.error.permission": "Autorisez le microphone et la reconnaissance vocale dans les réglages de confidentialité et réessayez.",
+  "chat.dictation.error.microphone": "Aucun microphone disponible. Vérifiez le périphérique d’entrée et les autorisations système.",
+  "chat.dictation.error.busy": "Un autre éditeur utilise le microphone.",
+  "chat.dictation.error.timeout": "Le délai de dictée a expiré. Réessayez.",
+  "chat.dictation.error.failed": "Échec de la dictée. Le brouillon est inchangé. Réessayez."
 }

@@ -3732,5 +3732,18 @@
 	"cockpit.receipts": "原生接收和运行结束凭据",
 	"cockpit.unavailable": "负责的工作完成前不可用。",
 	"cockpit.reportedState": "报告状态（声明）：{{state}}",
-	"cockpit.recorded": "记录时间：{{timestamp}}"
+	"cockpit.recorded": "记录时间：{{timestamp}}",
+  "chat.dictation.start": "在此设备上听写",
+  "chat.dictation.stop": "停止听写并插入文本",
+  "chat.dictation.cancel": "取消听写",
+  "chat.dictation.starting": "正在等待麦克风权限…",
+  "chat.dictation.stopping": "正在完成听写…",
+  "chat.dictation.recording": "正在此设备上录音…",
+  "chat.dictation.error.unsupported": "听写需要 macOS 或 Windows 桌面应用。",
+  "chat.dictation.error.unavailable": "此语言的设备端语音识别不可用。请在系统设置中安装语音资源后重试。",
+  "chat.dictation.error.permission": "请在系统隐私设置中允许访问麦克风和语音识别，然后重试。",
+  "chat.dictation.error.microphone": "麦克风不可用。请检查输入设备和系统麦克风权限。",
+  "chat.dictation.error.busy": "另一个编辑器正在使用麦克风。",
+  "chat.dictation.error.timeout": "听写超时，请重试。",
+  "chat.dictation.error.failed": "听写失败。草稿未更改，请重试。"
 }

@@ -92,6 +92,7 @@ export type ComposerPromptSuggestion = { id: string; text: string; onDismiss?: (
 
 export type ComposerEditorHandle = {
 	focus(): void;
+	insertText(text: string): void;
 	clear(): void;
 	/** Replaces the text with the caret at its end, or at its start when asked. */
 	setText(text: string, caret?: "start" | "end"): void;
@@ -939,6 +940,7 @@ const EditorBridge = forwardRef<
 	}
 >(function EditorBridge({ disabled, promptSuggestion, onDismissSuggestion, attachedImages, compositionState, compositionEndScheduler, onChange, onComplete, onEnter }, ref) {
 	const [editor] = useLexicalComposerContext();
+	const lastSelection = useRef<RangeSelection | null>(null);
 
 	useEffect(() => editor.setEditable(!disabled), [disabled, editor]);
 
@@ -946,6 +948,21 @@ const EditorBridge = forwardRef<
 		ref,
 		() => ({
 			focus: () => focusEditor(editor),
+			insertText: (text) => {
+				if (!editor.isEditable() || editor.isComposing()) return;
+				editor.update(() => {
+					if (!$isRangeSelection($getSelection())) {
+						const saved = lastSelection.current;
+						if (saved && $getNodeByKey(saved.anchor.key) && $getNodeByKey(saved.focus.key)) $setSelection(saved.clone());
+						else $getRoot().selectEnd();
+					}
+					$addUpdateTag(HISTORY_PUSH_TAG);
+					$normalizeCodeRangeSelection(text);
+					const selection = $getSelection();
+					if ($isRangeSelection(selection)) selection.insertRawText(text);
+				}, { discrete: true });
+				focusEditor(editor);
+			},
 			clear: () => {
 				editor.update(() => {
 					$replaceEditorText("");
@@ -1041,7 +1058,11 @@ const EditorBridge = forwardRef<
 		};
 		editor.getEditorState().read(dismissIfNotEmpty);
 		const unregister = editor.registerUpdateListener(({ editorState, prevEditorState, tags }) => {
-			editorState.read(dismissIfNotEmpty);
+			editorState.read(() => {
+				dismissIfNotEmpty();
+				const selection = $getSelection();
+				if ($isRangeSelection(selection)) lastSelection.current = selection.clone();
+			});
 			if (tags.has(COMPOSER_MARKDOWN_FORMAT_TAG)) return;
 			const text = editorState.read($serializeComposer);
 			const previousText = prevEditorState.read($serializeComposer);

@@ -20,6 +20,36 @@ permissions:
   contents: read
 
 jobs:
+  dictation-helper:
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Test dictation build configuration
+        run: node --test scripts/build-dictation-helper.node-test.mjs
+      - name: Compile native dictation helper
+        run: node scripts/build-dictation-helper.mjs --arch x64
+      - name: Compile Apple Silicon dictation helper
+        if: runner.os == 'macOS'
+        run: node scripts/build-dictation-helper.mjs --arch arm64
+      - name: Test dictation locale selection without audio
+        if: runner.os == 'macOS'
+        run: |
+          xcrun swiftc -module-cache-path .vite/dictation-swift-cache native/dictation/DictationLocale.swift native/dictation/LocaleTests.swift -o .vite/dictation-locale-tests
+          .vite/dictation-locale-tests
+      - name: Test Windows capture and production Stop without audio
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-dictation-windows.ps1
+
   mac-update-helper:
     # Keep this on Intel to exercise the x64 release target natively while
     # Swift cross-compiles and lipo-verifies the arm64 helper.

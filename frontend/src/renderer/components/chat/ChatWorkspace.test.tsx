@@ -33,6 +33,8 @@ import {
 	getChatDraftBoundaries,
 	getChatDraftBoundary,
 } from "../../lib/chat-draft-boundary";
+import { aoBridge } from "../../lib/bridge";
+import type { DictationUpdate } from "../../../shared/dictation";
 import { TooltipProvider } from "../ui/tooltip";
 import { DropdownMenuItem } from "../ui/dropdown-menu";
 
@@ -186,6 +188,13 @@ const terminalPaneState = vi.hoisted(() => ({
 
 vi.mock("../../lib/bridge", () => ({
 	aoBridge: {
+		dictation: {
+			availability: async () => ({ available: false, error: "unsupported" }),
+			start: async () => ({ error: "unsupported" }),
+			stop: async () => undefined,
+			cancel: async () => undefined,
+			onEvent: () => () => undefined,
+		},
 		app: {
 			onShortcut: () => () => undefined,
 			onPreviousTabShortcut: (listener: () => void) => {
@@ -4361,11 +4370,11 @@ describe("ChatWorkspace message actions", () => {
 			},
 		});
 		await waitFor(() => expect(onStageAttachments).toHaveBeenCalledTimes(1));
-		expect(screen.getByRole("status")).toHaveTextContent("Saving attachments");
+		expect(screen.getByRole("status", { name: "" })).toHaveTextContent("Saving attachments");
 		firstView.unmount();
 
 		render(<ChatWorkspace {...common} />);
-		expect(screen.getByRole("status")).toHaveTextContent("Saving attachments");
+		expect(screen.getByRole("status", { name: "" })).toHaveTextContent("Saving attachments");
 		await act(async () => finishStaging([".ao/attachments/attachment-pending.txt"]));
 
 		expect(await screen.findByLabelText("Remove pending.txt")).toBeInTheDocument();
@@ -4727,6 +4736,38 @@ describe("ChatWorkspace message actions", () => {
 	it("does not show a writing caret while prose is streaming", () => {
 		render(<ChatWorkspace snapshot={chatFixture} />);
 		expect(screen.queryByLabelText("still writing")).not.toBeInTheDocument();
+	});
+});
+
+describe("ChatWorkspace dictation tab visibility", () => {
+	it.each(["reviewer", "shell"])("releases the microphone when switching to %s", async (tab) => {
+		let emit: (event: DictationUpdate) => void = () => undefined;
+		const spies = [
+			vi.spyOn(aoBridge.dictation, "availability").mockResolvedValue({ available: true }),
+			vi.spyOn(aoBridge.dictation, "start").mockResolvedValue({}),
+			vi.spyOn(aoBridge.dictation, "cancel").mockResolvedValue(undefined),
+			vi.spyOn(aoBridge.dictation, "onEvent").mockImplementation((listener) => { emit = listener; return () => undefined; }),
+		];
+		try {
+			const common = { snapshot: idleSnapshot(), session: chatSession };
+			const view = render(<ChatWorkspace {...common} />);
+			const editor = screen.getByRole("combobox", { name: "Message the agent" });
+			await typeInLexicalEditor(editor, "keep this draft");
+			const mic = screen.getByRole("button", { name: "Dictate on this device" });
+			await waitFor(() => expect(mic).toBeEnabled());
+			fireEvent.click(mic);
+			const id = vi.mocked(aoBridge.dictation.start).mock.calls.at(-1)![0];
+			act(() => emit({ id, type: "recording" }));
+			view.rerender(<ChatWorkspace {...common}
+				reviewerChatSelected={tab === "reviewer"}
+				shellTarget={tab === "shell" ? { kind: "shell", handleId: "shell-1", sessionId: chatSession.id, generation: "1", title: "Shell" } : undefined}
+			/>);
+			await waitFor(() => expect(aoBridge.dictation.cancel).toHaveBeenCalledWith(id));
+			act(() => emit({ id, type: "result", text: "discard this speech" }));
+			expect(editor).toHaveTextContent("keep this draft");
+			expect(screen.getByTestId("chat-conversation-panel")).toHaveAttribute("hidden");
+			view.unmount();
+		} finally { spies.forEach((spy) => spy.mockRestore()); }
 	});
 });
 

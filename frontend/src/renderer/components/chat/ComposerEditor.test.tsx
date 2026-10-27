@@ -440,3 +440,31 @@ describe("composer code editing", () => {
 		).toBe(1);
 	});
 });
+
+describe("dictated text insertion", () => {
+	it("inserts at a mid-text caret as an undoable edit without sending", async () => {
+		const s = setup("hello world");
+		caret(s.editor, 6);
+		act(() => s.ref.current!.insertText("brave "));
+		expect(s.ref.current!.getSnapshot().text).toBe("hello brave world");
+		expect(s.onChange).toHaveBeenCalled();
+		expect(s.onEnter).not.toHaveBeenCalled();
+		await act(async () => s.editor.dispatchCommand(UNDO_COMMAND, undefined));
+		expect(s.ref.current!.getSnapshot().text).toBe("hello world");
+	});
+
+	it("replaces a range without rebuilding the rest of the draft", () => {
+		const s = setup("hello old world");
+		selectRange(s.editor, 6, 9);
+		act(() => s.ref.current!.insertText("new"));
+		expect(s.ref.current!.getSnapshot().text).toBe("hello new world");
+	});
+
+	it("retains the selection when keyboard focus moves to a toolbar control", () => {
+		const s = setup("hello world");
+		caret(s.editor, 6);
+		act(() => s.editor.update(() => $setSelection(null), { discrete: true }));
+		act(() => s.ref.current!.insertText("new "));
+		expect(s.ref.current!.getSnapshot().text).toBe("hello new world");
+	});
+});

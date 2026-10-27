@@ -10,6 +10,13 @@ export type { FeatureBuild } from "../../main/feature-builds";
 export const aoBridge: AoBridge =
 	window.ao ??
 	({
+		dictation: {
+			availability: async () => ({ available: false, error: "unsupported" }),
+			start: async () => ({ error: "unsupported" }),
+			stop: async () => undefined,
+			cancel: async () => undefined,
+			onEvent: () => () => undefined,
+		},
 		app: {
 			getVersion: async () => "0.0.0-preview",
 			chooseProjectContextLink: async () => null,
