@@ -33,6 +33,8 @@ import {
 	KEY_DELETE_COMMAND,
 	KEY_ARROW_LEFT_COMMAND,
 	KEY_ARROW_RIGHT_COMMAND,
+	KEY_ARROW_UP_COMMAND,
+	KEY_ARROW_DOWN_COMMAND,
 	SELECTION_CHANGE_COMMAND,
 	CONTROLLED_TEXT_INSERTION_COMMAND,
 	BEFORE_INPUT_COMMAND,
@@ -337,12 +339,13 @@ function $selectComposerOffset(offset: number, point: RangeSelection["anchor"], 
 			const index = node.getIndexWithinParent();
 			if (!raw && $isTextNode(node) && node.getStyle() === COMPOSER_MARKER_STYLE) {
 				const region = parent instanceof ComposerCodeNode ? parent : null;
-				if (region && ((index === 0 && offset === start) || (index > 0 && offset === end))) {
+				const opening = node.getPreviousSiblings().every((sibling) => $isTextNode(sibling) && sibling.getStyle() === COMPOSER_MARKER_STYLE);
+				if (region && ((index === 0 && offset === start) || (!opening && offset === end && !node.getNextSibling()))) {
 					point.set(region.getParentOrThrow().getKey(), region.getIndexWithinParent() + (index > 0 ? 1 : 0), "element");
 				} else {
-					const visible = index === 0 ? node.getNextSibling() : node.getPreviousSibling();
-					if ($isTextNode(visible)) point.set(visible.getKey(), index === 0 ? 0 : visible.getTextContentSize(), "text");
-					else point.set(parent.getKey(), index + (index === 0 ? 1 : 0), "element");
+					const visible = opening ? node.getNextSibling() : node.getPreviousSibling();
+					if ($isTextNode(visible)) point.set(visible.getKey(), opening ? 0 : visible.getTextContentSize(), "text");
+					else point.set(parent.getKey(), index + (opening ? 1 : 0), "element");
 				}
 			} else if ($isTextNode(node)) point.set(node.getKey(), Math.max(0, offset - start), "text");
 			else point.set(parent.getKey(), index + (offset === end ? 1 : 0), "element");
@@ -370,13 +373,18 @@ function $formatComposerMarkdown(): void {
 	};
 	const root = $getRoot();
 	const paragraphs = root.getChildren();
+	const first = paragraphs[0];
+	const last = paragraphs[paragraphs.length - 1];
+	const leadingEmpty = paragraphs.length > 1 && $isElementNode(first) && first.isEmpty();
+	let contentParagraphs = leadingEmpty ? paragraphs.slice(1) : paragraphs;
+	if (contentParagraphs.length > 1 && $isElementNode(last) && last.isEmpty() && !isComposerOpenCodeFenceAt(source, source.length)) contentParagraphs = contentParagraphs.slice(0, -1);
 	paragraphs.forEach((node, index) => {
 		collect(node);
 		if (index < paragraphs.length - 1) previousOffset += 1;
 	});
 	if (!regions.length && !previous.size) return;
 	const structureStable =
-		paragraphs.length === 1 &&
+		contentParagraphs.length === 1 &&
 		previous.size === regions.length &&
 		regions.every((region) => {
 			const block = previous.get(region.start);
@@ -384,24 +392,24 @@ function $formatComposerMarkdown(): void {
 		});
 
 	const leaves: LexicalNode[] = [];
-	paragraphs.forEach((paragraph, index) => {
+	contentParagraphs.forEach((paragraph, index) => {
 		const visit = (node: LexicalNode) => {
 			if ($isElementNode(node)) node.getChildren().forEach(visit);
 			else leaves.push(node);
 		};
 		visit(paragraph);
-		if (index < paragraphs.length - 1) leaves.push($createLineBreakNode());
+		if (index < contentParagraphs.length - 1) leaves.push($createLineBreakNode());
 	});
-	const paragraph = $isElementNode(paragraphs[0]) ? paragraphs[0] : $createParagraphNode();
+	const paragraph = $isElementNode(contentParagraphs[0]) ? contentParagraphs[0] : $createParagraphNode();
 	if (!structureStable) {
 		paragraph.append(...leaves);
 		for (const child of paragraph.getChildren()) if ($isElementNode(child)) child.remove();
-		for (const extra of paragraphs.slice(1)) extra.remove();
+		for (const extra of contentParagraphs.slice(1)) extra.remove();
 		if (!paragraph.isAttached()) root.append(paragraph);
 	}
 
 	const boundaries = regions.flatMap((region) => [region.start, region.contentStart, region.contentEnd, region.end]);
-	let offset = 0;
+	let offset = leadingEmpty ? 1 : 0;
 	const parts: { node: LexicalNode; start: number; end: number }[] = [];
 	let boundaryIndex = 0;
 	for (const leaf of leaves) {
@@ -479,6 +487,68 @@ function $formatComposerMarkdown(): void {
 	}
 }
 
+function $exitComposerCode(event: globalThis.KeyboardEvent, direction: -1 | 1, atBoundary = false): boolean {
+	const selection = $getSelection();
+	if (
+		!$isRangeSelection(selection) || !selection.isCollapsed() || event.defaultPrevented ||
+		event.isComposing || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey
+	) return false;
+	let node: LexicalNode | null = selection.focus.getNode();
+	while (node && !(node instanceof ComposerCodeNode)) node = node.getParent();
+	if (!(node instanceof ComposerCodeNode)) return false;
+	const offset = $documentOffsetForPoint(selection.focus.getNode(), selection.focus.offset);
+	if (offset === undefined) return false;
+	const source = $serializeComposer();
+	const regions = composerCodeRegions(source);
+	const region = regions.find((candidate) => offset >= candidate.contentStart && offset <= candidate.contentEnd);
+	if (!region) return false;
+	if (atBoundary) {
+		if (region.kind === "fenced") {
+			const remaining = direction < 0 ? source.slice(region.contentStart, offset) : source.slice(offset, region.contentEnd);
+			if (remaining.includes("\n")) return false;
+		} else if (offset !== (direction < 0 ? region.contentStart : region.contentEnd)) return false;
+	}
+	let target = direction < 0 ? region.start : region.end;
+	const parent = node.getParentOrThrow();
+	const index = node.getIndexWithinParent() + (direction > 0 ? 1 : 0);
+	selection.anchor.set(parent.getKey(), index, "element");
+	selection.focus.set(parent.getKey(), index, "element");
+	selection.format = 0;
+	selection.style = "";
+	if (region.kind === "fenced") {
+		if (direction < 0) {
+			if (source[target - 1] === "\n") {
+				const newline = source[target - 2] === "\r" ? "\r\n" : "\n";
+				if (regions.some((candidate) => candidate.kind === "fenced" && /^\r?\n$/.test(source.slice(candidate.end, target)))) {
+					$addUpdateTag(HISTORY_PUSH_TAG);
+					selection.insertText(newline);
+				} else target -= newline.length;
+			} else $getRoot().getFirstChildOrThrow().insertBefore($createParagraphNode());
+		} else if (region.end === region.contentEnd) {
+			const closing = "\n" + source.slice(region.start, region.contentStart).match(/`{3,}/)![0];
+			selection.insertText(closing);
+			$getRoot().append($createParagraphNode());
+			target += closing.length + 1;
+		} else if (source[target] === "\n" || source.slice(target, target + 2) === "\r\n") {
+			target += source[target] === "\r" ? 2 : 1;
+			if (regions.some((candidate) => candidate.kind === "fenced" && candidate.start === target)) {
+				$addUpdateTag(HISTORY_PUSH_TAG);
+				$selectComposerOffset(target, selection.anchor);
+				$selectComposerOffset(target, selection.focus);
+				selection.insertText(source[target - 2] === "\r" ? "\r\n" : "\n");
+			}
+		} else {
+			$getRoot().append($createParagraphNode());
+			target += 1;
+		}
+		$selectComposerOffset(target, selection.anchor);
+		$selectComposerOffset(target, selection.focus);
+	}
+	completionHandledEvents.add(event);
+	event.preventDefault();
+	return true;
+}
+
 function $codeEdgeKey(event: globalThis.KeyboardEvent, direction: -1 | 1, remove = false): boolean {
 	const selection = $getSelection();
 	if (
@@ -502,6 +572,10 @@ function $codeEdgeKey(event: globalThis.KeyboardEvent, direction: -1 | 1, remove
 			: offset >= candidate.start && offset <= candidate.end,
 	);
 	if (!region) return false;
+	if (!remove && region.kind === "fenced" && !event.shiftKey &&
+		(direction < 0 ? offset === region.contentStart : offset === region.contentEnd)) {
+		return $exitComposerCode(event, direction);
+	}
 	if (remove) {
 		$addUpdateTag(HISTORY_PUSH_TAG);
 		$selectComposerOffset(region.start, selection.anchor);
@@ -928,6 +1002,7 @@ const EditorBridge = forwardRef<
 	ComposerEditorHandle,
 	{
 		disabled?: boolean;
+		menuOpen: boolean;
 		promptSuggestion?: ComposerPromptSuggestion;
 		onDismissSuggestion: () => void;
 		/** Staged paths of the images attached right now. */
@@ -938,7 +1013,7 @@ const EditorBridge = forwardRef<
 		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
 	}
->(function EditorBridge({ disabled, promptSuggestion, onDismissSuggestion, attachedImages, compositionState, compositionEndScheduler, onChange, onComplete, onEnter }, ref) {
+>(function EditorBridge({ disabled, menuOpen, promptSuggestion, onDismissSuggestion, attachedImages, compositionState, compositionEndScheduler, onChange, onComplete, onEnter }, ref) {
 	const [editor] = useLexicalComposerContext();
 	const lastSelection = useRef<RangeSelection | null>(null);
 
@@ -1174,6 +1249,16 @@ const EditorBridge = forwardRef<
 				COMMAND_PRIORITY_HIGH,
 			),
 			editor.registerCommand(
+				KEY_ARROW_UP_COMMAND,
+				(event) => !menuOpen && !editor.isComposing() && !compositionState.current && $exitComposerCode(event, -1, true),
+				COMMAND_PRIORITY_HIGH,
+			),
+			editor.registerCommand(
+				KEY_ARROW_DOWN_COMMAND,
+				(event) => !menuOpen && !editor.isComposing() && !compositionState.current && $exitComposerCode(event, 1, true),
+				COMMAND_PRIORITY_HIGH,
+			),
+			editor.registerCommand(
 				SELECTION_CHANGE_COMMAND,
 				() => {
 					if (editor.isComposing() || compositionState.current) return false;
@@ -1193,7 +1278,7 @@ const EditorBridge = forwardRef<
 			),
 		];
 		return () => commands.forEach((unregister) => unregister());
-	}, [compositionState, editor]);
+	}, [compositionState, editor, menuOpen]);
 
 	useEffect(() => {
 		const complete = (event: globalThis.KeyboardEvent | null, key: "Enter" | "Tab") => {
@@ -1254,7 +1339,11 @@ const EditorBridge = forwardRef<
 		);
 		const removeTab = editor.registerCommand(
 			KEY_TAB_COMMAND,
-			(event) => complete(event, "Tab"),
+			(event) => {
+				if (event.isComposing || editor.isComposing() || compositionState.current) return false;
+				if (complete(event, "Tab")) return true;
+				return !menuOpen && $exitComposerCode(event, 1);
+			},
 			COMMAND_PRIORITY_HIGH,
 		);
 		const removeEscape = editor.registerCommand(KEY_ESCAPE_COMMAND, (event) => {
@@ -1270,7 +1359,7 @@ const EditorBridge = forwardRef<
 			removeTab();
 			removeEscape();
 		};
-	}, [editor, onComplete, onDismissSuggestion, onEnter, promptSuggestion]);
+	}, [compositionState, editor, menuOpen, onComplete, onDismissSuggestion, onEnter, promptSuggestion]);
 
 	return null;
 });
@@ -1443,6 +1532,7 @@ export const ComposerEditor = forwardRef<
 				<EditorBridge
 					ref={ref}
 					disabled={disabled}
+					menuOpen={menuOpen}
 					promptSuggestion={suggestion}
 					onDismissSuggestion={dismissSuggestion}
 					attachedImages={attachedImages}
