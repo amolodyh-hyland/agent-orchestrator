@@ -373,27 +373,36 @@ describe("composer code editing", () => {
 		expect(ref.current!.getSnapshot().text).toBe(source.replace("@src", "@src!"));
 	});
 
-	it.each([
-		["Tab", "first"], ["ArrowDown", "first"], ["ArrowUp", "second"],
-	])("keeps adjacent fences balanced when exiting with %s from %s", async (key, block) => {
-		const source = "```ts\nfirst\n```\n```js\nsecond\n```";
-		const separated = "```ts\nfirst\n```\n\n```js\nsecond\n```";
-		const expected = "```ts\nfirst\n```\n!\n```js\nsecond\n```";
-		const { editor, field, ref, onEnter } = setup(source);
-		caret(editor, source.indexOf(block) + (key === "ArrowUp" ? 0 : block.length));
-		fireEvent.keyDown(field, { key });
-		await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(separated));
-		await act(async () => editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, "!"));
-		await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(expected));
-		expect(field.querySelectorAll(".chat-composer-code-block")).toHaveLength(2);
-		fireEvent.keyDown(field, { key: "Enter" });
-		expect(onEnter).toHaveBeenCalledWith(expect.objectContaining({ text: expected }), expect.any(KeyboardEvent));
-		act(() => editor.dispatchCommand(UNDO_COMMAND, undefined));
-		await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(key === "ArrowUp" ? separated : source));
-		expect(field.querySelectorAll(".chat-composer-code-block")).toHaveLength(2);
-		act(() => editor.dispatchCommand(UNDO_COMMAND, undefined));
-		await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(source));
-		expect(field.querySelectorAll(".chat-composer-code-block")).toHaveLength(2);
+	describe.each(["\n", "\r\n"])("keeps adjacent fences balanced with %j line endings", (newline) => {
+		describe.each(["typing", "paste", "dictation"])("inserts %s outside the fences", (method) => {
+			it.each([
+				["Tab", "first"], ["ArrowDown", "first"], ["ArrowUp", "second"],
+			])("exits with %s from %s", async (key, block) => {
+				const source = ["```ts", "first", "```", "```js", "second", "```"].join(newline);
+				const separated = ["```ts", "first", "```", "", "```js", "second", "```"].join(newline);
+				const expected = ["```ts", "first", "```", "!", "```js", "second", "```"].join(newline);
+				const { editor, field, ref, onEnter } = setup(source);
+				caret(editor, source.indexOf(block) + (key === "ArrowUp" ? 0 : block.length));
+				fireEvent.keyDown(field, { key });
+				await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(separated));
+				if (method === "paste") fireEvent.paste(field, { clipboardData: { getData: (type: string) => type === "text/plain" ? "!" : "" } });
+				else if (method === "dictation") act(() => ref.current!.insertText("!"));
+				else await act(async () => editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, "!"));
+				await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(expected));
+				expect(field.querySelectorAll(".chat-composer-code-block")).toHaveLength(2);
+				fireEvent.keyDown(field, { key: "Enter" });
+				expect(onEnter).toHaveBeenCalledWith(expect.objectContaining({ text: expected }), expect.any(KeyboardEvent));
+				act(() => editor.dispatchCommand(UNDO_COMMAND, undefined));
+				await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(separated));
+				expect(field.querySelectorAll(".chat-composer-code-block")).toHaveLength(2);
+				act(() => editor.dispatchCommand(UNDO_COMMAND, undefined));
+				await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(source));
+				expect(field.querySelectorAll(".chat-composer-code-block")).toHaveLength(2);
+				act(() => editor.dispatchCommand(REDO_COMMAND, undefined));
+				act(() => editor.dispatchCommand(REDO_COMMAND, undefined));
+				await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(expected));
+			});
+		});
 	});
 
 	it.each(["```\n", "```\nvalue\n", "```\nvalue\n\n"])("keeps an open fence's trailing empty line inside code until Tab: %s", async (source) => {

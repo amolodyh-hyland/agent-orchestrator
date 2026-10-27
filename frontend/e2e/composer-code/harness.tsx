@@ -90,6 +90,13 @@ function Fixture() {
 			>
 				Clear
 			</button>
+			<button
+				type="button"
+				onMouseDown={(event) => event.preventDefault()}
+				onClick={() => editor.current?.insertText("!")}
+			>
+				Insert dictated text
+			</button>
 			<pre data-testid="sent">{sent}</pre>
 		</main>
 	);

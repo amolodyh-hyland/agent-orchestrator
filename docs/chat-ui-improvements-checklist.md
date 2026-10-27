@@ -23,5 +23,5 @@
 - [x] Make the composer fade an overlay so it does not add layout padding.
 - [x] Keep spaces inside composer code; exit with boundary arrows or Tab, leaving completion handling and Shift+Tab unchanged.
 - [x] Cover code exits, whitespace insertion, completion precedence, native Tab focus, and composition in `ComposerEditor.test.tsx`.
-- [x] Give open completion popups arrow/Tab precedence, keep adjacent fences balanced through typing/send/undo, and retain empty trailing lines inside open fences.
+- [x] Give open completion popups arrow/Tab precedence, keep LF/CRLF adjacent fences balanced through typing, paste, dictation, send, undo, and redo, and retain empty trailing lines inside open fences.
 - [x] Verify composer and consumer tests, native keyboard checks in `frontend/e2e/composer-code.spec.ts`, frontend typecheck, and the final diff.

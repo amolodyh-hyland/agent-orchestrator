@@ -324,35 +324,44 @@ for (const source of ["`@src`", "```ts\n@src\n```"]) {
 	});
 }
 
-for (const example of [
-	{ key: "Tab", offset: 2 },
-	{ key: "ArrowDown", offset: 5 },
-	{ key: "ArrowUp", offset: 6 },
-]) {
-	test(`native ${example.key} between adjacent blocks keeps sent Markdown and undo balanced`, async ({ page }) => {
-		const source = "```ts\nfirst\n```\n```js\nsecond\n```";
-		const separated = "```ts\nfirst\n```\n\n```js\nsecond\n```";
-		const expected = "```ts\nfirst\n```\n!\n```js\nsecond\n```";
-		await page.goto("/e2e/composer-code/harness.html?text=" + encodeURIComponent(source));
-		const field = page.getByRole("combobox", { name: "Message", exact: true });
-		await expect(field.locator(".chat-composer-code-block")).toHaveCount(2);
-		await selectVisibleText(field, example.offset, example.offset);
-		await field.press(example.key);
-		await expect(page.getByTestId("wire")).toHaveJSProperty("textContent", separated);
-		await field.pressSequentially("!");
-		await expect(page.getByTestId("wire")).toHaveJSProperty("textContent", expected);
-		await expect(field.locator(".chat-composer-code-block")).toHaveCount(2);
-		await field.press("ControlOrMeta+z");
-		await expect(page.getByTestId("wire")).toHaveJSProperty("textContent", separated);
-		await field.press("ControlOrMeta+z");
-		await expect(page.getByTestId("wire")).toHaveJSProperty("textContent", source);
-		await expect(field.locator(".chat-composer-code-block")).toHaveCount(2);
-		await field.press("ControlOrMeta+Shift+z");
-		await field.press("ControlOrMeta+Shift+z");
-		await expect(page.getByTestId("wire")).toHaveJSProperty("textContent", expected);
-		await field.press("Enter");
-		await expect(page.getByTestId("sent")).toHaveJSProperty("textContent", expected);
-	});
+for (const newline of ["\n", "\r\n"]) {
+	for (const method of ["typing", "paste", "dictation"]) {
+		for (const example of [
+			{ key: "Tab", offset: 2 },
+			{ key: "ArrowDown", offset: 5 },
+			{ key: "ArrowUp", offset: 6 },
+		]) {
+			test(`native ${example.key} between adjacent blocks keeps ${method}, send and undo balanced (${newline === "\n" ? "LF" : "CRLF"})`, async ({ page, context }) => {
+				const source = ["```ts", "first", "```", "```js", "second", "```"].join(newline);
+				const separated = ["```ts", "first", "```", "", "```js", "second", "```"].join(newline);
+				const expected = ["```ts", "first", "```", "!", "```js", "second", "```"].join(newline);
+				if (method === "paste") await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+				await page.goto("/e2e/composer-code/harness.html?text=" + encodeURIComponent(source));
+				const field = page.getByRole("combobox", { name: "Message", exact: true });
+				await expect(field.locator(".chat-composer-code-block")).toHaveCount(2);
+				await selectVisibleText(field, example.offset, example.offset);
+				await field.press(example.key);
+				await expect(page.getByTestId("wire")).toHaveJSProperty("textContent", separated);
+				if (method === "paste") {
+					await page.evaluate(() => navigator.clipboard.writeText("!"));
+					await field.press("ControlOrMeta+v");
+				} else if (method === "dictation") await page.getByRole("button", { name: "Insert dictated text" }).click();
+				else await field.pressSequentially("!");
+				await expect(page.getByTestId("wire")).toHaveJSProperty("textContent", expected);
+				await expect(field.locator(".chat-composer-code-block")).toHaveCount(2);
+				await field.press("ControlOrMeta+z");
+				await expect(page.getByTestId("wire")).toHaveJSProperty("textContent", separated);
+				await field.press("ControlOrMeta+z");
+				await expect(page.getByTestId("wire")).toHaveJSProperty("textContent", source);
+				await expect(field.locator(".chat-composer-code-block")).toHaveCount(2);
+				await field.press("ControlOrMeta+Shift+z");
+				await field.press("ControlOrMeta+Shift+z");
+				await expect(page.getByTestId("wire")).toHaveJSProperty("textContent", expected);
+				await field.press("Enter");
+				await expect(page.getByTestId("sent")).toHaveJSProperty("textContent", expected);
+			});
+		}
+	}
 }
 
 for (const source of ["```\n", "```\nvalue\n", "```\nvalue\n\n"]) {

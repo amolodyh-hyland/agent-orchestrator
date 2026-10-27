@@ -519,7 +519,7 @@ function $exitComposerCode(event: globalThis.KeyboardEvent, direction: -1 | 1, a
 		if (direction < 0) {
 			if (source[target - 1] === "\n") {
 				const newline = source[target - 2] === "\r" ? "\r\n" : "\n";
-				if (regions.some((candidate) => candidate.kind === "fenced" && candidate.end === target - newline.length)) {
+				if (regions.some((candidate) => candidate.kind === "fenced" && /^\r?\n$/.test(source.slice(candidate.end, target)))) {
 					$addUpdateTag(HISTORY_PUSH_TAG);
 					selection.insertText(newline);
 				} else target -= newline.length;
@@ -530,12 +530,13 @@ function $exitComposerCode(event: globalThis.KeyboardEvent, direction: -1 | 1, a
 			$getRoot().append($createParagraphNode());
 			target += closing.length + 1;
 		} else if (source[target] === "\n" || source.slice(target, target + 2) === "\r\n") {
-			const newline = source[target] === "\r" ? "\r\n" : "\n";
-			if (regions.some((candidate) => candidate.kind === "fenced" && candidate.start === target + newline.length)) {
+			target += source[target] === "\r" ? 2 : 1;
+			if (regions.some((candidate) => candidate.kind === "fenced" && candidate.start === target)) {
 				$addUpdateTag(HISTORY_PUSH_TAG);
-				selection.insertText(newline);
+				$selectComposerOffset(target, selection.anchor);
+				$selectComposerOffset(target, selection.focus);
+				selection.insertText(source[target - 2] === "\r" ? "\r\n" : "\n");
 			}
-			target += newline.length;
 		} else {
 			$getRoot().append($createParagraphNode());
 			target += 1;
