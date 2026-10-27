@@ -21,4 +21,6 @@
 - [x] Limit code blocks to 160px initially and offer flat Show more / Show less controls only when the content overflows.
 - [x] Keep code-edge deletion undoable, move the caret by grapheme through code, and preserve the existing Enter / Shift+Enter behavior.
 - [x] Make the composer fade an overlay so it does not add layout padding.
-- [x] Run focused tests and review the final diff. Frontend typecheck was attempted but is blocked by missing workspace dependencies (`react`/`motion` in `packages/product-ui`).
+- [x] Keep spaces inside composer code; exit with boundary arrows or Tab, leaving completion handling and Shift+Tab unchanged.
+- [x] Cover code exits, whitespace insertion, completion precedence, native Tab focus, and composition in `ComposerEditor.test.tsx`.
+- [x] Verify composer and consumer tests, native keyboard checks in `frontend/e2e/composer-code.spec.ts`, frontend typecheck, and the final diff.

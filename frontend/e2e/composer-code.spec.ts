@@ -266,3 +266,37 @@ test("block controls preserve the source and keep their keyboard events out of t
 	await field.press("Enter");
 	await expect(page.getByTestId("sent")).toHaveText(source.replace("custom", "python"));
 });
+
+for (const source of ["`value`", "```ts\nvalue\n```"]) {
+	for (const edge of [0, 5]) {
+		test(`native Space stays in code at ${edge}: ${JSON.stringify(source)}`, async ({ page }) => {
+			await page.goto("/e2e/composer-code/harness.html?text=" + encodeURIComponent(source));
+			const field = page.getByRole("combobox", { name: "Message", exact: true });
+			await expect(page.getByTestId("wire")).toHaveText(source);
+			await selectVisibleText(field, edge, edge);
+			await field.pressSequentially(" X");
+			const offset = source.indexOf("value") + edge;
+			await expect(page.getByTestId("wire")).toHaveJSProperty("textContent", source.slice(0, offset) + " X" + source.slice(offset));
+			await expect(field.locator(".chat-composer-markdown-code").filter({ hasText: "X" })).toHaveCount(1);
+		});
+	}
+}
+
+for (const example of [
+	{ source: "`value`", offset: 2, key: "Tab", expected: "`value`!" },
+	{ source: "```ts\nvalue\n```", offset: 2, key: "Tab", expected: "```ts\nvalue\n```\n!" },
+	{ source: "```ts\nvalue\n```", offset: 0, key: "ArrowUp", expected: "!\n```ts\nvalue\n```" },
+	{ source: "```ts\nvalue\n```", offset: 5, key: "ArrowDown", expected: "```ts\nvalue\n```\n!" },
+]) {
+	test(`native ${example.key} leaves code for plain typing: ${JSON.stringify(example.source)}`, async ({ page }) => {
+		await page.goto("/e2e/composer-code/harness.html?text=" + encodeURIComponent(example.source));
+		const field = page.getByRole("combobox", { name: "Message", exact: true });
+		await expect(page.getByTestId("wire")).toHaveText(example.source);
+		await selectVisibleText(field, example.offset, example.offset);
+		await field.press(example.key);
+		await expect(field).toBeFocused();
+		await field.pressSequentially("!");
+		await expect(page.getByTestId("wire")).toHaveJSProperty("textContent", example.expected);
+		await expect(field.locator(".chat-composer-markdown-code").filter({ hasText: "!" })).toHaveCount(0);
+	});
+}

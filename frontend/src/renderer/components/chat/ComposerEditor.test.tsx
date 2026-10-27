@@ -15,16 +15,17 @@ import {
 	type LexicalEditor,
 	type LexicalNode,
 } from "lexical";
-import { createRef } from "react";
+import { createRef, type ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { typeInLexicalEditor } from "../../test/lexical";
 import { aoBridge } from "../../lib/bridge";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 
-function setup(text: string) {
+function setup(text: string, props: Partial<ComponentProps<typeof ComposerEditor>> = {}) {
 	const ref = createRef<ComposerEditorHandle>();
 	const onChange = vi.fn();
 	const onEnter = vi.fn(() => true);
+	const onComplete = vi.fn(() => undefined);
 	render(
 		<ComposerEditor
 			ref={ref}
@@ -34,11 +35,12 @@ function setup(text: string) {
 			menuId="menu"
 			activeIndex={0}
 			onChange={onChange}
-			onComplete={() => undefined}
+			onComplete={onComplete}
 			onEnter={onEnter}
 			onCompositionChange={vi.fn()}
 			onKeyDown={vi.fn()}
 			onPaste={vi.fn()}
+			{...props}
 		/>,
 	);
 	const field = screen.getByRole("combobox", { name: "Composer" });
@@ -47,7 +49,7 @@ function setup(text: string) {
 		field.focus();
 		ref.current!.setText(text);
 	});
-	return { ref, field, editor, onChange, onEnter };
+	return { ref, field, editor, onChange, onEnter, onComplete };
 }
 
 function caret(editor: LexicalEditor, offset: number) {
@@ -58,6 +60,11 @@ function caret(editor: LexicalEditor, offset: number) {
 				const visit = (node: LexicalNode): boolean => {
 					if ($isElementNode(node)) return node.getChildren().some(visit);
 					const end = start + node.getTextContentSize();
+					if (node.getType() === "composer-code-placeholder" && offset === start) {
+						const index = node.getIndexWithinParent();
+						node.getParentOrThrow().select(index, index);
+						return true;
+					}
 					if ($isTextNode(node) && offset >= start && offset <= end && node.getStyle() !== "display: none") {
 						node.select(offset - start, offset - start);
 						return true;
@@ -224,6 +231,132 @@ describe("composer code editing", () => {
 		expect(editor.getEditorState().read(() => $getRoot().getAllTextNodes().find((node) => node.getTextContent().includes("!"))?.hasFormat("code"))).toBe(false);
 		act(() => editor.dispatchCommand(UNDO_COMMAND, undefined));
 		await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(source));
+	});
+
+	it.each([
+		["`value`", 1], ["`value`", 3], ["`value`", 6],
+		["```ts\nvalue\n```", 6], ["```ts\nvalue\n```", 8], ["```ts\nvalue\n```", 11],
+		["```ts\nvalue", 11],
+	])("keeps spaces inside code: %s at %i", async (source, offset) => {
+		const { ref, editor, field } = setup(source);
+		caret(editor, offset);
+		expect(fireEvent.keyDown(field, { key: " " })).toBe(true);
+		await act(async () => editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, " "));
+		await act(async () => editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, "X"));
+		await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(source.slice(0, offset) + " X" + source.slice(offset)));
+		expect(editor.getEditorState().read(() => $getRoot().getAllTextNodes().find((node) => node.getTextContent().includes("X"))?.hasFormat("code"))).toBe(true);
+	});
+
+	it.each([
+		["`value`", 1, "ArrowUp", "!`value`"],
+		["`value`", 6, "ArrowDown", "`value`!"],
+		["```ts\nvalue\n```", 6, "ArrowLeft", "!\n```ts\nvalue\n```"],
+		["```ts\nvalue\n```", 11, "ArrowRight", "```ts\nvalue\n```\n!"],
+		["```ts\nvalue\n```", 8, "ArrowUp", "!\n```ts\nvalue\n```"],
+		["```ts\nvalue\n```", 8, "ArrowDown", "```ts\nvalue\n```\n!"],
+		["A\n```ts\nvalue\n```\nZ", 10, "ArrowUp", "A!\n```ts\nvalue\n```\nZ"],
+		["A\n```ts\nvalue\n```\nZ", 10, "ArrowDown", "A\n```ts\nvalue\n```\n!Z"],
+		["```\nfirst\nlast\n```", 6, "ArrowUp", "!\n```\nfirst\nlast\n```"],
+		["```\nfirst\nlast\n```", 12, "ArrowDown", "```\nfirst\nlast\n```\n!"],
+		["```\nvalue", 9, "ArrowDown", "```\nvalue\n```\n!"],
+	])("exits code with %s at %i via %s", async (source, offset, key, expected) => {
+		const { ref, editor, field } = setup(source);
+		caret(editor, offset);
+		expect(fireEvent.keyDown(field, { key })).toBe(false);
+		await act(async () => editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, "!"));
+		await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(expected));
+		expect(editor.getEditorState().read(() => $getRoot().getAllTextNodes().find((node) => node.getTextContent().includes("!"))?.hasFormat("code"))).toBe(false);
+	});
+
+	it.each([
+		["```\nfirst\nlast\n```", 6, "ArrowDown"],
+		["```\nfirst\nlast\n```", 12, "ArrowUp"],
+		["`value`", 3, "ArrowUp"],
+		["`value`", 3, "ArrowDown"],
+	])("leaves native vertical movement inside code alone: %s at %i %s", (source, offset, key) => {
+		const { ref, editor, field } = setup(source);
+		caret(editor, offset);
+		expect(fireEvent.keyDown(field, { key })).toBe(true);
+		expect(ref.current!.getSnapshot().text).toBe(source);
+	});
+
+	it.each([
+		["`value`", 3, "`value`!"],
+		["A `value` Z", 5, "A `value`! Z"],
+		["```ts\nvalue\n```", 8, "```ts\nvalue\n```\n!"],
+		["```ts\nvalue\n```\nZ", 8, "```ts\nvalue\n```\n!Z"],
+		["```ts\nvalue", 8, "```ts\nvalue\n```\n!"],
+		["```\n\n```", 4, "```\n\n```\n!"],
+	])("Tab exits code without inserting a tab: %s at %i", async (source, offset, expected) => {
+		const { ref, editor, field } = setup(source);
+		caret(editor, offset);
+		expect(fireEvent.keyDown(field, { key: "Tab" })).toBe(false);
+		await act(async () => editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, "!"));
+		await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(expected));
+		expect(editor.getEditorState().read(() => $getRoot().getAllTextNodes().find((node) => node.getTextContent().includes("!"))?.hasFormat("code"))).toBe(false);
+		expect(document.activeElement).toBe(field);
+	});
+
+	it.each(["ArrowUp", "ArrowDown", "Tab"])("creates an empty paragraph outside a terminal code block: %s", async (key) => {
+		const { ref, editor, field } = setup("```\nvalue\n```");
+		caret(editor, key === "ArrowUp" ? 4 : 9);
+		fireEvent.keyDown(field, { key });
+		await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(key === "ArrowUp" ? "\n```\nvalue\n```" : "```\nvalue\n```\n"));
+		expect(editor.getEditorState().read(() => $getRoot().getChildrenSize())).toBe(2);
+	});
+
+	it.each(["ArrowUp", "ArrowDown", "Tab"])("does not forward a consumed code exit to app shortcuts: %s", (key) => {
+		const onKeyDown = vi.fn();
+		const { editor, field } = setup("```\nvalue\n```", { onKeyDown });
+		caret(editor, 6);
+		fireEvent.keyDown(field, { key });
+		expect(onKeyDown).not.toHaveBeenCalled();
+	});
+
+	it("keeps Tab completion and native focus outside code", async () => {
+		const { ref, onComplete } = setup("plain");
+		const next = document.createElement("button");
+		document.body.append(next);
+		await userEvent.tab();
+		expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ text: "plain" }), "Tab");
+		expect(ref.current!.getSnapshot().text).toBe("plain");
+		expect(document.activeElement).toBe(next);
+		next.remove();
+	});
+
+	it("lets a completion consume Tab before leaving code", async () => {
+		const onComplete = vi.fn(() => "src/file.ts");
+		const { ref, editor, field } = setup("`@src`", { menuOpen: true, onComplete });
+		caret(editor, 5);
+		expect(fireEvent.keyDown(field, { key: "Tab" })).toBe(false);
+		await waitFor(() => expect(field.querySelector('[data-composer-token="file"]')).not.toBeNull());
+		expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ trigger: expect.objectContaining({ query: "src" }) }), "Tab");
+		expect(ref.current!.getSnapshot().text).toContain("src/file.ts");
+	});
+
+	it("respects a popup's prevented Tab event", async () => {
+		const { ref, editor, field, onComplete } = setup("`value`", { menuOpen: true });
+		caret(editor, 3);
+		field.addEventListener("keydown", (event) => event.preventDefault(), { capture: true, once: true });
+		fireEvent.keyDown(field, { key: "Tab" });
+		expect(onComplete).not.toHaveBeenCalled();
+		await act(async () => editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, "!"));
+		await waitFor(() => expect(ref.current!.getSnapshot().text).toBe("`va!lue`"));
+	});
+
+	it.each(["`value`", "```\nvalue\n```"])("preserves Shift+Tab and composition inside code: %s", async (source) => {
+		const { ref, editor, field, onComplete } = setup(source);
+		const offset = source.indexOf("value") + 2;
+		caret(editor, offset);
+		expect(fireEvent.keyDown(field, { key: "Tab", shiftKey: true })).toBe(true);
+		fireEvent.compositionStart(field);
+		for (const key of ["Tab", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"]) {
+			expect(fireEvent.keyDown(field, { key })).toBe(true);
+		}
+		fireEvent.compositionEnd(field);
+		expect(onComplete).not.toHaveBeenCalled();
+		await act(async () => editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, "!"));
+		await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(source.slice(0, offset) + "!" + source.slice(offset)));
 	});
 
 	it.each([[1, "ArrowLeft", "ArrowRight"], [6, "ArrowRight", "ArrowLeft"]])(
