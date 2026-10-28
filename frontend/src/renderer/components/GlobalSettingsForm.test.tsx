@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appI18n } from "../i18n";
 import { GlobalSettingsForm, type GlobalSettingsSection } from "./GlobalSettingsForm";
 import { useLocaleStore } from "../stores/locale-store";
+import { useFactoryControlsStore } from "../stores/factory-controls-store";
 import { useSoundNotificationsStore } from "../stores/sound-notifications-store";
 import { useTerminalShellStore } from "../stores/terminal-shell-store";
 import { useUiStore } from "../stores/ui-store";
@@ -118,6 +119,10 @@ vi.mock("../lib/bridge", () => ({
 			setMacDifferentialUpdates,
 		},
 		uiSettings: { get: getUiSettings, set: setUiSettings },
+		multicaDelegation: {
+			settings: async () => ({ enabled: false }),
+			onSettingsChanged: () => () => undefined,
+		},
 		multica: {
 			getSettings: async () => ({ mode: "local", customUrl: "", apiUrl: "" }),
 			setSettings: async () => ({ ok: true, settings: { mode: "local", customUrl: "", apiUrl: "" } }),
@@ -227,6 +232,7 @@ beforeEach(async () => {
 	await appI18n.changeLanguage("en");
 	useLocaleStore.setState({ locale: "en", loaded: false, saving: false, saveError: false });
 	useSoundNotificationsStore.setState({ enabled: true, loaded: false, saving: false, saveError: false });
+	useFactoryControlsStore.setState({ enabled: false, loaded: false, saving: false, saveError: false });
 	useTerminalShellStore.setState({
 		preference: { kind: "auto" },
 		loaded: false,
@@ -435,6 +441,32 @@ describe("GlobalSettingsForm", () => {
 		expect(screen.getByText("主题")).toBeInTheDocument();
 		expect(document.documentElement.lang).toBe("zh-CN");
 		expect(useLocaleStore.getState().locale).toBe("zh-CN");
+	});
+
+	it("keeps experimental factory controls off by default and persists the toggle", async () => {
+		const user = userEvent.setup();
+		renderForm();
+		const toggle = await screen.findByRole("switch", { name: "Experimental: software factory controls" });
+		expect(toggle).not.toBeChecked();
+
+		await user.click(toggle);
+		await waitFor(() => expect(setUiSettings).toHaveBeenCalledWith({ factoryControlsEnabled: true }));
+		expect(toggle).toBeChecked();
+
+		await user.click(toggle);
+		await waitFor(() => expect(setUiSettings).toHaveBeenCalledWith({ factoryControlsEnabled: false }));
+		expect(toggle).not.toBeChecked();
+	});
+
+	it("reports a failed factory controls save and leaves the controls disabled", async () => {
+		setUiSettings.mockRejectedValue(new Error("disk full"));
+		const user = userEvent.setup();
+		renderForm();
+		const toggle = await screen.findByRole("switch", { name: "Experimental: software factory controls" });
+
+		await user.click(toggle);
+		expect(await screen.findByRole("alert")).toHaveTextContent("Could not save the software factory controls preference.");
+		expect(toggle).not.toBeChecked();
 	});
 
 	it("toggles sound notifications on and persists the change", async () => {

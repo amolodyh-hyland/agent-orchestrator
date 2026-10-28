@@ -18,6 +18,7 @@ export interface UiSettings {
 	locale: AppLocale;
 	/** Whether attention-worthy notifications (needs input, ready to merge) also play a sound. */
 	soundNotificationsEnabled: boolean;
+	factoryControlsEnabled: boolean;
 	/** Windows shell used for new standalone terminal panes. */
 	terminalShell: TerminalShellPreference;
 }
@@ -27,6 +28,7 @@ export const DEFAULT_TERMINAL_SHELL: TerminalShellPreference = { kind: "auto" };
 export const DEFAULT_UI_SETTINGS: UiSettings = {
 	locale: DEFAULT_LOCALE,
 	soundNotificationsEnabled: true,
+	factoryControlsEnabled: false,
 	terminalShell: DEFAULT_TERMINAL_SHELL,
 };
 
@@ -61,6 +63,9 @@ export function coerceUiSettings(raw: unknown): UiSettings {
 	return {
 		locale: coerceLocale(record.locale),
 		soundNotificationsEnabled,
+		factoryControlsEnabled: typeof record.factoryControlsEnabled === "boolean"
+			? record.factoryControlsEnabled
+			: DEFAULT_UI_SETTINGS.factoryControlsEnabled,
 		terminalShell: coerceTerminalShell(record.terminalShell),
 	};
 }

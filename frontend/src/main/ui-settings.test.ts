@@ -59,10 +59,28 @@ describe("ui-settings", () => {
 		await writeUiSettings(dir, { locale: "ja", soundNotificationsEnabled: false });
 		await writeUiSettings(dir, { terminalShell: { kind: "git-bash" } });
 		expect(await readUiSettings(dir)).toEqual({
+			...DEFAULT_UI_SETTINGS,
 			locale: "ja",
 			soundNotificationsEnabled: false,
 			terminalShell: { kind: "git-bash" },
 		});
+	});
+
+	it("defaults existing settings to factory controls off and preserves the preference in partial writes", async () => {
+		await writeFile(path.join(dir, UI_SETTINGS_FILE_NAME), JSON.stringify({ locale: "ja" }));
+		expect((await readUiSettings(dir)).factoryControlsEnabled).toBe(false);
+
+		await writeUiSettings(dir, { factoryControlsEnabled: true });
+		await writeUiSettings(dir, { soundNotificationsEnabled: false });
+		expect(await readUiSettings(dir)).toEqual({
+			...DEFAULT_UI_SETTINGS,
+			locale: "ja",
+			soundNotificationsEnabled: false,
+			factoryControlsEnabled: true,
+		});
+
+		await writeUiSettings(dir, { factoryControlsEnabled: false });
+		expect((await readUiSettings(dir)).factoryControlsEnabled).toBe(false);
 	});
 
 	it("atomic write leaves no temp file behind", async () => {

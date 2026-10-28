@@ -36,6 +36,7 @@ describe("shared UI locale schema", () => {
 		expect(DEFAULT_UI_SETTINGS).toEqual({
 			locale: "en",
 			soundNotificationsEnabled: true,
+			factoryControlsEnabled: false,
 			terminalShell: { kind: "auto" },
 		});
 		expect(coerceUiSettings({ locale: "en", soundNotificationsEnabled: false })).toEqual({
@@ -56,6 +57,14 @@ describe("shared UI locale schema", () => {
 		expect(coerceUiSettings({ locale: "en", soundNotificationsEnabled: null })).toEqual({
 			...DEFAULT_UI_SETTINGS,
 		});
+	});
+
+	it("defaults factory controls off for old or malformed settings and accepts only booleans", () => {
+		expect(DEFAULT_UI_SETTINGS.factoryControlsEnabled).toBe(false);
+		for (const factoryControlsEnabled of [undefined, null, "true", 1, false]) {
+			expect(coerceUiSettings({ factoryControlsEnabled }).factoryControlsEnabled).toBe(false);
+		}
+		expect(coerceUiSettings({ factoryControlsEnabled: true }).factoryControlsEnabled).toBe(true);
 	});
 
 	it("accepts supported terminal shells and normalizes custom paths", () => {

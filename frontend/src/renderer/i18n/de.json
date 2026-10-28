@@ -1683,6 +1683,8 @@
 	"settings.codexAccounts.unknown": "Anmeldestatus unbekannt",
 	"settings.close": "Einstellungen schließen",
 	"settings.connectMobile": "Mobile verbinden",
+	"settings.factoryControls": "Experimentell: Software-Factory-Steuerung",
+	"settings.factoryControls.saveFailed": "Die Einstellung für die Software-Factory-Steuerung konnte nicht gespeichert werden.",
 	"settings.developerMode": "Entwicklermodus",
 	"settings.cliLink.label": "Global ao command",
 	"settings.cliLink.loading": "Checking the global ao command.",

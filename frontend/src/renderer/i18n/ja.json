@@ -1683,6 +1683,8 @@
 	"settings.codexAccounts.unknown": "認証状態不明",
 	"settings.close": "設定を閉じる",
 	"settings.connectMobile": "モバイル接続",
+	"settings.factoryControls": "実験的：ソフトウェアファクトリーの操作",
+	"settings.factoryControls.saveFailed": "ソフトウェアファクトリーの操作設定を保存できませんでした。",
 	"settings.developerMode": "開発者モード",
 	"settings.cliLink.label": "Global ao command",
 	"settings.cliLink.loading": "Checking the global ao command.",

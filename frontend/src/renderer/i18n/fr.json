@@ -1709,6 +1709,8 @@
 	"settings.codexAccounts.unknown": "Authentification inconnue",
 	"settings.close": "Fermer les paramètres",
 	"settings.connectMobile": "Connecter le mobile",
+	"settings.factoryControls": "Expérimental : commandes de fabrique logicielle",
+	"settings.factoryControls.saveFailed": "Impossible d’enregistrer la préférence des commandes de fabrique logicielle.",
 	"settings.developerMode": "Mode développeur",
 	"settings.cliLink.label": "Global ao command",
 	"settings.cliLink.loading": "Checking the global ao command.",
