@@ -4,6 +4,7 @@ import { previewDocumentThemeStyle, type ThemePreference, type ThemeStyle } from
 import { THEMES, getThemeDefinition } from "../../lib/theme-palettes";
 import type { AppLocale } from "../../i18n";
 import { useLocaleStore } from "../../stores/locale-store";
+import { useFactoryControlsStore } from "../../stores/factory-controls-store";
 import { useSoundNotificationsStore } from "../../stores/sound-notifications-store";
 import { useUiStore } from "../../stores/ui-store";
 import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
@@ -174,6 +175,10 @@ export function GeneralSettingsSection({
 	const setSoundNotificationsEnabled = useSoundNotificationsStore((state) => state.setEnabled);
 	const soundNotificationsSaving = useSoundNotificationsStore((state) => state.saving);
 	const soundNotificationsSaveError = useSoundNotificationsStore((state) => state.saveError);
+	const factoryControlsEnabled = useFactoryControlsStore((state) => state.enabled);
+	const setFactoryControlsEnabled = useFactoryControlsStore((state) => state.setEnabled);
+	const factoryControlsSaving = useFactoryControlsStore((state) => state.saving);
+	const factoryControlsSaveError = useFactoryControlsStore((state) => state.saveError);
 	const developerMode = useUiStore((state) => state.developerMode);
 	const setDeveloperMode = useUiStore((state) => state.setDeveloperMode);
 	const terminalCopyOnSelect = useUiStore((state) => state.terminalCopyOnSelect);
@@ -319,6 +324,19 @@ export function GeneralSettingsSection({
 
 			{/* Advanced */}
 			<SettingsSection title={t("settings.advanced")} grouped>
+				<SettingsRow
+					label={t("settings.factoryControls")}
+					description={factoryControlsSaveError ? <span role="alert" className="text-error">{t("settings.factoryControls.saveFailed")}</span> : undefined}
+				>
+					<Switch
+						aria-label={t("settings.factoryControls")}
+						checked={factoryControlsEnabled}
+						disabled={factoryControlsSaving}
+						onCheckedChange={(next) => {
+							void setFactoryControlsEnabled(next);
+						}}
+					/>
+				</SettingsRow>
 				<SettingsRow label={t("settings.developerMode")}>
 					<Switch
 						aria-label={t("settings.developerMode")}

@@ -1685,6 +1685,8 @@
 	"settings.githubPat.description": "Optional. Paste a GitHub personal access token with access to private repositories. It is encrypted and used only by Cloud workers when cloning GitHub repositories.",
 	"settings.githubPat.remove": "Remove",
 	"settings.connectMobile": "Connect mobile",
+	"settings.factoryControls": "Experimental: software factory controls",
+	"settings.factoryControls.saveFailed": "Could not save the software factory controls preference.",
 	"settings.developerMode": "Developer mode",
 	"settings.cliLink.label": "Global ao command",
 	"settings.cliLink.loading": "Checking the global ao command.",

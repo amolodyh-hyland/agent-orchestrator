@@ -3,6 +3,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useFactoryControlsStore } from "../stores/factory-controls-store";
 import { useMulticaStore } from "../stores/multica-store";
 import { useUiStore } from "../stores/ui-store";
 import {
@@ -91,6 +92,7 @@ vi.mock("../lib/telemetry", () => ({
 	captureRendererEvent: vi.fn(),
 	captureRendererException: vi.fn(),
 }));
+vi.mock("./RunMonitoring", () => ({ RunMonitoring: () => <section aria-label="Run monitoring" /> }));
 vi.mock("./NewTaskDialog", () => ({ NewTaskDialog: () => null }));
 vi.mock("./NotificationCenter", () => ({
 	NotificationCenter: () => <button aria-label="Notifications" type="button" />,
@@ -220,6 +222,7 @@ async function clickKillDialogConfirm() {
 }
 
 beforeEach(() => {
+	useFactoryControlsStore.setState({ enabled: false, loaded: false, saving: false, saveError: false });
 	locationMock.pathname = "/";
 	navigateMock.mockReset();
 	onKilledMock.mockReset();
@@ -231,6 +234,50 @@ beforeEach(() => {
 	useWorkspaceQueryMock.mockReset();
 	useWorkspaceQueryMock.mockReturnValue({ data: [], isError: false, isLoading: false, isSuccess: true });
 	useUiStore.setState({ inspectorSessions: {}, settingsModal: null, newTaskRequest: null });
+});
+
+describe.each([
+	{ session: worker, delegationTitle: "Delegate task to Multica" },
+	{ session: orchestrator, delegationTitle: "Delegate from project orchestrator" },
+])("software factory controls for $session.kind sessions", ({ session, delegationTitle }) => {
+	it("hides both controls and their dialogs by default", () => {
+		renderTopbar(session);
+
+		expect(screen.queryByRole("button", { name: "Run evidence" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Delegate to Multica" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
+
+	it("shows both controls when enabled and unmounts open evidence when disabled", async () => {
+		const user = userEvent.setup();
+		renderTopbar(session);
+		await act(() => useFactoryControlsStore.getState().setEnabled(true));
+
+		expect(screen.getByRole("button", { name: "Delegate to Multica" })).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Run evidence" }));
+		expect(await screen.findByRole("dialog", { name: "Review run evidence" })).toBeInTheDocument();
+		expect(screen.getByRole("region", { name: "Run monitoring" })).toBeInTheDocument();
+
+		await act(() => useFactoryControlsStore.getState().setEnabled(false));
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+		expect(screen.queryByRole("region", { name: "Run monitoring" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Run evidence" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Delegate to Multica" })).not.toBeInTheDocument();
+	});
+
+	it("opens the matching delegation dialog only while enabled", async () => {
+		const user = userEvent.setup();
+		renderTopbar(session);
+		await act(() => useFactoryControlsStore.getState().setEnabled(true));
+		await user.click(screen.getByRole("button", { name: "Delegate to Multica" }));
+		expect(await screen.findByRole("dialog", { name: delegationTitle })).toBeInTheDocument();
+
+		await act(() => useFactoryControlsStore.getState().setEnabled(false));
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+		await act(() => useFactoryControlsStore.getState().setEnabled(true));
+		expect(screen.getByRole("button", { name: "Delegate to Multica" })).toBeInTheDocument();
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
 });
 
 describe("optimistic orchestrator topbar", () => {

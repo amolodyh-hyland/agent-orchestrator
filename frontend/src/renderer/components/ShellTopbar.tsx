@@ -1,3 +1,4 @@
+import { useFactoryControlsStore } from "../stores/factory-controls-store";
 import { FactoryRunDialog } from "./FactoryRunDialog";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -107,6 +108,7 @@ export function ShellTopbar({
 	compactActions?: boolean;
 	startingOrchestrator?: boolean;
 } = {}) {
+	const factoryControlsEnabled = useFactoryControlsStore((state) => state.enabled);
 	const { t } = useTranslation();
 	const location = useLocation();
 	const queryClient = useQueryClient();
@@ -318,13 +320,13 @@ export function ShellTopbar({
 								style={noDragStyle}
 							/>
 						) : null}
-						{session && !hostId && !session.cloud && project?.kind !== CLOUD_PROJECT_KIND ? (
+						{factoryControlsEnabled && session && !hostId && !session.cloud && project?.kind !== CLOUD_PROJECT_KIND ? (
 							<span className="inline-flex" style={noDragStyle}>
 								<FactoryRunDialog key={`run-${session.id}`} projectId={session.workspaceId} sessionId={session.id} />
 							</span>
 						) : null}
 						{/* Cues run from the topbar into the selected session. */}
-						{session && !hostId && !session.cloud && supportsLocalCues ? (
+						{factoryControlsEnabled && session && !hostId && !session.cloud && supportsLocalCues ? (
 							<span className="inline-flex" style={noDragStyle}>
 								<MulticaDelegationDialog key={session.id} orchestrator={isOrchestrator ? "project" : "task"}
 									projectId={session.workspaceId} taskId={isOrchestrator ? undefined : session.id} title={isOrchestrator ? undefined : session.title} />

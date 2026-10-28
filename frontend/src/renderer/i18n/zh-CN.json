@@ -1665,6 +1665,8 @@
 	"settings.codexAccounts.unknown": "身份验证状态未知",
 	"settings.close": "关闭设置",
 	"settings.connectMobile": "连接手机",
+	"settings.factoryControls": "实验性：软件工厂控件",
+	"settings.factoryControls.saveFailed": "无法保存软件工厂控件偏好设置。",
 	"settings.developerMode": "开发者模式",
 	"settings.cliLink.label": "Global ao command",
 	"settings.cliLink.loading": "Checking the global ao command.",

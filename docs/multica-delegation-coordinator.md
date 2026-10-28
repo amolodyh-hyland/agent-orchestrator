@@ -1,5 +1,11 @@
 # Confirmed Multica delegation coordinator
 
+The desktop session controls are hidden by default. Enable **Experimental: software factory controls**
+in **Settings → General → Advanced** to show **Run evidence** and **Delegate to Multica**
+for eligible local worker and project orchestrator sessions. The `factoryControlsEnabled` boolean
+is saved with the other app preferences in `ui-settings.json` under the AO state directory.
+Turning it off closes these panels and dialogs; existing run evidence, delegation data, and APIs are preserved.
+
 `frontend/src/main/multica-delegation-coordinator.ts` provides one main-process
 coordinator to task and project orchestrators. Both handles refer to the same
 instance, share serialization, and use the same task identity and journal.

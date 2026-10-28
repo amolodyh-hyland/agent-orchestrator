@@ -1,5 +1,11 @@
 # Manual run evidence
 
+The desktop session controls are hidden by default. Enable **Experimental: software factory controls**
+in **Settings → General → Advanced** to show **Run evidence** and **Delegate to Multica**
+for eligible local worker and project orchestrator sessions. The `factoryControlsEnabled` boolean
+is saved with the other app preferences in `ui-settings.json` under the AO state directory.
+Turning it off closes these panels and dialogs; existing run evidence, delegation data, and APIs are preserved.
+
 A run records one task claim, confirmed by a person in the desktop app, around an existing Project and implementation
 session. Recording a run does not start, resume, send to, review, publish, or terminate a session. Findings delivery is a separate native-confirmed action.
 The stages are `design`, `implementation`, `review`, and `handoff`. Advancing a stage
