@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync as nativeSpawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -27,7 +28,11 @@ export function fakeSpawnSync(command, args, options = {}) {
 	const configs = Object.fromEntries([env.npm_config_userconfig, env.npm_config_globalconfig].filter((file) => file?.includes("/noetaxis-public-npm-")).map((file) => [file, readFileSync(file, "utf8")]));
 	state.calls.push({ command, args, options: { ...options, env: { ...env } }, snapshot, configs });
 	let stdout = "";
-	if (command === "npm" && args[0] === "--version") stdout = "11.6.0";
+	if ((command === "npm" || command === "corepack") && args.includes("config")) {
+		if (state.configCli) return nativeSpawnSync(command === "corepack" ? process.execPath : command, command === "corepack" ? [state.configCli, ...args.slice(1)] : args, options);
+		stdout = JSON.stringify({ registry: env.npm_config_registry, ...(command === "corepack" ? { globalconfig: path.join(state.root, "pnpm-rc"), "@jsr:registry": "https://npm.jsr.io/", ...state.pnpmConfig } : state.npmConfig) });
+	}
+	else if (command === "npm" && args[0] === "--version") stdout = "11.6.0";
 	else if (command === "uname") stdout = "arm64";
 	else if (command === "git" && args[0] === "rev-parse") stdout = fixtureRevision;
 	else if (command === "git" && args[0] === "worktree" && args[1] === "add") cpSync(state.source, args[3], { recursive: true });
@@ -80,7 +85,7 @@ export async function makeBuildFixture(t, options = {}) {
 	const file = path.join(root, "build.mjs");
 	await writeFile(file, contents);
 	const build = await import(pathToFileURL(file));
-	const state = { root, source, multica, calls: [], failInstall: options.failInstall };
+	const state = { root, source, multica, calls: [], failInstall: options.failInstall, configCli: options.configCli, npmConfig: options.npmConfig, pnpmConfig: options.pnpmConfig };
 	states.set(root, state);
 	t.after(() => states.delete(root));
 	return {

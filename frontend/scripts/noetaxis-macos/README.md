@@ -6,7 +6,7 @@ This flow creates an arm64 desktop app, `MANIFEST.sha256`, an unsigned installer
 
 Run from the AO fork checkout on an Apple Silicon Mac with macOS, Node 24, npm 11, Go 1.27.1 or newer, Xcode command line tools, and Corepack available.
 
-**Company machines (default):** join the company VPN first. Every npm and pnpm registry request is pinned to the internal ProGet endpoint `https://proget.onbase.net/npm/npm`. Package credentials are read through the normal npm configuration and are never printed by these scripts. `COREPACK_INTEGRITY_KEYS=0` is set only for the pnpm install step because the mirror has no npm signature metadata; the pnpm tarball is not hash-pinned.
+**Company machines (default):** join the company VPN first. Registry requests default to the ProGet endpoint `https://proget.onbase.net/npm/npm`; scoped registry configuration on `proget.onbase.net` stays allowed. Package credentials are read through the normal npm configuration and are never printed by these scripts. `COREPACK_INTEGRITY_KEYS=0` is set for the Corepack/pnpm configuration preflight and install step because the mirror has no npm signature metadata; the pnpm tarball is not hash-pinned.
 
 ```bash
 node frontend/scripts/noetaxis-macos/build.mjs
@@ -18,9 +18,11 @@ node frontend/scripts/noetaxis-macos/build.mjs
 node frontend/scripts/noetaxis-macos/build.mjs --public-registry
 ```
 
-This mode selects `https://registry.npmjs.org/` for both AO installs, the pinned browser license package, Corepack's pnpm download, the Multica pnpm install/build, and child steps such as the ACP runtime install. It uses empty temporary user/global npm configurations, replaces project npm configuration only in the temporary build copies (preserving Multica's hoisting setting), and removes inherited npm configuration and npm/Corepack authentication variables. Corepack uses a fresh temporary cache with normal signature verification. Lockfile registry URLs are routed to public npm; unknown HTTP package download endpoints stop the build. A failed request stops the build without switching registries.
+This mode selects `https://registry.npmjs.org/` for both AO installs, the pinned browser license package, Corepack's pnpm download, the Multica pnpm install/build, and child steps such as the ACP runtime install. It uses empty temporary user/global npm configurations, redirects `XDG_CONFIG_HOME` and `PNPM_HOME` to temporary directories so pnpm does not load the machine's independent global rc, replaces project npm configuration only in the temporary build copies (preserving Multica's hoisting setting), and removes inherited npm/pnpm/Corepack configuration and authentication overrides. Public mode disables pnpm configuration hooks and package-manager version switching. Corepack uses a fresh temporary cache with normal signature verification and its environment-file loading disabled. Lockfile registry URLs are routed to public npm; unknown HTTP package download endpoints stop the build. A failed request stops the build without switching registries.
 
-`--public-registry` overrides `NOETAXIS_NPM_REGISTRY`. The existing `--registry <url>` option must match the selected mode: ProGet without the flag, public npm with the flag. Setting `--registry https://registry.npmjs.org/` or `NOETAXIS_NPM_REGISTRY` alone does not opt in. Only these two endpoints are supported; credentials, query strings, fragments, alternate ports and other registries are rejected. `--help` lists both modes. `BUILD-INFO.txt` records the selected registry host.
+Before dependency installs, both modes inspect npm's effective registry configuration at each build location and pnpm's effective configuration plus its independent global rc. ProGet mode keeps normal npm authentication configuration and rejects scoped registries that point outside `proget.onbase.net`. Public mode rejects any remaining registry override outside `registry.npmjs.org`. Configuration command output is captured; errors display no configuration values or credentials. pnpm's built-in `@jsr` scope is pinned to the selected registry after validating explicit overrides. These checks stop the build rather than silently sending scoped packages to another host.
+
+`--public-registry` overrides `NOETAXIS_NPM_REGISTRY`. The existing `--registry <url>` option must match the selected mode: ProGet without the flag, public npm with the flag. Setting `--registry https://registry.npmjs.org/` or `NOETAXIS_NPM_REGISTRY` alone does not opt in. The registry selection accepts only these two endpoints; credentials, query strings, fragments and alternate ports in that selection are rejected. Scoped registry configuration must use HTTPS on the selected host, without URL credentials, query strings, fragments or alternate ports. `--help` lists both modes. `BUILD-INFO.txt` records the selected registry host.
 
 Dependency check at AO `ab2b4da93`: all eight npm lockfiles contain no Hyland-only packages or private download hosts. Downloads use public npm, local workspace links, and the public `electron/node-gyp` GitHub repository. The Multica `pnpm-lock.yaml` at `4b32bc7710753a6d97277c3833a4d7d19e48b2f7` (the revision pinned by `backend/go.mod`) has no private registry/tarball URLs or internal package scopes; its local packages use workspace links. Recheck dependencies when changing either source revision.
 
@@ -51,6 +53,17 @@ The output contains:
 - `SHA256SUMS`, covering the installer, packages, manifest and build information (the app itself is covered by `MANIFEST.sha256`)
 
 The app is signed with an ad-hoc signature (`codesign --sign -`). It has no Apple Developer ID, certificate chain, or notarization ticket. The PKG and DMG are unsigned. `MANIFEST.sha256` detects corruption and unlisted files; it sits next to the app, so it is not tamper protection. The PKG has not been run through Installer.app (Installer compares `CFBundleVersion` before the scripts run, so it may skip an upgrade between `-noetaxis` builds); the script install from the build output is the verified path. The app contains `Resources/ao-updates-disabled`; rebuild and reinstall from a reviewed source ref to update it.
+
+## Registry configuration tests
+
+The node tests fake build commands and do not run a full build. To also run the effective-configuration regression against the real pinned pnpm CLI, supply a previously downloaded/unpacked pnpm `10.28.2` CLI:
+
+```bash
+NOETAXIS_TEST_PNPM_CLI=/path/to/pnpm-10.28.2/package/bin/pnpm.cjs \
+  node --test frontend/scripts/noetaxis-macos.node-test.mjs
+```
+
+That regression uses only temporary homes, npm configuration files and a fake pnpm global rc. It runs real npm/pnpm configuration commands without installing dependencies; it verifies that ProGet scopes and authentication remain available in default mode, foreign scopes fail, and public mode drops the fake machine configuration. Without the CLI variable, that integration regression is explicitly skipped; the remaining registry tests still run. The tests do not download pnpm.
 
 ## Update with one command
 
