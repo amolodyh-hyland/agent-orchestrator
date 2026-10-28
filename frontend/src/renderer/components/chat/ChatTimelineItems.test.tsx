@@ -1,6 +1,8 @@
-import { act, render as rtlRender, screen } from "@testing-library/react";
+import { act, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StrictMode, type ReactElement } from "react";
+import userEvent from "@testing-library/user-event";
+import { aoBridge } from "../../lib/bridge";
 import { ActivityRow, AssistantMessage, HumanMessage, TurnOutcome } from "./ChatTimelineItems";
 import type { ConversationMessage } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
@@ -393,6 +395,67 @@ describe("HumanMessage", () => {
 	function human(overrides: Partial<ConversationMessage> = {}): ConversationMessage {
 		return message({ id: "human-1", role: "user", origin: "human", text: "hi", streaming: false, ...overrides });
 	}
+
+	it.each([40, 160])("keeps code at %ipx free of collapse controls", (height) => {
+		vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(height);
+		render(<HumanMessage message={human({ text: "Before\n```go\nfunc main() {}\n```\nAfter" })} sessionId="s1" />);
+		expect(screen.getByRole("button", { name: "Copy code" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Show less" })).not.toBeInTheDocument();
+	});
+
+	it("collapses long code by default and toggles without replacing its content or hiding prose", async () => {
+		vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(400);
+		const copy = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		const code = "const value = 42;\n".repeat(20).trimEnd();
+		const text = `Before\n\n\`\`\`javascript\n${code}\n\`\`\`\n\nAfter`;
+		const { container } = render(<HumanMessage message={human({ text })} sessionId="s1" />);
+		const body = container.querySelector("pre")!;
+		const more = screen.getByRole("button", { name: "Show more" });
+		expect(more).toHaveAttribute("aria-expanded", "false");
+		expect(more).toHaveAttribute("aria-controls", body.id);
+		expect(body).toHaveStyle({ maxHeight: "160px" });
+		expect(body).toHaveClass("overflow-auto");
+		expect(body.textContent).toBe(code);
+		expect(body.parentElement?.lastElementChild).toBe(more);
+		expect(body.parentElement).not.toHaveTextContent("Before");
+		expect(body.parentElement).not.toHaveTextContent("After");
+		expect(screen.getByText(/Before/)).toBeInTheDocument();
+		expect(screen.getByText(/After/)).toBeInTheDocument();
+		await waitFor(() => expect(body.querySelector(".hljs-keyword")).not.toBeNull());
+		const highlighted = body.querySelector(".hljs-keyword");
+		const selection = window.getSelection()!;
+		const range = document.createRange();
+		range.selectNodeContents(body);
+		selection.removeAllRanges();
+		selection.addRange(range);
+		expect(selection.toString()).toBe(code);
+		await userEvent.click(more);
+		expect(screen.getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
+		expect(body).toHaveStyle({ maxHeight: "none" });
+		expect(container.querySelector("pre")).toBe(body);
+		expect(body.querySelector(".hljs-keyword")).toBe(highlighted);
+		selection.removeAllRanges();
+		selection.addRange(range);
+		expect(selection.toString()).toBe(code);
+		await userEvent.click(screen.getByRole("button", { name: "Show less" }));
+		expect(screen.getByRole("button", { name: "Show more" })).toHaveAttribute("aria-expanded", "false");
+		expect(body).toHaveStyle({ maxHeight: "160px" });
+		expect(body.textContent).toBe(code);
+		await userEvent.click(screen.getByRole("button", { name: "Copy code" }));
+		expect(copy).toHaveBeenCalledWith(code);
+	});
+
+	it("expands each long code block independently", async () => {
+		vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(400);
+		const { container } = render(<HumanMessage message={human({ text: "```\nfirst\n```\n\n```\nsecond\n```" })} sessionId="s1" />);
+		const bodies = container.querySelectorAll("pre");
+		const toggles = screen.getAllByRole("button", { name: "Show more" });
+		await userEvent.click(toggles[0]!);
+		expect(bodies[0]).toHaveStyle({ maxHeight: "none" });
+		expect(bodies[1]).toHaveStyle({ maxHeight: "160px" });
+		expect(screen.getByRole("button", { name: "Show more" })).toHaveAttribute("aria-controls", bodies[1]!.id);
+	});
 
 	// Light theme cannot separate a sent bubble from the canvas by fill alone, so it
 	// paints an enclosure keyed off this attribute's absence. Losing it makes the

@@ -23,6 +23,7 @@ import { aoBridge } from "../../lib/bridge";
 import { Button } from "../ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { composerCodeRegions } from "./composerMarkdown";
+import { CodeBlockCollapse } from "./CodeBlockCollapse";
 
 type SerializedComposerCode = Spread<{ kind: "inline" | "fenced" }, SerializedElementNode>;
 
@@ -150,25 +151,11 @@ function CodeControls({ nodeKey, dom, source }: { nodeKey: string; dom: HTMLElem
 	const region = composerCodeRegions(source)[0];
 	const language = region?.language || "text";
 	const code = region ? source.slice(region.contentStart, region.contentEnd) : "";
-	const [expanded, setExpanded] = useState(false);
-	const [overflow, setOverflow] = useState(false);
 	const [copied, setCopied] = useState(false);
 	const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 	const [editable, setEditable] = useState(editor.isEditable());
 	useEffect(() => editor.registerEditableListener(setEditable), [editor]);
 	useEffect(() => () => clearTimeout(timer.current), []);
-	useLayoutEffect(() => {
-		const body = dom.children[1] as HTMLElement;
-		const measure = () => setOverflow(body.scrollHeight > 160);
-		measure();
-		const observer = new ResizeObserver(measure);
-		observer.observe(body);
-		return () => observer.disconnect();
-	}, [dom, source]);
-	useLayoutEffect(() => {
-		const body = dom.children[1] as HTMLElement;
-		body.style.maxHeight = expanded ? "none" : "160px";
-	}, [dom, expanded]);
 	const copy = () => {
 		void aoBridge.clipboard.writeText(code).then(
 			() => {
@@ -240,23 +227,10 @@ function CodeControls({ nodeKey, dom, source }: { nodeKey: string; dom: HTMLElem
 				</span>,
 				dom.children[0],
 			)}
-			{overflow
-				? createPortal(
-						<Button
-							type="button"
-							variant="ghost"
-							size="sm"
-							aria-expanded={expanded}
-							aria-controls={(dom.children[1] as HTMLElement).id}
-							onKeyDown={(event) => event.stopPropagation()}
-							onClick={() => setExpanded(!expanded)}
-							className="m-1 h-7 rounded-none text-xs text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring"
-						>
-							{expanded ? t("chat.composer.showLessCode") : t("chat.composer.showMoreCode")}
-						</Button>,
-						dom.children[2],
-					)
-				: null}
+			{createPortal(
+				<CodeBlockCollapse body={dom.children[1] as HTMLElement} source={source} />,
+				dom.children[2],
+			)}
 		</>
 	);
 }

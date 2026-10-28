@@ -32,6 +32,7 @@ import {
 	memo,
 	useContext,
 	useEffect,
+	useId,
 	useMemo,
 	useState,
 	type MouseEvent as ReactMouseEvent,
@@ -70,6 +71,7 @@ import {
 import { HighlightedCode } from "./HighlightedCode";
 import { MermaidBlock } from "./MermaidBlock";
 import { CopyButton } from "./CopyButton";
+import { CodeBlockCollapse } from "./CodeBlockCollapse";
 import { ChatImage, ChatImageGallery, ChatImageLinkScope, isImageOnlyParagraph } from "./ChatImage";
 import "./code-theme.css";
 
@@ -105,6 +107,7 @@ const FADE_SHED_MS = 450;
  * and re-parse every message on every poll.
  */
 const StreamingProse = createContext(false);
+const CollapseCodeBlocks = createContext(false);
 const InsideMarkdownLink = createContext(false);
 const SafeOriginContent = createContext(false);
 const REMOTE_PREVIEW_UNAVAILABLE = "This link points to the remote host. Preview is unavailable on this device.";
@@ -241,7 +244,7 @@ export function ChatCodeText({ text, renderText }: { text: string; renderText: (
 		cursor = region.end;
 	}
 	if (cursor < text.length) content.push(<Fragment key={`text-${cursor}`}>{renderText(text.slice(cursor))}</Fragment>);
-	return <>{content}</>;
+	return <CollapseCodeBlocks.Provider value={true}>{content}</CollapseCodeBlocks.Provider>;
 }
 
 /**
@@ -264,6 +267,9 @@ let preferredWrap = false;
  * line, where scrolling means losing the rest of the block.
  */
 function CodeBlock({ code, language }: { code: string; language?: string }) {
+	const collapsible = useContext(CollapseCodeBlocks);
+	const [body, setBody] = useState<HTMLPreElement | null>(null);
+	const bodyId = useId();
 	const streaming = useContext(StreamingProse);
 	const grammar = canonicalLanguage(language);
 	const [wrap, setWrap] = useState(preferredWrap);
@@ -300,11 +306,12 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
 					<CopyButton text={code} label="Copy code" />
 				</div>
 			</div>
-			<pre className="scrollbar-none overflow-x-auto px-3 py-2.5">
+			<pre ref={collapsible ? setBody : undefined} id={bodyId} className="scrollbar-none overflow-auto px-3 py-2.5">
 				<code className="font-mono text-xs leading-[1.6] text-foreground">
 					<HighlightedCode code={code} language={grammar} streaming={streaming} />
 				</code>
 			</pre>
+			{collapsible ? <CodeBlockCollapse body={body} source={code} /> : null}
 		</div>
 	);
 }

@@ -18,7 +18,7 @@
 - [x] Keep chat composer dropdown triggers and menu labels at 12px.
 - [x] Hide recognized inline-code delimiters and fence lines while preserving exact Markdown in drafts and sent messages.
 - [x] Add a language selector and code-only copy action to composer code blocks, with localized labels and copied feedback.
-- [x] Limit code blocks to 160px initially and offer flat Show more / Show less controls only when the content overflows.
+- [x] Limit composer and sent user-message code bodies to 160px initially through the shared `CodeBlockCollapse` control; keep prose and code toolbars visible and reuse localized Show more / Show less controls only when the code overflows.
 - [x] Keep code-edge deletion undoable, move the caret by grapheme through code, and preserve the existing Enter / Shift+Enter behavior.
 - [x] Make the composer fade an overlay so it does not add layout padding.
 - [x] Keep spaces inside composer code; exit with boundary arrows or Tab, leaving completion handling and Shift+Tab unchanged.
