@@ -2,6 +2,34 @@
 
 This flow creates an arm64 desktop app, `MANIFEST.sha256`, an unsigned installer package, a compressed disk image, an `installer/` directory, and `SHA256SUMS`. It does not install the app or publish any artifact.
 
+## Commands from the repository root
+
+Use an Apple Silicon Mac with Node 24+, npm 11+, Go 1.27.1+, Xcode command line tools and Corepack for source builds. The command wrappers use Node/npm without any additional dependencies or an existing AO install. Go, Xcode and Corepack are build prerequisites.
+
+```bash
+npm run app:build          # company VPN / ProGet (default)
+npm run app:build:public   # public npm; no company VPN
+npm run app:install        # first install on a Mac without AO
+npm run app:update         # routine update of an existing install, using --fast
+```
+
+Only the default `app:build` needs the company VPN. Installing or updating a completed local build does not need it. Run **`app:update` from your own Terminal outside AO**: it quits and replaces the running app. The wrapper refuses with exit 20 when `AO_SESSION_ID` is set, including with `--dry-run` or `--detached`; the packaged installer's own origin checks remain in place.
+
+Builds default to `~/ao-builds/noetaxis-<shortsha>` using the selected source revision's first seven characters. An existing nonempty output directory is refused. `app:install` and `app:update` select the most recent `noetaxis-*` directory by its `SHA256SUMS` modification time, ignoring directories without that completion file. They verify every entry in `SHA256SUMS` before invoking that build's `installer/install.sh` or `installer/update.sh --fast`. Missing or invalid checksums stop the command; no older build is substituted after a verification failure. The installer also verifies the app manifest and signature.
+
+To override build output or select a build explicitly, put the build directory first after `--`; following arguments go unchanged to the installer:
+
+```bash
+npm run app:build -- --output "$HOME/ao-builds/my-build"
+npm run app:install -- "$HOME/ao-builds/my-build" --dry-run
+npm run app:update -- --dry-run
+npm run app:update -- "$HOME/ao-builds/my-build" --yes --health-timeout 300
+```
+
+An explicit directory need not be under `~/ao-builds` or use the `noetaxis-` prefix. `app:install` retains the installer's safe first-install behavior and never stops processes; update-only flags such as `--yes` and `--health-timeout` belong to `app:update`.
+
+The root scripts deliberately use the `app:` namespace. Do not name them `install`, `preinstall`, `postinstall` or `prepare`: npm automatically runs install/prepare lifecycle hooks during `npm install` and `npm ci`, which could unexpectedly launch the app installer. The root also avoids a generic `build` script so desktop builds stay an explicit `app:build` operation.
+
 ## Build
 
 Run from the AO fork checkout on an Apple Silicon Mac with macOS, Node 24, npm 11, Go 1.27.1 or newer, Xcode command line tools, and Corepack available.
@@ -9,13 +37,13 @@ Run from the AO fork checkout on an Apple Silicon Mac with macOS, Node 24, npm 1
 **Company machines (default):** join the company VPN first. Registry requests use `https://proget.onbase.net/npm/npm`. The build reads the configured npm user/global rc files directly and imports only ProGet-scoped authentication applicable to this feed (bearer tokens or basic authentication, including environment-variable references). Auth discovery honors the user rc’s `globalconfig`/`prefix`, environment overrides, and npm’s inline-comment, escape and quoting rules. It does not import other registry settings, credentials or unscoped auth. Imported auth is written only to the private temporary user npmrc (mode `0600`); Corepack receives the same applicable ProGet credentials. Credentials and configuration contents are never printed, and the temporary configuration is deleted on normal completion, thrown/uncaught errors, and SIGINT/SIGTERM/SIGHUP. Commands that run while credentials exist are asynchronous so cleanup can run while a child is blocked; credentials are removed before native artifact packaging. SIGKILL, fatal runtime crashes and power loss cannot run cleanup; they may leave the private temporary directory behind. `COREPACK_INTEGRITY_KEYS=0` is set only for the pnpm install/download step because the mirror has no npm signature metadata; the pnpm tarball is not hash-pinned.
 
 ```bash
-node frontend/scripts/noetaxis-macos/build.mjs
+npm run app:build
 ```
 
 **Personal Macs (explicit opt-in):** use the public npm registry without the company VPN or company npm credentials:
 
 ```bash
-node frontend/scripts/noetaxis-macos/build.mjs --public-registry
+npm run app:build:public
 ```
 
 Public mode selects `https://registry.npmjs.org/` for AO installs, the pinned browser license package, Corepack's pnpm download, the Multica pnpm install/build, and child steps such as the ACP runtime install. It never reads the user's npm configuration or imports authentication. Corepack keeps normal signature verification.
@@ -39,7 +67,7 @@ The static checks use bundled, non-executing parsers so no parser install or con
 The default source is `HEAD` of the checkout running the command. To select a commit or tag and output location:
 
 ```bash
-node frontend/scripts/noetaxis-macos/build.mjs \
+npm run app:build -- \
   --ref 8e2bc21fd5d95c525f536dc03b5e7b7f10b04c7c \
   --base-version 0.13.4 \
   --output "$HOME/ao-builds/noetaxis-8e2bc21"
