@@ -1,5 +1,45 @@
 # Install this build from your own Terminal
 
+From the source repository root on an Apple Silicon Mac:
+
+```bash
+npm run app:build          # default ProGet build; join the company VPN
+npm run app:build:public   # public npm build without the company VPN
+npm run app:install        # first install on a Mac without AO
+npm run app:update         # routine fast update of an existing install
+```
+
+Source builds require Node 24+, npm 11+, Go 1.27.1+, Xcode command line tools
+and Corepack. The install/update wrappers need Node/npm and a completed local
+build; they do not require an existing `ao` command. Only the default
+`app:build` needs the company VPN; install/update do not.
+
+The default build folder is `~/ao-builds/noetaxis-<shortsha>`. Install/update
+select the newest `noetaxis-*` build by its `SHA256SUMS` modification time and
+verify all checksums before running its packaged installer. Incomplete folders
+without `SHA256SUMS` are ignored; verification failure stops the command.
+Override the output or select a build explicitly (directory first):
+
+```bash
+npm run app:build -- --output "$HOME/ao-builds/my-build"
+npm run app:install -- "$HOME/ao-builds/my-build" --dry-run
+npm run app:update -- --dry-run
+npm run app:update -- "$HOME/ao-builds/my-build" --yes --health-timeout 300
+```
+
+**Run `app:update` from your own Terminal outside AO.** It calls
+`installer/update.sh --fast` and refuses with exit 20 if `AO_SESSION_ID` is set,
+even with `--dry-run` or `--detached`. The packaged installer's origin checks
+also remain in place. `app:install` calls `installer/install.sh` for a safe
+first install and never stops processes.
+
+These commands use the `app:` namespace intentionally. Root `install`,
+`preinstall`, `postinstall` and `prepare` scripts would run automatically as npm
+lifecycle hooks during `npm install` or `npm ci` and could unexpectedly start
+the app installer. A generic root `build` script is also deliberately avoided.
+
+## Using this build folder without a source checkout
+
 For routine updates, **`--fast` is RECOMMENDED**. Set `ART` to this build's folder:
 
 ```bash

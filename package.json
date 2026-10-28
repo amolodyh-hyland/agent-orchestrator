@@ -2,6 +2,10 @@
 	"name": "agent-orchestrator",
 	"private": true,
 	"scripts": {
+		"app:build": "node frontend/scripts/noetaxis-macos/build.mjs",
+		"app:build:public": "node frontend/scripts/noetaxis-macos/build.mjs --public-registry",
+		"app:install": "node frontend/scripts/noetaxis-macos/app.mjs install",
+		"app:update": "node frontend/scripts/noetaxis-macos/app.mjs update",
 		"lint": "cd backend && go test ./... && go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run --path-mode=abs",
 		"frontend:typecheck": "npm --prefix frontend run typecheck",
 		"cloud:check": "npm --prefix packages/cloud-client run generate && git diff --exit-code -- packages/cloud-client/src/schema.ts && npm --prefix packages/cloud-client run typecheck && npm --prefix packages/cloud-client test && npm --prefix packages/cloud-client run build",

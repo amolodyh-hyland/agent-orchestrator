@@ -1,13 +1,14 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { fixtureRoot, fixtureSpawn as spawn, fixtureSpawnSync as spawnSync } from "./noetaxis-macos-fixture-registry.mjs";
-import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { copyAgentBrowserLicenses } from "./agent-browser-license.mjs";
-import { buildDiskImage, buildPackages, writeManifest } from "./noetaxis-macos/package-artifacts.mjs";
+import { buildDiskImage, buildPackages, writeArtifactChecksums, writeManifest } from "./noetaxis-macos/package-artifacts.mjs";
+import { latestBuild, runApp } from "./noetaxis-macos/app.mjs";
 import { checkMulticaConfiguration, prepareRegistry, progetAuth, registryBuildEnv, parseArgs, parseMulticaPin, stampVersion, validateRegistry } from "./noetaxis-macos/build.mjs";
 import { makeBuildFixture } from "./noetaxis-macos-build-fixture.mjs";
 import { copyFakeScripts } from "./noetaxis-macos-update-world.mjs";
@@ -176,6 +177,100 @@ async function allFiles(root) {
 	}
 	return result;
 }
+
+async function commandBuild(directory, modified = 1000) {
+	await mkdir(path.join(directory, "installer"), { recursive: true });
+	await writeFile(path.join(directory, "MANIFEST.sha256"), "fixture manifest\n");
+	for (const name of ["install.sh", "update.sh"]) await writeFile(path.join(directory, "installer", name), "fixture installer\n");
+	await writeArtifactChecksums(directory);
+	await utimes(path.join(directory, "SHA256SUMS"), modified, modified);
+	return directory;
+}
+
+test("root app scripts are explicit commands without npm install lifecycle hooks", async () => {
+	const { scripts } = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
+	assert.equal(scripts["app:build"], "node frontend/scripts/noetaxis-macos/build.mjs");
+	assert.equal(scripts["app:build:public"], `${scripts["app:build"]} --public-registry`);
+	for (const action of ["install", "update"]) assert.equal(scripts[`app:${action}`], `node frontend/scripts/noetaxis-macos/app.mjs ${action}`);
+	for (const name of ["install", "preinstall", "postinstall", "prepare", "build"]) assert.equal(scripts[name], undefined);
+});
+
+test("app commands discover the latest checksummed build and pass installer options through", async (t) => {
+	const home = await testRoot(t, "noetaxis-app-command");
+	const builds = path.join(home, "ao-builds");
+	await commandBuild(path.join(builds, "noetaxis-fffffff"), 1000);
+	const latest = await commandBuild(path.join(builds, "noetaxis-aaaaaaa"), 2000);
+	await mkdir(path.join(builds, "noetaxis-incomplete"));
+	await commandBuild(path.join(builds, "other-build"), 3000);
+	assert.equal(await latestBuild(builds), latest);
+	for (const action of ["install", "update"]) {
+		const extra = action === "update" ? ["--dry-run", "--yes", "--health-timeout", "300"] : ["--dry-run"];
+		const env = { HOME: home };
+		let calls = 0;
+		const result = await runApp(action, extra, { home, env, run(command, args, options) {
+			calls += 1;
+			assert.equal(command, "/bin/bash");
+			assert.deepEqual(args, [path.join(latest, "installer", `${action}.sh`), ...(action === "update" ? ["--fast"] : []), path.join(latest, "Applications", "Agent Orchestrator.app"), ...extra]);
+			assert.deepEqual(options, { cwd: latest, env, stdio: "inherit" });
+			return { status: 62 };
+		} });
+		assert.equal(calls, 1);
+		assert.equal(result, 62);
+	}
+});
+
+test("app commands accept an explicit build path with spaces without searching the default directory", async (t) => {
+	const root = await testRoot(t, "noetaxis-app-explicit");
+	const build = await commandBuild(path.join(root, "custom build"));
+	for (const action of ["install", "update"]) {
+		let calls = 0;
+		assert.equal(await runApp(action, [path.relative(process.cwd(), build), "--dry-run"], { home: root, env: {}, run(command, args) {
+			calls += 1;
+			assert.equal(args[0], path.join(build, "installer", `${action}.sh`));
+			assert.equal(args.at(-1), "--dry-run");
+			return { status: 0 };
+		} }), 0);
+		assert.equal(calls, 1);
+	}
+	await assert.rejects(latestBuild(path.join(root, "ao-builds")), /No completed build found/);
+});
+
+test("checksum failures and missing manifest entries stop app commands before the installer", async (t) => {
+	const root = await testRoot(t, "noetaxis-app-checksum");
+	for (const action of ["install", "update"]) {
+		const build = await commandBuild(path.join(root, action));
+		const options = { env: {}, run() { assert.fail("installer must not run"); } };
+		await writeFile(path.join(build, "installer", `${action}.sh`), "tampered\n");
+		await assert.rejects(runApp(action, [build], options), /SHA256SUMS verification failed/);
+		await writeFile(path.join(build, "SHA256SUMS"), "");
+		await assert.rejects(runApp(action, [build], options), /SHA256SUMS is missing/);
+		await writeFile(path.join(build, "SHA256SUMS"), "invalid\n");
+		await assert.rejects(runApp(action, [build], options), /Invalid SHA256SUMS/);
+		await rm(path.join(build, "SHA256SUMS"));
+		await assert.rejects(runApp(action, [build], options), { code: "ENOENT" });
+	}
+});
+
+test("app:update refuses an AO session before discovery even with override flags", async () => {
+	for (const args of [[], ["--dry-run"], ["--detached", "--yes"], ["--allow-ao-session"]]) {
+		await assert.rejects(runApp("update", args, { env: { AO_SESSION_ID: "fixture-session" }, run() { assert.fail("installer must not run"); } }), { exitCode: 20, message: /own Terminal outside AO/ });
+	}
+});
+
+test("app command CLI invokes only the selected fixture installer and preserves its exit code", async (t) => {
+	const root = await testRoot(t, "noetaxis-app-cli");
+	for (const action of ["install", "update"]) {
+		const build = await commandBuild(path.join(root, `${action} build`));
+		await writeFile(path.join(build, "installer", `${action}.sh`), '#!/bin/bash\nprintf "%s\\n" "$@" > "$HOME/installer-args"\nexit 62\n');
+		await writeArtifactChecksums(build);
+		const result = execute(process.execPath, [path.join(scriptDir, "noetaxis-macos/app.mjs"), action, build, "--dry-run"], { env: { HOME: root, PATH: "/usr/bin:/bin" } });
+		assert.equal(result.status, 62, result.stderr);
+		assert.equal(await readFile(path.join(root, "installer-args"), "utf8"), `${action === "update" ? "--fast\n" : ""}${path.join(build, "Applications", "Agent Orchestrator.app")}\n--dry-run\n`);
+	}
+	const guard = execute(process.execPath, [path.join(scriptDir, "noetaxis-macos/app.mjs"), "update"], { env: { HOME: root, AO_SESSION_ID: "fixture-session" } });
+	assert.equal(guard.status, 20);
+	assert.match(guard.stderr, /own Terminal outside AO/);
+});
 
 test("build metadata pins Multica, restricts npm, and stamps the selected revision", () => {
 	const pin = parseMulticaPin(`module example/backend\nreplace github.com/multica-ai/multica/server => github.com/amolodyh-hyland/multica/server v0.0.0-20261007172956-730184d835ff\n`);

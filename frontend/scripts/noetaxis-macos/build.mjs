@@ -446,7 +446,7 @@ async function buildWithRegistry(options, registry, npmEnv, goEnv, cleanup) {
 	await supportedHost(npmEnv);
 	const commit = await capture("git", ["rev-parse", "--verify", `${options.ref}^{commit}`], { cwd: repoRoot });
 	const version = stampVersion(options.baseVersion, commit);
-	const outputDir = path.resolve(options.output || path.join(defaultOutputRoot, `noetaxis-${version}`));
+	const outputDir = path.resolve(options.output || path.join(defaultOutputRoot, `noetaxis-${commit.slice(0, 7)}`));
 	if (isWithin("/Applications", outputDir)) throw new Error("Build output must be outside /Applications");
 	if (isWithin(repoRoot, outputDir)) throw new Error("Build output must be outside the AO checkout");
 	const outputEntries = await readdir(outputDir).catch((error) => error.code === "ENOENT" ? [] : Promise.reject(error));
