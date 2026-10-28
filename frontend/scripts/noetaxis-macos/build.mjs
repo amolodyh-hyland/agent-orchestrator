@@ -477,7 +477,7 @@ async function buildWithRegistry(options, registry, npmEnv, goEnv, cleanup) {
 			cwd: multicaDir,
 			env: pnpmEnv,
 		});
-		await run(pnpmCommand, ["pnpm@10.28.2", "--ignore-pnpmfile", "--filter", "@multica/desktop", "exec", "electron-vite", "build"], {
+		await run(pnpmCommand, ["pnpm@10.28.2", "--config.ignore-pnpmfile=true", "--filter", "@multica/desktop", "exec", "electron-vite", "build"], {
 			cwd: multicaDir,
 			env: npmEnv,
 		});
