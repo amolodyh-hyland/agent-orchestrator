@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -51,6 +53,22 @@ export function fakeSpawnSync(command, args, options = {}) {
 	return { status: 0, stdout: options.encoding ? stdout : Buffer.from(stdout), stderr: "" };
 }
 
+export function fakeSpawn(command, args, options = {}) {
+	const child = new EventEmitter();
+	child.stdout = new PassThrough();
+	child.stderr = new PassThrough();
+	child.kill = () => {};
+	queueMicrotask(() => {
+		try {
+			const result = fakeSpawnSync(command, args, options);
+			child.stdout.end(result.stdout);
+			child.stderr.end(result.stderr);
+			child.emit("close", result.status, result.signal);
+		} catch (error) { child.emit("error", error); }
+	});
+	return child;
+}
+
 export async function makeBuildFixture(t, options = {}) {
 	const root = await fixtureRoot(t, "noetaxis-build-fixture-");
 	const source = path.join(root, "source");
@@ -77,9 +95,12 @@ export async function makeBuildFixture(t, options = {}) {
 	await writeFile(userNpmrc, options.userNpmrc ?? "", { mode: 0o600 });
 	await writeFile(globalNpmrc, "", { mode: 0o600 });
 	const buildFile = new URL("./noetaxis-macos/build.mjs", import.meta.url);
-	const fixtureURL = pathToFileURL(import.meta.filename).href;
+	const fixtureURL = pathToFileURL(options.realCommands ? path.join(root, "native-stubs.mjs") : import.meta.filename).href;
+	if (options.realCommands) await writeFile(path.join(root, "native-stubs.mjs"), 'export function daemonBuildEnv(){return {CGO_ENABLED:"1"}}; export async function buildPackages(){}; export async function writeArtifactChecksums(){};');
 	const contents = (await readFile(buildFile, "utf8"))
-		.replace('import { spawnSync } from "node:child_process";', `import { fakeSpawnSync as spawnSync } from ${JSON.stringify(fixtureURL)};`)
+		.replace('import { spawn } from "node:child_process";', options.realCommands ? 'import { spawn } from "node:child_process";' : `import { fakeSpawn as spawn } from ${JSON.stringify(fixtureURL)};`)
+		.replace('"./parsers/ini.cjs"', JSON.stringify(new URL("./parsers/ini.cjs", buildFile).href))
+		.replace('"./parsers/js-yaml.mjs"', JSON.stringify(new URL("./parsers/js-yaml.mjs", buildFile).href))
 		.replace('"./package-artifacts.mjs"', JSON.stringify(fixtureURL))
 		.replace('"../go-build-env.mjs"', JSON.stringify(fixtureURL))
 		.replace('const repoRoot = path.resolve(scriptDir, "../../..");', `const repoRoot = ${JSON.stringify(source)};`)
@@ -92,7 +113,7 @@ export async function makeBuildFixture(t, options = {}) {
 	states.set(root, state);
 	t.after(() => states.delete(root));
 	return {
-		...state,
+		...state, file,
 		async run(args = []) {
 			assert.equal(globalThis.__noetaxisBuildFixture, undefined);
 			globalThis.__noetaxisBuildFixture = root;
