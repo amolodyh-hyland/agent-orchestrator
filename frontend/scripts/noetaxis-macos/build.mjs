@@ -1,4 +1,4 @@
-import { cp, chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
@@ -127,115 +127,141 @@ function lockfiles(root) {
 	return ["package-lock.json", "pnpm-lock.yaml"].map((name) => path.join(root, name));
 }
 
-async function routeLockfilesToInternalRegistry(root, registry) {
-	for (const file of lockfiles(root)) {
-		let contents;
-		try {
-			contents = await readFile(file, "utf8");
-		} catch (error) {
-			if (error.code === "ENOENT") continue;
-			throw error;
-		}
-		const routed = contents
-			.replaceAll("https://registry.npmjs.org", registry)
-			.replaceAll("http://registry.npmjs.org", registry)
-			.replaceAll("https://registry.npmjs.com", registry)
-			.replaceAll("https://registry.yarnpkg.com", registry);
-		if (/https?:\/\/(?:registry\.npmjs\.org|registry\.npmjs\.com|registry\.yarnpkg\.com)\//i.test(routed)) {
-			throw new Error(`A public npm registry URL remains in ${file}; refusing to install dependencies`);
-		}
-		if (routed !== contents) await writeFile(file, routed, "utf8");
+async function readOptional(file) {
+	try { return await readFile(file, "utf8"); }
+	catch (error) {
+		if (error.code === "ENOENT") return "";
+		throw new Error("Could not read package-manager configuration; no configuration values are displayed");
 	}
 }
 
-async function preparePublicRegistry(root, hoist = false) {
-	for (const file of lockfiles(root)) {
-		let contents;
+export function progetAuth(contents, env = process.env) {
+	const entries = new Map();
+	for (const line of contents.split(/\r?\n/)) {
+		const match = line.match(/^\s*(\/\/[^\s=]+):(_authToken|_auth|username|_password|always-auth)\s*=\s*(.*?)\s*$/i);
+		if (!match) continue;
+		let url;
+		try { url = new URL(`https:${match[1]}`); } catch { continue; }
+		const authPath = url.pathname.endsWith("/") ? url.pathname : `${url.pathname}/`;
+		if (url.hostname !== "proget.onbase.net" || url.port || url.username || url.password || url.search || url.hash || !"/npm/npm/".startsWith(authPath)) continue;
+		let value = match[3];
 		try {
-			contents = await readFile(file, "utf8");
-		} catch (error) {
-			if (error.code === "ENOENT") continue;
-			throw error;
-		}
-		const routed = contents.replace(/https?:\/\/(?:registry\.npmjs\.(?:org|com)|registry\.yarnpkg\.com|proget\.onbase\.net\/npm\/npm)(?=\/|["'\s]|$)\/?/g, publicRegistry);
-		const downloads = [...routed.matchAll(/(?:"resolved"\s*:\s*"|tarball:\s*["']?)(https?:\/\/[^"'\s}]+)/g)];
-		if (downloads.some((match) => !match[1].startsWith(publicRegistry))) {
-			throw new Error(`A non-public npm download remains in ${file}; refusing to install dependencies`);
-		}
-		if (routed !== contents) await writeFile(file, routed, "utf8");
+			if (value.startsWith('"')) value = JSON.parse(value);
+			else if (value.startsWith("'") && value.endsWith("'")) value = value.slice(1, -1);
+			value = value.replace(/\$\{([^}]+)\}/g, (_, key) => {
+				if (!Object.hasOwn(env, key)) throw new Error();
+				return env[key];
+			});
+			if (/[\r\n\0]/.test(value)) throw new Error();
+		} catch { throw new Error("Could not resolve ProGet authentication; no configuration values are displayed"); }
+		const field = { _authtoken: "_authToken", _auth: "_auth", username: "username", _password: "_password", "always-auth": "always-auth" }[match[2].toLowerCase()];
+		entries.set(`//${url.host}${authPath}:${field}`, JSON.stringify(value));
 	}
-	await writeFile(path.join(root, ".npmrc"), `registry=${publicRegistry}\n${hoist ? "shamefully-hoist=true\n" : ""}`, "utf8");
+	return entries;
 }
 
-async function publicRegistryEnv(configDir) {
-	const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:npm_config_|pnpm_|corepack_|npm_(?:token|auth_token|auth|password|username)$|node_auth_token$|yarn_npm_auth_token$)/i.test(key)));
+export async function registryBuildEnv(configDir, registry, inherited = process.env) {
+	const env = Object.fromEntries(Object.entries(inherited).filter(([key]) => !/^(?:npm_config_|pnpm_|corepack_|npm_(?:token|auth_token|auth|password|username)$|node_auth_token$|yarn_npm_auth_token$)/i.test(key)));
+	const auth = new Map();
+	if (registry === defaultRegistry) {
+		const prefix = inherited.npm_config_prefix || inherited.NPM_CONFIG_PREFIX || path.dirname(path.dirname(process.execPath));
+		const files = [inherited.npm_config_globalconfig || inherited.NPM_CONFIG_GLOBALCONFIG || path.join(prefix, "etc/npmrc"), inherited.npm_config_userconfig || inherited.NPM_CONFIG_USERCONFIG || path.join(inherited.HOME || os.homedir(), ".npmrc")];
+		for (const file of files) for (const [key, value] of progetAuth(await readOptional(file), inherited)) auth.set(key, value);
+		const authEnv = Object.entries(inherited).filter(([key]) => /^npm_config_\/\//i.test(key)).map(([key, value]) => `${key.slice(11)}=${JSON.stringify(value)}`).join("\n");
+		for (const [key, value] of progetAuth(authEnv, inherited)) auth.set(key, value);
+	}
+	const corepackAuth = {};
+	const scopes = new Map();
+	for (const [key, value] of auth) {
+		const split = key.lastIndexOf(":");
+		const scope = key.slice(0, split);
+		if (!scopes.has(scope)) scopes.set(scope, {});
+		scopes.get(scope)[key.slice(split + 1)] = JSON.parse(value);
+	}
+	for (const [, credentials] of [...scopes].sort(([left], [right]) => right.length - left.length)) {
+		if (credentials._authToken) { corepackAuth.COREPACK_NPM_TOKEN = credentials._authToken; break; }
+		const basic = credentials._auth ? Buffer.from(credentials._auth, "base64").toString("utf8") : credentials.username && credentials._password ? `${credentials.username}:${Buffer.from(credentials._password, "base64").toString("utf8")}` : "";
+		if (basic.includes(":")) {
+			corepackAuth.COREPACK_NPM_USERNAME = basic.slice(0, basic.indexOf(":"));
+			corepackAuth.COREPACK_NPM_PASSWORD = basic.slice(basic.indexOf(":") + 1);
+			break;
+		}
+	}
+	const base = `registry=${registry}\n@jsr:registry=${registry}\n`;
 	const userconfig = path.join(configDir, "user-npmrc");
 	const globalconfig = path.join(configDir, "global-npmrc");
-	await writeFile(userconfig, "", "utf8");
-	await writeFile(globalconfig, "", "utf8");
+	const xdg = path.join(configDir, "config");
+	await mkdir(path.join(xdg, "pnpm"), { recursive: true });
+	await writeFile(userconfig, base + [...auth].map(([key, value]) => `${key}=${value}\n`).join(""), { mode: 0o600 });
+	await writeFile(globalconfig, base, { mode: 0o600 });
+	await writeFile(path.join(xdg, "pnpm/rc"), base, { mode: 0o600 });
 	return {
-		...env,
-		npm_config_registry: publicRegistry,
-		NPM_CONFIG_REGISTRY: publicRegistry,
-		npm_config_userconfig: userconfig,
-		NPM_CONFIG_USERCONFIG: userconfig,
-		npm_config_globalconfig: globalconfig,
-		NPM_CONFIG_GLOBALCONFIG: globalconfig,
-		npm_config_replace_registry_host: "always",
-		NPM_CONFIG_REPLACE_REGISTRY_HOST: "always",
-		npm_config_loglevel: "error",
-		NPM_CONFIG_LOGLEVEL: "error",
-		XDG_CONFIG_HOME: path.join(configDir, "config"),
-		PNPM_HOME: path.join(configDir, "pnpm"),
-		npm_config_manage_package_manager_versions: "false",
-		npm_config_ignore_pnpmfile: "true",
-		COREPACK_NPM_REGISTRY: publicRegistry.slice(0, -1),
-		COREPACK_HOME: path.join(configDir, "corepack"),
-		COREPACK_ENABLE_PROJECT_SPEC: "0",
-		COREPACK_ENABLE_ENV_FILE: "0",
+		...env, ...corepackAuth,
+		npm_config_registry: registry, NPM_CONFIG_REGISTRY: registry,
+		npm_config_userconfig: userconfig, NPM_CONFIG_USERCONFIG: userconfig,
+		npm_config_globalconfig: globalconfig, NPM_CONFIG_GLOBALCONFIG: globalconfig,
+		npm_config_replace_registry_host: registry === defaultRegistry ? "npmjs" : "always",
+		NPM_CONFIG_REPLACE_REGISTRY_HOST: registry === defaultRegistry ? "npmjs" : "always",
+		npm_config_loglevel: "error", NPM_CONFIG_LOGLEVEL: "error",
+		npm_config_manage_package_manager_versions: "false", npm_config_ignore_pnpmfile: "true",
+		XDG_CONFIG_HOME: xdg, PNPM_HOME: path.join(configDir, "pnpm"),
+		COREPACK_NPM_REGISTRY: registry.replace(/\/$/, ""), COREPACK_HOME: path.join(configDir, "corepack"),
+		COREPACK_ENABLE_PROJECT_SPEC: "0", COREPACK_ENABLE_ENV_FILE: "0",
 	};
 }
 
-export function assertRegistryConfiguration(config, registry, allowBuiltinJsr = false) {
-	const hostname = new URL(registry).hostname;
-	for (const [key, value] of Object.entries(config)) {
-		if (key === "registries" && value && typeof value === "object") {
-			assertRegistryConfiguration(Object.fromEntries(Object.entries(value).map(([scope, url]) => [`${scope}:registry`, url])), registry);
-			continue;
+export async function checkMulticaConfiguration(root, registry) {
+	const fail = () => { throw new Error("Unsupported Multica package-manager configuration; refusing to start pnpm. Configuration dependencies, hooks, registry overrides and foreign tarballs are forbidden; no configuration values are displayed."); };
+	const forbidden = (key) => /configdependencies|pnpmfile|registr(?:y|ies)|managepackagemanagerversions/.test(key.replace(/[^a-z]/gi, "").toLowerCase());
+	const checkUrls = (text) => {
+		for (const match of text.matchAll(/(?:[a-z][a-z0-9+.-]*:)?\/\/[^\s"'<>},]+/gi)) {
+			if (!match[0].startsWith(`${registry.replace(/\/$/, "")}/`)) fail();
+			const url = new URL(match[0]);
+			if (url.username || url.password || url.search || url.hash) fail();
 		}
-		if (key !== "registry" && !key.toLowerCase().endsWith(":registry")) continue;
-		if (allowBuiltinJsr && key === "@jsr:registry" && value === "https://npm.jsr.io/") continue;
-		let allowed = false;
-		try {
-			const url = new URL(value);
-			allowed = url.protocol === "https:" && url.hostname === hostname && !url.port && !url.username && !url.password && !url.search && !url.hash;
-		} catch {}
-		if (!allowed) throw new Error(`Registry configuration contains a disallowed registry override; all registries must use ${hostname}. No configuration values are displayed.`);
-	}
-}
-
-export function readRegistryConfiguration(command, args, options) {
-	const result = spawnSync(command, args, { ...options, encoding: "utf8", stdio: "pipe" });
-	if (result.error || result.status !== 0) throw new Error("Could not verify package-manager registry configuration; refusing to install dependencies. No configuration values are displayed.");
+	};
+	const walk = (value, dependencies = false) => {
+		if (typeof value === "string") { if (dependencies || /\.(?:tgz|tar\.gz)(?:[?#]|$)/i.test(value)) checkUrls(value); return; }
+		if (!value || typeof value !== "object") return;
+		for (const [key, child] of Object.entries(value)) {
+			if (forbidden(key)) fail();
+			walk(child, dependencies || /dependencies|overrides|resolutions/i.test(key));
+		}
+	};
+	const manifest = await readOptional(path.join(root, "package.json"));
 	try {
-		const config = JSON.parse(result.stdout);
-		if (!config || typeof config !== "object" || Array.isArray(config) || typeof config.registry !== "string") throw new Error();
-		return config;
-	} catch {
-		throw new Error("Could not parse package-manager registry configuration; refusing to install dependencies. No configuration values are displayed.");
+		const parsed = JSON.parse(manifest);
+		if (parsed.packageManager && parsed.packageManager !== "pnpm@10.28.2") fail();
+		walk(parsed);
+	} catch { fail(); }
+	const yaml = await readOptional(path.join(root, "pnpm-workspace.yaml"));
+	for (const line of yaml.split(/\r?\n/)) {
+		if (/^\s*(?:#|$)/.test(line)) continue;
+		if (/[{}\[\]\\]/.test(line) || /^\s*(?:%|---|\.\.\.|[?:]\s|<<\s*:)/.test(line) || /(?:^|[\s:])[&*!][\w]/.test(line)) fail();
+		const key = line.match(/^\s*(?:"([^"]+)"|'((?:[^']|'')+)'|([^:#]+))\s*:/);
+		if (key && forbidden(key[1] || key[2] || key[3])) fail();
+		checkUrls(line);
+	}
+	for (const line of (await readOptional(path.join(root, ".npmrc"))).split(/\r?\n/)) {
+		if (!/^\s*(?:[;#].*)?$/.test(line) && !/^\s*shamefully-hoist\s*=\s*true\s*$/.test(line)) fail();
+	}
+	for (const name of [".pnpmfile.cjs", ".pnpmfile.mjs", ".pnpmfile.js"]) {
+		const entry = await lstat(path.join(root, name)).catch((error) => { if (error.code !== "ENOENT") throw error; });
+		if (entry) fail();
 	}
 }
 
-function checkNpmRegistries(cwd, env, registry, extraArgs = []) {
-	assertRegistryConfiguration(readRegistryConfiguration("npm", ["config", "list", "--json", ...extraArgs], { cwd, env }), registry);
-}
-
-function checkedPnpmEnv(cwd, env, registry) {
-	const config = readRegistryConfiguration("corepack", ["pnpm@10.28.2", "config", "list", "--json"], { cwd, env });
-	if (typeof config.globalconfig !== "string") throw new Error("Could not locate pnpm global configuration; refusing to install dependencies");
-	checkNpmRegistries(path.dirname(cwd), env, registry, ["--userconfig", config.globalconfig]);
-	assertRegistryConfiguration(config, registry, true);
-	return { ...env, "npm_config_@jsr:registry": registry };
+export async function prepareRegistry(root, registry, hoist = false) {
+	for (const file of lockfiles(root)) {
+		const contents = await readOptional(file);
+		if (!contents) continue;
+		const target = `${registry.replace(/\/$/, "")}/`;
+		const routed = contents.replace(/https?:\/\/(?:registry\.npmjs\.(?:org|com)|registry\.yarnpkg\.com|proget\.onbase\.net\/npm\/npm)(?=\/|["'\s]|$)\/?/g, target);
+		const downloads = [...routed.matchAll(/(?:"resolved"\s*:\s*"|tarball:\s*["']?)(https?:\/\/[^"'\s}]+)/gi)];
+		if (downloads.some((match) => !match[1].startsWith(target))) throw new Error("A foreign package download remains in a lockfile; refusing to install dependencies");
+		if (routed !== contents) await writeFile(file, routed, "utf8");
+	}
+	await writeFile(path.join(root, ".npmrc"), `registry=${registry}\n@jsr:registry=${registry}\n${hoist ? "shamefully-hoist=true\n" : ""}`, "utf8");
 }
 
 function plistSet(plistPath, key, value) {
@@ -263,22 +289,9 @@ function parseDatabaseSchema(root) {
 }
 
 // The internal registry mirror serves no npm signature metadata, so corepack cannot
-// verify the pnpm download. Applied to the configuration preflight and install;
+// verify the pnpm download. Applied only to the install;
 // the electron-vite child runs with the cached pnpm and without this override.
 const corepackEnv = { COREPACK_INTEGRITY_KEYS: "0" };
-
-async function internalRegistryEnv(registry) {
-	return {
-		...process.env,
-		npm_config_registry: registry,
-		NPM_CONFIG_REGISTRY: registry,
-		npm_config_replace_registry_host: "npmjs",
-		NPM_CONFIG_REPLACE_REGISTRY_HOST: "npmjs",
-		npm_config_loglevel: "error",
-		NPM_CONFIG_LOGLEVEL: "error",
-		COREPACK_NPM_REGISTRY: registry,
-	};
-}
 
 async function seedAgentBrowserLicenses(workDir, env, frontendDir) {
 	const archiveDir = path.join(workDir, "agent-browser-package");
@@ -325,17 +338,16 @@ async function findAppBundle(directory) {
 
 export async function buildNoetaxis(options) {
 	const registry = validateRegistry(options.registry, options.publicRegistry);
-	if (!options.publicRegistry) return buildWithRegistry(options, registry);
-	const configDir = await mkdtemp(path.join(os.tmpdir(), "noetaxis-public-npm-"));
+	const configDir = await mkdtemp(path.join(os.tmpdir(), "noetaxis-npm-"));
 	try {
-		return await buildWithRegistry(options, registry, await publicRegistryEnv(configDir));
+		return await buildWithRegistry(options, registry, await registryBuildEnv(configDir, registry));
 	} finally {
 		await rm(configDir, { recursive: true, force: true });
 	}
 }
 
-async function buildWithRegistry(options, registry, publicEnv) {
-	supportedHost(publicEnv);
+async function buildWithRegistry(options, registry, npmEnv) {
+	supportedHost(npmEnv);
 	const goEnv = daemonBuildEnv({ cwd: path.join(repoRoot, "backend") });
 	const commit = capture("git", ["rev-parse", "--verify", `${options.ref}^{commit}`], { cwd: repoRoot });
 	const version = stampVersion(options.baseVersion, commit);
@@ -356,29 +368,23 @@ async function buildWithRegistry(options, registry, publicEnv) {
 		const frontendDir = path.join(sourceWorktree, "frontend");
 		const productUiDir = path.join(sourceWorktree, "packages/product-ui");
 		const multicaDir = path.join(workDir, "multica");
-		const npmEnv = publicEnv || await internalRegistryEnv(registry);
-		if (publicEnv) {
-			for (const directory of [sourceWorktree, frontendDir, productUiDir, path.join(frontendDir, "acp-runtime")]) await preparePublicRegistry(directory);
-		}
-		for (const directory of [sourceWorktree, frontendDir, productUiDir, path.join(frontendDir, "acp-runtime")]) checkNpmRegistries(directory, npmEnv, registry);
-		run("npm", ["ci", "--ignore-scripts", "--registry", registry, "--replace-registry-host", publicEnv ? "always" : "npmjs"], { cwd: frontendDir, env: npmEnv });
-		run("npm", ["ci", "--ignore-scripts", "--registry", registry, "--replace-registry-host", publicEnv ? "always" : "npmjs"], { cwd: productUiDir, env: npmEnv });
+		for (const directory of [sourceWorktree, frontendDir, productUiDir, path.join(frontendDir, "acp-runtime")]) await prepareRegistry(directory, registry);
+		run("npm", ["ci", "--ignore-scripts", "--registry", registry, "--replace-registry-host", npmEnv.npm_config_replace_registry_host], { cwd: frontendDir, env: npmEnv });
+		run("npm", ["ci", "--ignore-scripts", "--registry", registry, "--replace-registry-host", npmEnv.npm_config_replace_registry_host], { cwd: productUiDir, env: npmEnv });
 		const licenseDir = await seedAgentBrowserLicenses(workDir, npmEnv, frontendDir);
 		run("git", ["clone", "--filter=blob:none", "--no-checkout", `https://${multicaPin.repository}.git`, multicaDir], { cwd: workDir });
 		run("git", ["-C", multicaDir, "checkout", "--detach", multicaPin.shortRevision]);
-		if (publicEnv) await preparePublicRegistry(multicaDir, true);
-		else await routeLockfilesToInternalRegistry(multicaDir, registry);
-		checkNpmRegistries(multicaDir, npmEnv, registry);
-		const pnpmEnv = checkedPnpmEnv(multicaDir, publicEnv || { ...npmEnv, ...corepackEnv }, registry);
-		const pnpmBuildEnv = { ...npmEnv, "npm_config_@jsr:registry": registry };
+		await checkMulticaConfiguration(multicaDir, registry);
+		await prepareRegistry(multicaDir, registry, true);
+		const pnpmEnv = registry === defaultRegistry ? { ...npmEnv, ...corepackEnv } : npmEnv;
 		const pnpmCommand = "corepack";
-		run(pnpmCommand, ["pnpm@10.28.2", "install", "--frozen-lockfile", "--ignore-scripts", "--filter", "@multica/desktop...", `--registry=${registry}`], {
+		run(pnpmCommand, ["pnpm@10.28.2", "--ignore-pnpmfile", "install", "--frozen-lockfile", "--ignore-scripts", "--filter", "@multica/desktop...", `--registry=${registry}`], {
 			cwd: multicaDir,
 			env: pnpmEnv,
 		});
-		run(pnpmCommand, ["pnpm@10.28.2", "--filter", "@multica/desktop", "exec", "electron-vite", "build"], {
+		run(pnpmCommand, ["pnpm@10.28.2", "--ignore-pnpmfile", "--filter", "@multica/desktop", "exec", "electron-vite", "build"], {
 			cwd: multicaDir,
-			env: pnpmBuildEnv,
+			env: npmEnv,
 		});
 		const multicaRevision = capture("git", ["-C", multicaDir, "rev-parse", "HEAD"]);
 		if (!multicaRevision.startsWith(multicaPin.shortRevision)) throw new Error("Multica checkout does not match backend/go.mod pin");

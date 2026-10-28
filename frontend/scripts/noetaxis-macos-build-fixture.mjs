@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync as nativeSpawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -25,14 +24,10 @@ export function fakeSpawnSync(command, args, options = {}) {
 			if (existsSync(file)) snapshot[file] = readFileSync(file, "utf8");
 		}
 	}
-	const configs = Object.fromEntries([env.npm_config_userconfig, env.npm_config_globalconfig].filter((file) => file?.includes("/noetaxis-public-npm-")).map((file) => [file, readFileSync(file, "utf8")]));
-	state.calls.push({ command, args, options: { ...options, env: { ...env } }, snapshot, configs });
+	const configs = Object.fromEntries([env.npm_config_userconfig, env.npm_config_globalconfig].filter((file) => file?.includes("/noetaxis-npm-")).map((file) => [file, readFileSync(file, "utf8")]));
+	state.calls.push({ command, args, options: { ...options, env: { ...env } }, snapshot, configs, configModes: Object.fromEntries(Object.keys(configs).map((file) => [file, statSync(file).mode & 0o777])) });
 	let stdout = "";
-	if ((command === "npm" || command === "corepack") && args.includes("config")) {
-		if (state.configCli) return nativeSpawnSync(command === "corepack" ? process.execPath : command, command === "corepack" ? [state.configCli, ...args.slice(1)] : args, options);
-		stdout = JSON.stringify({ registry: env.npm_config_registry, ...(command === "corepack" ? { globalconfig: path.join(state.root, "pnpm-rc"), "@jsr:registry": "https://npm.jsr.io/", ...state.pnpmConfig } : state.npmConfig) });
-	}
-	else if (command === "npm" && args[0] === "--version") stdout = "11.6.0";
+	if (command === "npm" && args[0] === "--version") stdout = "11.6.0";
 	else if (command === "uname") stdout = "arm64";
 	else if (command === "git" && args[0] === "rev-parse") stdout = fixtureRevision;
 	else if (command === "git" && args[0] === "worktree" && args[1] === "add") cpSync(state.source, args[3], { recursive: true });
@@ -73,7 +68,14 @@ export async function makeBuildFixture(t, options = {}) {
 	await writeFile(path.join(source, "backend/go.mod"), `replace github.com/multica-ai/multica/server => github.com/amolodyh-hyland/multica/server v0.0.0-20261020093039-${fixtureMulticaRevision.slice(0, 12)}\n`);
 	await mkdir(multica, { recursive: true });
 	await writeFile(path.join(multica, "pnpm-lock.yaml"), options.multicaLock ?? `packages:\n  example@1.0.0:\n    resolution: {tarball: ${registry}example/-/example-1.0.0.tgz}\n`);
-	await writeFile(path.join(multica, ".npmrc"), "shamefully-hoist=true\n@company:registry=https://proget.onbase.net/npm/npm\n");
+	await writeFile(path.join(multica, ".npmrc"), options.multicaNpmrc ?? "shamefully-hoist=true\n");
+	await writeFile(path.join(multica, "package.json"), JSON.stringify(options.multicaPackage ?? { name: "multica", version: "0.0.0" }));
+	await writeFile(path.join(multica, "pnpm-workspace.yaml"), options.multicaWorkspace ?? "packages:\n  - apps/*\n");
+	if (options.pnpmfile) await writeFile(path.join(multica, ".pnpmfile.cjs"), options.pnpmfile);
+	const userNpmrc = path.join(root, "auth-user-npmrc");
+	const globalNpmrc = path.join(root, "auth-global-npmrc");
+	await writeFile(userNpmrc, options.userNpmrc ?? "", { mode: 0o600 });
+	await writeFile(globalNpmrc, "", { mode: 0o600 });
 	const buildFile = new URL("./noetaxis-macos/build.mjs", import.meta.url);
 	const fixtureURL = pathToFileURL(import.meta.filename).href;
 	const contents = (await readFile(buildFile, "utf8"))
@@ -81,11 +83,12 @@ export async function makeBuildFixture(t, options = {}) {
 		.replace('"./package-artifacts.mjs"', JSON.stringify(fixtureURL))
 		.replace('"../go-build-env.mjs"', JSON.stringify(fixtureURL))
 		.replace('const repoRoot = path.resolve(scriptDir, "../../..");', `const repoRoot = ${JSON.stringify(source)};`)
+		.replace('await registryBuildEnv(configDir, registry)', `await registryBuildEnv(configDir, registry, { ...process.env, npm_config_userconfig: ${JSON.stringify(userNpmrc)}, npm_config_globalconfig: ${JSON.stringify(globalNpmrc)} })`)
 		.replace('process.platform !== "darwin" || process.arch !== "arm64"', 'false');
 	const file = path.join(root, "build.mjs");
 	await writeFile(file, contents);
 	const build = await import(pathToFileURL(file));
-	const state = { root, source, multica, calls: [], failInstall: options.failInstall, configCli: options.configCli, npmConfig: options.npmConfig, pnpmConfig: options.pnpmConfig };
+	const state = { root, source, multica, calls: [], failInstall: options.failInstall };
 	states.set(root, state);
 	t.after(() => states.delete(root));
 	return {

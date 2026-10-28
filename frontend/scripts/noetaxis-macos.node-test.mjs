@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { copyAgentBrowserLicenses } from "./agent-browser-license.mjs";
 import { buildDiskImage, buildPackages, writeManifest } from "./noetaxis-macos/package-artifacts.mjs";
-import { assertRegistryConfiguration, readRegistryConfiguration, parseArgs, parseMulticaPin, stampVersion, validateRegistry } from "./noetaxis-macos/build.mjs";
+import { checkMulticaConfiguration, prepareRegistry, progetAuth, registryBuildEnv, parseArgs, parseMulticaPin, stampVersion, validateRegistry } from "./noetaxis-macos/build.mjs";
 import { makeBuildFixture } from "./noetaxis-macos-build-fixture.mjs";
 import { copyFakeScripts } from "./noetaxis-macos-update-world.mjs";
 
@@ -227,185 +227,167 @@ test("build help describes the two modes without running the build", () => {
 	assert.match(help.stdout, /https:\/\/registry\.npmjs\.org\//);
 });
 
-test("default build preserves ProGet commands, lock routing, environment, and metadata", async (t) => {
-	setBuildEnv(t, { NOETAXIS_NPM_REGISTRY: undefined, COREPACK_INTEGRITY_KEYS: undefined });
-	const f = await makeBuildFixture(t);
-	await f.run();
-	const steps = f.calls.filter(({ command, args }) => ["npm", "corepack"].includes(command) && args[0] !== "--version" && !args.includes("config"));
-	assert.equal(steps.length, 9);
-	assert.deepEqual(steps.slice(0, 3).map(({ args }) => args[0]), ["ci", "ci", "pack"]);
-	const defaultEnv = {
-		...process.env,
-		npm_config_registry: registry, NPM_CONFIG_REGISTRY: registry,
-		npm_config_replace_registry_host: "npmjs", NPM_CONFIG_REPLACE_REGISTRY_HOST: "npmjs",
-		npm_config_loglevel: "error", NPM_CONFIG_LOGLEVEL: "error", COREPACK_NPM_REGISTRY: registry,
-	};
-	for (const step of steps) {
-		const scoped = step.command === "corepack" ? { "npm_config_@jsr:registry": registry } : {};
-		const extra = step.args.includes("install") ? { COREPACK_INTEGRITY_KEYS: "0" } : step.args[0] === "run" ? {
-			CGO_ENABLED: "1", AO_MULTICA_DESKTOP_OUT: path.join(step.options.env.AO_SCRATCH_SWIFT_CACHE, "../multica/apps/desktop/out"),
-			AO_RELEASE_REPO: "amolodyh-hyland/agent-orchestrator", AO_SCRATCH_SWIFT_CACHE: step.options.env.AO_SCRATCH_SWIFT_CACHE,
-			AO_AGENT_BROWSER_LICENSE_DIR: path.join(step.options.env.AO_SCRATCH_SWIFT_CACHE, "../agent-browser-licenses"),
-		} : {};
-		assert.deepEqual(step.options.env, { ...defaultEnv, ...scoped, ...extra });
-		assert.equal(step.options.env.npm_config_registry, registry);
-		assert.equal(step.options.env.NPM_CONFIG_REGISTRY, registry);
-		assert.equal(step.options.env.COREPACK_NPM_REGISTRY, registry);
-		assert.equal(step.options.env.npm_config_replace_registry_host, "npmjs");
-		if (step.args[0] === "ci") assert.deepEqual(step.args, ["ci", "--ignore-scripts", "--registry", registry, "--replace-registry-host", "npmjs"]);
-		for (const [file, contents] of Object.entries(step.snapshot)) {
-			if (file.endsWith(".npmrc")) assert.match(contents, /@company:registry=/);
-			if (file.endsWith("pnpm-lock.yaml")) assert.match(contents, /https:\/\/proget\.onbase\.net\/npm\/npm\/example/);
+test("both build modes use owned configuration and preserve build metadata", async (t) => {
+	setBuildEnv(t, { NOETAXIS_NPM_REGISTRY: undefined, "npm_config_@foreign:registry": "https://user:fixture-secret@foreign.example/", COREPACK_NPM_TOKEN: "foreign-secret", PNPM_CONFIG_REGISTRY: "https://foreign.example/" });
+	for (const publicMode of [false, true]) {
+		const selected = publicMode ? "https://registry.npmjs.org/" : registry;
+		const f = await makeBuildFixture(t, { userNpmrc: '@foreign:registry=https://user:fixture-secret@foreign.example/\n//foreign.example/:_authToken=foreign-secret\n//proget.onbase.net/npm/npm/:_authToken=proget-secret\n' });
+		await f.run(publicMode ? ["--public-registry"] : []);
+		const steps = f.calls.filter(({ command }) => ["npm", "corepack"].includes(command) || command.endsWith("/electron-forge"));
+		assert.equal(steps.length, 11);
+		for (const { command, args, options, configs, configModes, snapshot } of steps) {
+			assert.equal(options.env.npm_config_registry, selected);
+			assert.equal(options.env.NPM_CONFIG_REGISTRY, selected);
+			assert.equal(options.env.COREPACK_NPM_REGISTRY, selected.replace(/\/$/, ""));
+			assert.equal(options.env.COREPACK_ENABLE_ENV_FILE, "0");
+			assert.equal(options.env.npm_config_ignore_pnpmfile, "true");
+			assert.equal(options.env.npm_config_manage_package_manager_versions, "false");
+			assert.equal(options.env.COREPACK_NPM_TOKEN, publicMode ? undefined : "proget-secret");
+			for (const key of ["npm_config_@foreign:registry", "PNPM_CONFIG_REGISTRY"]) assert.equal(options.env[key], undefined);
+			for (const [file, content] of Object.entries(configs)) {
+				assert.equal(configModes[file], 0o600);
+				assert.match(content, new RegExp(`registry=${selected.replaceAll(".", "\\.")}`));
+				assert.doesNotMatch(content, /foreign|fixture-secret/);
+				assert.equal(content.includes("proget-secret"), !publicMode && file.endsWith("user-npmrc"));
+			}
+			for (const content of Object.values(snapshot)) assert.doesNotMatch(content, /MISSING_COMPANY_TOKEN/);
+			if (command === "corepack") assert.ok(args.includes("--ignore-pnpmfile"));
+			assert.equal(options.env.COREPACK_INTEGRITY_KEYS, !publicMode && args.includes("install") ? "0" : undefined);
 		}
-		assert.equal(step.options.env.COREPACK_INTEGRITY_KEYS, step.args.includes("install") ? "0" : undefined);
+		assert.deepEqual(steps.filter(({ args }) => args[0] === "run").map(({ args }) => args), [["run", "build:daemon"], ["run", "build:tmux"], ["run", "browser-runtime:prepare"], ["run", "build:acp-runtime"]]);
+		assert.equal(f.calls.some(({ args }) => args.includes("config")), false);
+		assert.match(await readFile(path.join(f.root, "output/BUILD-INFO.txt"), "utf8"), new RegExp(`^Registry: ${new URL(selected).host.replaceAll(".", "\\.")}$`, "m"));
+		await assert.rejects(readFile(steps[0].options.env.npm_config_userconfig), { code: "ENOENT" });
 	}
-	assert.deepEqual(steps.filter(({ command }) => command === "corepack").map(({ args }) => args), [
-		["pnpm@10.28.2", "install", "--frozen-lockfile", "--ignore-scripts", "--filter", "@multica/desktop...", `--registry=${registry}`],
-		["pnpm@10.28.2", "--filter", "@multica/desktop", "exec", "electron-vite", "build"],
-	]);
-	assert.deepEqual(steps.filter(({ args }) => args[0] === "run").map(({ args }) => args), [["run", "build:daemon"], ["run", "build:tmux"], ["run", "browser-runtime:prepare"], ["run", "build:acp-runtime"]]);
-	assert.match(await readFile(path.join(f.root, "output/BUILD-INFO.txt"), "utf8"), /^Registry: proget\.onbase\.net$/m);
 });
 
-test("public opt-in reaches every build step and isolates credentials and lockfile hosts", async (t) => {
-	setBuildEnv(t, { NOETAXIS_NPM_REGISTRY: registry, npm_config_registry: registry, NPM_CONFIG_REGISTRY: registry, npm_config__auth: "fixture-secret", NPM_CONFIG_USERCONFIG: "/must-not-read-company-config", npm_config_userconfig: "/must-not-read-company-config", COREPACK_NPM_REGISTRY: registry, COREPACK_NPM_TOKEN: "fixture-secret", COREPACK_INTEGRITY_KEYS: "0", COREPACK_ENV_FILE: "/must-not-read-company-env", NPM_TOKEN: "fixture-secret", NPM_AUTH_TOKEN: "fixture-secret", NODE_AUTH_TOKEN: "fixture-secret" });
-	const f = await makeBuildFixture(t, { lockRegistry: `${registry}/` });
-	await f.run(["--public-registry"]);
-	const steps = f.calls.filter(({ command, args }) => !args.includes("config") && (["npm", "corepack"].includes(command) || command.endsWith("/electron-forge")));
-	assert.equal(steps.length, 11);
-	for (const step of steps) {
-		const env = step.options.env;
-		assert.equal(env.npm_config_registry, "https://registry.npmjs.org/");
-		assert.equal(env.NPM_CONFIG_REGISTRY, "https://registry.npmjs.org/");
-		assert.equal(env.COREPACK_NPM_REGISTRY, "https://registry.npmjs.org");
-		assert.equal(env.COREPACK_ENABLE_ENV_FILE, "0");
-		assert.equal(env.npm_config_replace_registry_host, "always");
-		for (const key of ["COREPACK_NPM_TOKEN", "COREPACK_INTEGRITY_KEYS", "COREPACK_ENV_FILE", "NPM_TOKEN", "NPM_AUTH_TOKEN", "NODE_AUTH_TOKEN", "npm_config__auth"]) assert.equal(env[key], undefined, key);
-		assert.deepEqual(Object.values(step.configs), ["", ""]);
-		assert.equal(env.npm_config_userconfig, env.NPM_CONFIG_USERCONFIG);
-		assert.equal(env.npm_config_globalconfig, env.NPM_CONFIG_GLOBALCONFIG);
-		assert.doesNotMatch(step.args.join(" "), /proget/);
-		for (const [file, contents] of Object.entries(step.snapshot)) {
-			assert.doesNotMatch(contents, /proget|MISSING_COMPANY_TOKEN/, file);
-			assert.match(contents, /https:\/\/registry\.npmjs\.org\//, file);
-			if (file.endsWith("pnpm-lock.yaml")) assert.doesNotMatch(contents, /npmjs\.org\/\//);
-		}
-	}
-	const install = steps.find(({ command, args }) => command === "corepack" && args.includes("install"));
-	assert.ok(install.args.includes("--registry=https://registry.npmjs.org/"));
-	assert.match(Object.values(install.snapshot).join("\n"), /shamefully-hoist=true/);
-	for (const step of steps.filter(({ args }) => ["ci", "pack"].includes(args[0]))) {
-		assert.equal(step.args[step.args.indexOf("--registry") + 1], "https://registry.npmjs.org/");
-		assert.equal(step.args[step.args.indexOf("--replace-registry-host") + 1], "always");
-	}
-	assert.match(await readFile(path.join(f.root, "output/BUILD-INFO.txt"), "utf8"), /^Registry: registry\.npmjs\.org$/m);
-	await assert.rejects(readFile(steps[0].options.env.npm_config_userconfig), { code: "ENOENT" });
+test("ProGet auth extraction copies only applicable scoped auth and resolves only its variables", async (t) => {
+	const root = await testRoot(t, "noetaxis-auth");
+	const user = path.join(root, "user-npmrc");
+	const global = path.join(root, "global-npmrc");
+	await writeFile(global, '//proget.onbase.net/:_authToken=old-token\n');
+	await writeFile(user, '@foreign:registry=https://user:password@foreign.example/\n//foreign.example/:_authToken=${NEVER_RESOLVE_THIS}\n//proget.onbase.net/:_authToken=${PROGET_TOKEN}\n//proget.onbase.net/npm/other/:_authToken=wrong-feed\n//proget.onbase.net/:email=company-email\n');
+	const inherited = { PATH: process.env.PATH, HOME: root, npm_config_userconfig: user, npm_config_globalconfig: global, PROGET_TOKEN: "selected-token", "npm_config_@foreign:registry": "https://foreign.example/", COREPACK_NPM_REGISTRY: "https://foreign.example/" };
+	const config = path.join(root, "owned");
+	await mkdir(config);
+	const env = await registryBuildEnv(config, registry, inherited);
+	const content = await readFile(env.npm_config_userconfig, "utf8");
+	assert.match(content, /\/\/proget\.onbase\.net\/:_authToken="selected-token"/);
+	assert.doesNotMatch(content, /old-token|wrong-feed|foreign|NEVER_RESOLVE|company-email/);
+	assert.equal(env.COREPACK_NPM_TOKEN, "selected-token");
+	assert.equal((await lstat(env.npm_config_userconfig)).mode & 0o777, 0o600);
+	await writeFile(user, `//proget.onbase.net/npm/npm/:username=fixture-user\n//proget.onbase.net/npm/npm/:_password=${Buffer.from("fixture-password").toString("base64")}\n`);
+	const basicDir = path.join(root, "basic"); await mkdir(basicDir);
+	const basicEnv = await registryBuildEnv(basicDir, registry, inherited);
+	assert.equal(basicEnv.COREPACK_NPM_USERNAME, "fixture-user");
+	assert.equal(basicEnv.COREPACK_NPM_PASSWORD, "fixture-password");
+	const publicDir = path.join(root, "public"); await mkdir(publicDir);
+	const publicEnv = await registryBuildEnv(publicDir, "https://registry.npmjs.org/", { ...inherited, npm_config_userconfig: root, npm_config_globalconfig: root });
+	assert.doesNotMatch(await readFile(publicEnv.npm_config_userconfig, "utf8"), /auth|token/);
+	assert.equal(publicEnv.COREPACK_NPM_TOKEN, undefined);
+	assert.throws(() => progetAuth('//proget.onbase.net/:_authToken=${MISSING}\n', {}), (error) => !error.message.includes("MISSING"));
 });
 
-test("public builds reject unrecognized lockfile downloads without installing them", async (t) => {
-	const f = await makeBuildFixture(t, { multicaLock: 'packages:\n  example@1.0.0:\n    resolution: {tarball: https://private.example/npm/example.tgz}\n' });
-	await assert.rejects(f.run(["--public-registry"]), /non-public npm download/);
-	assert.equal(f.calls.some(({ command }) => command === "corepack"), false);
-});
-
-test("public registry failures stop the build without a ProGet retry", async (t) => {
-	const f = await makeBuildFixture(t, { failInstall: true });
-	await assert.rejects(f.run(["--public-registry"]), /corepack failed/);
-	assert.equal(f.calls.filter(({ command, args }) => command === "corepack" && !args.includes("config")).length, 1);
-	assert.equal(f.calls.some(({ command, args }) => command === "npm" && args[0] === "run"), false);
-});
-
-test("registry preflight rejects scoped npm/env and pnpm overrides without displaying secrets", async (t) => {
-	for (const source of ["npmConfig", "pnpmConfig"]) {
-		for (const url of ["https://registry.npmjs.org/", "https://other.example/npm/", "https://user:fixture-secret@other.example/npm/?fixture-secret#fixture-secret"]) {
-			const f = await makeBuildFixture(t, { [source]: { "@company:registry": url } });
-			await assert.rejects(f.run(), (error) => {
-				assert.match(error.message, /disallowed registry override.*proget\.onbase\.net/);
-				assert.doesNotMatch(error.message, /fixture-secret|other\.example|@company/);
+test("Multica configuration is rejected statically before any pnpm invocation", async (t) => {
+	for (const publicMode of [false, true]) {
+		for (const options of [
+			{ multicaWorkspace: 'configDependencies:\n  dangerous: 1.0.0\n' },
+			{ multicaWorkspace: 'ignorePnpmfile: false\n' },
+			{ multicaWorkspace: 'managePackageManagerVersions: true\n' },
+			{ multicaWorkspace: 'registry: https://user:fixture-secret@foreign.example/\n' },
+			{ multicaWorkspace: '{"configDependencies": {"dangerous": "1.0.0"}}\n' },
+			{ multicaWorkspace: '"config\\u0044ependencies":\n  dangerous: 1.0.0\n' },
+			{ multicaNpmrc: '@foreign:registry=https://user:fixture-secret@foreign.example/\n' },
+			{ multicaNpmrc: 'global-pnpmfile=/fixture-secret\n' },
+			{ multicaPackage: { name: "multica", pnpm: { configDependencies: { dangerous: "1.0.0" } } } },
+			{ multicaPackage: { name: "multica", pnpm: { registries: { "@foreign": "https://foreign.example/" } } } },
+			{ multicaPackage: { name: "multica", dependencies: { dangerous: "https://foreign.example/pkg.tgz" } } },
+			{ multicaPackage: { name: "multica", dependencies: { dangerous: "HTTPS://foreign.example/pkg.tgz" } } },
+			{ multicaPackage: { name: "multica", dependencies: { dangerous: "//foreign.example/pkg.tgz" } } },
+			{ pnpmfile: 'require("fs").writeFileSync("hook-ran", "fixture-secret")' },
+		]) {
+			const f = await makeBuildFixture(t, options);
+			await assert.rejects(f.run(publicMode ? ["--public-registry"] : []), (error) => {
+				assert.match(error.message, /Unsupported Multica package-manager configuration/);
+				assert.doesNotMatch(error.message, /fixture-secret|foreign\.example/);
 				return true;
 			});
-			assert.equal(f.calls.some(({ args }) => args.includes("install")), false);
-			if (source === "npmConfig") assert.equal(f.calls.some(({ args }) => args[0] === "ci"), false);
+			assert.equal(f.calls.some(({ command }) => command === "corepack"), false);
 		}
 	}
-	const f = await makeBuildFixture(t, { pnpmConfig: { "registries": { "@company": "https://other.example/" } } });
-	await assert.rejects(f.run(["--public-registry"]), /disallowed registry override.*registry\.npmjs\.org/);
 });
 
-test("registry configuration checks fail closed on command errors and malformed output", () => {
-	for (const source of ['process.stdout.write("fixture-secret"); process.exit(1)', 'process.stdout.write("fixture-secret")', 'process.stdout.write("[]")', 'process.stdout.write("{}")']) {
-		assert.throws(() => readRegistryConfiguration(process.execPath, ["-e", source], {}), (error) => {
-			assert.match(error.message, /refusing to install dependencies/);
-			assert.doesNotMatch(error.message, /fixture-secret/);
-			return true;
-		});
+test("foreign lockfile downloads and registry failures never trigger a fallback", async (t) => {
+	for (const publicMode of [false, true]) {
+		const args = publicMode ? ["--public-registry"] : [];
+		const foreign = await makeBuildFixture(t, { multicaLock: 'packages:\n  dangerous@1.0.0:\n    resolution: {tarball: https://foreign.example/pkg.tgz}\n' });
+		await assert.rejects(foreign.run(args), /foreign package download/);
+		assert.equal(foreign.calls.some(({ command }) => command === "corepack"), false);
+		const failed = await makeBuildFixture(t, { failInstall: true });
+		await assert.rejects(failed.run(args), /corepack failed/);
+		assert.equal(failed.calls.filter(({ command }) => command === "corepack").length, 1);
+		await assert.rejects(readFile(failed.calls.find(({ command }) => command === "npm").options.env.npm_config_userconfig), { code: "ENOENT" });
 	}
-	assert.doesNotThrow(() => assertRegistryConfiguration({ "@company:registry": `${registry}/`, "//proget.onbase.net/npm/npm/:_authToken": "fixture-secret" }, registry));
 });
 
-test("actual pnpm 10.28.2 configuration isolates public mode and rejects foreign scopes in ProGet mode", { skip: !process.env.NOETAXIS_TEST_PNPM_CLI && "Set NOETAXIS_TEST_PNPM_CLI to the pinned pnpm 10.28.2 bin/pnpm.cjs for offline effective-config verification" }, async (t) => {
+test("real npm and pnpm use only the constructed registry without network access or hooks", { skip: !process.env.NOETAXIS_TEST_PNPM_CLI && "Set NOETAXIS_TEST_PNPM_CLI to pinned pnpm 10.28.2 for offline configuration tests" }, async (t) => {
+	const root = await testRoot(t, "noetaxis-offline-registry");
 	const cli = process.env.NOETAXIS_TEST_PNPM_CLI;
-	const root = await testRoot(t, "noetaxis-effective-config");
-	const home = path.join(root, "home");
-	const config = path.join(root, "xdg");
-	const userconfig = path.join(root, "user-npmrc");
-	const globalconfig = path.join(root, "global-npmrc");
-	await mkdir(home, { recursive: true });
-	await mkdir(path.join(config, "pnpm"), { recursive: true });
-	await writeFile(userconfig, "");
-	await writeFile(globalconfig, "");
-	setBuildEnv(t, { HOME: home, XDG_CONFIG_HOME: config, PNPM_HOME: path.join(root, "untrusted-pnpm"), npm_config_userconfig: userconfig, NPM_CONFIG_USERCONFIG: userconfig, npm_config_globalconfig: globalconfig, NPM_CONFIG_GLOBALCONFIG: globalconfig, npm_config_registry: registry, NPM_CONFIG_REGISTRY: registry, NOETAXIS_NPM_REGISTRY: registry, CI: "1", COREPACK_ENABLE_NETWORK: "0" });
-	const globalRc = path.join(config, "pnpm/rc");
-	await writeFile(globalRc, `@company:registry=${registry}\n//proget.onbase.net/npm/npm/:_authToken=fixture-secret\n`);
-	const version = execute(process.execPath, [cli, "--version"], { cwd: root, env: process.env });
-	assert.equal(version.status, 0);
-	assert.equal(version.stdout.trim(), "10.28.2");
-	const baseline = readRegistryConfiguration(process.execPath, [cli, "config", "list", "--json"], { cwd: root, env: process.env });
-	assert.equal(baseline["@company:registry"], registry, "the control must demonstrate pnpm independently loading its global rc");
-	const f = await makeBuildFixture(t, { configCli: cli });
-	await f.run(["--public-registry"]);
-	const pnpm = f.calls.find(({ command, args }) => command === "corepack" && args.includes("install"));
-	const effective = readRegistryConfiguration(process.execPath, [cli, "config", "list", "--json"], { cwd: root, env: pnpm.options.env });
-	assert.equal(effective.registry, "https://registry.npmjs.org/");
-	assert.equal(effective["@company:registry"], undefined);
-	assert.equal(effective["//proget.onbase.net/npm/npm/:_authToken"], undefined);
-	assert.equal(effective["@jsr:registry"], "https://registry.npmjs.org/");
-	assert.doesNotThrow(() => assertRegistryConfiguration(effective, "https://registry.npmjs.org/"));
-	assert.equal(effective["manage-package-manager-versions"], false);
-	assert.equal(effective["ignore-pnpmfile"], true);
-	const allowed = await makeBuildFixture(t, { configCli: cli });
-	await allowed.run();
-	const internalPnpm = allowed.calls.find(({ command, args }) => command === "corepack" && args.includes("install"));
-	const internalConfig = readRegistryConfiguration(process.execPath, [cli, "config", "list", "--json"], { cwd: root, env: internalPnpm.options.env });
-	assert.equal(internalConfig["@company:registry"], registry);
-	assert.equal(internalConfig["//proget.onbase.net/npm/npm/:_authToken"], "fixture-secret");
-	assert.equal(internalConfig["@jsr:registry"], registry);
-	for (const url of ["https://registry.npmjs.org/", "https://private.example/npm/"]) {
-		await writeFile(globalRc, `@company:registry=${url}\n//private.example/:_authToken=fixture-secret\n`);
-		const blocked = await makeBuildFixture(t, { configCli: cli });
-		await assert.rejects(blocked.run(), (error) => { assert.match(error.message, /disallowed registry override/); assert.doesNotMatch(error.message, /fixture-secret|private\.example/); return true; });
-		assert.equal(blocked.calls.some(({ args }) => args.includes("install")), false);
+	const user = path.join(root, "user-npmrc"); const global = path.join(root, "global-npmrc");
+	const guard = path.join(root, "offline.cjs"); const requests = path.join(root, "requests");
+	await writeFile(user, '@password:registry=https://user:fixture-secret@foreign.example/\n//foreign.example/:_authToken=foreign-token\n//proget.onbase.net/npm/npm/:_authToken=proget-token\n');
+	await writeFile(global, '@foreign:registry=https://foreign.example/\n');
+	await writeFile(guard, `const fs = require("node:fs");
+function block(kind, target, options) {
+ let host = "unknown";
+ try { host = typeof target === "string" || target instanceof URL ? new URL(target).hostname : target.hostname || target.host || "unknown"; } catch {}
+ const headers = target?.headers || options?.headers;
+ let authenticated = false;
+ try { authenticated = new Headers(headers || {}).get("authorization") === "Bearer proget-token"; } catch {}
+ fs.appendFileSync(process.env.NOETAXIS_REQUESTS, JSON.stringify({ kind, host, authenticated }) + "\\n");
+ throw new Error("NOETAXIS_OFFLINE");
+}
+for (const kind of ["http", "https"]) {
+ const module = require("node:" + kind);
+ module.request = module.get = (...args) => block(kind, args[0], args[1]);
+}
+require("node:net").Socket.prototype.connect = function (...args) { return block("socket", args[0]); };
+global.fetch = (...args) => block("fetch", args[0], args[1]);
+`);
+	const inherited = { PATH: process.env.PATH, HOME: root, TMPDIR: root, CI: "1", NO_UPDATE_NOTIFIER: "1", npm_config_userconfig: user, npm_config_globalconfig: global, XDG_CONFIG_HOME: path.join(root, "foreign-xdg"), PNPM_HOME: path.join(root, "foreign-pnpm"), "npm_config_@password:registry": "https://user:fixture-secret@foreign.example/", COREPACK_NPM_REGISTRY: "https://foreign.example/", NODE_OPTIONS: `--require=${guard}`, NOETAXIS_REQUESTS: requests };
+	await mkdir(path.join(inherited.XDG_CONFIG_HOME, "pnpm"), { recursive: true });
+	await writeFile(path.join(inherited.XDG_CONFIG_HOME, "pnpm/rc"), '@password:registry=https://user:fixture-secret@foreign.example/\n');
+	for (const selected of [registry, "https://registry.npmjs.org/"]) {
+		const project = path.join(root, selected === registry ? "internal" : "public"); await mkdir(project);
+		await writeFile(path.join(project, "package.json"), JSON.stringify({ name: "fixture", version: "1.0.0", dependencies: { "@password/noetaxis-fixture": "1.0.0" } }));
+		await writeFile(path.join(project, "pnpm-workspace.yaml"), 'packages:\n  - apps/*\n');
+		await writeFile(path.join(project, ".npmrc"), "shamefully-hoist=true\n");
+		await checkMulticaConfiguration(project, selected);
+		const owned = path.join(project, "owned"); await mkdir(owned);
+		const env = await registryBuildEnv(owned, selected, inherited);
+		await prepareRegistry(project, selected, true);
+		const version = execute(process.execPath, [cli, "--version"], { cwd: project, env, timeout: 10_000 });
+		assert.equal(version.status, 0); assert.equal(version.stdout.trim(), "10.28.2");
+		await writeFile(path.join(project, ".pnpmfile.cjs"), 'require("node:fs").writeFileSync("hook-ran", "bad"); module.exports={hooks:{updateConfig(config){config.registries={default:"https://foreign.example/"};return config}}};');
+		await writeFile(path.join(project, "pnpm-workspace.yaml"), 'ignorePnpmfile: false\n');
+		for (const [command, args] of [["npm", ["view", "@password/noetaxis-fixture", "version", "--fetch-retries=0"]], [process.execPath, [cli, "--ignore-pnpmfile", "install", "--ignore-scripts", "--lockfile=false", "--fetch-retries=0"]]]) {
+			await writeFile(requests, "");
+			const result = execute(command, args, { cwd: project, env, timeout: 10_000 });
+			assert.notEqual(result.status, 0, "the offline guard must block the dependency request");
+			const seen = (await readFile(requests, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+			assert.ok(seen.length > 0, "a real package-manager request must reach the offline guard");
+			for (const request of seen) {
+				assert.equal(request.host, new URL(selected).hostname);
+				assert.equal(request.authenticated, selected === registry, `auth header at ${command}`);
+			}
+			await assert.rejects(lstat(path.join(project, "hook-ran")), { code: "ENOENT" });
+		}
+		await assert.rejects(checkMulticaConfiguration(project, selected), /Unsupported Multica/);
+		await writeFile(path.join(project, "pnpm-workspace.yaml"), 'configDependencies:\n  dangerous: https://foreign.example/pkg.tgz\n');
+		await writeFile(requests, "");
+		await assert.rejects(checkMulticaConfiguration(project, selected), /Unsupported Multica/);
+		assert.equal(await readFile(requests, "utf8"), "");
 	}
-	await writeFile(globalRc, "");
-	for (const npmrc of [userconfig, globalconfig]) {
-		await writeFile(npmrc, "@foreign:registry=https://private.example/\n//private.example/:_authToken=fixture-secret\n");
-		const blocked = await makeBuildFixture(t, { configCli: cli });
-		await assert.rejects(blocked.run(), /disallowed registry override/);
-		assert.equal(blocked.calls.some(({ args }) => args[0] === "ci"), false);
-		await writeFile(npmrc, "");
-	}
-	const projectBlocked = await makeBuildFixture(t, { configCli: cli });
-	await writeFile(path.join(projectBlocked.source, "frontend/.npmrc"), "@foreign:registry=https://private.example/\n");
-	await assert.rejects(projectBlocked.run(), /disallowed registry override/);
-	assert.equal(projectBlocked.calls.some(({ args }) => args[0] === "ci"), false);
-	process.env["npm_config_@company:registry"] = "https://private.example/";
-	t.after(() => { delete process.env["npm_config_@company:registry"]; });
-	const envBlocked = await makeBuildFixture(t, { configCli: cli });
-	await assert.rejects(envBlocked.run(), /disallowed registry override/);
-	assert.equal(envBlocked.calls.some(({ args }) => args[0] === "ci"), false);
-	await writeFile(globalRc, "@foreign:registry=https://private.example/\n//private.example/:_authToken=fixture-secret\n");
-	const publicExternal = await makeBuildFixture(t, { configCli: cli });
-	await publicExternal.run(["--public-registry"]);
 });
 
 test("agent-browser license files copy byte-for-byte from the internal package", async (t) => {
