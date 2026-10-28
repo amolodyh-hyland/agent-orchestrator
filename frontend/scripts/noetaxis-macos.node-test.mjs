@@ -347,7 +347,7 @@ test("both build modes use owned configuration and preserve build metadata", asy
 				assert.equal(content.includes("proget-secret"), !publicMode && file.endsWith("user-npmrc"));
 			}
 			for (const content of Object.values(snapshot)) assert.doesNotMatch(content, /MISSING_COMPANY_TOKEN/);
-			if (command === "corepack") assert.ok(args.includes("--ignore-pnpmfile"));
+			if (command === "corepack") assert.ok(args.includes(args.includes("exec") ? "--config.ignore-pnpmfile=true" : "--ignore-pnpmfile"));
 			assert.equal(options.env.COREPACK_INTEGRITY_KEYS, !publicMode && args.includes("install") ? "0" : undefined);
 		}
 		const pack = steps.find(({ args }) => args[0] === "pack");
@@ -653,6 +653,53 @@ test("real npm and pnpm use only the constructed registry without network access
 		await writeFile(path.join(project, "pnpm-workspace.yaml"), 'configDependencies:\n  dangerous: https://foreign.example/pkg.tgz\n');
 		await writeFile(requests, "");
 		await assert.rejects(checkMulticaConfiguration(project, selected), /Unsupported Multica/);
+		assert.equal(await readFile(requests, "utf8"), "");
+	}
+});
+
+test("real pnpm 10.28.2 executes the Multica build command without hooks in both registry modes", { skip: !process.env.NOETAXIS_TEST_PNPM_CLI && "Set NOETAXIS_TEST_PNPM_CLI to pinned pnpm 10.28.2" }, async (t) => {
+	const cli = process.env.NOETAXIS_TEST_PNPM_CLI;
+	const { root, inherited, requests } = await offlineRegistryFixture(t);
+	for (const publicMode of [false, true]) {
+		const selected = publicMode ? "https://registry.npmjs.org/" : registry;
+		const f = await makeBuildFixture(t);
+		await f.run(publicMode ? ["--public-registry"] : []);
+		const invocation = f.calls.find(({ command, args }) => command === "corepack" && args.includes("exec"));
+		assert.equal(invocation.args[0], "pnpm@10.28.2");
+		const project = path.join(root, publicMode ? "exec-public" : "exec-internal");
+		const desktop = path.join(project, "apps/desktop");
+		const bin = path.join(desktop, "node_modules/.bin");
+		await mkdir(bin, { recursive: true });
+		await writeFile(path.join(project, "package.json"), '{"name":"multica","packageManager":"pnpm@10.28.2"}');
+		await writeFile(path.join(desktop, "package.json"), '{"name":"@multica/desktop","version":"1.0.0"}');
+		await writeFile(path.join(project, "pnpm-workspace.yaml"), 'packages:\n  - apps/*\n');
+		await checkMulticaConfiguration(project, selected);
+		await prepareRegistry(project, selected, true);
+		const owned = path.join(project, "owned"); await mkdir(owned);
+		const env = await registryBuildEnv(owned, selected, inherited);
+		const version = execute(process.execPath, [cli, "--version"], { cwd: project, env, timeout: 10_000 });
+		assert.equal(version.status, 0, version.stderr);
+		assert.equal(version.stdout.trim(), "10.28.2");
+		const output = path.join(project, "build-ran.json");
+		await writeFile(path.join(bin, "electron-vite"), `#!${process.execPath}
+require("node:fs").writeFileSync(${JSON.stringify(output)}, JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(2) }));
+`, { mode: 0o755 });
+		const hooks = ["local-hook-ran", "global-hook-ran", "update-config-ran"].map((name) => path.join(project, name));
+		const globalHook = path.join(project, "global-pnpmfile.cjs");
+		await writeFile(globalHook, `require("node:fs").writeFileSync(${JSON.stringify(hooks[1])}, "bad"); module.exports={hooks:{}};`);
+		await writeFile(path.join(project, ".pnpmfile.cjs"), `const fs=require("node:fs"); fs.writeFileSync(${JSON.stringify(hooks[0])}, "bad"); module.exports={hooks:{updateConfig(config){fs.writeFileSync(${JSON.stringify(hooks[2])}, "bad");return config}}};`);
+		await writeFile(path.join(project, ".npmrc"), `registry=${selected}\nglobal-pnpmfile=${globalHook}\n`);
+		await writeFile(path.join(project, "pnpm-workspace.yaml"), 'packages:\n  - apps/*\nignorePnpmfile: false\n');
+		await writeFile(requests, "");
+		const result = execute(process.execPath, [cli, ...invocation.args.slice(1)], { cwd: project, env, timeout: 10_000 });
+		assert.equal(result.status, 0, result.stdout + result.stderr);
+		assert.deepEqual(JSON.parse(await readFile(output, "utf8")), { cwd: await realpath(desktop), args: ["build"] });
+		for (const hook of [...hooks, path.join(root, "global-hook-ran")]) await assert.rejects(lstat(hook), { code: "ENOENT" });
+		assert.equal(await readFile(requests, "utf8"), "");
+		const controlArgs = invocation.args.slice(1).filter((arg) => !arg.includes("ignore-pnpmfile"));
+		const control = execute(process.execPath, [cli, ...controlArgs], { cwd: project, env: { ...env, npm_config_ignore_pnpmfile: "false" }, timeout: 10_000 });
+		assert.equal(control.status, 0, control.stdout + control.stderr);
+		for (const hook of hooks) assert.equal(await readFile(hook, "utf8"), "bad", "the control must prove each hook can run");
 		assert.equal(await readFile(requests, "utf8"), "");
 	}
 });
