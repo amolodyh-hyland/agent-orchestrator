@@ -4,11 +4,37 @@ This flow creates an arm64 desktop app, `MANIFEST.sha256`, an unsigned installer
 
 ## Build
 
-Run from the AO fork checkout on an Apple Silicon Mac with macOS, Node 24, npm 11, Go 1.27.1 or newer, Xcode command line tools, and Corepack available. Join the company VPN first. Every npm and pnpm registry request is pinned to the internal ProGet endpoint `https://proget.onbase.net/npm/npm`. Package credentials are read through the normal npm configuration and are never printed by these scripts. Not every network request is a registry request. Besides the registry, the build contacts: `github.com` (git clone of the Multica fork and the checksum-pinned agent-browser release binary), the Electron binary download used by Electron Forge, and the Go module proxy. Check that your VPN and policy allow these. `COREPACK_INTEGRITY_KEYS=0` is set only for the pnpm install step, and the pnpm tarball is not hash-pinned.
+Run from the AO fork checkout on an Apple Silicon Mac with macOS, Node 24, npm 11, Go 1.27.1 or newer, Xcode command line tools, and Corepack available.
+
+**Company machines (default):** join the company VPN first. Registry requests use `https://proget.onbase.net/npm/npm`. The build reads the configured npm user/global rc files directly and imports only ProGet-scoped authentication applicable to this feed (bearer tokens or basic authentication, including environment-variable references). Auth discovery honors the user rc’s `globalconfig`/`prefix`, environment overrides, and npm’s inline-comment, escape and quoting rules. It does not import other registry settings, credentials or unscoped auth. Imported auth is written only to the private temporary user npmrc (mode `0600`); Corepack receives the same applicable ProGet credentials. Credentials and configuration contents are never printed, and the temporary configuration is deleted on normal completion, thrown/uncaught errors, and SIGINT/SIGTERM/SIGHUP. Commands that run while credentials exist are asynchronous so cleanup can run while a child is blocked; credentials are removed before native artifact packaging. SIGKILL, fatal runtime crashes and power loss cannot run cleanup; they may leave the private temporary directory behind. `COREPACK_INTEGRITY_KEYS=0` is set only for the pnpm install/download step because the mirror has no npm signature metadata; the pnpm tarball is not hash-pinned.
 
 ```bash
 node frontend/scripts/noetaxis-macos/build.mjs
 ```
+
+**Personal Macs (explicit opt-in):** use the public npm registry without the company VPN or company npm credentials:
+
+```bash
+node frontend/scripts/noetaxis-macos/build.mjs --public-registry
+```
+
+Public mode selects `https://registry.npmjs.org/` for AO installs, the pinned browser license package, Corepack's pnpm download, the Multica pnpm install/build, and child steps such as the ACP runtime install. It never reads the user's npm configuration or imports authentication. Corepack keeps normal signature verification.
+
+**Both modes construct their own configuration.** npm user/global rc files, project npmrc files in the temporary build copies, and pnpm's XDG global rc contain the selected registry and pin pnpm's built-in `@jsr` scope to it. Every inherited `npm_config_*`, `pnpm_*` (including `pnpm_config_*`), and `COREPACK_*` setting is removed case-insensitively before build-owned values are set. This includes `workspace_dir` and `global_pnpmfile` overrides. npm authentication variables are removed too; only applicable ProGet auth is restored in default mode.
+
+The build disables package-manager version switching. Both pnpm commands explicitly pass `--ignore-pnpmfile`, disabling workspace and global pnpmfiles. Workspace `ignorePnpmfile: false` is rejected before pnpm starts, and dependency installs retain `--ignore-scripts`. The license-seeding `npm pack agent-browser@0.38.1` command uses the same owned npm configuration as installs.
+
+`XDG_CONFIG_HOME`, `PNPM_HOME` and `COREPACK_HOME` point to fresh build-owned directories. Corepack receives the selected endpoint through `COREPACK_NPM_REGISTRY` and `COREPACK_ENABLE_PROJECT_SPEC=0`/`COREPACK_ENABLE_ENV_FILE=0`; inherited caches, project package-manager selection and `.corepack.env` files do not select another registry or cache. npm may reuse its content cache, but user configuration and caches do not select registries. No npm/pnpm configuration-inspection command runs during the build.
+
+Before pnpm starts, the pinned Multica checkout is checked statically for configuration dependencies (including explicit tarball URLs that need not appear in a lockfile), hook files/settings, registry/scoped-registry settings, version-switching overrides, and foreign HTTP tarball/dependency URLs in `pnpm-workspace.yaml`, `.npmrc` and `package.json`. Unsupported configuration stops the build without displaying its values. JSON and YAML are parsed before validation, including quoted/escaped keys, flow mappings and explicit mapping keys. The workspace allows only `packages`, `catalog` and `catalogs`; root manifest pnpm settings allow only the pinned `onlyBuiltDependencies`, `overrides` and `patchedDependencies`. Other settings, alternate lockfile locations, cyclic/shared YAML objects and unsupported tags stop the build. The source npmrc allows only the pinned `shamefully-hoist=true` setting, which is preserved. Known registry lockfile URLs are routed to the selected endpoint after parsing; foreign package download URLs and unapproved Git sources stop the build. Local workspace links are allowed. The only non-registry package source exception is `@electron/node-gyp` from `github.com/electron/node-gyp.git`: every Git specification and its lockfile `resolved` must agree on an exact 40-character commit, or the build stops. Its Git URL is preserved in both modes; npm can fetch the corresponding archive from `codeload.github.com` or clone from GitHub. npm uses `replace-registry-host=npmjs` in both modes, since `always` would also rewrite Git URLs. Failed requests never retry another registry.
+
+`--public-registry` overrides `NOETAXIS_NPM_REGISTRY`. The existing `--registry <url>` option must match the selected mode: ProGet without the flag, public npm with the flag. Setting `--registry https://registry.npmjs.org/` or `NOETAXIS_NPM_REGISTRY` alone does not opt in. The registry selection accepts only these two endpoints; credentials, query strings, fragments and alternate ports in that selection are rejected. Inherited scoped-registry overrides, including URLs containing passwords, are discarded rather than passed to package managers. `--help` lists both modes. `BUILD-INFO.txt` records the selected registry host.
+
+Dependency check at AO `ab2b4da93`: all eight npm lockfiles contain no Hyland-only packages or private download hosts. Downloads use public npm, local workspace links, and the allowlisted public `electron/node-gyp` GitHub repository at commit `06b29aafb7708acef8b3669835c8a7857ebc92d2`. All eight AO lockfiles and the pinned Multica config/lockfile also pass the build’s parsed gates in both registry modes. The Multica `pnpm-lock.yaml` at `4b32bc7710753a6d97277c3833a4d7d19e48b2f7` (the revision pinned by `backend/go.mod`) has no private registry/tarball URLs or internal package scopes; its local packages use workspace links. Recheck dependencies when changing either source revision.
+
+Not every network request is a registry request. Both modes also contact `github.com` (the Multica fork, the approved `electron/node-gyp` source exception and the checksum-pinned browser release binary), `codeload.github.com` (the exact-commit node-gyp archive), the Electron binary download used by Electron Forge, `nodejs.org` for the packaged ACP runtime, and the Go module proxy. GitHub access to the source forks is still required. Company machines should keep the default VPN/ProGet path and allow these additional downloads under company policy.
+
+The static checks use bundled, non-executing parsers so no parser install or config-loading subprocess is needed before validation: [js-yaml 4.1.1](https://github.com/nodeca/js-yaml/tree/4.1.1) (`parsers/js-yaml.mjs`, SHA-256 `efbc45850bf15f0c8ee3434983f512be656002d7507dc292c7ade4449b5d57fa`) with its JSON schema, and [npm ini 6.0.0](https://github.com/npm/ini/tree/v6.0.0) (`parsers/ini.cjs`, SHA-256 `007123836ffec243f41c8b35584fb3db0498aa12a440a9e0efc675d0000f4c32`). Their original licenses are alongside the parser files. Keep these source copies pinned and review updates before replacing them.
 
 The default source is `HEAD` of the checkout running the command. To select a commit or tag and output location:
 
@@ -35,6 +61,19 @@ The output contains:
 - `SHA256SUMS`, covering the installer, packages, manifest and build information (the app itself is covered by `MANIFEST.sha256`)
 
 The app is signed with an ad-hoc signature (`codesign --sign -`). It has no Apple Developer ID, certificate chain, or notarization ticket. The PKG and DMG are unsigned. `MANIFEST.sha256` detects corruption and unlisted files; it sits next to the app, so it is not tamper protection. The PKG has not been run through Installer.app (Installer compares `CFBundleVersion` before the scripts run, so it may skip an upgrade between `-noetaxis` builds); the script install from the build output is the verified path. The app contains `Resources/ao-updates-disabled`; rebuild and reinstall from a reviewed source ref to update it.
+
+## Registry configuration tests
+
+The node tests fake the full build. To also exercise real npm and the pinned pnpm CLI, supply a previously downloaded/unpacked pnpm `10.28.2` CLI:
+
+```bash
+NOETAXIS_TEST_PNPM_CLI=/path/to/pnpm-10.28.2/package/bin/pnpm.cjs \
+  node --test frontend/scripts/noetaxis-macos.node-test.mjs
+```
+
+The regressions use temporary homes and fake user/global rc files, including foreign scopes with URL passwords, an external workspace, and global/workspace pnpmfiles. Real npm metadata, the pinned browser `npm pack`, and pnpm install attempts run under a network guard that intercepts requests before network access; every attempted request must target the selected registry. Hooks must never execute, and configuration dependencies or `ignorePnpmfile: false` must be rejected statically before pnpm can load them. Without the pnpm CLI variable, that integration test is explicitly skipped.
+
+A separate test runs the real installed Corepack CLI: it first proves a fake inherited pnpm cache is usable, then verifies the build ignores that cache and poisoned `.corepack.env` files. The guard returns synthetic pnpm metadata and intercepts the resulting tarball fetch. Both requests must target the selected endpoint, with ProGet auth only in default mode and a cache created inside the owned temporary directory. The test locates Corepack next to Node or accepts `NOETAXIS_TEST_COREPACK_CLI=/path/to/corepack/dist/corepack.js`; it is explicitly skipped when Corepack is unavailable. No dependencies or application artifacts are downloaded or built, and the tests do not download pnpm or Corepack.
 
 ## Update with one command
 
@@ -247,6 +286,8 @@ node --test frontend/scripts/noetaxis-macos*.node-test.mjs
 ```
 
 The fake-world harness registers helper identities for safe cleanup. On a busy Mac, run suites with limited test concurrency; `NOETAXIS_TEST_COMMAND_TIMEOUT_MS=300000` raises the harness's outer command budget from its normal 150 seconds. The detached test uses the same budget. This does not change installer wait options or the fast-mode timing assertions.
+
+The build tests also interrupt a blocked real child with each supported signal and an uncaught error, check npmrc comments/escaping and auth-source precedence, reject quoted/escaped/flow lockfile tarballs and explicit workspace mappings, and run cold `npm ci` with an empty content cache under guards that block every socket/request and Git subprocess. Cold installs verify the selected registry plus only the pinned GitHub node-gyp exception; no package tarball is actually downloaded.
 
 The end-to-end test uses a synthetic app in a temporary home and Applications directory. It expands the unsigned PKG with `pkgutil`, checks its payload and scripts, creates and mounts the DMG read-only, and detaches it. It does not run `installer`, launch Electron, connect to the live daemon, access the real Keychain, or register a URL handler. Set `NOETAXIS_TEST_ARTIFACTS=/private/tmp/noetaxis-macos-test-artifacts` to retain the generated test app, package, and disk image for inspection.
 

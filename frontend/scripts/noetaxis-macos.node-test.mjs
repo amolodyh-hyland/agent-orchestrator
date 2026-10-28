@@ -1,13 +1,15 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { fixtureRoot, fixtureSpawn as spawn, fixtureSpawnSync as spawnSync } from "./noetaxis-macos-fixture-registry.mjs";
-import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { copyAgentBrowserLicenses } from "./agent-browser-license.mjs";
 import { buildDiskImage, buildPackages, writeManifest } from "./noetaxis-macos/package-artifacts.mjs";
-import { parseMulticaPin, stampVersion, validateRegistry } from "./noetaxis-macos/build.mjs";
+import { checkMulticaConfiguration, prepareRegistry, progetAuth, registryBuildEnv, parseArgs, parseMulticaPin, stampVersion, validateRegistry } from "./noetaxis-macos/build.mjs";
+import { makeBuildFixture } from "./noetaxis-macos-build-fixture.mjs";
 import { copyFakeScripts } from "./noetaxis-macos-update-world.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -185,6 +187,484 @@ test("build metadata pins Multica, restricts npm, and stamps the selected revisi
 	assert.equal(stampVersion("0.13.4", revision), version);
 	assert.equal(validateRegistry(registry), registry);
 	assert.throws(() => validateRegistry("https://registry.npmjs.org"), /public registries are blocked/);
+});
+
+function setBuildEnv(t, values) {
+	for (const [key, value] of Object.entries(values)) {
+		const previous = process.env[key];
+		if (value === undefined) delete process.env[key];
+		else process.env[key] = value;
+		t.after(() => { if (previous === undefined) delete process.env[key]; else process.env[key] = previous; });
+	}
+}
+
+test("registry selection keeps ProGet as the default and requires explicit public opt-in", (t) => {
+	setBuildEnv(t, { NOETAXIS_NPM_REGISTRY: undefined });
+	assert.deepEqual(parseArgs([]), { ref: "HEAD", baseVersion: "0.13.4", registry });
+	assert.equal(validateRegistry(`${registry}/`), registry);
+	const publicUrl = "https://registry.npmjs.org/";
+	assert.deepEqual(parseArgs(["--public-registry"]), { ref: "HEAD", baseVersion: "0.13.4", registry: publicUrl, publicRegistry: true });
+	assert.equal(validateRegistry(publicUrl, true), publicUrl);
+	assert.equal(validateRegistry(publicUrl.slice(0, -1), true), publicUrl);
+	process.env.NOETAXIS_NPM_REGISTRY = publicUrl;
+	assert.throws(() => validateRegistry(parseArgs([]).registry), /public registries are blocked/);
+	process.env.NOETAXIS_NPM_REGISTRY = registry;
+	assert.equal(parseArgs(["--public-registry"]).registry, publicUrl);
+	for (const args of [["--registry", publicUrl, "--public-registry"], ["--public-registry", "--registry", publicUrl]]) assert.equal(validateRegistry(parseArgs(args).registry, true), publicUrl);
+	assert.throws(() => validateRegistry(parseArgs(["--public-registry", "--registry", registry]).registry, true), /requires https/);
+});
+
+test("registry validation rejects all other endpoints and URL decorations in either mode", () => {
+	for (const url of ["http://registry.npmjs.org/", "https://registry.yarnpkg.com/", "https://example.com/", "not a URL", "https://registry.npmjs.org.evil/", "https://registry.npmjs.org/path", "https://registry.npmjs.org:8443/", "https://registry.npmjs.org:443/", "https://user:password@registry.npmjs.org/", "https://registry.npmjs.org/?token=x", "https://registry.npmjs.org/#x", "https://registry.npmjs.org/?", "https://registry.npmjs.org/#", `${registry}?token=x`, `${registry}#x`, "https://user:password@proget.onbase.net/npm/npm", "https://proget.onbase.net:8443/npm/npm"]) {
+		for (const optIn of [false, true]) assert.throws(() => validateRegistry(url, optIn), /[Rr]egistry/);
+	}
+});
+
+test("build help describes the two modes without running the build", () => {
+	const help = execute(process.execPath, [path.join(scriptDir, "noetaxis-macos/build.mjs"), "--help"]);
+	assert.equal(help.status, 0, help.stderr);
+	assert.match(help.stdout, /--public-registry/);
+	assert.match(help.stdout, /Default: https:\/\/proget\.onbase\.net\/npm\/npm/);
+	assert.match(help.stdout, /https:\/\/registry\.npmjs\.org\//);
+});
+
+test("both build modes use owned configuration and preserve build metadata", async (t) => {
+	setBuildEnv(t, { NOETAXIS_NPM_REGISTRY: undefined, "npm_config_@foreign:registry": "https://user:fixture-secret@foreign.example/", COREPACK_NPM_TOKEN: "foreign-secret", PNPM_CONFIG_REGISTRY: "https://foreign.example/", npm_config_workspace_dir: "/foreign-workspace", NPM_CONFIG_WORKSPACE_DIR: "/foreign-workspace", pnpm_config_workspace_dir: "/foreign-workspace", npm_config_global_pnpmfile: "/foreign-hook.cjs", NPM_CONFIG_GLOBAL_PNPMFILE: "/foreign-hook.cjs" });
+	for (const publicMode of [false, true]) {
+		const selected = publicMode ? "https://registry.npmjs.org/" : registry;
+		const f = await makeBuildFixture(t, { userNpmrc: '@foreign:registry=https://user:fixture-secret@foreign.example/\n//foreign.example/:_authToken=foreign-secret\n//proget.onbase.net/npm/npm/:_authToken=proget-secret\n' });
+		await f.run(publicMode ? ["--public-registry"] : []);
+		const steps = f.calls.filter(({ command }) => ["npm", "corepack"].includes(command) || command.endsWith("/electron-forge"));
+		assert.equal(steps.length, 11);
+		for (const { command, args, options, configs, configModes, snapshot } of steps) {
+			assert.equal(options.env.npm_config_registry, selected);
+			assert.equal(options.env.NPM_CONFIG_REGISTRY, selected);
+			assert.equal(options.env.COREPACK_NPM_REGISTRY, selected.replace(/\/$/, ""));
+			assert.equal(options.env.COREPACK_ENABLE_ENV_FILE, "0");
+			assert.equal(options.env.npm_config_ignore_pnpmfile, "true");
+			assert.equal(options.env.npm_config_manage_package_manager_versions, "false");
+			assert.equal(options.env.COREPACK_NPM_TOKEN, publicMode ? undefined : "proget-secret");
+			for (const key of ["npm_config_@foreign:registry", "PNPM_CONFIG_REGISTRY", "npm_config_workspace_dir", "NPM_CONFIG_WORKSPACE_DIR", "pnpm_config_workspace_dir", "npm_config_global_pnpmfile", "NPM_CONFIG_GLOBAL_PNPMFILE"]) assert.equal(options.env[key], undefined);
+			for (const [file, content] of Object.entries(configs)) {
+				assert.equal(configModes[file], 0o600);
+				assert.match(content, new RegExp(`registry=${selected.replaceAll(".", "\\.")}`));
+				assert.doesNotMatch(content, /foreign|fixture-secret/);
+				assert.equal(content.includes("proget-secret"), !publicMode && file.endsWith("user-npmrc"));
+			}
+			for (const content of Object.values(snapshot)) assert.doesNotMatch(content, /MISSING_COMPANY_TOKEN/);
+			if (command === "corepack") assert.ok(args.includes("--ignore-pnpmfile"));
+			assert.equal(options.env.COREPACK_INTEGRITY_KEYS, !publicMode && args.includes("install") ? "0" : undefined);
+		}
+		const pack = steps.find(({ args }) => args[0] === "pack");
+		assert.ok(pack.args.includes("agent-browser@0.38.1"));
+		assert.equal(pack.options.env.npm_config_userconfig, steps[0].options.env.npm_config_userconfig);
+		assert.equal(pack.options.env.npm_config_globalconfig, steps[0].options.env.npm_config_globalconfig);
+		assert.deepEqual(steps.filter(({ args }) => args[0] === "run").map(({ args }) => args), [["run", "build:daemon"], ["run", "build:tmux"], ["run", "browser-runtime:prepare"], ["run", "build:acp-runtime"]]);
+		assert.equal(f.calls.some(({ args }) => args.includes("config")), false);
+		assert.match(await readFile(path.join(f.root, "output/BUILD-INFO.txt"), "utf8"), new RegExp(`^Registry: ${new URL(selected).host.replaceAll(".", "\\.")}$`, "m"));
+		await assert.rejects(readFile(steps[0].options.env.npm_config_userconfig), { code: "ENOENT" });
+	}
+});
+
+test("ProGet auth extraction copies only applicable scoped auth and resolves only its variables", async (t) => {
+	const root = await testRoot(t, "noetaxis-auth");
+	const user = path.join(root, "user-npmrc");
+	const global = path.join(root, "global-npmrc");
+	await writeFile(global, '//proget.onbase.net/:_authToken=old-token\n');
+	await writeFile(user, '@foreign:registry=https://user:password@foreign.example/\n//foreign.example/:_authToken=${NEVER_RESOLVE_THIS}\n//proget.onbase.net/:_authToken=${PROGET_TOKEN}\n//proget.onbase.net/npm/other/:_authToken=wrong-feed\n//proget.onbase.net/:email=company-email\n');
+	const inherited = { PATH: process.env.PATH, HOME: root, npm_config_userconfig: user, npm_config_globalconfig: global, PROGET_TOKEN: "selected-token", "npm_config_@foreign:registry": "https://foreign.example/", COREPACK_NPM_REGISTRY: "https://foreign.example/" };
+	const config = path.join(root, "owned");
+	await mkdir(config);
+	const env = await registryBuildEnv(config, registry, inherited);
+	const content = await readFile(env.npm_config_userconfig, "utf8");
+	assert.match(content, /\/\/proget\.onbase\.net\/:_authToken="selected-token"/);
+	assert.doesNotMatch(content, /old-token|wrong-feed|foreign|NEVER_RESOLVE|company-email/);
+	assert.equal(env.COREPACK_NPM_TOKEN, "selected-token");
+	assert.equal((await lstat(env.npm_config_userconfig)).mode & 0o777, 0o600);
+	await writeFile(user, `//proget.onbase.net/npm/npm/:username=fixture-user\n//proget.onbase.net/npm/npm/:_password=${Buffer.from("fixture-password").toString("base64")}\n`);
+	const basicDir = path.join(root, "basic"); await mkdir(basicDir);
+	const basicEnv = await registryBuildEnv(basicDir, registry, inherited);
+	assert.equal(basicEnv.COREPACK_NPM_USERNAME, "fixture-user");
+	assert.equal(basicEnv.COREPACK_NPM_PASSWORD, "fixture-password");
+	const publicDir = path.join(root, "public"); await mkdir(publicDir);
+	const publicEnv = await registryBuildEnv(publicDir, "https://registry.npmjs.org/", { ...inherited, npm_config_userconfig: root, npm_config_globalconfig: root });
+	assert.doesNotMatch(await readFile(publicEnv.npm_config_userconfig, "utf8"), /auth|token/);
+	assert.equal(publicEnv.COREPACK_NPM_TOKEN, undefined);
+	assert.throws(() => progetAuth('//proget.onbase.net/:_authToken=${MISSING}\n', {}), (error) => !error.message.includes("MISSING"));
+});
+
+test("ProGet npmrc values preserve npm comments, escaping and quoted values", () => {
+	for (const [source, expected] of [
+		["fixture-token # workstation", "fixture-token"],
+		["fixture-token; workstation", "fixture-token"],
+		[String.raw`fixture\#token\;value # workstation`, "fixture#token;value"],
+		['"fixture#token;value"', "fixture#token;value"],
+		["'fixture#token;value'", "fixture#token;value"],
+		[String.raw`fixture\\# workstation`, "fixture\\"],
+	]) {
+		const auth = progetAuth(`"//proget.onbase.net/npm/npm/:_authToken"=${source}\n`);
+		assert.equal(JSON.parse(auth.get("//proget.onbase.net/npm/npm/:_authToken")), expected);
+	}
+	assert.equal(progetAuth('[other]\n//proget.onbase.net/npm/npm/:_authToken=not-top-level\n').size, 0);
+});
+
+test("ProGet auth discovery honors user globalconfig and prefix with environment precedence", async (t) => {
+	const root = await testRoot(t, "noetaxis-auth-sources");
+	const user = path.join(root, ".npmrc");
+	const pointed = path.join(root, "pointed-npmrc");
+	const envGlobal = path.join(root, "env-global");
+	const userPrefix = path.join(root, "user-prefix");
+	const envPrefix = path.join(root, "env-prefix");
+	for (const [file, token] of [[pointed, "pointed"], [envGlobal, "env-global"], [path.join(userPrefix, "etc/npmrc"), "user-prefix"], [path.join(envPrefix, "etc/npmrc"), "env-prefix"]]) {
+		await mkdir(path.dirname(file), { recursive: true });
+		await writeFile(file, `//proget.onbase.net/npm/npm/:_authToken=${token} # comment\n`);
+	}
+	for (const [index, [content, extra, expected]] of [
+		['globalconfig=~/pointed-npmrc # user pointer\n', {}, "pointed"],
+		[`globalconfig=${pointed}\n`, { NPM_CONFIG_GLOBALCONFIG: envGlobal }, "env-global"],
+		[`prefix=${userPrefix}\n`, {}, "user-prefix"],
+		["", { PREFIX: envPrefix }, "env-prefix"],
+		[`prefix=${userPrefix}\n`, { PREFIX: envPrefix }, "user-prefix"],
+		[`prefix=${userPrefix}\n`, { npm_config_globalconfig: "" }, "user-prefix"],
+		[`prefix=${userPrefix}\n`, { npm_config_prefix: envPrefix }, "env-prefix"],
+		[`globalconfig=${pointed}\nprefix=${userPrefix}\n`, { NPM_CONFIG_PREFIX: envPrefix }, "pointed"],
+		[`globalconfig=${pointed}\n//proget.onbase.net/npm/npm/:_authToken=user-token\n`, {}, "user-token"],
+		[`globalconfig=${pointed}\n`, { "npm_config_//proget.onbase.net/npm/npm/:_authToken": "env-token" }, "env-token"],
+	].entries()) {
+		await writeFile(user, content);
+		const owned = path.join(root, `owned-${index}`); await mkdir(owned);
+		const env = await registryBuildEnv(owned, registry, { HOME: root, ...extra });
+		assert.equal(env.COREPACK_NPM_TOKEN, expected);
+		const copied = progetAuth(await readFile(env.npm_config_userconfig, "utf8"));
+		assert.equal(JSON.parse(copied.get("//proget.onbase.net/npm/npm/:_authToken")), expected);
+	}
+});
+
+test("build removes ProGet credentials when interrupted during a running child or on an uncaught error", { timeout: 20_000 }, async (t) => {
+	for (const [signal, expected] of [["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129], ["uncaught", 1]]) {
+		const f = await makeBuildFixture(t, { realCommands: true, userNpmrc: "//proget.onbase.net/npm/npm/:_authToken=fixture-secret\n" });
+		const bin = path.join(f.root, "bin"); await mkdir(bin);
+		const marker = path.join(f.root, "child-ready");
+		await writeFile(path.join(bin, "npm"), `#!${process.execPath}
+const fs = require("node:fs");
+fs.writeFileSync(process.env.NOETAXIS_CHILD_READY, process.env.npm_config_userconfig);
+const parent = process.ppid;
+setInterval(() => { if (process.ppid !== parent) process.exit(); }, 25);
+`, { mode: 0o755 });
+		if (signal === "uncaught") await writeFile(f.file, (await readFile(f.file, "utf8")).replace('await buildNoetaxis(options);', `setInterval(() => { if (process.env.NOETAXIS_THROW_READY && readdirSync(${JSON.stringify(f.root)}).includes("child-ready")) throw new Error("fixture uncaught failure"); }, 10); await buildNoetaxis(options);`));
+		const child = spawn(process.execPath, [await realpath(f.file), "--output", path.join(f.root, "output")], { cwd: f.root, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, NOETAXIS_CHILD_READY: marker, NOETAXIS_THROW_READY: signal === "uncaught" ? "1" : "" }, stdio: "pipe" });
+		const closed = new Promise((resolve, reject) => { child.once("error", reject); child.once("close", (code, terminated) => resolve({ code, terminated })); });
+		let stderr = ""; child.stdout.resume(); child.stderr.on("data", (chunk) => { stderr += chunk; });
+		let credentials;
+		for (let attempt = 0; attempt < 200; attempt++) {
+			credentials = await readFile(marker, "utf8").catch(() => "");
+			if (credentials) break;
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+		assert.ok(credentials, `the real child must be running after private credentials are created: ${stderr}`);
+		if (signal !== "uncaught") {
+			assert.match(await readFile(credentials, "utf8"), /fixture-secret/);
+			assert.equal(child.kill(signal), true);
+		}
+		const result = await closed;
+		assert.equal(result.code, expected, stderr);
+		assert.equal(result.terminated, null);
+		await assert.rejects(lstat(path.dirname(credentials)), { code: "ENOENT" });
+	}
+});
+
+test("Multica configuration is rejected statically before any pnpm invocation", async (t) => {
+	for (const publicMode of [false, true]) {
+		for (const options of [
+			{ multicaWorkspace: 'configDependencies:\n  dangerous: 1.0.0\n' },
+			{ multicaWorkspace: 'configDependencies:\n  dangerous: https://foreign.example/config.tgz\n' },
+			{ multicaWorkspace: 'ignorePnpmfile: false\n' },
+			{ multicaWorkspace: 'managePackageManagerVersions: true\n' },
+			{ multicaWorkspace: 'registry: https://user:fixture-secret@foreign.example/\n' },
+			{ multicaWorkspace: '{"configDependencies": {"dangerous": "1.0.0"}}\n' },
+			{ multicaWorkspace: '"config\\u0044ependencies":\n  dangerous: 1.0.0\n' },
+			{ multicaWorkspace: '?\n  configDependencies\n:\n  dangerous: https://foreign.example/config.tgz\n' },
+			{ multicaWorkspace: "'configDependencies': { dangerous: 'https://foreign.example/config.tgz' }\n" },
+			{ multicaWorkspace: 'lockfileDir: /foreign-lockfile\n' },
+			{ multicaPackage: { name: 'multica', pnpm: { lockfileDir: '/foreign-lockfile' } } },
+			{ multicaNpmrc: '@foreign:registry=https://user:fixture-secret@foreign.example/\n' },
+			{ multicaNpmrc: 'global-pnpmfile=/fixture-secret\n' },
+			{ multicaPackage: { name: "multica", pnpm: { configDependencies: { dangerous: "1.0.0" } } } },
+			{ multicaPackage: { name: "multica", pnpm: { configDependencies: { dangerous: "https://foreign.example/config.tgz" } } } },
+			{ multicaPackage: { name: "multica", pnpm: { registries: { "@foreign": "https://foreign.example/" } } } },
+			{ multicaPackage: { name: "multica", dependencies: { dangerous: "https://foreign.example/pkg.tgz" } } },
+			{ multicaPackage: { name: "multica", dependencies: { dangerous: "HTTPS://foreign.example/pkg.tgz" } } },
+			{ multicaPackage: { name: "multica", dependencies: { dangerous: "//foreign.example/pkg.tgz" } } },
+			{ pnpmfile: 'require("fs").writeFileSync("hook-ran", "fixture-secret")' },
+		]) {
+			const f = await makeBuildFixture(t, options);
+			await assert.rejects(f.run(publicMode ? ["--public-registry"] : []), (error) => {
+				assert.match(error.message, /Unsupported Multica package-manager configuration/);
+				assert.doesNotMatch(error.message, /fixture-secret|foreign\.example/);
+				return true;
+			});
+			assert.equal(f.calls.some(({ command }) => command === "corepack"), false);
+		}
+	}
+});
+
+test("foreign lockfile downloads and registry failures never trigger a fallback", async (t) => {
+	for (const publicMode of [false, true]) {
+		const args = publicMode ? ["--public-registry"] : [];
+		const foreign = await makeBuildFixture(t, { multicaLock: 'packages:\n  dangerous@1.0.0:\n    resolution: {tarball: https://foreign.example/pkg.tgz}\n' });
+		await assert.rejects(foreign.run(args), /foreign package download/);
+		assert.equal(foreign.calls.some(({ command }) => command === "corepack"), false);
+		const failed = await makeBuildFixture(t, { failInstall: true });
+		await assert.rejects(failed.run(args), /corepack failed/);
+		assert.equal(failed.calls.filter(({ command }) => command === "corepack").length, 1);
+		await assert.rejects(readFile(failed.calls.find(({ command }) => command === "npm").options.env.npm_config_userconfig), { code: "ENOENT" });
+	}
+});
+
+test("lockfile parsing rejects quoted, escaped, flow and explicit foreign download keys", async (t) => {
+	const fixtures = [
+		['pnpm-lock.yaml', 'packages:\n  dangerous@1.0.0:\n    resolution: {"tarball": "https://foreign.example/pkg.tgz"}\n'],
+		['pnpm-lock.yaml', "packages:\n  dangerous@1.0.0:\n    resolution: {'tarball': 'https://foreign.example/pkg.tgz'}\n"],
+		['pnpm-lock.yaml', String.raw`{"packages":{"dangerous@1.0.0":{"resolution":{"tar\u0062all":"https:\/\/foreign.example/pkg.tgz"}}}}`],
+		['pnpm-lock.yaml', 'packages:\n  dangerous@1.0.0:\n    resolution:\n      ?\n        tarball\n      :\n        https://foreign.example/pkg.tgz\n'],
+		['package-lock.json', String.raw`{"packages":{"node_modules/dangerous":{"re\u0073olved":"https:\/\/foreign.example/pkg.tgz"}}}`],
+	];
+	for (const selected of [registry, "https://registry.npmjs.org/"]) for (const [file, contents] of fixtures) {
+		const root = await testRoot(t, "noetaxis-quoted-lock");
+		await writeFile(path.join(root, file), contents);
+		await assert.rejects(prepareRegistry(root, selected), /foreign package download/);
+	}
+	for (const selected of [registry, "https://registry.npmjs.org/"]) {
+		const root = await testRoot(t, "noetaxis-routed-lock");
+		await writeFile(path.join(root, "pnpm-lock.yaml"), String.raw`{"packages":{"example@1.0.0":{"resolution":{"tar\u0062all":"https:\/\/registry.yarnpkg.com/example/-/example-1.0.0.tgz"}}}}`);
+		await prepareRegistry(root, selected);
+		assert.match(await readFile(path.join(root, "pnpm-lock.yaml"), "utf8"), new RegExp(`${selected.replaceAll(".", "\\.").replace(/\/$/, "")}/example`));
+	}
+});
+
+test("only the exact-commit electron/node-gyp GitHub lock source is allowlisted", async (t) => {
+	const pin = "06b29aafb7708acef8b3669835c8a7857ebc92d2";
+	for (const selected of [registry, "https://registry.npmjs.org/"]) {
+		for (const [name, url, accepted] of [
+			["@electron/node-gyp", `git+ssh://git@github.com/electron/node-gyp.git#${pin}`, true],
+			["@electron/node-gyp", `git+https://github.com/electron/node-gyp.git#${pin}`, true],
+			["@electron/node-gyp", 'git+https://github.com/electron/node-gyp.git#main', false],
+			["@electron/node-gyp", `git+https://github.com/electron/node-gyp.git#${pin.slice(0, 12)}`, false],
+			["@electron/node-gyp", `git+https://foreign.example/electron/node-gyp.git#${pin}`, false],
+			["@electron/node-gyp", `git+https://user:secret@github.com/electron/node-gyp.git#${pin}`, false],
+			["other", `git+https://github.com/electron/node-gyp.git#${pin}`, false],
+		]) {
+			const root = await testRoot(t, "noetaxis-git-lock");
+			await writeFile(path.join(root, "package-lock.json"), JSON.stringify({ packages: { [`node_modules/${name}`]: { resolved: url } } }));
+			if (accepted) {
+				await prepareRegistry(root, selected);
+				assert.equal(JSON.parse(await readFile(path.join(root, "package-lock.json"), "utf8")).packages[`node_modules/${name}`].resolved, url);
+			} else await assert.rejects(prepareRegistry(root, selected), /unpinned Git/);
+		}
+	}
+	const root = await testRoot(t, "noetaxis-real-lock");
+	await cp(path.join(repoRoot, "frontend/package-lock.json"), path.join(root, "package-lock.json"));
+	await prepareRegistry(root, registry);
+	const actual = JSON.parse(await readFile(path.join(root, "package-lock.json"), "utf8"));
+	assert.equal(actual.packages["node_modules/@electron/node-gyp"].resolved, `git+ssh://git@github.com/electron/node-gyp.git#${pin}`);
+	await writeFile(path.join(root, "package-lock.json"), JSON.stringify({ packages: { "": { dependencies: { "@electron/node-gyp": `git+https://github.com/electron/node-gyp.git#${pin}` } } } }));
+	await assert.rejects(prepareRegistry(root, registry), /unpinned Git/);
+});
+
+async function offlineRegistryFixture(t) {
+	const root = await testRoot(t, "noetaxis-offline-registry");
+	const user = path.join(root, "user-npmrc"); const global = path.join(root, "global-npmrc");
+	const guard = path.join(root, "offline.cjs"); const requests = path.join(root, "requests");
+	await writeFile(user, '@password:registry=https://user:fixture-secret@foreign.example/\n//foreign.example/:_authToken=foreign-token\n//proget.onbase.net/npm/npm/:_authToken=proget-token # workstation\n');
+	await writeFile(global, '@foreign:registry=https://foreign.example/\n');
+	await writeFile(guard, `const fs = require("node:fs");
+function record(kind, target, options) {
+ let host = "unknown"; let pathname = "";
+ try { host = typeof target === "string" || target instanceof URL ? new URL(target).hostname : target.hostname || target.host || "unknown"; } catch {}
+ try { pathname = new URL(target).pathname; } catch { pathname = target?.path || ""; }
+ const headers = target?.headers || options?.headers;
+ let authenticated = false;
+ try { authenticated = new Headers(headers || {}).get("authorization") === "Bearer proget-token"; } catch {}
+ fs.appendFileSync(process.env.NOETAXIS_REQUESTS, JSON.stringify({ kind, host, pathname, authenticated }) + "\\n");
+}
+function block(kind, target, options) {
+ record(kind, target, options);
+ throw new Error("NOETAXIS_OFFLINE");
+}
+for (const kind of ["http", "https"]) {
+ const module = require("node:" + kind);
+ module.request = module.get = (...args) => block(kind, args[0], args[1]);
+}
+require("node:net").Socket.prototype.connect = function (...args) { return block("socket", args[0]); };
+if (process.env.NOETAXIS_BLOCK_CHILDREN) {
+ const cp = require("node:child_process");
+ const original = cp.spawn;
+ cp.spawn = (command, args, options) => {
+  if (command === "git" && args.length === 1 && args[0] === "--version") return original(command, args, options);
+  const source = args?.find((value) => /^(?:git[+])?(?:https|ssh):/.test(value));
+  return block("child", source?.replace(/^git[+]/, "") || "https://blocked-child.invalid/");
+ };
+}
+global.fetch = (target, options) => {
+ if (process.env.NOETAXIS_COREPACK_METADATA && new URL(target).pathname.endsWith("/pnpm/10.28.2")) {
+  record("fetch", target, options);
+  return Promise.resolve(new Response(JSON.stringify({ dist: { tarball: "https://registry.npmjs.org/pnpm/-/pnpm-10.28.2.tgz", integrity: "sha512-" + Buffer.alloc(64).toString("base64"), signatures: [] } }), { status: 200 }));
+ }
+ return block("fetch", target, options);
+};
+`);
+	const inherited = { PATH: process.env.PATH, HOME: root, TMPDIR: root, CI: "1", NO_UPDATE_NOTIFIER: "1", npm_config_userconfig: user, npm_config_globalconfig: global, XDG_CONFIG_HOME: path.join(root, "foreign-xdg"), PNPM_HOME: path.join(root, "foreign-pnpm"), "npm_config_@password:registry": "https://user:fixture-secret@foreign.example/", COREPACK_NPM_REGISTRY: "https://foreign.example/", NODE_OPTIONS: `--require=${guard}`, NOETAXIS_REQUESTS: requests };
+	await mkdir(path.join(inherited.XDG_CONFIG_HOME, "pnpm"), { recursive: true });
+	const globalHook = path.join(root, "global-pnpmfile.cjs");
+	await writeFile(globalHook, `require("node:fs").writeFileSync(${JSON.stringify(path.join(root, "global-hook-ran"))}, "bad");`);
+	await writeFile(global, `@foreign:registry=https://foreign.example/\nglobal-pnpmfile=${globalHook}\n`);
+	const foreignWorkspace = path.join(root, "foreign-workspace"); await mkdir(foreignWorkspace);
+	await writeFile(path.join(foreignWorkspace, "pnpm-workspace.yaml"), 'configDependencies:\n  dangerous: https://foreign.example/config.tgz\nignorePnpmfile: false\n');
+	await writeFile(path.join(inherited.XDG_CONFIG_HOME, "pnpm/rc"), `@password:registry=https://user:fixture-secret@foreign.example/\nglobal-pnpmfile=${globalHook}\n`);
+	Object.assign(inherited, { npm_config_workspace_dir: foreignWorkspace, NPM_CONFIG_WORKSPACE_DIR: foreignWorkspace, pnpm_config_workspace_dir: foreignWorkspace, npm_config_global_pnpmfile: globalHook, NPM_CONFIG_GLOBAL_PNPMFILE: globalHook });
+	return { root, inherited, requests };
+}
+
+test("real npm and pnpm use only the constructed registry without network access or hooks", { skip: !process.env.NOETAXIS_TEST_PNPM_CLI && "Set NOETAXIS_TEST_PNPM_CLI to pinned pnpm 10.28.2 for offline configuration tests" }, async (t) => {
+	const cli = process.env.NOETAXIS_TEST_PNPM_CLI;
+	const { root, inherited, requests } = await offlineRegistryFixture(t);
+	for (const selected of [registry, "https://registry.npmjs.org/"]) {
+		const project = path.join(root, selected === registry ? "internal" : "public"); await mkdir(project);
+		await writeFile(path.join(project, "package.json"), JSON.stringify({ name: "fixture", version: "1.0.0", dependencies: { "@password/noetaxis-fixture": "1.0.0" } }));
+		await writeFile(path.join(project, "pnpm-workspace.yaml"), 'packages:\n  - apps/*\n');
+		await writeFile(path.join(project, ".npmrc"), "shamefully-hoist=true\n");
+		await checkMulticaConfiguration(project, selected);
+		const owned = path.join(project, "owned"); await mkdir(owned);
+		const env = await registryBuildEnv(owned, selected, inherited);
+		await prepareRegistry(project, selected, true);
+		const version = execute(process.execPath, [cli, "--version"], { cwd: project, env, timeout: 10_000 });
+		assert.equal(version.status, 0); assert.equal(version.stdout.trim(), "10.28.2");
+		await writeFile(path.join(project, ".pnpmfile.cjs"), 'require("node:fs").writeFileSync("hook-ran", "bad"); module.exports={hooks:{updateConfig(config){config.registries={default:"https://foreign.example/"};return config}}};');
+		await writeFile(path.join(project, "pnpm-workspace.yaml"), 'ignorePnpmfile: false\n');
+		for (const [command, args] of [["npm", ["view", "@password/noetaxis-fixture", "version", "--fetch-retries=0"]], ["npm", ["pack", "agent-browser@0.38.1", "--ignore-scripts", "--fetch-retries=0", "--pack-destination", project]], [process.execPath, [cli, "--ignore-pnpmfile", "install", "--ignore-scripts", "--lockfile=false", "--fetch-retries=0"]]]) {
+			await writeFile(requests, "");
+			const result = execute(command, args, { cwd: project, env, timeout: 10_000 });
+			assert.notEqual(result.status, 0, "the offline guard must block the dependency request");
+			const seen = (await readFile(requests, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+			assert.ok(seen.length > 0, "a real package-manager request must reach the offline guard");
+			for (const request of seen) {
+				assert.equal(request.host, new URL(selected).hostname);
+				assert.equal(request.authenticated, selected === registry, `auth header at ${command}`);
+			}
+			await assert.rejects(lstat(path.join(project, "hook-ran")), { code: "ENOENT" });
+			await assert.rejects(lstat(path.join(root, "global-hook-ran")), { code: "ENOENT" });
+		}
+		await assert.rejects(checkMulticaConfiguration(project, selected), /Unsupported Multica/);
+		await writeFile(path.join(project, "pnpm-workspace.yaml"), 'configDependencies:\n  dangerous: https://foreign.example/pkg.tgz\n');
+		await writeFile(requests, "");
+		await assert.rejects(checkMulticaConfiguration(project, selected), /Unsupported Multica/);
+		assert.equal(await readFile(requests, "utf8"), "");
+	}
+});
+
+test("real pnpm reads routed quoted lockfile tarballs before its offline download", { skip: !process.env.NOETAXIS_TEST_PNPM_CLI && "Set NOETAXIS_TEST_PNPM_CLI to pinned pnpm 10.28.2" }, async (t) => {
+	const { root, inherited, requests } = await offlineRegistryFixture(t);
+	for (const selected of [registry, "https://registry.npmjs.org/"]) {
+		const project = path.join(root, selected === registry ? "frozen-internal" : "frozen-public"); await mkdir(project);
+		await writeFile(path.join(project, "package.json"), '{"name":"frozen-fixture","version":"1.0.0","dependencies":{"noetaxis-fixture":"1.0.0"}}');
+		await writeFile(path.join(project, "pnpm-workspace.yaml"), '{"packages":[]}');
+		await writeFile(path.join(project, "pnpm-lock.yaml"), String.raw`{
+ "lockfileVersion":"9.0",
+ "settings":{"autoInstallPeers":true,"excludeLinksFromLockfile":false},
+ "importers":{".":{"dependencies":{"noetaxis-fixture":{"specifier":"1.0.0","version":"1.0.0"}}}},
+ "packages":{"noetaxis-fixture@1.0.0":{"resolution":{"tar\u0062all":"https:\/\/registry.yarnpkg.com/noetaxis-fixture/-/noetaxis-fixture-1.0.0.tgz"}}},
+ "snapshots":{"noetaxis-fixture@1.0.0":{}}
+}`);
+		await checkMulticaConfiguration(project, selected);
+		await prepareRegistry(project, selected, true);
+		const owned = path.join(project, "owned"); await mkdir(owned);
+		const env = await registryBuildEnv(owned, selected, inherited);
+		await writeFile(requests, "");
+		const result = execute(process.execPath, [process.env.NOETAXIS_TEST_PNPM_CLI, "--ignore-pnpmfile", "install", "--frozen-lockfile", "--ignore-scripts", "--fetch-retries=0", `--registry=${selected}`], { cwd: project, env, timeout: 10_000 });
+		assert.notEqual(result.status, 0);
+		const seen = (await readFile(requests, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+		assert.ok(seen.length > 0, "the real pnpm loader must accept the routed lockfile and request its tarball");
+		for (const request of seen) {
+			assert.equal(request.host, new URL(selected).hostname);
+			assert.equal(request.pathname, `${new URL(selected).pathname.replace(/\/$/, "")}/noetaxis-fixture/-/noetaxis-fixture-1.0.0.tgz`);
+		}
+	}
+});
+
+test("cold real npm ci preserves only the approved pinned GitHub dependency exception", async (t) => {
+	const { root, inherited, requests } = await offlineRegistryFixture(t);
+	const pin = "06b29aafb7708acef8b3669835c8a7857ebc92d2";
+	const git = `git+ssh://git@github.com/electron/node-gyp.git#${pin}`;
+	for (const selected of [registry, "https://registry.npmjs.org/"]) {
+		const project = path.join(root, selected === registry ? "cold-internal" : "cold-public"); await mkdir(project);
+		const dependencies = { "@electron/node-gyp": `git+https://github.com/electron/node-gyp.git#${pin}`, "noetaxis-fixture": "1.0.0" };
+		await writeFile(path.join(project, "package.json"), JSON.stringify({ name: "cold-fixture", version: "1.0.0", dependencies }));
+		await writeFile(path.join(project, "package-lock.json"), JSON.stringify({ name: "cold-fixture", version: "1.0.0", lockfileVersion: 3, requires: true, packages: {
+			"": { name: "cold-fixture", version: "1.0.0", dependencies },
+			"node_modules/@electron/node-gyp": { version: "10.2.0-electron.1", resolved: git },
+			"node_modules/noetaxis-fixture": { version: "1.0.0", resolved: "https://registry.npmjs.org/noetaxis-fixture/-/noetaxis-fixture-1.0.0.tgz" },
+		} }));
+		await prepareRegistry(project, selected);
+		const owned = path.join(project, "owned"); await mkdir(owned);
+		const env = await registryBuildEnv(owned, selected, inherited);
+		await writeFile(requests, "");
+		const result = execute("npm", ["ci", "--ignore-scripts", "--fetch-retries=0", "--audit=false", "--fund=false"], { cwd: project, env: { ...env, npm_config_cache: path.join(project, "empty-cache"), NOETAXIS_BLOCK_CHILDREN: "1" }, timeout: 10_000 });
+		assert.notEqual(result.status, 0, "offline guards must stop cold dependency downloads");
+		const seen = (await readFile(requests, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+		assert.ok(seen.some(({ host }) => host === new URL(selected).hostname), "cold ci must request the registry tarball");
+		assert.ok(seen.some(({ host }) => ["github.com", "codeload.github.com"].includes(host)), `cold ci must attempt the pinned public GitHub source: ${JSON.stringify(seen)}`);
+		for (const request of seen) {
+			assert.ok([new URL(selected).hostname, "github.com", "codeload.github.com"].includes(request.host), JSON.stringify(request));
+			if (request.host !== new URL(selected).hostname) {
+				assert.match(request.pathname, new RegExp(`/electron/node-gyp(?:\\.git)?(?:/tar\\.gz/${pin})?$`));
+				assert.equal(request.authenticated, false, "registry auth must never reach GitHub");
+			}
+		}
+	}
+});
+
+const corepackTestCli = process.env.NOETAXIS_TEST_COREPACK_CLI || path.resolve(path.dirname(process.execPath), "../lib/node_modules/corepack/dist/corepack.js");
+test("real Corepack isolates its cache and routes metadata and tarball fetches to the selected registry", { skip: !process.env.NOETAXIS_TEST_COREPACK_CLI && !existsSync(corepackTestCli) && "Set NOETAXIS_TEST_COREPACK_CLI to an installed Corepack dist/corepack.js" }, async (t) => {
+	const { root, inherited, requests } = await offlineRegistryFixture(t);
+	const foreignHome = path.join(root, "foreign-corepack");
+	const cache = path.join(foreignHome, "v1/pnpm/10.28.2");
+	await mkdir(path.join(cache, "bin"), { recursive: true });
+	await writeFile(path.join(cache, ".corepack"), JSON.stringify({ locator: { name: "pnpm", reference: "10.28.2" }, hash: "sha512.fixture", bin: { pnpm: "bin/pnpm.cjs" } }));
+	await writeFile(path.join(cache, "bin/pnpm.cjs"), `require("node:fs").writeFileSync(${JSON.stringify(path.join(root, "foreign-cache-used"))}, "bad");`);
+	await writeFile(requests, "");
+	const control = execute(process.execPath, [corepackTestCli, "pnpm@10.28.2", "--version"], { cwd: root, env: { ...inherited, COREPACK_HOME: foreignHome, COREPACK_ENABLE_PROJECT_SPEC: "0", COREPACK_ENABLE_ENV_FILE: "0" }, timeout: 10_000 });
+	assert.equal(control.status, 0, "the foreign cache fixture must be usable without a fetch");
+	assert.equal(await readFile(path.join(root, "foreign-cache-used"), "utf8"), "bad");
+	assert.equal(await readFile(requests, "utf8"), "");
+	await rm(path.join(root, "foreign-cache-used"));
+	const poison = `COREPACK_NPM_REGISTRY=https://foreign.example/\nCOREPACK_HOME=${foreignHome}\nCOREPACK_ENABLE_NETWORK=0\n`;
+	const envfile = path.join(root, "foreign-corepack.env"); await writeFile(envfile, poison);
+	for (const selected of [registry, "https://registry.npmjs.org/"]) {
+		const project = path.join(root, selected === registry ? "corepack-internal" : "corepack-public"); await mkdir(project);
+		await writeFile(path.join(project, "package.json"), '{"packageManager":"pnpm@1.0.0"}');
+		await writeFile(path.join(project, ".corepack.env"), poison);
+		const owned = path.join(project, "owned"); await mkdir(owned);
+		const env = await registryBuildEnv(owned, selected, { ...inherited, COREPACK_HOME: foreignHome, COREPACK_ENV_FILE: envfile, COREPACK_ENABLE_ENV_FILE: "1", COREPACK_NPM_TOKEN: "foreign-token" });
+		assert.equal(env.COREPACK_HOME, path.join(owned, "corepack"));
+		assert.equal(env.COREPACK_ENV_FILE, undefined);
+		assert.equal(env.COREPACK_ENABLE_ENV_FILE, "0");
+		assert.equal(env.COREPACK_ENABLE_PROJECT_SPEC, "0");
+		await writeFile(requests, "");
+		const result = execute(process.execPath, [corepackTestCli, "pnpm@10.28.2", "--version"], { cwd: project, env: { ...env, NOETAXIS_COREPACK_METADATA: "1", COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" }, timeout: 10_000 });
+		assert.notEqual(result.status, 0, "the real tarball download must stop at the offline guard");
+		const seen = (await readFile(requests, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+		assert.equal(seen.length, 2, "real Corepack must request metadata and then the metadata-supplied tarball");
+		for (const request of seen) {
+			assert.equal(request.kind, "fetch");
+			assert.equal(request.host, new URL(selected).hostname);
+			assert.equal(request.authenticated, selected === registry);
+		}
+		const base = new URL(selected).pathname.replace(/\/$/, "");
+		assert.equal(seen[0].pathname, `${base}/pnpm/10.28.2`);
+		assert.equal(seen[1].pathname, `${base}/pnpm/-/pnpm-10.28.2.tgz`);
+		assert.ok((await lstat(env.COREPACK_HOME)).isDirectory());
+		await assert.rejects(lstat(path.join(root, "foreign-cache-used")), { code: "ENOENT" });
+	}
 });
 
 test("agent-browser license files copy byte-for-byte from the internal package", async (t) => {
