@@ -10,6 +10,8 @@ import { daemonBuildEnv } from "../go-build-env.mjs";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../../..");
 const defaultRegistry = "https://proget.onbase.net/npm/npm";
+const publicRegistry = "https://registry.npmjs.org/";
+const usage = "Usage: build.mjs [--ref <commit-or-tag>] [--base-version <x.y.z>] [--output <directory>] [--public-registry] [--registry <url>]\nDefault: https://proget.onbase.net/npm/npm (company VPN). --public-registry explicitly selects https://registry.npmjs.org/ without company npm credentials. --registry must match the selected mode; no other endpoints are allowed.";
 const defaultBaseVersion = "0.13.4";
 const agentBrowserVersion = "0.38.1";
 const multicaModule = "github.com/multica-ai/multica/server";
@@ -36,7 +38,8 @@ function captureBytes(command, args, options = {}) {
 	return result.stdout;
 }
 
-function parseArgs(args) {
+export function parseArgs(args) {
+	let explicitRegistry;
 	const options = { ref: "HEAD", baseVersion: defaultBaseVersion, registry: process.env.NOETAXIS_NPM_REGISTRY || defaultRegistry };
 	for (let index = 0; index < args.length; index += 1) {
 		const name = args[index];
@@ -44,13 +47,19 @@ function parseArgs(args) {
 			options.help = true;
 			continue;
 		}
+		if (name === "--public-registry") {
+			options.publicRegistry = true;
+			continue;
+		}
 		if (!["--ref", "--output", "--base-version", "--registry"].includes(name) || !args[index + 1]) {
-			throw new Error("Usage: build.mjs [--ref <commit-or-tag>] [--base-version <x.y.z>] [--output <directory>] [--registry <internal-proget-url>]");
+			throw new Error(usage);
 		}
 		const key = { "--ref": "ref", "--output": "output", "--base-version": "baseVersion", "--registry": "registry" }[name];
 		options[key] = args[index + 1];
+		if (key === "registry") explicitRegistry = options[key];
 		index += 1;
 	}
+	if (options.publicRegistry) options.registry = explicitRegistry || publicRegistry;
 	return options;
 }
 
@@ -61,14 +70,20 @@ export function parseMulticaPin(goMod) {
 	return { repository: match[1], version: match[2], shortRevision: match[3] };
 }
 
-export function validateRegistry(value) {
+export function validateRegistry(value, publicOptIn = false) {
+	if (publicOptIn) {
+		if (value !== publicRegistry && value !== publicRegistry.slice(0, -1)) {
+			throw new Error("--public-registry requires https://registry.npmjs.org/; no other registry is allowed in public mode");
+		}
+		return publicRegistry;
+	}
 	let parsed;
 	try {
 		parsed = new URL(value);
 	} catch {
 		throw new Error("Registry must be the internal ProGet npm endpoint https://proget.onbase.net/npm/npm");
 	}
-	if (parsed.protocol !== "https:" || parsed.hostname !== "proget.onbase.net" || parsed.pathname.replace(/\/$/, "") !== "/npm/npm" || parsed.username || parsed.password || parsed.search || parsed.hash) {
+	if (![defaultRegistry, `${defaultRegistry}/`].includes(value) || parsed.protocol !== "https:" || parsed.hostname !== "proget.onbase.net" || parsed.pathname.replace(/\/$/, "") !== "/npm/npm" || parsed.username || parsed.password || parsed.search || parsed.hash) {
 		throw new Error("Registry must be the internal ProGet npm endpoint https://proget.onbase.net/npm/npm; public registries are blocked");
 	}
 	return parsed.origin + parsed.pathname.replace(/\/$/, "");
@@ -99,9 +114,9 @@ async function makeTemporaryWritable(directory) {
 	} catch {}
 }
 
-function supportedHost() {
+function supportedHost(env) {
 	if (process.platform !== "darwin" || process.arch !== "arm64") throw new Error("The custom desktop build requires an Apple Silicon Mac and macOS");
-	const npmVersion = capture("npm", ["--version"]);
+	const npmVersion = capture("npm", ["--version"], env ? { env, cwd: path.dirname(env.npm_config_userconfig) } : {});
 	const npmMajor = Number(npmVersion.split(".")[0]);
 	const nodeMajor = Number(process.versions.node.split(".")[0]);
 	if (nodeMajor < 24 || npmMajor < 11) throw new Error(`Node 24 and npm 11 are required; found Node ${process.versions.node} and npm ${npmVersion}`);
@@ -131,6 +146,50 @@ async function routeLockfilesToInternalRegistry(root, registry) {
 		}
 		if (routed !== contents) await writeFile(file, routed, "utf8");
 	}
+}
+
+async function preparePublicRegistry(root, hoist = false) {
+	for (const file of lockfiles(root)) {
+		let contents;
+		try {
+			contents = await readFile(file, "utf8");
+		} catch (error) {
+			if (error.code === "ENOENT") continue;
+			throw error;
+		}
+		const routed = contents.replace(/https?:\/\/(?:registry\.npmjs\.(?:org|com)|registry\.yarnpkg\.com|proget\.onbase\.net\/npm\/npm)(?=\/|["'\s]|$)\/?/g, publicRegistry);
+		const downloads = [...routed.matchAll(/(?:"resolved"\s*:\s*"|tarball:\s*["']?)(https?:\/\/[^"'\s}]+)/g)];
+		if (downloads.some((match) => !match[1].startsWith(publicRegistry))) {
+			throw new Error(`A non-public npm download remains in ${file}; refusing to install dependencies`);
+		}
+		if (routed !== contents) await writeFile(file, routed, "utf8");
+	}
+	await writeFile(path.join(root, ".npmrc"), `registry=${publicRegistry}\n${hoist ? "shamefully-hoist=true\n" : ""}`, "utf8");
+}
+
+async function publicRegistryEnv(configDir) {
+	const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:npm_config_|corepack_|npm_(?:token|auth_token|auth|password|username)$|node_auth_token$|yarn_npm_auth_token$)/i.test(key)));
+	const userconfig = path.join(configDir, "user-npmrc");
+	const globalconfig = path.join(configDir, "global-npmrc");
+	await writeFile(userconfig, "", "utf8");
+	await writeFile(globalconfig, "", "utf8");
+	return {
+		...env,
+		npm_config_registry: publicRegistry,
+		NPM_CONFIG_REGISTRY: publicRegistry,
+		npm_config_userconfig: userconfig,
+		NPM_CONFIG_USERCONFIG: userconfig,
+		npm_config_globalconfig: globalconfig,
+		NPM_CONFIG_GLOBALCONFIG: globalconfig,
+		npm_config_replace_registry_host: "always",
+		NPM_CONFIG_REPLACE_REGISTRY_HOST: "always",
+		npm_config_loglevel: "error",
+		NPM_CONFIG_LOGLEVEL: "error",
+		COREPACK_NPM_REGISTRY: publicRegistry.slice(0, -1),
+		COREPACK_HOME: path.join(configDir, "corepack"),
+		COREPACK_ENABLE_PROJECT_SPEC: "0",
+		COREPACK_ENABLE_ENV_FILE: "0",
+	};
 }
 
 function plistSet(plistPath, key, value) {
@@ -183,10 +242,10 @@ async function seedAgentBrowserLicenses(workDir, env, frontendDir) {
 	run("npm", [
 		"pack", `agent-browser@${agentBrowserVersion}`, "--ignore-scripts",
 		"--pack-destination", archiveDir, "--registry", env.npm_config_registry,
-		"--replace-registry-host", "npmjs",
+		"--replace-registry-host", env.npm_config_replace_registry_host,
 	], { cwd: frontendDir, env });
 	const archive = path.join(archiveDir, (await readdir(archiveDir)).find((name) => name.endsWith(".tgz")) || "");
-	if (!archive.endsWith(".tgz")) throw new Error("Internal registry did not provide the pinned agent-browser package");
+	if (!archive.endsWith(".tgz")) throw new Error(`${env.npm_config_registry === publicRegistry ? "Public" : "Internal"} registry did not provide the pinned agent-browser package`);
 	const files = [
 		["package/LICENSE", "LICENSE-agent-browser"],
 		["package/cli/src/native/a11y/LICENSE-axe-core.txt", "LICENSE-axe-core"],
@@ -219,8 +278,18 @@ async function findAppBundle(directory) {
 }
 
 export async function buildNoetaxis(options) {
-	const registry = validateRegistry(options.registry);
-	supportedHost();
+	const registry = validateRegistry(options.registry, options.publicRegistry);
+	if (!options.publicRegistry) return buildWithRegistry(options, registry);
+	const configDir = await mkdtemp(path.join(os.tmpdir(), "noetaxis-public-npm-"));
+	try {
+		return await buildWithRegistry(options, registry, await publicRegistryEnv(configDir));
+	} finally {
+		await rm(configDir, { recursive: true, force: true });
+	}
+}
+
+async function buildWithRegistry(options, registry, publicEnv) {
+	supportedHost(publicEnv);
 	const goEnv = daemonBuildEnv({ cwd: path.join(repoRoot, "backend") });
 	const commit = capture("git", ["rev-parse", "--verify", `${options.ref}^{commit}`], { cwd: repoRoot });
 	const version = stampVersion(options.baseVersion, commit);
@@ -241,17 +310,21 @@ export async function buildNoetaxis(options) {
 		const frontendDir = path.join(sourceWorktree, "frontend");
 		const productUiDir = path.join(sourceWorktree, "packages/product-ui");
 		const multicaDir = path.join(workDir, "multica");
-		const npmEnv = await internalRegistryEnv(registry);
-		run("npm", ["ci", "--ignore-scripts", "--registry", registry, "--replace-registry-host", "npmjs"], { cwd: frontendDir, env: npmEnv });
-		run("npm", ["ci", "--ignore-scripts", "--registry", registry, "--replace-registry-host", "npmjs"], { cwd: productUiDir, env: npmEnv });
+		const npmEnv = publicEnv || await internalRegistryEnv(registry);
+		if (publicEnv) {
+			for (const directory of [sourceWorktree, frontendDir, productUiDir, path.join(frontendDir, "acp-runtime")]) await preparePublicRegistry(directory);
+		}
+		run("npm", ["ci", "--ignore-scripts", "--registry", registry, "--replace-registry-host", publicEnv ? "always" : "npmjs"], { cwd: frontendDir, env: npmEnv });
+		run("npm", ["ci", "--ignore-scripts", "--registry", registry, "--replace-registry-host", publicEnv ? "always" : "npmjs"], { cwd: productUiDir, env: npmEnv });
 		const licenseDir = await seedAgentBrowserLicenses(workDir, npmEnv, frontendDir);
 		run("git", ["clone", "--filter=blob:none", "--no-checkout", `https://${multicaPin.repository}.git`, multicaDir], { cwd: workDir });
 		run("git", ["-C", multicaDir, "checkout", "--detach", multicaPin.shortRevision]);
-		await routeLockfilesToInternalRegistry(multicaDir, registry);
+		if (publicEnv) await preparePublicRegistry(multicaDir, true);
+		else await routeLockfilesToInternalRegistry(multicaDir, registry);
 		const pnpmCommand = "corepack";
 		run(pnpmCommand, ["pnpm@10.28.2", "install", "--frozen-lockfile", "--ignore-scripts", "--filter", "@multica/desktop...", `--registry=${registry}`], {
 			cwd: multicaDir,
-			env: { ...npmEnv, ...corepackEnv },
+			env: publicEnv || { ...npmEnv, ...corepackEnv },
 		});
 		run(pnpmCommand, ["pnpm@10.28.2", "--filter", "@multica/desktop", "exec", "electron-vite", "build"], {
 			cwd: multicaDir,
@@ -341,7 +414,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 	try {
 		const options = parseArgs(process.argv.slice(2));
 		if (options.help) {
-			console.log("Usage: build.mjs [--ref <commit-or-tag>] [--base-version <x.y.z>] [--output <directory>] [--registry <internal-ProGet-url>]");
+			console.log(usage);
 		} else {
 			await buildNoetaxis(options);
 		}

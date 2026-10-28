@@ -7,7 +7,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { copyAgentBrowserLicenses } from "./agent-browser-license.mjs";
 import { buildDiskImage, buildPackages, writeManifest } from "./noetaxis-macos/package-artifacts.mjs";
-import { parseMulticaPin, stampVersion, validateRegistry } from "./noetaxis-macos/build.mjs";
+import { parseArgs, parseMulticaPin, stampVersion, validateRegistry } from "./noetaxis-macos/build.mjs";
+import { makeBuildFixture } from "./noetaxis-macos-build-fixture.mjs";
 import { copyFakeScripts } from "./noetaxis-macos-update-world.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -185,6 +186,132 @@ test("build metadata pins Multica, restricts npm, and stamps the selected revisi
 	assert.equal(stampVersion("0.13.4", revision), version);
 	assert.equal(validateRegistry(registry), registry);
 	assert.throws(() => validateRegistry("https://registry.npmjs.org"), /public registries are blocked/);
+});
+
+function setBuildEnv(t, values) {
+	for (const [key, value] of Object.entries(values)) {
+		const previous = process.env[key];
+		if (value === undefined) delete process.env[key];
+		else process.env[key] = value;
+		t.after(() => { if (previous === undefined) delete process.env[key]; else process.env[key] = previous; });
+	}
+}
+
+test("registry selection keeps ProGet as the default and requires explicit public opt-in", (t) => {
+	setBuildEnv(t, { NOETAXIS_NPM_REGISTRY: undefined });
+	assert.deepEqual(parseArgs([]), { ref: "HEAD", baseVersion: "0.13.4", registry });
+	assert.equal(validateRegistry(`${registry}/`), registry);
+	const publicUrl = "https://registry.npmjs.org/";
+	assert.deepEqual(parseArgs(["--public-registry"]), { ref: "HEAD", baseVersion: "0.13.4", registry: publicUrl, publicRegistry: true });
+	assert.equal(validateRegistry(publicUrl, true), publicUrl);
+	assert.equal(validateRegistry(publicUrl.slice(0, -1), true), publicUrl);
+	process.env.NOETAXIS_NPM_REGISTRY = publicUrl;
+	assert.throws(() => validateRegistry(parseArgs([]).registry), /public registries are blocked/);
+	process.env.NOETAXIS_NPM_REGISTRY = registry;
+	assert.equal(parseArgs(["--public-registry"]).registry, publicUrl);
+	for (const args of [["--registry", publicUrl, "--public-registry"], ["--public-registry", "--registry", publicUrl]]) assert.equal(validateRegistry(parseArgs(args).registry, true), publicUrl);
+	assert.throws(() => validateRegistry(parseArgs(["--public-registry", "--registry", registry]).registry, true), /requires https/);
+});
+
+test("registry validation rejects all other endpoints and URL decorations in either mode", () => {
+	for (const url of ["http://registry.npmjs.org/", "https://registry.yarnpkg.com/", "https://example.com/", "not a URL", "https://registry.npmjs.org.evil/", "https://registry.npmjs.org/path", "https://registry.npmjs.org:8443/", "https://registry.npmjs.org:443/", "https://user:password@registry.npmjs.org/", "https://registry.npmjs.org/?token=x", "https://registry.npmjs.org/#x", "https://registry.npmjs.org/?", "https://registry.npmjs.org/#", `${registry}?token=x`, `${registry}#x`, "https://user:password@proget.onbase.net/npm/npm", "https://proget.onbase.net:8443/npm/npm"]) {
+		for (const optIn of [false, true]) assert.throws(() => validateRegistry(url, optIn), /[Rr]egistry/);
+	}
+});
+
+test("build help describes the two modes without running the build", () => {
+	const help = execute(process.execPath, [path.join(scriptDir, "noetaxis-macos/build.mjs"), "--help"]);
+	assert.equal(help.status, 0, help.stderr);
+	assert.match(help.stdout, /--public-registry/);
+	assert.match(help.stdout, /Default: https:\/\/proget\.onbase\.net\/npm\/npm/);
+	assert.match(help.stdout, /https:\/\/registry\.npmjs\.org\//);
+});
+
+test("default build preserves ProGet commands, lock routing, environment, and metadata", async (t) => {
+	setBuildEnv(t, { NOETAXIS_NPM_REGISTRY: undefined, COREPACK_INTEGRITY_KEYS: undefined });
+	const f = await makeBuildFixture(t);
+	await f.run();
+	const steps = f.calls.filter(({ command, args }) => ["npm", "corepack"].includes(command) && args[0] !== "--version");
+	assert.equal(steps.length, 9);
+	assert.deepEqual(steps.slice(0, 3).map(({ args }) => args[0]), ["ci", "ci", "pack"]);
+	const defaultEnv = {
+		...process.env,
+		npm_config_registry: registry, NPM_CONFIG_REGISTRY: registry,
+		npm_config_replace_registry_host: "npmjs", NPM_CONFIG_REPLACE_REGISTRY_HOST: "npmjs",
+		npm_config_loglevel: "error", NPM_CONFIG_LOGLEVEL: "error", COREPACK_NPM_REGISTRY: registry,
+	};
+	for (const step of steps) {
+		const extra = step.args.includes("install") ? { COREPACK_INTEGRITY_KEYS: "0" } : step.args[0] === "run" ? {
+			CGO_ENABLED: "1", AO_MULTICA_DESKTOP_OUT: path.join(step.options.env.AO_SCRATCH_SWIFT_CACHE, "../multica/apps/desktop/out"),
+			AO_RELEASE_REPO: "amolodyh-hyland/agent-orchestrator", AO_SCRATCH_SWIFT_CACHE: step.options.env.AO_SCRATCH_SWIFT_CACHE,
+			AO_AGENT_BROWSER_LICENSE_DIR: path.join(step.options.env.AO_SCRATCH_SWIFT_CACHE, "../agent-browser-licenses"),
+		} : {};
+		assert.deepEqual(step.options.env, { ...defaultEnv, ...extra });
+		assert.equal(step.options.env.npm_config_registry, registry);
+		assert.equal(step.options.env.NPM_CONFIG_REGISTRY, registry);
+		assert.equal(step.options.env.COREPACK_NPM_REGISTRY, registry);
+		assert.equal(step.options.env.npm_config_replace_registry_host, "npmjs");
+		if (step.args[0] === "ci") assert.deepEqual(step.args, ["ci", "--ignore-scripts", "--registry", registry, "--replace-registry-host", "npmjs"]);
+		for (const [file, contents] of Object.entries(step.snapshot)) {
+			if (file.endsWith(".npmrc")) assert.match(contents, /@company:registry=/);
+			if (file.endsWith("pnpm-lock.yaml")) assert.match(contents, /https:\/\/proget\.onbase\.net\/npm\/npm\/example/);
+		}
+		assert.equal(step.options.env.COREPACK_INTEGRITY_KEYS, step.args.includes("install") ? "0" : undefined);
+	}
+	assert.deepEqual(steps.filter(({ command }) => command === "corepack").map(({ args }) => args), [
+		["pnpm@10.28.2", "install", "--frozen-lockfile", "--ignore-scripts", "--filter", "@multica/desktop...", `--registry=${registry}`],
+		["pnpm@10.28.2", "--filter", "@multica/desktop", "exec", "electron-vite", "build"],
+	]);
+	assert.deepEqual(steps.filter(({ args }) => args[0] === "run").map(({ args }) => args), [["run", "build:daemon"], ["run", "build:tmux"], ["run", "browser-runtime:prepare"], ["run", "build:acp-runtime"]]);
+	assert.match(await readFile(path.join(f.root, "output/BUILD-INFO.txt"), "utf8"), /^Registry: proget\.onbase\.net$/m);
+});
+
+test("public opt-in reaches every build step and isolates credentials and lockfile hosts", async (t) => {
+	setBuildEnv(t, { NOETAXIS_NPM_REGISTRY: registry, npm_config_registry: registry, NPM_CONFIG_REGISTRY: registry, npm_config__auth: "fixture-secret", NPM_CONFIG_USERCONFIG: "/must-not-read-company-config", npm_config_userconfig: "/must-not-read-company-config", COREPACK_NPM_REGISTRY: registry, COREPACK_NPM_TOKEN: "fixture-secret", COREPACK_INTEGRITY_KEYS: "0", COREPACK_ENV_FILE: "/must-not-read-company-env", NPM_TOKEN: "fixture-secret", NPM_AUTH_TOKEN: "fixture-secret", NODE_AUTH_TOKEN: "fixture-secret" });
+	const f = await makeBuildFixture(t, { lockRegistry: `${registry}/` });
+	await f.run(["--public-registry"]);
+	const steps = f.calls.filter(({ command }) => ["npm", "corepack"].includes(command) || command.endsWith("/electron-forge"));
+	assert.equal(steps.length, 11);
+	for (const step of steps) {
+		const env = step.options.env;
+		assert.equal(env.npm_config_registry, "https://registry.npmjs.org/");
+		assert.equal(env.NPM_CONFIG_REGISTRY, "https://registry.npmjs.org/");
+		assert.equal(env.COREPACK_NPM_REGISTRY, "https://registry.npmjs.org");
+		assert.equal(env.COREPACK_ENABLE_ENV_FILE, "0");
+		assert.equal(env.npm_config_replace_registry_host, "always");
+		for (const key of ["COREPACK_NPM_TOKEN", "COREPACK_INTEGRITY_KEYS", "COREPACK_ENV_FILE", "NPM_TOKEN", "NPM_AUTH_TOKEN", "NODE_AUTH_TOKEN", "npm_config__auth"]) assert.equal(env[key], undefined, key);
+		assert.deepEqual(Object.values(step.configs), ["", ""]);
+		assert.equal(env.npm_config_userconfig, env.NPM_CONFIG_USERCONFIG);
+		assert.equal(env.npm_config_globalconfig, env.NPM_CONFIG_GLOBALCONFIG);
+		assert.doesNotMatch(step.args.join(" "), /proget/);
+		for (const [file, contents] of Object.entries(step.snapshot)) {
+			assert.doesNotMatch(contents, /proget|MISSING_COMPANY_TOKEN/, file);
+			assert.match(contents, /https:\/\/registry\.npmjs\.org\//, file);
+			if (file.endsWith("pnpm-lock.yaml")) assert.doesNotMatch(contents, /npmjs\.org\/\//);
+		}
+	}
+	const install = steps.find(({ command, args }) => command === "corepack" && args.includes("install"));
+	assert.ok(install.args.includes("--registry=https://registry.npmjs.org/"));
+	assert.match(Object.values(install.snapshot).join("\n"), /shamefully-hoist=true/);
+	for (const step of steps.filter(({ args }) => ["ci", "pack"].includes(args[0]))) {
+		assert.equal(step.args[step.args.indexOf("--registry") + 1], "https://registry.npmjs.org/");
+		assert.equal(step.args[step.args.indexOf("--replace-registry-host") + 1], "always");
+	}
+	assert.match(await readFile(path.join(f.root, "output/BUILD-INFO.txt"), "utf8"), /^Registry: registry\.npmjs\.org$/m);
+	await assert.rejects(readFile(steps[0].options.env.npm_config_userconfig), { code: "ENOENT" });
+});
+
+test("public builds reject unrecognized lockfile downloads without installing them", async (t) => {
+	const f = await makeBuildFixture(t, { multicaLock: 'packages:\n  example@1.0.0:\n    resolution: {tarball: https://private.example/npm/example.tgz}\n' });
+	await assert.rejects(f.run(["--public-registry"]), /non-public npm download/);
+	assert.equal(f.calls.some(({ command }) => command === "corepack"), false);
+});
+
+test("public registry failures stop the build without a ProGet retry", async (t) => {
+	const f = await makeBuildFixture(t, { failInstall: true });
+	await assert.rejects(f.run(["--public-registry"]), /corepack failed/);
+	assert.equal(f.calls.filter(({ command }) => command === "corepack").length, 1);
+	assert.equal(f.calls.some(({ command, args }) => command === "npm" && args[0] === "run"), false);
 });
 
 test("agent-browser license files copy byte-for-byte from the internal package", async (t) => {

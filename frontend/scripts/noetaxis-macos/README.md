@@ -4,11 +4,27 @@ This flow creates an arm64 desktop app, `MANIFEST.sha256`, an unsigned installer
 
 ## Build
 
-Run from the AO fork checkout on an Apple Silicon Mac with macOS, Node 24, npm 11, Go 1.27.1 or newer, Xcode command line tools, and Corepack available. Join the company VPN first. Every npm and pnpm registry request is pinned to the internal ProGet endpoint `https://proget.onbase.net/npm/npm`. Package credentials are read through the normal npm configuration and are never printed by these scripts. Not every network request is a registry request. Besides the registry, the build contacts: `github.com` (git clone of the Multica fork and the checksum-pinned agent-browser release binary), the Electron binary download used by Electron Forge, and the Go module proxy. Check that your VPN and policy allow these. `COREPACK_INTEGRITY_KEYS=0` is set only for the pnpm install step, and the pnpm tarball is not hash-pinned.
+Run from the AO fork checkout on an Apple Silicon Mac with macOS, Node 24, npm 11, Go 1.27.1 or newer, Xcode command line tools, and Corepack available.
+
+**Company machines (default):** join the company VPN first. Every npm and pnpm registry request is pinned to the internal ProGet endpoint `https://proget.onbase.net/npm/npm`. Package credentials are read through the normal npm configuration and are never printed by these scripts. `COREPACK_INTEGRITY_KEYS=0` is set only for the pnpm install step because the mirror has no npm signature metadata; the pnpm tarball is not hash-pinned.
 
 ```bash
 node frontend/scripts/noetaxis-macos/build.mjs
 ```
+
+**Personal Macs (explicit opt-in):** use the public npm registry without the company VPN or company npm credentials:
+
+```bash
+node frontend/scripts/noetaxis-macos/build.mjs --public-registry
+```
+
+This mode selects `https://registry.npmjs.org/` for both AO installs, the pinned browser license package, Corepack's pnpm download, the Multica pnpm install/build, and child steps such as the ACP runtime install. It uses empty temporary user/global npm configurations, replaces project npm configuration only in the temporary build copies (preserving Multica's hoisting setting), and removes inherited npm configuration and npm/Corepack authentication variables. Corepack uses a fresh temporary cache with normal signature verification. Lockfile registry URLs are routed to public npm; unknown HTTP package download endpoints stop the build. A failed request stops the build without switching registries.
+
+`--public-registry` overrides `NOETAXIS_NPM_REGISTRY`. The existing `--registry <url>` option must match the selected mode: ProGet without the flag, public npm with the flag. Setting `--registry https://registry.npmjs.org/` or `NOETAXIS_NPM_REGISTRY` alone does not opt in. Only these two endpoints are supported; credentials, query strings, fragments, alternate ports and other registries are rejected. `--help` lists both modes. `BUILD-INFO.txt` records the selected registry host.
+
+Dependency check at AO `ab2b4da93`: all eight npm lockfiles contain no Hyland-only packages or private download hosts. Downloads use public npm, local workspace links, and the public `electron/node-gyp` GitHub repository. The Multica `pnpm-lock.yaml` at `4b32bc7710753a6d97277c3833a4d7d19e48b2f7` (the revision pinned by `backend/go.mod`) has no private registry/tarball URLs or internal package scopes; its local packages use workspace links. Recheck dependencies when changing either source revision.
+
+Not every network request is a registry request. Both modes also contact `github.com` (the Multica fork, the `electron/node-gyp` source and the checksum-pinned browser release binary), the Electron binary download used by Electron Forge, `nodejs.org` for the packaged ACP runtime, and the Go module proxy. GitHub access to the source forks is still required. Company machines should keep the default VPN/ProGet path and allow these additional downloads under company policy.
 
 The default source is `HEAD` of the checkout running the command. To select a commit or tag and output location:
 
