@@ -19,6 +19,11 @@ Submitted text contains the complete reference path, plus the existing durable
 attachment block. Files staged by the daemon retain its workspace-relative
 `.ao/attachments/...` wire paths; folder references retain their absolute paths.
 This preserves the attachment delivery and native-image contracts.
+Normal sends and steering share this serialization: a path beside prose remains
+at its inline position, and the attachment block retains its durable reference.
+Native image bytes are passed once as a separate payload. Image-only drafts omit
+redundant path prose and submit the attachment block. Tests use daemon-shaped
+`.ao/attachments/attachment-<id>.<ext>` paths so this image recognition is exercised.
 
 Deleting an inline reference removes that positional reference only. The file
 remains attached in the strip and in the durable attachment block, matching the
@@ -89,7 +94,7 @@ This document and the following files comprise the feature change:
 | Area | Files (relative to `frontend/`) |
 | --- | --- |
 | Shared chip | `src/renderer/components/chat/AttachmentPathChip.tsx`, `AttachmentPathChip.test.tsx` |
-| Composer | `src/renderer/components/chat/ChatComposer.tsx`, `ChatComposer.test.tsx`, `ComposerEditor.tsx`, `ComposerEditor.test.tsx`, `ChatWorkspace.tsx`, `ChatQueuedAttachments.test.tsx` |
+| Composer | `src/renderer/components/chat/ChatComposer.tsx`, `ChatComposer.test.tsx`, `ComposerEditor.tsx`, `ComposerEditor.test.tsx`, `ChatWorkspace.tsx`, `ChatQueuedAttachments.test.tsx`, `ChatSteer.test.tsx` |
 | Sent references | `src/renderer/components/chat/ChatMarkdown.tsx`, `ChatTimelineItems.tsx`, `ChatTimelineItems.test.tsx`, `messageAttachments.ts` |
 | Files panel | `src/renderer/components/SessionView.tsx`, `SessionView.test.tsx`, `SessionFileExplorer.tsx`, `SessionFileExplorer.test.tsx`, `src/renderer/stores/ui-store.ts` |
 | Desktop boundary | `src/main.ts`, `src/main/chat-folder-attachment-ipc.ts`, `src/main/chat-folder-attachment-ipc.test.ts`, `src/preload.ts`, `src/preload.test.ts`, `src/shared/chat-folder-attachment.ts` |
