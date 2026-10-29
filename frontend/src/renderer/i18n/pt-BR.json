@@ -1,4 +1,11 @@
 {
+	"chat.path.panelUnavailable": "Não foi possível abrir este caminho no painel de arquivos da sessão.",
+	"chat.path.revealMac": "Mostrar no Finder",
+	"chat.path.revealWindows": "Mostrar no Explorador de Arquivos",
+	"chat.path.reveal": "Mostrar no gerenciador de arquivos",
+	"chat.path.openSidePanel": "Abrir no painel lateral",
+	"chat.path.copy": "Copiar caminho",
+	"chat.path.actionFailed": "Não foi possível abrir ou copiar esse caminho.",
 	"outer.title": "Orquestrador global",
 	"outer.help": "Faça perguntas sobre os projetos selecionados no Chat principal do Codex. Cada envio é uma solicitação humana. As ações entre projetos compatíveis exigem a confirmação nativa de um plano exato.",
 	"outer.setup": "Configurar o Chat global",

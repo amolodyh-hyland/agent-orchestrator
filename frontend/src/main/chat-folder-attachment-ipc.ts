@@ -5,6 +5,8 @@ import path from "node:path";
 import type { Dialog, IpcMain } from "electron";
 import {
 	CHAT_FOLDER_ATTACHMENT_CHANNEL,
+	CHAT_ATTACHMENT_PATH_CHANNEL,
+	type ChatAttachmentPathInput,
 	type ChatFolderAttachmentError,
 	type ChatFolderAttachmentPickerResult,
 } from "../shared/chat-folder-attachment";
@@ -25,6 +27,30 @@ export type ChatFolderAttachmentIpcDeps = {
 };
 
 const defaultFileSystem: ChatFolderAttachmentFileSystem = { lstat, realpath, access };
+
+export function registerChatAttachmentPathIpc(deps: {
+	ipcMain: Pick<IpcMain, "handle">;
+	resolveWorkspace: (sessionId: string) => Promise<string>;
+	showItemInFolder: (filePath: string) => void;
+	platform?: NodeJS.Platform;
+}): void {
+	const paths = (deps.platform ?? process.platform) === "win32" ? path.win32 : path.posix;
+	deps.ipcMain.handle(CHAT_ATTACHMENT_PATH_CHANNEL, async (_event, input: ChatAttachmentPathInput): Promise<string> => {
+		if (!input || typeof input.path !== "string" || !input.path || /[\0\r\n]/.test(input.path) ||
+			(input.action !== "resolve" && input.action !== "reveal")) throw new Error("Invalid attachment path.");
+		let target = input.path;
+		if (!paths.isAbsolute(target)) {
+			if (!input.sessionId || typeof input.sessionId !== "string" || /^[A-Za-z]:|^[\\/]/.test(target)) throw new Error("A local session is required.");
+			const workspace = await deps.resolveWorkspace(input.sessionId);
+			if (!paths.isAbsolute(workspace)) throw new Error("Session workspace is not available.");
+			target = paths.resolve(workspace, target);
+			const relative = paths.relative(workspace, target);
+			if (relative === ".." || relative.startsWith(`..${paths.sep}`) || paths.isAbsolute(relative)) throw new Error("Attachment is outside the workspace.");
+		}
+		if (input.action === "reveal") deps.showItemInFolder(target);
+		return target;
+	});
+}
 
 function fileSystemError(cause: unknown): ChatFolderAttachmentError {
 	const code = cause && typeof cause === "object" && "code" in cause

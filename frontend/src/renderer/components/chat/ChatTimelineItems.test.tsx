@@ -1,10 +1,12 @@
-import { act, render as rtlRender, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StrictMode, type ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
+import { useUiStore } from "../../stores/ui-store";
 import { aoBridge } from "../../lib/bridge";
 import { ActivityRow, AssistantMessage, HumanMessage, TurnOutcome } from "./ChatTimelineItems";
 import type { ConversationMessage } from "../../types/conversation";
+import { ChatLinkProvider } from "./ChatMarkdown";
 import { TooltipProvider } from "../ui/tooltip";
 
 function render(ui: ReactElement) {
@@ -395,6 +397,38 @@ describe("HumanMessage", () => {
 	function human(overrides: Partial<ConversationMessage> = {}): ConversationMessage {
 		return message({ id: "human-1", role: "user", origin: "human", text: "hi", streaming: false, ...overrides });
 	}
+
+	it.each(["/work/Project Files/", "C:\\work\\Project Files\\"])("renders an inline folder reference for %s with the shared menu", async (path) => {
+		const text = `Read ${path} please\n\nAttached files (read these files in the workspace):\n- ${path}`;
+		render(<HumanMessage message={human({ text })} sessionId="s1" />);
+		const body = document.querySelector("[data-chat-message-body]")!;
+		const chip = body.querySelector("[title]")!;
+		expect(chip).toHaveTextContent("Project Files");
+		expect(chip).toHaveAttribute("title", path);
+		fireEvent.contextMenu(chip, { button: 2 });
+		expect(await screen.findByRole("menuitem", { name: "Copy path" })).toBeInTheDocument();
+	});
+
+	it("opens a sent inline file reference in the existing Files panel", async () => {
+		const path = ".ao/attachments/attachment-readme.txt";
+		const open = vi.fn();
+		render(<ChatLinkProvider onFileOpen={open}><HumanMessage message={human({ text: `Read ${path} please\n\nAttached files (read these files in the workspace):\n- ${path}` })} sessionId="s1" /></ChatLinkProvider>);
+		const chip = document.querySelector("[data-chat-message-body] [title]")!;
+		expect(chip).toHaveTextContent("attachment-readme.txt");
+		fireEvent.contextMenu(chip, { button: 2 });
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Open in side panel" }));
+		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "s1", path, source: "panel" });
+		expect(open).not.toHaveBeenCalled();
+	});
+
+	it("does not reveal a cloud attachment on the client filesystem", async () => {
+		const path = "/cloud/project/";
+		render(<ChatLinkProvider sessionLinkSourceKind="cloud" onFileOpen={vi.fn()}><HumanMessage message={human({ text: `Read ${path}\n\nAttached files (read these files in the workspace):\n- ${path}` })} sessionId="cloud-session" /></ChatLinkProvider>);
+		fireEvent.contextMenu(document.querySelector("[data-chat-message-body] [title]")!, { button: 2 });
+		expect(await screen.findByRole("menuitem", { name: "Copy path" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /Finder|File Explorer|file manager/ })).toBeNull();
+		expect(screen.queryByRole("menuitem", { name: "Open in side panel" })).toBeNull();
+	});
 
 	it.each([40, 160])("keeps code at %ipx free of collapse controls", (height) => {
 		vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(height);

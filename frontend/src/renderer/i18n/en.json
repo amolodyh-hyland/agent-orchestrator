@@ -1,4 +1,11 @@
 {
+	"chat.path.panelUnavailable": "This path could not be opened in the session’s Files panel.",
+	"chat.path.revealMac": "Reveal in Finder",
+	"chat.path.revealWindows": "Show in File Explorer",
+	"chat.path.reveal": "Show in file manager",
+	"chat.path.openSidePanel": "Open in side panel",
+	"chat.path.copy": "Copy path",
+	"chat.path.actionFailed": "Could not open or copy that path.",
 	"outer.plans": "Requested action plans",
 	"outer.plansDisabled": "Confirmed actions are held in this build configuration.",
 	"outer.planManifest": "Exact sealed manifest",

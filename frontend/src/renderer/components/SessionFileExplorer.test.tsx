@@ -107,7 +107,7 @@ function renderWithQuery(children: ReactNode) {
 describe("SessionFileExplorer", () => {
 	beforeEach(() => {
 		window.localStorage.clear();
-		useUiStore.setState({ inspectorSessions: {} });
+		useUiStore.setState({ inspectorSessions: {}, workspaceFileOpenRequest: null });
 		getMock.mockReset().mockResolvedValue({
 			data: {
 				sessionId: "sess-1",
@@ -122,6 +122,31 @@ describe("SessionFileExplorer", () => {
 		postMock.mockReset();
 		hostAGetMock.mockReset();
 		hostBGetMock.mockReset();
+	});
+
+	it.each([false, true])("opens an attachment in the side panel without opening a center tab (folder: %s)", async (directory) => {
+		const previous = getMock.getMockImplementation()!;
+		getMock.mockImplementation((route: string, options: unknown) => route.endsWith("/workspace/resolve")
+			? Promise.resolve({ data: { kind: "workspace", path: directory ? "src" : "src/App.tsx" } }) : previous(route, options));
+		useUiStore.getState().requestWorkspaceFileOpen("panel-session", "/work/src", undefined, "panel", directory);
+		const openCenter = vi.fn();
+		renderWithQuery(<SessionFileExplorer sessionId="panel-session" onOpenFile={openCenter} />);
+		await waitFor(() => expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull());
+		if (directory) expect(screen.getByTestId("tree-filter")).toHaveTextContent("src/");
+		else expect(screen.getByTestId("content-pane")).toHaveTextContent("src/App.tsx");
+		expect(openCenter).not.toHaveBeenCalled();
+	});
+
+	it("does not try to read an attached directory outside the workspace", async () => {
+		const previous = getMock.getMockImplementation()!;
+		getMock.mockImplementation((route: string, options: unknown) => route.endsWith("/workspace/resolve")
+			? Promise.resolve({ data: { kind: "outside", path: "" } }) : previous(route, options));
+		useUiStore.getState().requestWorkspaceFileOpen("outside-session", "/elsewhere", undefined, "panel", true);
+		const openCenter = vi.fn();
+		renderWithQuery(<SessionFileExplorer sessionId="outside-session" onOpenFile={openCenter} />);
+		await waitFor(() => expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull());
+		expect(openCenter).not.toHaveBeenCalled();
+		expect(screen.queryByTestId("content-pane")).toBeNull();
 	});
 
 	it("warms the exact file query on hover so opening it needs no second request", async () => {

@@ -36,7 +36,7 @@ export function stagedAttachmentParts(text: string): { body: string; attachments
 }
 
 export function attachmentName(path: string): string {
-	return path.split(/[\\/]/).at(-1) ?? path;
+	return path.replace(/[\\/]+$/, "").split(/[\\/]/).at(-1) || path;
 }
 
 export function attachmentURL(apiBaseUrl: string, sessionId: string, path: string): string {
@@ -80,12 +80,16 @@ export function splitInlineImagePaths(text: string, keep: (path: string) => bool
  * with one following space, so the words around it don't double-space.
  */
 export function removeInlineImagePath(text: string, path: string): string {
+	return removeInlineAttachmentPath(text, path);
+}
+
+export function removeInlineAttachmentPath(text: string, path: string): string {
 	return text
 		.split("\n")
 		.map((line) => {
 			let kept = "";
 			let afterImage = false;
-			for (const segment of splitInlineImagePaths(line, (candidate) => candidate === path)) {
+			for (const segment of splitAttachmentPaths(line, [path])) {
 				if (segment.path !== undefined) afterImage = true;
 				else {
 					kept += afterImage && segment.text.startsWith(" ") ? segment.text.slice(1) : segment.text;
@@ -118,4 +122,24 @@ export function labelInlineImages(text: string, label: (index: number) => string
 		.map((segment) => segment.path === undefined ? segment.text : `[${label(images.indexOf(segment.path) + 1)}]`)
 		.join("");
 	return labelled + text.slice(body.length);
+}
+
+/** Split only known attachment paths; ordinary typed paths remain prose. */
+export function splitAttachmentPaths(text: string, paths: string[]): InlineImageSegment[] {
+	const candidates = [...new Set(paths.filter(Boolean))].sort((a, b) => b.length - a.length);
+	const segments: InlineImageSegment[] = [];
+	let start = 0;
+	let cursor = 0;
+	while (cursor < text.length) {
+		const path = candidates.find((candidate) => text.startsWith(candidate, cursor) &&
+			(cursor === 0 || /[\s(\["']/.test(text[cursor - 1]!)) &&
+			(cursor + candidate.length === text.length || /[\s)\]\"',.;:!?]/.test(text[cursor + candidate.length]!)));
+		if (!path) { cursor += 1; continue; }
+		if (cursor > start) segments.push({ text: text.slice(start, cursor) });
+		segments.push({ path });
+		cursor += path.length;
+		start = cursor;
+	}
+	if (start < text.length) segments.push({ text: text.slice(start) });
+	return segments;
 }

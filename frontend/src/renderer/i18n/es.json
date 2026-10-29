@@ -1,4 +1,11 @@
 {
+	"chat.path.panelUnavailable": "No se pudo abrir esta ruta en el panel de archivos de la sesión.",
+	"chat.path.revealMac": "Mostrar en Finder",
+	"chat.path.revealWindows": "Mostrar en el Explorador de archivos",
+	"chat.path.reveal": "Mostrar en el gestor de archivos",
+	"chat.path.openSidePanel": "Abrir en el panel lateral",
+	"chat.path.copy": "Copiar ruta",
+	"chat.path.actionFailed": "No se pudo abrir ni copiar la ruta.",
 	"outer.title": "Orquestador global",
 	"outer.help": "Haz preguntas sobre los proyectos seleccionados en el Chat principal de Codex. Cada envío es una solicitud humana. Las acciones entre proyectos admitidas requieren la confirmación nativa de un plan exacto.",
 	"outer.setup": "Configurar el Chat global",

@@ -656,3 +656,38 @@ describe("dictated text insertion", () => {
 		expect(s.ref.current!.getSnapshot().text).toBe("hello new world");
 	});
 });
+
+describe("inline attachment references", () => {
+	it.each(["/work/Project Files/", "C:\\work\\Project Files\\", ".ao/attachments/attachment-readme.txt"])("inserts %s atomically at the reserved caret and serializes the entire path", async (path) => {
+		const { ref, editor, field } = setup("Read here");
+		caret(editor, 5);
+		let reservation: string | undefined;
+		act(() => { reservation = ref.current!.reserveAttachments(); });
+		caret(editor, 0);
+		act(() => ref.current!.fillAttachments(reservation!, [path]));
+		await waitFor(() => expect(ref.current!.getSnapshot().text).toBe(`Read ${path} here`));
+		const chip = field.querySelector('[data-composer-token="file"]')!;
+		expect(chip).toHaveAttribute("contenteditable", "false");
+		expect(chip).toHaveAttribute("title", path);
+		expect(chip).toHaveTextContent(path.includes("Project") ? "Project Files" : "attachment-readme.txt");
+		act(() => ref.current!.removeAttachment(path));
+		expect(ref.current!.getSnapshot().text).toBe("Read here");
+	});
+
+	it("does not change the draft if a folder picker is cancelled", () => {
+		const { ref, editor } = setup("Read here");
+		caret(editor, 4);
+		act(() => {
+			const reservation = ref.current!.reserveAttachments();
+			ref.current!.fillAttachments(reservation!, []);
+		});
+		expect(ref.current!.getSnapshot().text).toBe("Read here");
+	});
+
+	it("restores attached file and folder references from a saved draft", () => {
+		const path = "/work/Project Files/";
+		const { field, ref } = setup(`Read ${path} please`, { attachments: [{ path, folder: true }] });
+		expect(field.querySelector('[data-composer-token="file"]')).toHaveTextContent("Project Files");
+		expect(ref.current!.getSnapshot().text).toBe(`Read ${path} please`);
+	});
+});

@@ -1819,6 +1819,8 @@ function ChatWorkspaceContent({
 										active={!workspaceActiveTabKey && !reviewerActive && !shellActive}
 									/>
 									<ChatComposer
+										onOpenFile={session?.cloud ? undefined : onOpenFile}
+										pathActionsRemote={Boolean(activeRemoteHostId) || Boolean(session?.cloud)}
 										nativeSession={nativeSession}
 										onSelectAnnotation={navigateToAnnotation}
 										focusRef={composerFocusRef}

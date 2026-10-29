@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { CHAT_FOLDER_ATTACHMENT_CHANNEL } from "../shared/chat-folder-attachment";
+import { CHAT_FOLDER_ATTACHMENT_CHANNEL, CHAT_ATTACHMENT_PATH_CHANNEL } from "../shared/chat-folder-attachment";
 import {
 	registerChatFolderAttachmentIpc,
+	registerChatAttachmentPathIpc,
 	validateChatFolderAttachment,
 	type ChatFolderAttachmentFileSystem,
 } from "./chat-folder-attachment-ipc";
@@ -122,5 +123,40 @@ describe("registerChatFolderAttachmentIpc", () => {
 		await expect(handler?.()).resolves.toBeNull();
 		await expect(handler?.()).resolves.toEqual({ error: "symbolic_link" });
 		expect(dialog.showOpenDialog).toHaveBeenCalledWith({ properties: ["openDirectory"] });
+	});
+});
+
+describe("attachment path IPC", () => {
+	it.each([
+		["darwin", "/Users/me/Project Files/"],
+		["win32", "C:\\Users\\me\\Project Files\\"],
+		["win32", "\\\\server\\share\\folder\\"],
+	] as const)("reveals an absolute path on %s without changing it", async (platform, target) => {
+		const { registered, ipcMain } = handlers();
+		const reveal = vi.fn();
+		registerChatAttachmentPathIpc({ ipcMain, platform, resolveWorkspace: vi.fn(), showItemInFolder: reveal });
+		await expect(registered.get(CHAT_ATTACHMENT_PATH_CHANNEL)?.(null, { path: target, action: "reveal" })).resolves.toBe(target);
+		expect(reveal).toHaveBeenCalledWith(target);
+	});
+
+	it.each([
+		["darwin", "/work", "/work/.ao/attachments/attachment-a.txt"],
+		["win32", "C:\\work", "C:\\work\\.ao\\attachments\\attachment-a.txt"],
+	] as const)("resolves staged paths on %s for copying without revealing", async (platform, workspace, expected) => {
+		const { registered, ipcMain } = handlers();
+		const reveal = vi.fn();
+		const resolveWorkspace = vi.fn(async () => workspace);
+		registerChatAttachmentPathIpc({ ipcMain, platform, resolveWorkspace, showItemInFolder: reveal });
+		await expect(registered.get(CHAT_ATTACHMENT_PATH_CHANNEL)?.(null, { sessionId: "ao-1", path: ".ao/attachments/attachment-a.txt", action: "resolve" })).resolves.toBe(expected);
+		expect(resolveWorkspace).toHaveBeenCalledWith("ao-1");
+		expect(reveal).not.toHaveBeenCalled();
+	});
+
+	it.each(["../secret", "", "bad\npath", "C:relative"])("rejects invalid paths: %s", async (target) => {
+		const { registered, ipcMain } = handlers();
+		const reveal = vi.fn();
+		registerChatAttachmentPathIpc({ ipcMain, platform: "darwin", resolveWorkspace: async () => "/work", showItemInFolder: reveal });
+		await expect(registered.get(CHAT_ATTACHMENT_PATH_CHANNEL)?.(null, { sessionId: "ao-1", path: target, action: "reveal" })).rejects.toThrow();
+		expect(reveal).not.toHaveBeenCalled();
 	});
 });

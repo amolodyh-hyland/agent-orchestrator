@@ -72,7 +72,8 @@ import { composerFileIcon } from "./composerFileIcon";
 import { composerCodeRegions, createComposerGraphemeNavigator, isComposerOpenCodeFenceAt } from "./composerMarkdown";
 import { COMPOSER_CODE_LANGUAGE_TAG, ComposerCodeNode, ComposerCodePlaceholderNode, ComposerCodePlugin } from "./ComposerCode";
 import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
-import { splitInlineImagePaths } from "./messageAttachments";
+import { attachmentName, isInlineImagePath, splitAttachmentPaths } from "./messageAttachments";
+import { AttachmentPathChip, AttachmentPathMenu } from "./AttachmentPathChip";
 
 export type ComposerTrigger = {
 	kind: TriggerKind;
@@ -111,8 +112,12 @@ export type ComposerEditorHandle = {
 	 * caret has moved by the time staging finishes.
 	 */
 	reserveImages(): string | undefined;
+	reserveAttachments(): string | undefined;
 	/** Replace a reservation with one chip per staged image path (none removes it). */
 	fillImages(reservation: string, paths: string[]): void;
+	fillAttachments(reservation: string, paths: string[]): void;
+	removeAttachment(path: string): void;
+	pruneAttachments(attached: string[]): void;
 	/** Drop every inline chip for an image that left the attachment list. */
 	removeImage(path: string): void;
 	/**
@@ -126,14 +131,14 @@ export type ComposerEditorHandle = {
 /** What an inline image chip shows for a staged path; the path itself is the wire text. */
 export type ComposerImage = { path: string; name: string; src?: string };
 
+const ComposerAttachments = createContext<{ path: string; folder?: boolean }[]>([]);
+
 const ComposerImages = createContext<ComposerImage[]>([]);
 
 /** An empty path is a reservation whose image is still being staged. */
 function ComposerImageChip({ path }: { path: string }) {
-	const { t } = useTranslation();
 	const images = useContext(ComposerImages);
-	const index = images.findIndex((candidate) => candidate.path === path);
-	const image = images[index];
+	const image = images.find((candidate) => candidate.path === path);
 	if (!path) {
 		return (
 			<span
@@ -147,11 +152,14 @@ function ComposerImageChip({ path }: { path: string }) {
 		);
 	}
 	return (
-		<span
+		<AttachmentPathMenu path={path}><span
+			tabIndex={0}
+			role="button"
+			aria-label={path}
 			data-composer-token="image"
 			data-value={path}
 			contentEditable={false}
-			title={image?.name}
+			title={path}
 			className="mx-0.5 inline-flex max-w-48 items-center gap-1 rounded-md border border-border-strong bg-interactive-hover py-0.5 pl-0.5 pr-1.5 align-middle text-[0.9em] leading-none text-foreground select-none"
 		>
 			{image?.src ? (
@@ -159,15 +167,19 @@ function ComposerImageChip({ path }: { path: string }) {
 			) : (
 				<ImageIcon aria-hidden="true" className="size-3 shrink-0" />
 			)}
-			{/* Numbered like the sent message will be; the file name stays in the tooltip. */}
 			<span className="truncate">
-				{image ? t("chat.image.numbered", { index: index + 1 }) : t("chat.image.untitled")}
+				{attachmentName(image?.name ?? path)}
 			</span>
-		</span>
+		</span></AttachmentPathMenu>
 	);
 }
 
-type TokenKind = "skill" | "file" | "image";
+function ComposerAttachmentChip({ path }: { path: string }) {
+	const attachments = useContext(ComposerAttachments);
+	return <AttachmentPathChip path={path} composer folder={attachments.find((item) => item.path === path)?.folder} />;
+}
+
+type TokenKind = "skill" | "file" | "image" | "attachment";
 
 const completionHandledEvents = new WeakSet<Event>();
 const PROGRAMMATIC_TEXT_UPDATE_TAG = "ao:composer-programmatic-text";
@@ -256,6 +268,8 @@ class ComposerTokenNode extends DecoratorNode<JSX.Element> {
 
 	decorate(): JSX.Element {
 		if (this.__kind === "image") return <ComposerImageChip path={this.__value} />;
+		if (this.__kind === "attachment") return <ComposerAttachmentChip path={this.__value} />;
+		if (this.__kind === "file") return <AttachmentPathChip path={this.__value} display={this.__display} composer />;
 		const Icon = this.__kind === "skill" ? Box : composerFileIcon(this.__value);
 		return (
 			<span
@@ -277,10 +291,9 @@ class ComposerTokenNode extends DecoratorNode<JSX.Element> {
 }
 
 function $createComposerTokenNode(kind: TokenKind, value: string): ComposerTokenNode {
-	if (kind === "image") return new ComposerTokenNode(kind, value, value, value);
+	if (kind === "image" || kind === "attachment") return new ComposerTokenNode(kind, value, value, value);
 	const wire = kind === "skill" ? (/^[/$]/.test(value) ? value : `/${value}`) : /\s/.test(value) ? `"${value}"` : value;
-	const slash = value.lastIndexOf("/");
-	const display = kind === "skill" ? wire : slash >= 0 ? value.slice(slash + 1) : value;
+	const display = kind === "skill" ? wire : attachmentName(value);
 	return new ComposerTokenNode(kind, value, display, wire);
 }
 
@@ -792,13 +805,13 @@ function $replaceEditorText(text: string, attached: string[] = [], caret: "start
 	$setSelection($createRangeSelection());
 	for (const line of text.split("\n")) {
 		const paragraph = $createParagraphNode();
-		// A restored draft is plain text; paths of still-attached images become chips
+		// A restored draft is plain text; paths of still-attached files become chips
 		// again. Any other path stays the text the user typed.
-		for (const segment of splitInlineImagePaths(line, (path) => attached.includes(path))) {
+		for (const segment of splitAttachmentPaths(line, attached)) {
 			paragraph.append(
 				segment.path === undefined
 					? $createTextNode(segment.text)
-					: $createComposerTokenNode("image", segment.path),
+					: $createComposerTokenNode(isInlineImagePath(segment.path) ? "image" : "attachment", segment.path),
 			);
 		}
 		root.append(paragraph);
@@ -844,9 +857,9 @@ function $joinsPreviousWord(selection: RangeSelection): boolean {
 	return /\S$/.test(before);
 }
 
-function $reserveImages(): string | undefined {
+function $reserveImages(spaced = true): string | undefined {
 	const reservation = $createComposerTokenNode("image", "");
-	const nodes: LexicalNode[] = [reservation, $createTextNode(" ")];
+	const nodes: LexicalNode[] = spaced ? [reservation, $createTextNode(" ")] : [reservation];
 	let selection = $getSelection();
 	if (!$isRangeSelection(selection)) {
 		// A drop or the file picker can leave no selection; the end is the natural place.
@@ -854,22 +867,29 @@ function $reserveImages(): string | undefined {
 		selection = $getSelection();
 	}
 	if (!$isRangeSelection(selection)) return undefined;
-	if ($joinsPreviousWord(selection)) nodes.unshift($createTextNode(" "));
+	if (spaced && $joinsPreviousWord(selection)) nodes.unshift($createTextNode(" "));
 	selection.insertNodes(nodes);
 	return reservation.getKey();
 }
 
-function $fillImages(reservation: string, paths: string[]): void {
+function $fillImages(reservation: string, paths: string[], attachments = false): void {
 	const node = $getNodeByKey(reservation);
 	// Deleted while staging: the user removed it on purpose, so add nothing back.
 	if (!(node instanceof ComposerTokenNode)) return;
 	if (paths.length === 0) {
-		$removeChip(node);
+		if (attachments) node.remove();
+		else $removeChip(node);
 		return;
+	}
+	if (attachments) {
+		const previous = node.getPreviousSibling()?.getTextContent() ?? "";
+		const next = node.getNextSibling()?.getTextContent() ?? "";
+		if (/\S$/.test(previous)) node.insertBefore($createTextNode(" "));
+		if (!/^\s/.test(next)) node.insertAfter($createTextNode(" "));
 	}
 	let last: LexicalNode = node;
 	paths.forEach((path, index) => {
-		const chip = $createComposerTokenNode("image", path);
+		const chip = $createComposerTokenNode(attachments && !isInlineImagePath(path) ? "attachment" : "image", path);
 		if (index === 0) {
 			node.replace(chip);
 		} else {
@@ -891,9 +911,9 @@ function $removeChip(chip: LexicalNode): void {
 	chip.remove();
 }
 
-function $removeImageTokens(remove: (path: string) => boolean): void {
+function $removeImageTokens(remove: (path: string) => boolean, attachments = false): void {
 	for (const child of $composerLeaves()) {
-		if (child instanceof ComposerTokenNode && child.__kind === "image" && remove(child.__value)) $removeChip(child);
+		if (child instanceof ComposerTokenNode && (child.__kind === "image" || (attachments && child.__kind === "attachment")) && remove(child.__value)) $removeChip(child);
 	}
 }
 
@@ -1005,7 +1025,7 @@ const EditorBridge = forwardRef<
 		menuOpen: boolean;
 		promptSuggestion?: ComposerPromptSuggestion;
 		onDismissSuggestion: () => void;
-		/** Staged paths of the images attached right now. */
+		/** Paths of the files and images attached right now. */
 		attachedImages: () => string[];
 		compositionState: { current: boolean };
 		compositionEndScheduler: { current: () => void };
@@ -1082,6 +1102,15 @@ const EditorBridge = forwardRef<
 					$insertComposerReference(path, display, wire);
 				}, { discrete: true });
 			},
+			reserveAttachments: () => {
+				let reservation: string | undefined;
+				editor.update(() => {
+					const saved = lastSelection.current;
+					if (saved && $getNodeByKey(saved.anchor.key) && $getNodeByKey(saved.focus.key)) $setSelection(saved.clone());
+					reservation = $reserveImages(false);
+				}, { discrete: true });
+				return reservation;
+			},
 			reserveImages: () => {
 				let reservation: string | undefined;
 				editor.update(() => {
@@ -1091,6 +1120,15 @@ const EditorBridge = forwardRef<
 			},
 			fillImages: (reservation, paths) => {
 				editor.update(() => $fillImages(reservation, paths), { discrete: true });
+			},
+			fillAttachments: (reservation, paths) => {
+				editor.update(() => $fillImages(reservation, paths, true), { discrete: true });
+			},
+			removeAttachment: (path) => {
+				editor.update(() => $removeImageTokens((candidate) => candidate === path, true), { discrete: true });
+			},
+			pruneAttachments: (attached) => {
+				editor.update(() => $removeImageTokens((candidate) => !attached.includes(candidate), true), { discrete: true });
 			},
 			removeImage: (path) => {
 				editor.update(() => $removeImageTokens((candidate) => candidate === path), { discrete: true });
@@ -1401,6 +1439,7 @@ export const ComposerEditor = forwardRef<
 		menuId: string;
 		activeIndex: number;
 		images?: ComposerImage[];
+		attachments?: { path: string; folder?: boolean }[];
 		onChange: (snapshot: ComposerEditorSnapshot) => void;
 		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
@@ -1419,6 +1458,7 @@ export const ComposerEditor = forwardRef<
 		menuId,
 		activeIndex,
 		images = [],
+		attachments = [],
 		onChange,
 		onComplete,
 		onEnter,
@@ -1459,8 +1499,8 @@ export const ComposerEditor = forwardRef<
 
 	// Read at setText time, not render time, so a draft restore sees the
 	// attachments it was restored with.
-	const imagesRef = useRef(images);
-	imagesRef.current = images;
+	const imagesRef = useRef([...images, ...attachments]);
+	imagesRef.current = [...images, ...attachments];
 	const attachedImages = useCallback(() => imagesRef.current.map((image) => image.path), []);
 
 	const placeholderNode = useCallback(
@@ -1479,6 +1519,7 @@ export const ComposerEditor = forwardRef<
 
 	return (
 		<LexicalComposer initialConfig={initialConfig}>
+			<ComposerAttachments.Provider value={attachments}>
 			<ComposerImages.Provider value={images}>
 			<div className={cn("relative", suggestion && "chat-composer-scrollbar max-h-40 overflow-y-auto overscroll-contain")}>
 				<PlainTextPlugin
@@ -1544,6 +1585,7 @@ export const ComposerEditor = forwardRef<
 				/>
 			</div>
 			</ComposerImages.Provider>
+			</ComposerAttachments.Provider>
 		</LexicalComposer>
 	);
 });

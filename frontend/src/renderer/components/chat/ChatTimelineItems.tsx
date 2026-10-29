@@ -9,7 +9,8 @@ import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
  * re-sorting. Those belong to the daemon.
  */
 
-import { stagedAttachmentParts, attachmentName, attachmentURL, isFolderAttachmentPath, isImageAttachmentPath, splitInlineImagePaths } from "./messageAttachments";
+import { stagedAttachmentParts, attachmentURL, isFolderAttachmentPath, isImageAttachmentPath, splitAttachmentPaths } from "./messageAttachments";
+import { AttachmentPathChip } from "./AttachmentPathChip";
 import { ChatImage } from "./ChatImage";
 import {
 	ACCENT_ACTION_SEGMENT,
@@ -28,7 +29,6 @@ import {
 	CornerDownLeft,
 	CornerDownRight,
 	File as FileIcon,
-	Folder as FolderIcon,
 	FileDiff,
 	Gauge,
 	KeyRound,
@@ -67,7 +67,7 @@ import { caretNotation, stripAnsi } from "../../lib/ansi";
 import { getApiBaseUrl } from "../../lib/api-client";
 import { readArtifactRef, readRenderRef } from "../../lib/render-frame";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
-import { ActivityTitle, ChatCodeText, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
+import { useChatFileActions, ActivityTitle, ChatCodeText, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
 import { HumanMessageEditor } from "./HumanMessageEditor";
@@ -428,11 +428,14 @@ function ProseWithInlineImages({
 	renderText: (text: string) => ReactNode;
 }) {
 	const { t } = useTranslation();
+	const { openFile: onOpenFile, remoteHost, sessionLinkHostId: hostId, sessionLinkSourceKind } = useChatFileActions();
+	const actions = { sessionId, onOpenFile: sessionLinkSourceKind === "cloud" ? undefined : onOpenFile, remoteHost: remoteHost || sessionLinkSourceKind === "cloud", hostId };
 	const images = attachments.filter(isImageAttachmentPath);
-	if (apiBaseUrl === null || images.length === 0) return renderText(text);
-	return splitInlineImagePaths(text, (path) => images.includes(path)).map((segment, index) =>
+	return splitAttachmentPaths(text, attachments).map((segment, index) =>
 		segment.path === undefined ? (
 			<Fragment key={index}>{renderText(segment.text)}</Fragment>
+		) : !isImageAttachmentPath(segment.path) || apiBaseUrl === null ? (
+			<AttachmentPathChip key={index} path={segment.path} folder={isFolderAttachmentPath(segment.path)} actions={actions} />
 		) : (
 			<ChatImage
 				key={index}
@@ -458,12 +461,12 @@ function StagedAttachmentItems({
 	className?: string;
 }) {
 	const { t } = useTranslation();
+	const { openFile: onOpenFile, remoteHost, sessionLinkHostId: hostId, sessionLinkSourceKind } = useChatFileActions();
 	if (paths.length === 0) return null;
 	const images = paths.filter(isImageAttachmentPath);
 	return (
 		<ul aria-label={ariaLabel} className={cn("flex max-w-full flex-wrap gap-2", className)}>
 			{paths.map((path) => {
-				const name = attachmentName(path);
 				return isImageAttachmentPath(path) && apiBaseUrl !== null ? (
 					<li key={path} className="max-w-full">
 						<ChatImage
@@ -472,15 +475,8 @@ function StagedAttachmentItems({
 						/>
 					</li>
 				) : (
-					<li
-						key={path}
-						title={path}
-						className="flex max-w-full items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1.5 text-xs text-muted-foreground"
-					>
-						{isFolderAttachmentPath(path)
-							? <FolderIcon aria-hidden="true" className="size-3.5 shrink-0" />
-							: <FileIcon aria-hidden="true" className="size-3.5 shrink-0" />}
-						<span className="truncate">{name}</span>
+					<li key={path} className="max-w-full">
+						<AttachmentPathChip path={path} folder={isFolderAttachmentPath(path)} actions={{ sessionId, remoteHost: remoteHost || sessionLinkSourceKind === "cloud", hostId, onOpenFile: sessionLinkSourceKind === "cloud" ? undefined : onOpenFile }} />
 					</li>
 				);
 			})}

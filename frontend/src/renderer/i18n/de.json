@@ -1,4 +1,11 @@
 {
+	"chat.path.panelUnavailable": "Dieser Pfad konnte nicht im Dateibereich der Sitzung geöffnet werden.",
+	"chat.path.revealMac": "Im Finder anzeigen",
+	"chat.path.revealWindows": "Im Datei-Explorer anzeigen",
+	"chat.path.reveal": "Im Dateimanager anzeigen",
+	"chat.path.openSidePanel": "In der Seitenleiste öffnen",
+	"chat.path.copy": "Pfad kopieren",
+	"chat.path.actionFailed": "Der Pfad konnte nicht geöffnet oder kopiert werden.",
 	"outer.title": "Übergeordneter Orchestrator",
 	"outer.help": "Stelle im Haupt-Chat von Codex Fragen zu ausgewählten Projekten. Jede gesendete Nachricht ist eine menschliche Anfrage. Unterstützte projektübergreifende Aktionen erfordern die native Bestätigung eines exakten Plans.",
 	"outer.setup": "Übergeordneten Chat einrichten",

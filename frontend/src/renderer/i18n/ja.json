@@ -1,4 +1,11 @@
 {
+	"chat.path.panelUnavailable": "このパスをセッションのファイルパネルで開けませんでした。",
+	"chat.path.revealMac": "Finderで表示",
+	"chat.path.revealWindows": "エクスプローラーで表示",
+	"chat.path.reveal": "ファイルマネージャーで表示",
+	"chat.path.openSidePanel": "サイドパネルで開く",
+	"chat.path.copy": "パスをコピー",
+	"chat.path.actionFailed": "パスを開くかコピーできませんでした。",
 	"outer.title": "全体オーケストレーター",
 	"outer.help": "Codex のメイン Chat で、選択したプロジェクトについて質問できます。送信ごとに人間によるリクエストが1件作成されます。対応するプロジェクト間の操作には、正確な計画のネイティブ確認が必要です。",
 	"outer.setup": "全体 Chat を設定",
