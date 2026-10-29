@@ -327,6 +327,22 @@ function $composerLeaves(): LexicalNode[] {
 	return leaves;
 }
 
+// Retain committed immutable node versions, including parent child lists. Text
+// equality cannot identify a range when the draft contains repeated words.
+function $composerNodeVersions(): LexicalNode[] {
+	const nodes: LexicalNode[] = [];
+	const visit = (node: LexicalNode) => {
+		nodes.push(node);
+		if ($isElementNode(node)) node.getChildren().forEach(visit);
+	};
+	visit($getRoot());
+	return nodes;
+}
+
+function $hasComposerNodeVersions(nodes: LexicalNode[]): boolean {
+	return nodes.every((node) => $getNodeByKey(node.getKey()) === node);
+}
+
 function $selectComposerOffset(offset: number, point: RangeSelection["anchor"], raw = false): void {
 	const positioned: { node: LexicalNode; start: number }[] = [];
 	let cursor = 0;
@@ -1038,7 +1054,7 @@ const EditorBridge = forwardRef<
 	const lastSelection = useRef<RangeSelection | null>(null);
 	// A range stays intact while the picker/stager is pending. Only acceptance
 	// replaces it, so cancellation is content-neutral and undo restores the range.
-	const attachmentRanges = useRef(new Map<string, { selection: RangeSelection; text: string }>());
+	const attachmentRanges = useRef(new Map<string, { selection: RangeSelection; nodes: LexicalNode[]; valid: boolean }>());
 	const attachmentRangeId = useRef(0);
 
 	useEffect(() => editor.setEditable(!disabled), [disabled, editor]);
@@ -1108,17 +1124,27 @@ const EditorBridge = forwardRef<
 			},
 			reserveAttachments: () => {
 				let reservation: string | undefined;
+				const bookmark: { selection?: RangeSelection } = {};
 				editor.update(() => {
 					const saved = lastSelection.current;
 					if (saved && $getNodeByKey(saved.anchor.key) && $getNodeByKey(saved.focus.key)) $setSelection(saved.clone());
 					const selection = $getSelection();
 					if ($isRangeSelection(selection) && !selection.isCollapsed()) {
 						reservation = `attachment-range-${++attachmentRangeId.current}`;
-						attachmentRanges.current.set(reservation, { selection: selection.clone(), text: selection.getTextContent() });
+						bookmark.selection = selection.clone();
 					} else {
 						reservation = $reserveImages(false);
 					}
 				}, { discrete: true });
+				if (reservation && bookmark.selection) {
+					attachmentRanges.current.set(reservation, {
+						selection: bookmark.selection,
+						// Snapshot only after the discrete update has committed. A
+						// later edit must clone these versions, even before listeners run.
+						nodes: editor.getEditorState().read($composerNodeVersions),
+						valid: true,
+					});
+				}
 				return reservation;
 			},
 			reserveImages: () => {
@@ -1137,13 +1163,10 @@ const EditorBridge = forwardRef<
 				if (range && !paths.length) return;
 				editor.update(() => {
 					if (range) {
-						const { selection, text } = range;
-						// A replaced draft or a user edit to this range invalidates the
-						// bookmark; never overwrite new content when staging completes.
-						const anchor = $getNodeByKey(selection.anchor.key);
-						const focus = $getNodeByKey(selection.focus.key);
-						if (!anchor || !focus || selection.anchor.offset > anchor.getTextContentSize() ||
-							selection.focus.offset > focus.getTextContentSize() || selection.getTextContent() !== text) return;
+						const { selection, nodes, valid } = range;
+						// Any document mutation invalidates this conservative bookmark.
+						// Check live versions too: an edit can still be pending commit.
+						if (!valid || !$hasComposerNodeVersions(nodes)) return;
 						$setSelection(selection.clone());
 						$addUpdateTag(HISTORY_PUSH_TAG);
 						const replacement = $reserveImages(false);
@@ -1202,6 +1225,9 @@ const EditorBridge = forwardRef<
 		const unregister = editor.registerUpdateListener(({ editorState, prevEditorState, tags }) => {
 			editorState.read(() => {
 				dismissIfNotEmpty();
+				for (const bookmark of attachmentRanges.current.values()) {
+					if (!$hasComposerNodeVersions(bookmark.nodes)) bookmark.valid = false;
+				}
 				const selection = $getSelection();
 				if ($isRangeSelection(selection)) lastSelection.current = selection.clone();
 			});

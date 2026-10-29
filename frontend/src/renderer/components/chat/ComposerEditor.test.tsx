@@ -722,6 +722,70 @@ describe("inline attachment references", () => {
 		expect(ref.current!.getSnapshot().text).toBe("Read new text");
 	});
 
+	it("does not replace a different occurrence after typing before the pending range", async () => {
+		const { ref, editor, field } = setup("x here here");
+		selectRange(editor, 7, 11);
+		let reservation: string | undefined;
+		act(() => { reservation = ref.current!.reserveAttachments(); });
+		const originalKey = editor.getEditorState().read(() => $getRoot().getFirstDescendant()!.getKey());
+		caret(editor, 0);
+		await act(async () => { editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, "here "); });
+		expect(editor.getEditorState().read(() => $getRoot().getFirstDescendant()!.getKey())).toBe(originalKey);
+		expect(ref.current!.getSnapshot().text).toBe("here x here here");
+		act(() => ref.current!.fillAttachments(reservation!, ["/work/Folder"]));
+		expect(ref.current!.getSnapshot().text).toBe("here x here here");
+		expect(field.querySelector('[data-composer-token="file"]')).toBeNull();
+	});
+
+	it("leaves the draft intact after typing after the pending range", async () => {
+		const { ref, editor, field } = setup("x here here");
+		selectRange(editor, 7, 11);
+		let reservation: string | undefined;
+		act(() => { reservation = ref.current!.reserveAttachments(); });
+		caret(editor, 11);
+		await act(async () => { editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, " here"); });
+		act(() => ref.current!.fillAttachments(reservation!, ["/work/Folder"]));
+		expect(ref.current!.getSnapshot().text).toBe("x here here here");
+		expect(field.querySelector('[data-composer-token="file"]')).toBeNull();
+	});
+
+	it("checks live node versions before a pending edit has notified listeners", () => {
+		const { ref, editor } = setup("x here here");
+		selectRange(editor, 7, 11);
+		let reservation: string | undefined;
+		act(() => { reservation = ref.current!.reserveAttachments(); });
+		act(() => editor.update(() => {
+			const node = $getRoot().getFirstDescendant();
+			if (!$isTextNode(node)) throw new Error("Expected composer text");
+			node.spliceText(0, 0, "here ", true);
+			ref.current!.fillAttachments(reservation!, ["/work/Folder"]);
+		}, { discrete: true }));
+		expect(ref.current!.getSnapshot().text).toBe("here x here here");
+	});
+
+	it("keeps a bookmark invalid after an intervening edit is undone", async () => {
+		const { ref, editor } = setup("x here here");
+		selectRange(editor, 7, 11);
+		let reservation: string | undefined;
+		act(() => { reservation = ref.current!.reserveAttachments(); });
+		caret(editor, 0);
+		act(() => ref.current!.insertText("here "));
+		await act(async () => editor.dispatchCommand(UNDO_COMMAND, undefined));
+		expect(ref.current!.getSnapshot().text).toBe("x here here");
+		act(() => ref.current!.fillAttachments(reservation!, ["/work/Folder"]));
+		expect(ref.current!.getSnapshot().text).toBe("x here here");
+	});
+
+	it("still replaces the original range when only the caret moves during staging", () => {
+		const { ref, editor } = setup("x here here");
+		selectRange(editor, 7, 11);
+		let reservation: string | undefined;
+		act(() => { reservation = ref.current!.reserveAttachments(); });
+		caret(editor, 0);
+		act(() => ref.current!.fillAttachments(reservation!, ["/work/Folder"]));
+		expect(ref.current!.getSnapshot().text).toBe("x here /work/Folder ");
+	});
+
 	it("restores attached file and folder references from a saved draft", () => {
 		const path = "/work/Project Files/";
 		const { field, ref } = setup(`Read ${path} please`, { attachments: [{ path, folder: true }] });

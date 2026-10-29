@@ -5,8 +5,11 @@ adds an atomic inline reference at the composer caret. The existing attachment
 strip remains visible. A reservation preserves the insertion point during
 asynchronous staging and the native folder picker. Selected text stays intact
 until acceptance, then replacement is one undoable edit. Cancellation and staging
-failure preserve the range. If the user edits that range during staging, the
-accepted file remains in the strip without replacing the new text.
+failure preserve the range. Pending ranges retain committed Lexical node
+versions and are invalidated by any document mutation during staging, including
+edits before or after the selection. Caret-only moves keep the bookmark valid.
+On invalidation, the accepted file remains in the strip and the draft stays
+intact; completion never guesses a replacement location from matching text.
 File mentions continue to use the same Lexical token pattern.
 
 Inline references show a basename and expose the entire path in their title.
