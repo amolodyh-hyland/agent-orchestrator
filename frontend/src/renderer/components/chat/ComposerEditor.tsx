@@ -1036,6 +1036,10 @@ const EditorBridge = forwardRef<
 >(function EditorBridge({ disabled, menuOpen, promptSuggestion, onDismissSuggestion, attachedImages, compositionState, compositionEndScheduler, onChange, onComplete, onEnter }, ref) {
 	const [editor] = useLexicalComposerContext();
 	const lastSelection = useRef<RangeSelection | null>(null);
+	// A range stays intact while the picker/stager is pending. Only acceptance
+	// replaces it, so cancellation is content-neutral and undo restores the range.
+	const attachmentRanges = useRef(new Map<string, { selection: RangeSelection; text: string }>());
+	const attachmentRangeId = useRef(0);
 
 	useEffect(() => editor.setEditable(!disabled), [disabled, editor]);
 
@@ -1107,7 +1111,13 @@ const EditorBridge = forwardRef<
 				editor.update(() => {
 					const saved = lastSelection.current;
 					if (saved && $getNodeByKey(saved.anchor.key) && $getNodeByKey(saved.focus.key)) $setSelection(saved.clone());
-					reservation = $reserveImages(false);
+					const selection = $getSelection();
+					if ($isRangeSelection(selection) && !selection.isCollapsed()) {
+						reservation = `attachment-range-${++attachmentRangeId.current}`;
+						attachmentRanges.current.set(reservation, { selection: selection.clone(), text: selection.getTextContent() });
+					} else {
+						reservation = $reserveImages(false);
+					}
 				}, { discrete: true });
 				return reservation;
 			},
@@ -1122,7 +1132,26 @@ const EditorBridge = forwardRef<
 				editor.update(() => $fillImages(reservation, paths), { discrete: true });
 			},
 			fillAttachments: (reservation, paths) => {
-				editor.update(() => $fillImages(reservation, paths, true), { discrete: true });
+				const range = attachmentRanges.current.get(reservation);
+				attachmentRanges.current.delete(reservation);
+				if (range && !paths.length) return;
+				editor.update(() => {
+					if (range) {
+						const { selection, text } = range;
+						// A replaced draft or a user edit to this range invalidates the
+						// bookmark; never overwrite new content when staging completes.
+						const anchor = $getNodeByKey(selection.anchor.key);
+						const focus = $getNodeByKey(selection.focus.key);
+						if (!anchor || !focus || selection.anchor.offset > anchor.getTextContentSize() ||
+							selection.focus.offset > focus.getTextContentSize() || selection.getTextContent() !== text) return;
+						$setSelection(selection.clone());
+						$addUpdateTag(HISTORY_PUSH_TAG);
+						const replacement = $reserveImages(false);
+						if (replacement) $fillImages(replacement, paths, true);
+					} else {
+						$fillImages(reservation, paths, true);
+					}
+				}, { discrete: true });
 			},
 			removeAttachment: (path) => {
 				editor.update(() => $removeImageTokens((candidate) => candidate === path, true), { discrete: true });

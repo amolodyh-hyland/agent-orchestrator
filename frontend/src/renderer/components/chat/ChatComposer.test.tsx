@@ -6,7 +6,7 @@ import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { Activity, Profiler } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { $getRoot, $isElementNode, $isTextNode, type LexicalEditor } from "lexical";
+import { $getRoot, $isElementNode, $isTextNode, UNDO_COMMAND, REDO_COMMAND, type LexicalEditor } from "lexical";
 import { ChatComposer } from "./ChatComposer";
 import { sendReferenceToChat } from "../../lib/chat-context-bus";
 import { attachmentURL } from "./messageAttachments";
@@ -97,10 +97,12 @@ it("stages outer Send with the visible scope and settings snapshot without a ren
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
-	const promise = new Promise<T>((resolvePromise) => {
+	let reject!: (reason: unknown) => void;
+	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
 		resolve = resolvePromise;
+		reject = rejectPromise;
 	});
-	return { promise, resolve };
+	return { promise, resolve, reject };
 }
 
 async function typeInComposer(field: HTMLElement, text: string) {
@@ -2261,6 +2263,56 @@ describe("attachments", () => {
 		await waitFor(() => expect(onSend.mock.calls.at(-1)?.[0]).toBe(
 			`${path} Please inspect this folder\n\nAttached files (read these files in the workspace):\n- ${path}`,
 		));
+	});
+
+	it("replaces selected text with an accepted folder in one undo/redo step", async () => {
+		const pick = deferred<{ path: string; name: string; machineName: string }>();
+		const { field } = renderComposer({ onStageAttachments: vi.fn(), onChooseFolder: () => pick.promise });
+		await typeInComposer(field, "Read here please");
+		selectComposerText(field, 5, 9);
+		await userEvent.click(screen.getByRole("button", { name: "Add attachment" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Attach folder" }));
+		expect(lexicalEditorText(field)).toBe("Read here please");
+		await act(async () => pick.resolve({ path: "/work/Folder", name: "Folder", machineName: "dev-mac" }));
+		await waitFor(() => expect(lexicalEditorText(field)).toBe("Read /work/Folder please"));
+		const editor = (field as HTMLElement & { __lexicalEditor: LexicalEditor }).__lexicalEditor;
+		await act(async () => editor.dispatchCommand(UNDO_COMMAND, undefined));
+		expect(lexicalEditorText(field)).toBe("Read here please");
+		await act(async () => editor.dispatchCommand(REDO_COMMAND, undefined));
+		expect(lexicalEditorText(field)).toBe("Read /work/Folder please");
+		expect(screen.getByRole("button", { name: "Remove Folder" })).toBeVisible();
+	});
+
+	it.each([null, { error: "not_readable" }, new Error("picker failed")])("preserves a selected range when the folder picker cancels or fails: %s", async (result) => {
+		const pick = deferred<null | { error: "not_readable" }>();
+		const chooseFolder = vi.fn(() => pick.promise);
+		const { field } = renderComposer({ onStageAttachments: vi.fn(), onChooseFolder: chooseFolder });
+		await typeInComposer(field, "Read here");
+		selectComposerText(field, 5, 9);
+		await userEvent.click(screen.getByRole("button", { name: "Add attachment" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Attach folder" }));
+		expect(lexicalEditorText(field)).toBe("Read here");
+		await act(async () => {
+			if (result instanceof Error) pick.reject(result);
+			else pick.resolve(result as null | { error: "not_readable" });
+		});
+		expect(lexicalEditorText(field)).toBe("Read here");
+		expect(field.querySelector('[data-composer-token="file"]')).toBeNull();
+	});
+
+	it("preserves a selected range when durable file staging fails", async () => {
+		const stage = deferred<string[]>();
+		const onStageAttachments = vi.fn(() => stage.promise);
+		const { field } = renderComposer({ onStageAttachments });
+		await typeInComposer(field, "Read here");
+		selectComposerText(field, 5, 9);
+		fireEvent.paste(field, { clipboardData: clipboardData([png("failed.png")]) });
+		expect(lexicalEditorText(field)).toBe("Read here");
+		await waitFor(() => expect(onStageAttachments).toHaveBeenCalledTimes(1));
+		await act(async () => stage.reject(new Error("staging failed")));
+		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("attach"));
+		expect(lexicalEditorText(field)).toBe("Read here");
+		expect(field.querySelector('[data-composer-token="image"]')).toBeNull();
 	});
 
 	it("disables Attach folder for remote sessions with an explanation", async () => {

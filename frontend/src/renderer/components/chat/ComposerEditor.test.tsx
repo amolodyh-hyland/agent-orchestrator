@@ -684,6 +684,44 @@ describe("inline attachment references", () => {
 		expect(ref.current!.getSnapshot().text).toBe("Read here");
 	});
 
+	it.each(["cancelled picker", "failed staging"])("preserves selected text through a %s", () => {
+		const { ref, editor } = setup("Read here");
+		selectRange(editor, 5, 9);
+		let reservation: string | undefined;
+		act(() => { reservation = ref.current!.reserveAttachments(); });
+		expect(ref.current!.getSnapshot().text).toBe("Read here");
+		act(() => ref.current!.fillAttachments(reservation!, []));
+		expect(ref.current!.getSnapshot().text).toBe("Read here");
+		expect(editor.getEditorState().read(() => $getSelection()?.getTextContent())).toBe("here");
+	});
+
+	it("replaces a selected range only on acceptance as one undoable edit", async () => {
+		const { ref, editor, field } = setup("Read here please");
+		selectRange(editor, 5, 9);
+		let reservation: string | undefined;
+		act(() => { reservation = ref.current!.reserveAttachments(); });
+		expect(ref.current!.getSnapshot().text).toBe("Read here please");
+		act(() => ref.current!.fillAttachments(reservation!, ["/work/Folder"]));
+		expect(ref.current!.getSnapshot().text).toBe("Read /work/Folder please");
+		expect(field.querySelector('[data-composer-token="file"]')).toHaveTextContent("Folder");
+		await act(async () => editor.dispatchCommand(UNDO_COMMAND, undefined));
+		expect(ref.current!.getSnapshot().text).toBe("Read here please");
+		expect(field.querySelector('[data-composer-token="file"]')).toBeNull();
+		await act(async () => editor.dispatchCommand(REDO_COMMAND, undefined));
+		expect(ref.current!.getSnapshot().text).toBe("Read /work/Folder please");
+		expect(field.querySelector('[data-composer-token="file"]')).toHaveTextContent("Folder");
+	});
+
+	it("does not overwrite edits to a selected range while staging", () => {
+		const { ref, editor } = setup("Read here");
+		selectRange(editor, 5, 9);
+		let reservation: string | undefined;
+		act(() => { reservation = ref.current!.reserveAttachments(); });
+		act(() => ref.current!.insertText("new text"));
+		act(() => ref.current!.fillAttachments(reservation!, ["/work/Folder"]));
+		expect(ref.current!.getSnapshot().text).toBe("Read new text");
+	});
+
 	it("restores attached file and folder references from a saved draft", () => {
 		const path = "/work/Project Files/";
 		const { field, ref } = setup(`Read ${path} please`, { attachments: [{ path, folder: true }] });

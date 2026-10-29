@@ -172,7 +172,7 @@ import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
-import { registerChatFolderAttachmentIpc, registerChatAttachmentPathIpc } from "./main/chat-folder-attachment-ipc";
+import { registerChatFolderAttachmentIpc, registerChatAttachmentPathIpc, ChatAttachmentPathGrants } from "./main/chat-folder-attachment-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
 import {
 	registerBrowserProfileIpc,
@@ -3262,8 +3262,13 @@ const cancelDictation = registerDictationIpc({
 	createEngine: () => new NativeDictationEngine(dictationHelperPath(process.platform, app.isPackaged ? process.resourcesPath : app.getAppPath())),
 });
 app.on("will-quit", cancelDictation);
-registerChatFolderAttachmentIpc({ ipcMain, dialog, machineName: os.hostname });
-registerChatAttachmentPathIpc({ ipcMain, resolveWorkspace: resolveSessionWorkspaceForDesktop, showItemInFolder: (target) => shell.showItemInFolder(target) });
+const chatAttachmentPathGrants = new ChatAttachmentPathGrants();
+const isTrustedAttachmentSender = (id: number): boolean => {
+	const sender = trustedShellWebContents.get(id);
+	return !!sender && !sender.isDestroyed();
+};
+registerChatFolderAttachmentIpc({ ipcMain, dialog, machineName: os.hostname, pathGrants: chatAttachmentPathGrants, isTrustedSender: isTrustedAttachmentSender });
+registerChatAttachmentPathIpc({ ipcMain, resolveWorkspace: resolveSessionWorkspaceForDesktop, showItemInFolder: (target) => shell.showItemInFolder(target), pathGrants: chatAttachmentPathGrants, isTrustedSender: isTrustedAttachmentSender });
 
 // A file dropped onto the terminal is delivered as raw bytes (its original path
 // is unavailable to the sandboxed renderer on macOS — see webUtils.getPathForFile
