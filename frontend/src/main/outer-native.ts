@@ -440,6 +440,7 @@ export function registerOuterNative(options: {
 					outerSettings: record.data.session,
 					admission: { stations: 2, heavyJobs: 1, foregroundReserve: record.data.binding?.foregroundReserve },
 					separateGates: "Publishing, installation, spending and managed-policy requirements remain separate; this plan grants none.",
+ reviewBounds: "Review trigger/cancel names one owned PR head. Codex Chat uses fixed read-only review permissions. No re-review or fix continuation is authorized.",
 					sourceClarificationAndDisclosure: plan.plan.sources,
 					actions: plan.plan.actions,
 					submissionDeadline: "Two minutes after confirmation. Each turn is single use; no follow-up authority.",

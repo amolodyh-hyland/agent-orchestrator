@@ -445,7 +445,14 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		if _, ok := domain.OuterExecutionFrom(ctx); !ok {
 			return nil, domain.ErrOuterHeld
 		}
-		if err := domain.CheckOuterOperation(ctx, s.store, "spawn", cfg.ProjectID, ""); err != nil {
+		op, target := "spawn", domain.SessionID("")
+		if conversationOwner(cfg).Kind == domain.ConversationOwnerReview {
+			op, target = "review.trigger", cfg.SessionID
+			if cfg.Harness != domain.HarnessCodex || cfg.Permissions != ports.PermissionModeAuto {
+				return nil, domain.ErrOuterHeld
+			}
+		}
+		if err := domain.CheckOuterOperation(ctx, s.store, op, cfg.ProjectID, target); err != nil {
 			return nil, err
 		}
 	}
@@ -1514,6 +1521,22 @@ func (s *Service) SendForOwner(ctx context.Context, owner domain.ConversationOwn
 	controller, err := s.ControllerForOwner(owner)
 	if err != nil {
 		return domain.ConversationTurn{}, err
+	}
+	if owner.Kind == domain.ConversationOwnerReview {
+		if _, executing := domain.OuterExecutionFrom(ctx); executing {
+			st, ok := s.store.(interface {
+				BindOuterReviewRequest(context.Context, string, string, string) (domain.OuterRequest, error)
+			})
+			if !ok {
+				return domain.ConversationTurn{}, domain.ErrOuterHeld
+			}
+			r, err := st.BindOuterReviewRequest(ctx, owner.ID, msg.Text, msg.ClientMessageID)
+			if err != nil {
+				return domain.ConversationTurn{}, err
+			}
+			msg.ClientMessageID = r.ID
+			ctx = domain.WithOuterNativeAction(ctx, domain.OuterNativeAction{Operation: "outer.send", SessionID: r.SessionID, RequestID: r.ID})
+		}
 	}
 	// A crash-safe retry may arrive after its source message changed. Once this
 	// client id is already durable, the controller's existing idempotency path is

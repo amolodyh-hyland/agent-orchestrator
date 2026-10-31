@@ -51,7 +51,7 @@ type RequestView struct {
 
 // View reads passive state without starting, resuming or draining a conversation.
 func (s *Service) View(ctx context.Context) (View, error) {
-	v := View{Requests: []RequestView{}, Reservations: []domain.OuterCapacity{}, Incoming: []domain.OuterEvidence{}, Limitations: []string{"M2: exact confirmed coordinator send, owned worker spawn and preserving worker stop only", "Observation-only restore; unknown submissions and reservations are retained", "Factory 2 stations / 1 heavy job; outside and unknown activity may hold admission", "Normal permissions; no process isolation, syscall audit, hard host cap or spending cap"}}
+	v := View{Requests: []RequestView{}, Reservations: []domain.OuterCapacity{}, Incoming: []domain.OuterEvidence{}, Limitations: []string{"M2/M3 finite confirmed adapters only; reviews require owned exact heads and fixed Codex Chat permissions; ledger and mailbox records launch no work", "Observation-only restore; unknown submissions and reservations are retained", "Factory 2 stations / 1 heavy job; outside and unknown activity may hold admission", "Normal permissions; no process isolation, syscall audit, hard host cap or spending cap"}}
 	if err := s.checkReader(ctx); err != nil {
 		return v, err
 	}

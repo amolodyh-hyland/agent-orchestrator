@@ -495,6 +495,13 @@ describe("exact outer plan confirmation",()=>{
    expect(f.submitted.filter(x=>x.operation==="plan")).toHaveLength(0);if(mode==="cancel")expect(f.submitted.filter(x=>x.operation)).toMatchObject([{operation:"plan.cancel",planId,digest}]);
   }finally{vi.restoreAllMocks();f.registration.dispose();}
  });
+ it("previews the exact M3 head and fixed reviewer settings before native approval", async()=>{
+  const m3=structuredClone(view);
+  m3.plans[0].plan.actions=[{id:"review-once",spec:{operation:"review.trigger",projectId:"B",sessionId:"owned-worker",review:{prUrl:"https://github.com/o/r/pull/1",headSha:"c".repeat(40)},config:{model:"gpt-test",effort:"high",permissions:"auto"}}}] as unknown as typeof m3.plans[0]["plan"]["actions"];
+  const confirm=vi.fn(async(detail:string)=>{expect(detail).toContain("c".repeat(40));expect(detail).toContain("owned-worker");expect(detail).toContain('"permissions": "auto"');expect(detail).toContain("No re-review or fix continuation");return true;});
+  const f=fixture({view:m3,confirmPlan:confirm});
+  try {const stage=await f.stage({operation:"plan",planId,digest});expect(f.submitted).toHaveLength(0);await f.handlers.get(OUTER_USER_ACTION)!(f.event,{id:stage.id,digest:stage.digest});expect(confirm).toHaveBeenCalledOnce();expect(f.submitted.filter(x=>x.operation)).toMatchObject([{operation:"plan",planId,digest}]);}finally{f.registration.dispose();}
+ });
  it("rejects caller supplied approval, manifest and wildcard fields",async()=>{
   const f=fixture({view});try{for(const extra of [{approved:true},{actions:["*"]},{humanAuthored:true},{authority:"forged"}])expect(await f.stage({operation:"plan",planId,digest,...extra})).toBeNull();expect(f.submitted).toHaveLength(0);}finally{f.registration.dispose();}
  });

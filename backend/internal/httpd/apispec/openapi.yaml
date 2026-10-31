@@ -17323,6 +17323,18 @@ components:
       - overage
       - observedAt
       type: object
+    DomainOuterReviewSpec:
+      properties:
+        headSha:
+          type: string
+        prUrl:
+          type: string
+        runId:
+          type: string
+      required:
+      - prUrl
+      - headSha
+      type: object
     DomainReviewerConfig:
       properties:
         agentConfig:
@@ -19473,6 +19485,8 @@ components:
           type: string
         projectId:
           type: string
+        review:
+          $ref: '#/components/schemas/DomainOuterReviewSpec'
         sessionId:
           type: string
         text:
@@ -19714,6 +19728,8 @@ components:
           type: integer
         providerConversationId:
           type: string
+        reviewDigest:
+          type: string
         settings:
           $ref: '#/components/schemas/DomainConversationSettings'
         spec:
@@ -19764,6 +19780,8 @@ components:
         planId:
           type: string
         providerConversationId:
+          type: string
+        reviewId:
           type: string
         scopeRevision:
           format: int64

@@ -105,7 +105,14 @@ func (s *Service) ProposePlan(ctx context.Context, in domain.OuterPlanProposal) 
 		a.Harness = domain.HarnessCodex
 		a.Mode = domain.SessionModeChat
 		switch spec.Operation {
+		case "review.trigger", "review.cancel":
+			if err := s.prepareReview(ctx, &a); err != nil {
+				return domain.OuterPlanReceipt{}, err
+			}
 		case "send", "kill", "retire":
+			if spec.Review != nil {
+				return domain.OuterPlanReceipt{}, domain.ErrOuterHeld
+			}
 			if spec.SessionID == "" || spec.Branch != "" || domain.OuterDigest(spec.Config) != domain.OuterDigest(domain.AgentConfig{}) {
 				return domain.OuterPlanReceipt{}, domain.ErrOuterHeld
 			}
@@ -137,6 +144,9 @@ func (s *Service) ProposePlan(ctx context.Context, in domain.OuterPlanProposal) 
 				}
 			}
 		case "spawn":
+			if spec.Review != nil {
+				return domain.OuterPlanReceipt{}, domain.ErrOuterHeld
+			}
 			if spec.SessionID != "" || spec.Branch == "" || strings.ContainsAny(spec.Branch, "*?\x00 \n") || strings.HasPrefix(spec.Branch, "-") || spec.Config.Model == "" || spec.Config.Permissions == "" || strings.TrimSpace(spec.Text) == "" || len(spec.Text) > 64000 || strings.Contains(spec.Text, "[skill:") || project.Kind.WithDefault() == domain.ProjectKindScratch || len(project.Config.PostCreate) > 0 || len(project.Config.Symlinks) > 0 {
 				return domain.OuterPlanReceipt{}, domain.ErrOuterHeld
 			}
@@ -214,6 +224,9 @@ func (s *Service) executeAction(ctx context.Context, st actionStore, p domain.Ou
 		return err
 	}
 	ctx = domain.WithOuterExecution(ctx, domain.OuterExecution{PlanID: p.Plan.ID, ActionID: a.ID})
+	if a.Spec.Operation == "review.trigger" || a.Spec.Operation == "review.cancel" {
+		return s.executeReview(ctx, st, p, a)
+	}
 	if a.Spec.Operation == "kill" || a.Spec.Operation == "retire" {
 		lifecycle, ok := s.sessions.(interface {
 			StopOuterWorker(context.Context, domain.SessionID, func(context.Context) (func(), error)) error

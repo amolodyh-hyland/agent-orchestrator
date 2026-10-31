@@ -113,10 +113,13 @@ func (s *Service) AcquireOuterInput(ctx context.Context, id domain.SessionID, ms
 	if r.PlanID != "" {
 		expectedOrigin = domain.MessageOriginAutomation
 	}
+	if r.ReviewID != "" {
+		expectedOrigin = domain.MessageOriginDaemon
+	}
 	if r.SessionID != id || msg.Text != r.Payload || domain.OuterDigest(msg.Text) != r.PayloadDigest || msg.Origin != expectedOrigin || len(msg.Content) > 0 || len(msg.Excerpts) > 0 || len(msg.NativeSkills) > 0 || msg.Continuation || msg.ReportBatchID != "" {
 		return fail("exact_payload_required")
 	}
-	if r.PlanID != "" && (msg.SenderSessionID != string(r.OwnerSessionID) || msg.SenderProjectID != b.AnchorProjectID || msg.SenderDisplayName == "") {
+	if r.PlanID != "" && r.ReviewID == "" && (msg.SenderSessionID != string(r.OwnerSessionID) || msg.SenderProjectID != b.AnchorProjectID || msg.SenderDisplayName == "") {
 		return fail("sealed_export_attribution_required")
 	}
 	if msg.FeedbackControllerGeneration != "" && (msg.FeedbackControllerGeneration != r.ControllerGeneration || msg.FeedbackConversationID != r.ConversationID) {

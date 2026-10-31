@@ -666,6 +666,10 @@ func formatTokens(tokens int64) string {
 
 // Interrupt cancels a turn. An empty turn id targets the active one.
 func (c *conversation) Interrupt(ctx context.Context, providerTurnID string) error {
+	return c.InterruptWithAdmission(ctx, providerTurnID, nil)
+}
+
+func (c *conversation) InterruptWithAdmission(ctx context.Context, providerTurnID string, acquire func(context.Context) (func(), error)) error {
 	providerTurnID = c.nativeID(providerTurnID)
 	if providerTurnID == "" {
 		c.mu.Lock()
@@ -675,10 +679,10 @@ func (c *conversation) Interrupt(ctx context.Context, providerTurnID string) err
 	if providerTurnID == "" {
 		return ports.ErrChatNoActiveTurn
 	}
-	if err := c.conn.request(ctx, "turn/interrupt", map[string]any{
+	if err := c.conn.requestWithAdmission(ctx, "turn/interrupt", map[string]any{
 		"threadId": c.threadID,
 		"turnId":   providerTurnID,
-	}, nil); err != nil {
+	}, nil, acquire); err != nil {
 		// The provider refuses an interrupt for a turn it does not consider
 		// active — which happens either side of the turn: pressed before it has
 		// acknowledged the start, or after it already finished. Neither is an

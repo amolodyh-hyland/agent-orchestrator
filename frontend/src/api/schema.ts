@@ -6051,6 +6051,11 @@ export interface components {
             stations: number;
             unknown: number;
         };
+        DomainOuterReviewSpec: {
+            headSha: string;
+            prUrl: string;
+            runId?: string;
+        };
         DomainReviewerConfig: {
             agentConfig?: components["schemas"]["AgentConfig"];
             harness: string;
@@ -6855,6 +6860,7 @@ export interface components {
             dependsOn: number[];
             operation: string;
             projectId: string;
+            review?: components["schemas"]["DomainOuterReviewSpec"];
             sessionId?: string;
             text?: string;
         };
@@ -6950,6 +6956,7 @@ export interface components {
             /** Format: int64 */
             projectRevision: number;
             providerConversationId: string;
+            reviewDigest?: string;
             settings: components["schemas"]["DomainConversationSettings"];
             spec: components["schemas"]["OuterActionSpec"];
             targetDigest: string;
@@ -6971,6 +6978,7 @@ export interface components {
             payloadDigest: string;
             planId?: string;
             providerConversationId: string;
+            reviewId?: string;
             /** Format: int64 */
             scopeRevision: number;
             sessionId: string;

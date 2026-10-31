@@ -454,8 +454,20 @@ func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionI
 	if err := domain.CheckOuterOperation(ctx, s.store, "review.trigger", "", workerID); err != nil {
 		return TriggerOutcome{}, err
 	}
+	if _, executing := domain.OuterExecutionFrom(ctx); executing {
+		st, ok := s.store.(interface {
+			OuterReviewSpec(context.Context, string, domain.SessionID) (domain.OuterActionSpec, error)
+		})
+		if !ok {
+			return TriggerOutcome{}, domain.ErrOuterHeld
+		}
+		spec, err := st.OuterReviewSpec(ctx, "review.trigger", workerID)
+		if err != nil || spec.Review == nil || req.Harness != domain.ReviewerCodex || req.Config != spec.Config || req.Source != domain.ReviewTriggerManual || req.InterfaceMode != domain.ReviewerInterfaceChat || req.PRURL != spec.Review.PRURL || !req.RejectReviewedHead || req.Rerun || req.EnableAutoInject {
+			return TriggerOutcome{}, domain.ErrOuterHeld
+		}
+	}
 	// Reject before refreshing/attaching a PR, as well as at engine admission.
-	if err := domain.CheckFactoryFeedback(ctx, s.store, workerID); err != nil {
+	if err := domain.CheckOuterReviewAdmission(ctx, s.store, workerID); err != nil {
 		return TriggerOutcome{}, err
 	}
 	source := req.Source
@@ -472,6 +484,9 @@ func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionI
 		return TriggerOutcome{}, fmt.Errorf("%w: rerun cannot be combined with rejecting an already-reviewed head", ErrInvalid)
 	}
 	if err := s.refreshPRs(ctx, workerID, strings.TrimSpace(req.PRURL)); err != nil {
+		if _, executing := domain.OuterExecutionFrom(ctx); executing {
+			err = errors.Join(err, domain.ErrOuterReviewNotStarted)
+		}
 		return TriggerOutcome{}, err
 	}
 	result, err := s.triggerWithOptions(ctx, workerID, reviewcore.TriggerOptions{
@@ -568,7 +583,7 @@ func (s *Service) TriggerAuto(ctx context.Context, workerID domain.SessionID, ha
 	if err := domain.CheckOuterOperation(ctx, s.store, "review.trigger", "", workerID); err != nil {
 		return reviewcore.TriggerResult{}, err
 	}
-	if err := domain.CheckFactoryFeedback(ctx, s.store, workerID); err != nil {
+	if err := domain.CheckOuterReviewAdmission(ctx, s.store, workerID); err != nil {
 		return reviewcore.TriggerResult{}, err
 	}
 	return s.triggerWithOptions(ctx, workerID, reviewcore.TriggerOptions{Harness: harness, Source: domain.ReviewTriggerAuto})
@@ -605,7 +620,7 @@ func (s *Service) triggerWithOptions(
 		}
 		defer release()
 	}
-	if err := domain.CheckFactoryFeedback(ctx, s.store, workerID); err != nil {
+	if err := domain.CheckOuterReviewAdmission(ctx, s.store, workerID); err != nil {
 		return reviewcore.TriggerResult{}, err
 	}
 	result, err := s.engineTrigger(ctx, workerID, opts)

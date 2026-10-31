@@ -209,3 +209,23 @@ providers, both final transport seams, omitted/forged authority, sealed-plan
 changes, concurrent/replayed approval, queue expiry, pause/settings/generation
 changes, source removal, unknown receipts, preserving stop and held adapters.
 No model or provider call is needed for these checks.
+
+
+## M3 exact native reviews
+
+The existing default-off `AO_OUTER_M2_ACTIONS` gate also controls M3. A sealed
+`review.trigger` action names a worker, its already-owned canonical PR URL and
+40-character head SHA in `review`, plus explicit model/effort and fixed `auto`
+permissions in `config`. It uses the existing Codex Chat reviewer with read-only
+launch permissions. Existing passes on that head hold; there is no automatic
+re-review, restore, switch, rerequest, submit, thread resolution or fix turn.
+`review.cancel` additionally names the exact running `runId`; sibling passes or
+changed reviewer identity hold cancellation rather than expanding its scope.
+
+The native plan dialog displays those exact bindings. Participant snapshots and
+feedback holds precede review launch. The generated native reviewer prompt is
+bound once to that action's request and reviewer conversation, generation and
+settings. Queue drain and the serialized Codex transport writer revalidate it.
+Reviewer cancellation has the same final-write check. Reviewer stations use the
+existing 2/1 admission and native acceptance/settlement receipts; ambiguous launch
+or delivery retains its reservation. No result wakes or continues any execution.

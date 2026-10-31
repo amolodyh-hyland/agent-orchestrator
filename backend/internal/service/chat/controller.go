@@ -2640,7 +2640,7 @@ func (c *Controller) interruptForHandoff(ctx context.Context) error {
 	if !ok {
 		return nil
 	}
-	if err := c.conv.Interrupt(ctx, turn); err != nil {
+	if err := c.interruptProvider(ctx, turn); err != nil {
 		if errors.Is(err, ports.ErrChatNoActiveTurn) {
 			// Completion won the race after the dispatch gate was armed. The queue is
 			// already terminal, so there is no remaining source work to release.
@@ -2683,7 +2683,13 @@ func (c *Controller) HandoffInterruptedTurn() string {
 //     "no active turn" would leave the user staring at a Working bar they cannot
 //     dismiss. Reconcile the durable row instead.
 func (c *Controller) Interrupt(ctx context.Context) error {
-	if err := domain.CheckOuterOperation(ctx, c.store, "interrupt", "", c.sessionID); err != nil {
+	op := "interrupt"
+	if c.reviewID != "" {
+		if _, executing := domain.OuterExecutionFrom(ctx); executing {
+			op = "review.cancel"
+		}
+	}
+	if err := domain.CheckOuterOperation(ctx, c.store, op, "", c.sessionID); err != nil {
 		return err
 	}
 	c.mu.Lock()
@@ -2721,8 +2727,12 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 		// The list uses the snapshot's visibility and ordering rules, so its first
 		// row is the same running turn whose Working bar the user pressed Stop on.
 		providerTurnID := providerTurnIDs[0]
-		if err := c.conv.Interrupt(ctx, providerTurnID); err != nil &&
+		if err := c.interruptProvider(ctx, providerTurnID); err != nil &&
 			!errors.Is(err, ports.ErrChatNoActiveTurn) {
+			if _, executing := domain.OuterExecutionFrom(ctx); executing {
+				c.sendMu.Unlock()
+				return err
+			}
 			c.log.Warn("provider interrupt during reconciliation failed",
 				"session", c.sessionID, "turn", providerTurnID, "error", err)
 		}
@@ -2739,7 +2749,7 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 		return nil
 	}
 
-	if err := c.conv.Interrupt(ctx, turn); err != nil {
+	if err := c.interruptProvider(ctx, turn); err != nil {
 		if errors.Is(err, ports.ErrChatNoActiveTurn) {
 			// Serialize durable settlement, memory cleanup, and queue promotion so
 			// a message arriving after Stop cannot slip between those steps.
@@ -4298,4 +4308,15 @@ func (c *Controller) reportActivity(
 		c.log.Debug("chat activity signal rejected",
 			"session", c.sessionID, "event", event, "error", err)
 	}
+}
+
+func (c *Controller) interruptProvider(ctx context.Context, turn string) error {
+	if execution, executing := domain.OuterExecutionFrom(ctx); executing && c.reviewID != "" {
+		guarded, ok := c.conv.(ports.ChatInterruptAdmission)
+		if !ok || execution.AdmitControl == nil {
+			return domain.ErrOuterHeld
+		}
+		return guarded.InterruptWithAdmission(ctx, turn, execution.AdmitControl)
+	}
+	return c.conv.Interrupt(ctx, turn)
 }

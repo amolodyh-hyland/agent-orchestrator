@@ -8,9 +8,13 @@ import (
 
 // ErrOuterSpawnNotStarted identifies a definitive failure before any launch attempt.
 var ErrOuterSpawnNotStarted = errors.New("outer spawn definitively did not start")
+var ErrOuterReviewNotStarted = errors.New("review preflight definitively did not start")
 
 // OuterExecution identifies one daemon-owned action attempt and grants no new turn.
-type OuterExecution struct{ PlanID, ActionID string }
+type OuterExecution struct {
+	PlanID, ActionID string
+	AdmitControl     func(context.Context) (func(), error)
+}
 type outerExecutionKey struct{}
 
 // WithOuterExecution carries the exact attempted action through its existing services.
@@ -44,14 +48,21 @@ func IsOuterParticipant(ctx context.Context, store any, id SessionID) (bool, err
 }
 
 // OuterActionSpec describes one finite operation and earlier manifest dependencies.
+type OuterReviewSpec struct {
+	PRURL   string `json:"prUrl"`
+	HeadSHA string `json:"headSha"`
+	RunID   string `json:"runId,omitempty"`
+}
+
 type OuterActionSpec struct {
-	Operation string      `json:"operation"`
-	ProjectID string      `json:"projectId"`
-	SessionID SessionID   `json:"sessionId,omitempty"`
-	Text      string      `json:"text,omitempty"`
-	Branch    string      `json:"branch,omitempty"`
-	Config    AgentConfig `json:"config"`
-	DependsOn []int       `json:"dependsOn"`
+	Review    *OuterReviewSpec `json:"review,omitempty"`
+	Operation string           `json:"operation"`
+	ProjectID string           `json:"projectId"`
+	SessionID SessionID        `json:"sessionId,omitempty"`
+	Text      string           `json:"text,omitempty"`
+	Branch    string           `json:"branch,omitempty"`
+	Config    AgentConfig      `json:"config"`
+	DependsOn []int            `json:"dependsOn"`
 }
 
 // OuterPlanProposal links proposed instances to one original human request.
@@ -63,6 +74,7 @@ type OuterPlanProposal struct {
 
 // OuterPlannedAction freezes one concrete target and its effective identity.
 type OuterPlannedAction struct {
+	ReviewDigest           string               `json:"reviewDigest,omitempty"`
 	Harness                AgentHarness         `json:"harness"`
 	Mode                   SessionMode          `json:"mode"`
 	Settings               ConversationSettings `json:"settings"`
@@ -103,4 +115,15 @@ type OuterActionReceipt struct {
 	AttemptedAt time.Time `json:"attemptedAt"`
 	CompletedAt time.Time `json:"completedAt"`
 	State       string    `json:"state"`
+}
+
+func CheckOuterReviewAdmission(ctx context.Context, store any, id SessionID) error {
+	if _, ok := OuterExecutionFrom(ctx); ok {
+		return CheckOuterOperation(ctx, store, "review.trigger", "", id)
+	}
+	return CheckFactoryFeedback(ctx, store, id)
+}
+
+func OuterReviewDigest(r Review) string {
+	return OuterDigest([]any{r.ID, r.SessionID, r.Harness, r.InterfaceMode, r.ProviderConversationID, r.ControllerGeneration, r.ReviewerLaunchID, r.ReviewerHandleID, r.IsArchived})
 }

@@ -1330,3 +1330,8 @@ type ChatDriverRegistry interface {
 	// all, without probing the local install.
 	SupportsChat(harness domain.AgentHarness) bool
 }
+
+// ChatInterruptAdmission guards cancellation at the driver's serialized write.
+type ChatInterruptAdmission interface {
+	InterruptWithAdmission(context.Context, string, func(context.Context) (func(), error)) error
+}

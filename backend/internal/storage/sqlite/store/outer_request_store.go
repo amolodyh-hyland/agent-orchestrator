@@ -149,6 +149,17 @@ func validateOuterRequest(ctx context.Context, q *gen.Queries, r domain.OuterReq
 		return err
 	}
 	rec := rowToRecord(row)
+	if r.ReviewID != "" {
+		review, err := q.GetReviewByID(ctx, r.ReviewID)
+		if err != nil || rec.IsTerminated || review.SessionID != r.SessionID || review.Harness != domain.ReviewerCodex || review.InterfaceMode != string(domain.ReviewerInterfaceChat) || review.IsArchived || review.ControllerGeneration != r.ControllerGeneration || review.ProviderConversationID != r.ProviderConversationID {
+			return domain.ErrOuterHeld
+		}
+		c, err := q.SelectConversationByID(ctx, r.ConversationID)
+		if err != nil || domain.OuterDigest(conversationToDomain(c).Settings) != r.SettingsDigest {
+			return domain.ErrOuterHeld
+		}
+		return nil
+	}
 	if rec.IsTerminated || rec.Harness != domain.HarnessCodex || rec.Mode != domain.SessionModeChat || rec.Metadata.ControllerGeneration != r.ControllerGeneration || rec.Metadata.ProviderConversationID != r.ProviderConversationID {
 		return domain.ErrOuterHeld
 	}
@@ -223,12 +234,12 @@ func (s *Store) AttemptOuterRequest(ctx context.Context, id, epoch string, now t
 		if err := validateOuterRequest(ctx, q, r.Request, now); err != nil {
 			return err
 		}
-		adopted, err := q.AdoptOuterCapacity(ctx, gen.AdoptOuterCapacityParams{RequestID: id, SessionID: string(r.Request.SessionID), Generation: r.Request.ControllerGeneration})
+		adopted, err := q.AdoptOuterCapacity(ctx, gen.AdoptOuterCapacityParams{RequestID: id, SessionID: outerCapacityOwner(r.Request), Generation: r.Request.ControllerGeneration})
 		if err != nil {
 			return err
 		}
 		if adopted != 0 {
-			counts, err := s.observeOuterCapacity(ctx, q, r.Request.SessionID)
+			counts, err := s.observeOuterCapacity(ctx, q, domain.SessionID(outerCapacityOwner(r.Request)))
 			if err != nil {
 				return err
 			}
@@ -304,6 +315,9 @@ func (s *Store) observeOuterCapacity(ctx context.Context, q *gen.Queries, target
 		return c, err
 	}
 	for _, v := range reviews {
+		if owners[domain.SessionID("review:"+v.ID)] {
+			continue
+		}
 		if v.IsArchived && v.ReviewerHandleID == "" {
 			continue
 		}
@@ -399,6 +413,9 @@ func linkOuterRequest(ctx context.Context, q *gen.Queries, session domain.Sessio
 	if r.PlanID != "" {
 		expectedOrigin = domain.MessageOriginAutomation
 	}
+	if r.ReviewID != "" {
+		expectedOrigin = domain.MessageOriginDaemon
+	}
 	if r.ControllerGeneration != generation || r.ConversationID != conversation || msg.Text != r.Payload || msg.Origin != expectedOrigin || msg.DeliveryContentJSON != "" || msg.Continuation {
 		return domain.ErrOuterHeld
 	}
@@ -477,4 +494,11 @@ func (s *Store) OuterRequestAuditLink(ctx context.Context, conv, turn, generatio
 		return "", nil
 	}
 	return id, err
+}
+
+func outerCapacityOwner(r domain.OuterRequest) string {
+	if r.ReviewID != "" {
+		return "review:" + r.ReviewID
+	}
+	return string(r.SessionID)
 }
