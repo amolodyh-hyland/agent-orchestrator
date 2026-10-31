@@ -124,6 +124,9 @@ func validateOuterPlannedTarget(ctx context.Context, q *gen.Queries, a domain.Ou
 	if err != nil || domain.OuterSettingsDigest(r, conversationToDomain(c), projectRowFromGen(p)) != a.TargetDigest {
 		return domain.ErrOuterHeld
 	}
+	if a.Spec.Run != nil {
+		return validateOuterRun(ctx, q, a)
+	}
 	if a.Spec.Operation == "review.trigger" || a.Spec.Operation == "review.cancel" {
 		return validateOuterReview(ctx, q, a)
 	}

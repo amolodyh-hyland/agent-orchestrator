@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -54,7 +55,14 @@ type OuterReviewSpec struct {
 	RunID   string `json:"runId,omitempty"`
 }
 
+type OuterRunSpec struct {
+	ID              string          `json:"id"`
+	ExpectedVersion int64           `json:"expectedVersion"`
+	Payload         json.RawMessage `json:"payload,omitempty"`
+}
+
 type OuterActionSpec struct {
+	Run       *OuterRunSpec    `json:"run,omitempty"`
 	Review    *OuterReviewSpec `json:"review,omitempty"`
 	Operation string           `json:"operation"`
 	ProjectID string           `json:"projectId"`
@@ -74,6 +82,7 @@ type OuterPlanProposal struct {
 
 // OuterPlannedAction freezes one concrete target and its effective identity.
 type OuterPlannedAction struct {
+	RunDigest              string               `json:"runDigest,omitempty"`
 	ReviewDigest           string               `json:"reviewDigest,omitempty"`
 	Harness                AgentHarness         `json:"harness"`
 	Mode                   SessionMode          `json:"mode"`

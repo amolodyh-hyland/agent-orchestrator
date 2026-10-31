@@ -1,3 +1,4 @@
+import { FactoryRunDialog } from "./FactoryRunDialog";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { Link, useSearch } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
@@ -395,6 +396,9 @@ export function OuterConsole() {
 											{action.id} · {action.sessionId} · {action.state}
 										</p>
 									))}
+ {plan.plan.actions.filter((a) => a.spec.run && ["run.evidence.request", "run.advance.request"].includes(a.spec.operation) && plan.actions.some((r) => r.id === a.id && r.state === "completed")).map((a) => (
+  <FactoryRunDialog key={a.id} projectId={a.spec.projectId} sessionId={a.spec.sessionId!} initialRunId={a.spec.run!.id} decisionsOnly />
+ ))}
 									{new Date(plan.approvedAt).getFullYear() < 1971 &&
 									new Date(plan.expiresAt).getFullYear() < 1971 ? (
 										<OuterNativeButton

@@ -211,6 +211,9 @@ func (s *Store) CheckOuterOperation(ctx context.Context, operation string, proje
 		if held, err := s.IsOuterParticipant(ctx, session); err != nil {
 			return err
 		} else if held && operation != "outer.reply.approval" && operation != "outer.reply.input" {
+			if a, ok := domain.OuterNativeActionFrom(ctx); ok && a.Operation == "run.confirm" && operation == "run.confirm" && a.ProjectID == project && a.SessionID == session && (a.Generation == "evidence" || a.Generation == "advance") {
+				return s.AppendOuterAudit(ctx, domain.OuterAudit{Operation: "run.confirm", State: "authorized", ProjectID: string(project), SessionID: session, Reason: "independent native evidence/stage decision only"})
+			}
 			return s.AppendOuterHeld(ctx, operation, project, session, "participant_exact_plan_required")
 		}
 	}

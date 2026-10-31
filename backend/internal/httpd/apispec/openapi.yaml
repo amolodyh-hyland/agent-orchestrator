@@ -17335,6 +17335,18 @@ components:
       - prUrl
       - headSha
       type: object
+    DomainOuterRunSpec:
+      properties:
+        expectedVersion:
+          format: int64
+          type: integer
+        id:
+          type: string
+        payload: {}
+      required:
+      - id
+      - expectedVersion
+      type: object
     DomainReviewerConfig:
       properties:
         agentConfig:
@@ -19487,6 +19499,8 @@ components:
           type: string
         review:
           $ref: '#/components/schemas/DomainOuterReviewSpec'
+        run:
+          $ref: '#/components/schemas/DomainOuterRunSpec'
         sessionId:
           type: string
         text:
@@ -19729,6 +19743,8 @@ components:
         providerConversationId:
           type: string
         reviewDigest:
+          type: string
+        runDigest:
           type: string
         settings:
           $ref: '#/components/schemas/DomainConversationSettings'

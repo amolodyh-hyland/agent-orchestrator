@@ -229,3 +229,22 @@ settings. Queue drain and the serialized Codex transport writer revalidate it.
 Reviewer cancellation has the same final-write check. Reviewer stations use the
 existing 2/1 admission and native acceptance/settlement receipts; ambiguous launch
 or delivery retains its reservation. No result wakes or continues any execution.
+
+
+## M3 run records and native decision requests
+
+The same sealed, default-off manifest supports `run.create`, `run.evidence`,
+`run.evidence.request` and `run.advance.request`. `run` carries the exact `id`,
+`expectedVersion` and, for writes, a strict existing CreateInput/RecordInput JSON
+`payload`. Project/session ownership must agree at every boundary. Claims use
+`actor: "outer-orchestrator"`; they are never self-confirmed. Existing immutable
+run intent, version checks, source verification and independent exact-head review
+gates remain authoritative. Participant snapshots and continuation holds precede
+each operation. Final ledger writes revalidate the sealed action after inspection.
+
+A decision request records the existing preview digest and an inert action receipt.
+The console opens the existing native run decision dialog for that exact run, with
+only evidence and stage controls. The human separately reviews current claims,
+owned source and blockers in that native dialog. A changed version needs a fresh
+preview. Neither stage changes nor requests start, restore or continue an execution;
+feedback, specialist import and monitoring controls are not added to the outer.

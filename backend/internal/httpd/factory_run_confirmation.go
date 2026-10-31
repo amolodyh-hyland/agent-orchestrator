@@ -90,7 +90,7 @@ func mountFactoryRunConfirmation(r chi.Router, service controllers.FactoryRunSer
 				err = readErr
 				break
 			}
-			ctx := domain.WithOuterNativeAction(req.Context(), domain.OuterNativeAction{Operation: "run.confirm", ProjectID: domain.ProjectID(detail.Run.ProjectID), SessionID: detail.Run.SessionID})
+			ctx := domain.WithOuterNativeAction(req.Context(), domain.OuterNativeAction{Operation: "run.confirm", Generation: in.Action, ProjectID: domain.ProjectID(detail.Run.ProjectID), SessionID: detail.Run.SessionID})
 			value, err = svc.Confirm(ctx, in.RunID, in.Action, in.ExpectedVersion, in.Digest)
 		default:
 			reject()

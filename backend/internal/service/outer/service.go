@@ -59,6 +59,7 @@ type Sessions interface {
 type Service struct {
 	actionsEnabled bool
 	reviews        Reviews
+	runs           Runs
 	store          Store
 	projects       Projects
 	sessions       Sessions

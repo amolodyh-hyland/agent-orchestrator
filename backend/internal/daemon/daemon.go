@@ -636,6 +636,7 @@ func Run() error {
 	outerSvc.SetTransport(chatSvc)
 	chatSvc.SetOuterAdmission(outerSvc)
 	outerSvc.SetReviews(reviewSvc)
+	outerSvc.SetRuns(factoryRunSvc)
 	reportSessions, ok := sessMgr.(reportSemanticSession)
 	if !ok {
 		return errors.New("wire report delivery: session manager lacks semantic send support")
