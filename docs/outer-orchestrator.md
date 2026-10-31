@@ -252,7 +252,7 @@ feedback, specialist import and monitoring controls are not added to the outer.
 
 ## M3 inert coordinator mailbox
 
-The timestamped mailbox migration retains immutable mailbox records and separate immutable read
+The mailbox migration retains immutable mailbox records and separate immutable read
 acknowledgements. Each Project holds at most 256 messages, each text at most
 8 KiB. The bound refuses additional records when full; it never evicts evidence.
 Reads use an exclusive durable sequence and at most 50 records per page. Scope
