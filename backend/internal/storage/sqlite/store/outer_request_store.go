@@ -198,6 +198,16 @@ func validateOuterFactSource(ctx context.Context, q *gen.Queries, source domain.
 		if domain.OuterDigest([]any{summary, r.State, r.DeliveryState + ":" + r.DeliveryBatchID, int64(0), ""}) != source.Digest {
 			return domain.ErrOuterHeld
 		}
+	case "mailbox":
+		row, err := q.GetOuterMailbox(ctx, source.ID)
+		if err != nil {
+			return domain.ErrOuterHeld
+		}
+		m, err := mailboxValue(row.Document, row.Sequence, row.RecipientID, row.RecordedAt, row.ActionID)
+		f := domain.OuterMailboxFact(m)
+		if err != nil || m.ProjectID != source.ProjectID || domain.OuterDigest([]any{f.Summary, f.State, f.Receipt, f.Source.Revision, f.CallerState}) != source.Digest {
+			return domain.ErrOuterHeld
+		}
 	case "runs":
 		document, err := q.GetFactoryRun(ctx, source.ID)
 		var run domain.FactoryRun

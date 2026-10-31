@@ -50,6 +50,25 @@ export function OuterConsole() {
 	const [status, setStatus] = useState("");
 	const [after, setAfter] = useState(0);
 	const [selectedRequest, setSelectedRequest] = useState("");
+	const [mailboxProject, setMailboxProject] = useState("");
+	const [mailboxAfter, setMailboxAfter] = useState(0);
+	const mailbox = useQuery({
+		queryKey: [
+			"outer-mailbox",
+			binding?.revision,
+			mailboxProject,
+			mailboxAfter,
+		],
+		enabled: Boolean(binding?.projectIds.includes(mailboxProject)),
+		refetchOnWindowFocus: false,
+		queryFn: () =>
+			readOuter({
+				projection: "mailbox",
+				projectId: mailboxProject,
+				after: mailboxAfter,
+				limit: 20,
+			}),
+	});
 	useEffect(() => setAfter(0), [auditProjectId]);
 	useEffect(() => {
 		if (!binding) return;
@@ -99,6 +118,7 @@ export function OuterConsole() {
 	const result = (value: { ok: boolean }) => {
 		setStatus(t(value.ok ? "outer.saved" : "outer.actionHeld"));
 		void view.refetch();
+		if (mailboxProject) void mailbox.refetch();
 	};
 	const permissionLabels = {
 		default: t("settings.project.permissionCodexDefault"),
@@ -255,6 +275,105 @@ export function OuterConsole() {
 								</OuterNativeButton>
 							) : null}
 						</section>
+						<section className="space-y-3">
+							<h2 className="font-medium">
+								{t("outer.mailbox", {
+									defaultValue: "Coordinator mailbox",
+								})}
+							</h2>
+							<p className="text-muted-foreground">
+								{t("outer.mailboxInert", {
+									defaultValue:
+										"Messages and record acknowledgements are inert. Executing delivery requires a separate exact send confirmation.",
+								})}
+							</p>
+							<div className="flex flex-wrap gap-2">
+								{projects
+									.filter((p) =>
+										binding.projectIds.includes(p.id)
+									)
+									.map((p) => (
+										<Button
+											key={p.id}
+											variant="ghost"
+											size="sm"
+											onClick={() => {
+												setMailboxAfter(0);
+												setMailboxProject(p.id);
+											}}
+										>
+											{p.name}
+										</Button>
+									))}
+							</div>
+							{mailbox.isError ? (
+								<p role="status">{t("outer.actionHeld")}</p>
+							) : null}
+							{mailbox.data?.messages.map((m) => (
+								<article
+									key={m.id}
+									className="border-b border-border py-2"
+								>
+									<p className="break-all text-xs">
+										{m.id} · {m.direction} · {m.senderId} →{" "}
+										{m.recipientId}
+									</p>
+									<pre className="whitespace-pre-wrap break-all text-xs">
+										{m.text}
+									</pre>
+									<details>
+										<summary>
+											{t("outer.mailboxSources", {
+												defaultValue: "Source labels",
+											})}
+										</summary>
+										<pre className="whitespace-pre-wrap break-all text-xs">
+											{JSON.stringify(m.sources, null, 2)}
+										</pre>
+									</details>
+									<p className="text-xs text-muted-foreground">
+										{m.acknowledgedBy
+											? `${t("outer.recordAcknowledged", { defaultValue: "Record acknowledged" })}: ${m.acknowledgedBy}`
+											: t("outer.recordUnacknowledged", {
+													defaultValue:
+														"Record unacknowledged",
+												})}
+									</p>
+								</article>
+							))}
+							{mailboxProject ? (
+								<div className="flex gap-2">
+									<Button
+										variant="ghost"
+										size="sm"
+										disabled={mailboxAfter === 0}
+										onClick={() => setMailboxAfter(0)}
+									>
+										{t("outer.firstMailboxPage", {
+											defaultValue: "First page",
+										})}
+									</Button>
+									<Button
+										variant="ghost"
+										size="sm"
+										disabled={
+											!mailbox.data?.messages.length
+										}
+										onClick={() => {
+											const last =
+												mailbox.data?.messages.at(-1);
+											if (last)
+												setMailboxAfter(last.sequence);
+										}}
+									>
+										{t("outer.nextMailboxPage", {
+											defaultValue: "Next page",
+										})}
+									</Button>
+								</div>
+							) : null}
+						</section>
+
 						<section className="space-y-3">
 							<h2 className="font-medium">{t("outer.scope")}</h2>
 							<p className="text-muted-foreground">

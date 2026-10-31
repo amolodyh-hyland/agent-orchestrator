@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -43,6 +44,10 @@ type OuterAuditQuery struct {
 // Register mounts the passive outer projections.
 func (c *OuterController) Register(r chi.Router) {
 	r.Post("/outer/plans", c.proposePlan)
+	r.Get("/outer/mailbox", c.mailbox)
+	r.Get("/sessions/{sessionId}/mailbox", c.mailbox)
+	r.Post("/sessions/{sessionId}/mailbox", c.appendMailbox)
+	r.Post("/sessions/{sessionId}/mailbox/{messageId}/receipt", c.receiptMailbox)
 	r.Get("/outer", c.view)
 	r.Get("/outer/facts", c.facts)
 	r.Get("/outer/audit", c.audit)
@@ -120,4 +125,69 @@ func (c *OuterController) proposePlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	envelope.WriteJSON(w, 200, plan)
+}
+
+type OuterMailboxResponse struct {
+	Messages []domain.OuterMailboxMessage `json:"messages"`
+}
+type OuterMailboxQuery struct {
+	ProjectID string `query:"projectId" json:"projectId"`
+	After     int64  `query:"after" json:"after"`
+	Limit     int    `query:"limit" json:"limit"`
+}
+
+func (c *OuterController) mailbox(w http.ResponseWriter, r *http.Request) {
+	if !c.ready(w, r) {
+		return
+	}
+	after, err := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
+	if r.URL.Query().Get("after") == "" {
+		after, err = 0, nil
+	}
+	limit, limitErr := strconv.Atoi(r.URL.Query().Get("limit"))
+	if r.URL.Query().Get("limit") == "" {
+		limit, limitErr = 20, nil
+	}
+	if err != nil || limitErr != nil {
+		envelope.WriteError(w, r, domain.ErrOuterHeld)
+		return
+	}
+	messages, err := c.Svc.Mailbox(r.Context(), r.URL.Query().Get("projectId"), domain.SessionID(chi.URLParam(r, "sessionId")), after, limit)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, 200, OuterMailboxResponse{Messages: messages})
+}
+func (c *OuterController) appendMailbox(w http.ResponseWriter, r *http.Request) {
+	if !c.ready(w, r) {
+		return
+	}
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 12<<10))
+	var in domain.OuterMailboxSpec
+	if err != nil || domain.StrictDelegationJSON(raw, &in) != nil {
+		envelope.WriteError(w, r, domain.ErrOuterHeld)
+		return
+	}
+	m, err := c.Svc.AppendMailbox(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")), in)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, 200, m)
+}
+func (c *OuterController) receiptMailbox(w http.ResponseWriter, r *http.Request) {
+	if !c.ready(w, r) {
+		return
+	}
+	m, err := c.Svc.ReceiptMailbox(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")), chi.URLParam(r, "messageId"))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, 200, m)
+}
+
+type MailboxMessagePath struct {
+	MessageID string `path:"messageId" json:"messageId"`
 }

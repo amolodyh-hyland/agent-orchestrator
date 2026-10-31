@@ -10,6 +10,7 @@ export function readOuter(
 export function readOuter(
 	query: Extract<OuterReadQuery, { projection: "audit" }>
 ): Promise<OuterReadData["audit"]>;
+export function readOuter(query: Extract<OuterReadQuery, { projection: "mailbox" }>): Promise<OuterReadData["mailbox"]>;
 export async function readOuter(
 	query: OuterReadQuery
 ): Promise<OuterReadData[keyof OuterReadData]> {

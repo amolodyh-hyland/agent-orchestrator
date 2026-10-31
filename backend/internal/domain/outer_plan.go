@@ -62,15 +62,16 @@ type OuterRunSpec struct {
 }
 
 type OuterActionSpec struct {
-	Run       *OuterRunSpec    `json:"run,omitempty"`
-	Review    *OuterReviewSpec `json:"review,omitempty"`
-	Operation string           `json:"operation"`
-	ProjectID string           `json:"projectId"`
-	SessionID SessionID        `json:"sessionId,omitempty"`
-	Text      string           `json:"text,omitempty"`
-	Branch    string           `json:"branch,omitempty"`
-	Config    AgentConfig      `json:"config"`
-	DependsOn []int            `json:"dependsOn"`
+	Mailbox   *OuterMailboxSpec `json:"mailbox,omitempty"`
+	Run       *OuterRunSpec     `json:"run,omitempty"`
+	Review    *OuterReviewSpec  `json:"review,omitempty"`
+	Operation string            `json:"operation"`
+	ProjectID string            `json:"projectId"`
+	SessionID SessionID         `json:"sessionId,omitempty"`
+	Text      string            `json:"text,omitempty"`
+	Branch    string            `json:"branch,omitempty"`
+	Config    AgentConfig       `json:"config"`
+	DependsOn []int             `json:"dependsOn"`
 }
 
 // OuterPlanProposal links proposed instances to one original human request.
@@ -82,6 +83,7 @@ type OuterPlanProposal struct {
 
 // OuterPlannedAction freezes one concrete target and its effective identity.
 type OuterPlannedAction struct {
+	MailboxDigest          string               `json:"mailboxDigest,omitempty"`
 	RunDigest              string               `json:"runDigest,omitempty"`
 	ReviewDigest           string               `json:"reviewDigest,omitempty"`
 	Harness                AgentHarness         `json:"harness"`

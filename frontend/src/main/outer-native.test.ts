@@ -360,6 +360,13 @@ describe("outer native human issuance", () => {
 });
 
 describe("trusted passive outer projections", () => {
+ it("binds the bounded inert mailbox read to its separate private purpose",async()=>{
+  const f=fixture();
+  expect(await f.handlers.get(OUTER_READ)!(f.event,{projection:"mailbox",projectId:"a",after:9,limit:20})).not.toBeNull();
+  expect(f.submitted[0]).toMatchObject({projection:"mailbox",projectId:"a",after:9,limit:20});
+  expect(f.shell.send).not.toHaveBeenCalled();
+  f.registration.dispose();
+ });
 	it("binds a bounded affected-Project audit filter to its private read", async () => {
 		const f = fixture();
 		expect(
@@ -424,6 +431,9 @@ describe("trusted passive outer projections", () => {
 			{ projection: "facts", projectId: "a", kind: "files", limit: 1 },
 			{ projection: "facts", projectId: "a", kind: "reports", limit: 51 },
 			{ projection: "audit", after: -1, limit: 100 },
+ { projection:"mailbox",projectId:"a",after:-1,limit:20 },
+ { projection:"mailbox",projectId:"a",after:0,limit:51 },
+ { projection:"mailbox",projectId:"a",after:0,limit:20,approved:true },
 			{ projection: "audit", after: 0, limit: 101 },
 			{ projection: "audit", projectId: "", after: 0, limit: 20 },
 		])
