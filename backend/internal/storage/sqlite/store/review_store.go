@@ -265,13 +265,40 @@ func (s *Store) InsertReviewRun(ctx context.Context, r domain.ReviewRun) error {
 func (s *Store) UpdateReviewRunResult(ctx context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	n, err := s.qw.UpdateReviewRunResult(ctx, gen.UpdateReviewRunResultParams{
+	if status == domain.ReviewRunComplete {
+		run, found, err := s.GetReviewRun(ctx, id)
+		if err != nil {
+			return false, err
+		}
+		if found {
+			if err := s.CheckOuterReviewSubmission(ctx, run.SessionID, []string{id}); err != nil {
+				return false, err
+			}
+		}
+	}
+	caller, _ := domain.OuterCallerFrom(ctx)
+	if caller.ReviewResult != nil {
+		if status != domain.ReviewRunComplete || !verdict.Valid() {
+			return false, domain.ErrOuterHeld
+		}
+		autoInjectReview = false
+	}
+	params := gen.UpdateReviewRunResultParams{
 		Status:           status,
 		Verdict:          verdict,
 		Body:             body,
 		GithubReviewID:   githubReviewID,
 		AutoInjectReview: autoInjectReview,
 		ID:               id,
+	}
+	var n int64
+	err := s.inTx(ctx, "record review result", func(q *gen.Queries) error {
+		var err error
+		n, err = q.UpdateReviewRunResult(ctx, params)
+		if err != nil || n == 0 || caller.ReviewResult == nil {
+			return err
+		}
+		return appendOuterAudit(ctx, q, domain.OuterAudit{Operation: "review.result", State: "recorded", ProjectID: string(caller.ProjectID), SessionID: caller.SessionID, ReceiptID: id, Digest: domain.OuterDigest([]any{caller.ReviewResult, verdict, body, githubReviewID}), Reason: "authenticated exact reviewer verdict only; no feedback or continuation"})
 	})
 	if err != nil {
 		return false, err

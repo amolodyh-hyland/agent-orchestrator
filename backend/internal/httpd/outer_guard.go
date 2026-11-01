@@ -40,6 +40,10 @@ func outerGuard(router chi.Router, svc *outer.Service) func(http.Handler) http.H
 			}
 			read := r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions
 			if read {
+				if caller, ok := domain.OuterCallerFrom(ctx); ok && caller.ReviewResult != nil {
+					envelope.WriteAPIError(w, r, 409, "conflict", "OUTER_HELD", "Reviewer credential is limited to the exact result receipt", nil)
+					return
+				}
 				if caller, ok := domain.OuterCallerFrom(ctx); ok && caller.Outer && !strings.HasPrefix(r.URL.Path, "/api/v1/outer") {
 					_ = svc.Deny(ctx, "outer.read", "use_bounded_outer_projection", "")
 					envelope.WriteAPIError(w, r, 409, "conflict", "OUTER_HELD", "Use bounded selected-project facts", nil)
@@ -61,6 +65,9 @@ func outerGuard(router chi.Router, svc *outer.Service) func(http.Handler) http.H
 			}
 			pattern := match.RoutePattern()
 			op, classified := outerMutationManifest[r.Method+" "+pattern]
+			if caller, ok := domain.OuterCallerFrom(ctx); ok && caller.ReviewResult != nil && r.Method == http.MethodPost && pattern == "/api/v1/sessions/{sessionId}/reviews/submit" {
+				op = "review.result"
+			}
 			if !classified {
 				op = "unclassified"
 			}

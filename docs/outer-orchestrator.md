@@ -230,6 +230,16 @@ Reviewer cancellation has the same final-write check. Reviewer stations use the
 existing 2/1 admission and native acceptance/settlement receipts; ambiguous launch
 or delivery retains its reservation. A definitive preflight rejection releases its station only with journaled no-start evidence; it grants no retry. No result wakes or continues any execution.
 
+The launched reviewer receives a result-only credential for its exact reviewer
+identity, run, head and controller generation. After native turn acceptance it
+can use the existing `ao review submit` transport to record that verdict through
+the existing review service. The binding is checked again at the atomic verdict
+and audit write. It cannot read other API content, submit sibling results, enable
+feedback or launch another turn. Results retain `autoInjectReview=false` and do
+not release capacity before native settlement. The outer's own `review.submit`
+adapter remains held; independent factory review evidence and head gates still
+require the recorded native verdict and the separate human evidence decision.
+
 
 ## M3 run records and native decision requests
 

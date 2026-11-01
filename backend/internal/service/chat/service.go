@@ -816,6 +816,26 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		generation = s.newID()
 	}
 	issueEnv := func(ctx context.Context, env map[string]string) (map[string]string, error) {
+		if owner.Kind == domain.ConversationOwnerReview {
+			env = maps.Clone(env)
+			if env == nil {
+				env = map[string]string{}
+			}
+			env["AO_SCOPE_CREDENTIAL"] = ""
+			if _, executing := domain.OuterExecutionFrom(ctx); executing {
+				issuer, ok := s.store.(interface {
+					IssueOuterReviewCallerGeneration(context.Context, string, string) (string, error)
+				})
+				if !ok {
+					return nil, domain.ErrOuterHeld
+				}
+				token, err := issuer.IssueOuterReviewCallerGeneration(ctx, owner.ID, generation)
+				if err != nil {
+					return nil, err
+				}
+				env["AO_SCOPE_CREDENTIAL"] = token
+			}
+		}
 		if owner.Kind == domain.ConversationOwnerSession {
 			if issuer, ok := s.store.(interface {
 				IssueOuterCallerGeneration(context.Context, domain.SessionID, string, string) (string, error)

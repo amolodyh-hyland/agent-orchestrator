@@ -791,6 +791,17 @@ func (s *Service) SubmitMany(ctx context.Context, workerID domain.SessionID, rev
 	if s.store == nil {
 		return nil, fmt.Errorf("review service store is not configured")
 	}
+	if guard, ok := s.store.(interface {
+		CheckOuterReviewSubmission(context.Context, domain.SessionID, []string) error
+	}); ok {
+		ids := make([]string, 0, len(reviews))
+		for _, review := range reviews {
+			ids = append(ids, review.RunID)
+		}
+		if err := guard.CheckOuterReviewSubmission(ctx, workerID, ids); err != nil {
+			return nil, err
+		}
+	}
 	runs := make([]domain.ReviewRun, 0, len(reviews))
 	var supersededRunIDs []string
 	for _, review := range reviews {
@@ -854,7 +865,11 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 		if !found {
 			return domain.ReviewRun{}, fmt.Errorf("%w: worker session %q", ErrNotFound, workerID)
 		}
-		updated, err := s.store.UpdateReviewRunResult(ctx, run.ID, domain.ReviewRunComplete, verdict, body, githubReviewID, session.AutoInjectReview)
+		autoInject := session.AutoInjectReview
+		if caller, ok := domain.OuterCallerFrom(ctx); ok && caller.ReviewResult != nil {
+			autoInject = false
+		}
+		updated, err := s.store.UpdateReviewRunResult(ctx, run.ID, domain.ReviewRunComplete, verdict, body, githubReviewID, autoInject)
 		if err != nil {
 			return domain.ReviewRun{}, err
 		}
@@ -865,7 +880,7 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 		run.Verdict = verdict
 		run.Body = body
 		run.GithubReviewID = githubReviewID
-		run.AutoInjectReview = session.AutoInjectReview
+		run.AutoInjectReview = autoInject
 		// Only on the real running -> complete transition. Re-submitting an
 		// already-complete run returns early below, so telemetry stays idempotent
 		// the same way the store does.
@@ -884,7 +899,7 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 			"body_bytes": len(body),
 			// Whether the session policy will let this result reach the worker at
 			// all, recorded at the moment it is snapshotted onto the run.
-			"auto_inject": session.AutoInjectReview,
+			"auto_inject": autoInject,
 		})
 	case domain.ReviewRunComplete:
 		if run.Verdict != verdict {

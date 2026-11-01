@@ -203,6 +203,12 @@ func (s *Service) ResolveTarget(ctx context.Context, kind, id string) (domain.Pr
 
 // AuthorizeOperation applies the common mutation guard to a resolved target.
 func (s *Service) AuthorizeOperation(ctx context.Context, op string, p domain.ProjectID, id domain.SessionID) error {
+	if caller, ok := domain.OuterCallerFrom(ctx); ok && caller.ReviewResult != nil {
+		if !s.actionsEnabled || op != "review.result" {
+			return s.denied(ctx, op, "review_result_only", string(p))
+		}
+		return s.store.CheckOuterOperation(ctx, op, p, id)
+	}
 	if op == "mailbox.scoped" {
 		if err := s.CheckMailboxCaller(ctx, id); err != nil {
 			return err

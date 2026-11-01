@@ -99,6 +99,9 @@ func (s *Store) AuthenticateOuterCaller(ctx context.Context, token string) (doma
 	if err != nil {
 		return domain.OuterCaller{}, domain.ErrOuterHeld
 	}
+	if strings.HasPrefix(row.Generation, "review:") {
+		return s.authenticateOuterReviewCaller(ctx, row)
+	}
 	r, found, err := s.GetSession(ctx, domain.SessionID(row.SessionID))
 	if err != nil {
 		return domain.OuterCaller{}, err

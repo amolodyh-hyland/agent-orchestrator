@@ -145,6 +145,15 @@ func (s *Store) IsOuterSession(ctx context.Context, id domain.SessionID) (bool, 
 
 // CheckOuterOperation applies the common target-side mutation predicate.
 func (s *Store) CheckOuterOperation(ctx context.Context, operation string, project domain.ProjectID, session domain.SessionID) error {
+	if caller, ok := domain.OuterCallerFrom(ctx); ok && caller.ReviewResult != nil {
+		if operation != "review.result" || caller.ProjectID != project {
+			return domain.ErrOuterHeld
+		}
+		return s.CheckOuterReviewSubmission(ctx, session, []string{caller.ReviewResult.RunID})
+	}
+	if operation == "review.result" {
+		return domain.ErrOuterHeld
+	}
 	b, found, err := s.OuterBinding(ctx)
 	if err != nil || !found {
 		return err

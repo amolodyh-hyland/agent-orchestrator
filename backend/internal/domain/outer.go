@@ -97,10 +97,18 @@ type OuterCapacityObservation struct {
 
 // OuterCaller identifies an authenticated runtime scope and grants no human authority.
 type OuterCaller struct {
-	ProjectID  ProjectID
-	SessionID  SessionID
-	Generation string
-	Outer      bool
+	ProjectID    ProjectID
+	SessionID    SessionID
+	Generation   string
+	Outer        bool
+	ReviewResult *OuterReviewResultScope
+}
+
+type OuterReviewResultScope struct {
+	ReviewID   string `json:"reviewId"`
+	RunID      string `json:"runId"`
+	HeadSHA    string `json:"headSha"`
+	Generation string `json:"generation"`
 }
 type outerCallerKey struct{}
 
