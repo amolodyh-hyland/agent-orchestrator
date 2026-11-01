@@ -45,6 +45,60 @@ func (s *Store) PageOuterMailbox(ctx context.Context, project string, coordinato
 	return out, nil
 }
 
+func (s *Store) ReadOuterCoordinatorMailbox(ctx context.Context, coordinator domain.SessionID, after int64, limit int) ([]domain.OuterMailboxMessage, error) {
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return nil, err
+	}
+	defer s.writeMu.Unlock()
+	if err := s.CheckOuterMailboxCaller(ctx, coordinator); err != nil {
+		return nil, err
+	}
+	rec, found, err := s.GetSession(ctx, coordinator)
+	if err != nil || !found {
+		return nil, domain.ErrOuterHeld
+	}
+	b, found, err := s.OuterBinding(ctx)
+	if err != nil || !found {
+		return nil, domain.ErrOuterHeld
+	}
+	rows, err := s.PageOuterMailbox(ctx, string(rec.ProjectID), coordinator, after, limit)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.inTx(ctx, "import coordinator mailbox page", func(q *gen.Queries) error {
+		return s.importOuterMailbox(ctx, q, b, rec, rows)
+	}); err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func (s *Store) importOuterMailbox(ctx context.Context, q *gen.Queries, b domain.OuterBinding, rec domain.SessionRecord, messages []domain.OuterMailboxMessage) error {
+	if rec.Metadata.ProviderConversationID == "" {
+		return domain.ErrOuterHeld
+	}
+	facts := make([]domain.OuterFact, 0, len(messages))
+	for _, m := range messages {
+		if m.CoordinatorID != rec.ID || m.ProjectID != string(rec.ProjectID) {
+			return domain.ErrOuterHeld
+		}
+		facts = append(facts, domain.OuterMailboxFact(m))
+	}
+	if err := s.labelOuterFacts(ctx, q, b, rec.Metadata.ProviderConversationID, facts, domain.OuterAudit{Operation: "mailbox.import", State: "observed", SessionID: rec.ID, Reason: "bounded inert content import; no wake or turn authority"}); err != nil {
+		return err
+	}
+	for _, fact := range facts {
+		doc, err := json.Marshal(fact.Source)
+		if err != nil {
+			return err
+		}
+		if err := q.UpsertOuterSource(ctx, gen.UpsertOuterSourceParams{ConversationID: rec.Metadata.ProviderConversationID, SourceKey: "export:mailbox:" + fact.Source.ID, Document: string(doc)}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Store) CheckOuterMailboxCaller(ctx context.Context, id domain.SessionID) error {
 	caller, ok := domain.OuterCallerFrom(ctx)
 	if !ok || caller.Outer || caller.SessionID != id {
@@ -169,6 +223,11 @@ func (s *Store) AppendOuterMailbox(ctx context.Context, coordinator domain.Sessi
 		m.Sources = []domain.OuterSource{{ProjectID: m.ProjectID, Kind: "coordinator_mailbox", ID: in.ID, Unknown: true, Sources: append([]string{}, b.ProjectIDs...)}}
 		if prior, err := s.GetOuterMailbox(ctx, in.ID); err == nil {
 			if prior.SenderID == m.SenderID && prior.CoordinatorID == coordinator && prior.Text == m.Text && prior.Direction == m.Direction && prior.RecipientID == m.RecipientID {
+				if err := s.inTx(ctx, "import retained coordinator mailbox append", func(q *gen.Queries) error {
+					return s.importOuterMailbox(ctx, q, b, rec, []domain.OuterMailboxMessage{prior})
+				}); err != nil {
+					return domain.OuterMailboxMessage{}, err
+				}
 				return prior, nil
 			}
 			return m, domain.ErrOuterHeld
@@ -191,6 +250,19 @@ func (s *Store) AppendOuterMailbox(ctx context.Context, coordinator domain.Sessi
 		if err := q.InsertOuterMailbox(ctx, gen.InsertOuterMailboxParams{ID: m.ID, ProjectID: m.ProjectID, CoordinatorID: string(coordinator), Document: string(data)}); err != nil {
 			return err
 		}
+		row, err := q.GetOuterMailbox(ctx, m.ID)
+		if err != nil {
+			return err
+		}
+		m, err = mailboxValue(row.Document, row.Sequence, row.RecipientID, row.RecordedAt, row.ActionID)
+		if err != nil {
+			return err
+		}
+		if !executing {
+			if err := s.importOuterMailbox(ctx, q, b, rec, []domain.OuterMailboxMessage{m}); err != nil {
+				return err
+			}
+		}
 		if err := appendOuterAudit(ctx, q, domain.OuterAudit{Operation: "mailbox.append", State: "inert", ProjectID: m.ProjectID, SessionID: coordinator, ReceiptID: m.ID, Digest: domain.OuterDigest(m), RequestID: m.RequestID, Sources: m.Sources, Reason: "durable record only; no wake, queue or continuation"}); err != nil {
 			return err
 		}
@@ -200,9 +272,9 @@ func (s *Store) AppendOuterMailbox(ctx context.Context, coordinator domain.Sessi
 		return nil
 	})
 	if err != nil {
-		return m, err
+		return domain.OuterMailboxMessage{}, err
 	}
-	return s.GetOuterMailbox(ctx, m.ID)
+	return m, nil
 }
 
 func (s *Store) ReceiptOuterMailbox(ctx context.Context, coordinator domain.SessionID, id string) (domain.OuterMailboxMessage, error) {
@@ -215,7 +287,7 @@ func (s *Store) ReceiptOuterMailbox(ctx context.Context, coordinator domain.Sess
 	defer s.writeMu.Unlock()
 	m, err := s.GetOuterMailbox(ctx, id)
 	if err != nil || m.CoordinatorID != coordinator {
-		return m, domain.ErrOuterHeld
+		return domain.OuterMailboxMessage{}, domain.ErrOuterHeld
 	}
 	actor := coordinator
 	action := "scoped_record_acknowledgement"
@@ -223,11 +295,11 @@ func (s *Store) ReceiptOuterMailbox(ctx context.Context, coordinator domain.Sess
 	e, executing := domain.OuterExecutionFrom(ctx)
 	if executing {
 		if err := s.CheckOuterExecution(ctx, "mailbox.receipt", domain.ProjectID(m.ProjectID), coordinator); err != nil {
-			return m, err
+			return domain.OuterMailboxMessage{}, err
 		}
 		p, err := s.GetOuterPlan(ctx, e.PlanID)
 		if err != nil {
-			return m, err
+			return domain.OuterMailboxMessage{}, err
 		}
 		matched := false
 		for _, a := range p.Plan.Actions {
@@ -236,20 +308,41 @@ func (s *Store) ReceiptOuterMailbox(ctx context.Context, coordinator domain.Sess
 			}
 		}
 		if !matched {
-			return m, domain.ErrOuterHeld
+			return domain.OuterMailboxMessage{}, domain.ErrOuterHeld
 		}
 		actor, action = p.Plan.Request.SessionID, e.ActionID
 		requestID = p.Plan.Request.ID
 	} else if err := s.CheckOuterMailboxCaller(ctx, coordinator); err != nil {
-		return m, err
+		return domain.OuterMailboxMessage{}, err
 	}
 	if actor != m.RecipientID {
-		return m, domain.ErrOuterHeld
+		return domain.OuterMailboxMessage{}, domain.ErrOuterHeld
 	}
 	now := time.Now().UTC()
 	err = s.inTx(ctx, "acknowledge inert coordinator mailbox", func(q *gen.Queries) error {
 		if err := q.ReceiptOuterMailbox(ctx, gen.ReceiptOuterMailboxParams{MessageID: id, RecipientID: string(actor), ActionID: action, RecordedAt: now}); err != nil {
 			return err
+		}
+		row, err := q.GetOuterMailbox(ctx, id)
+		if err != nil {
+			return err
+		}
+		m, err = mailboxValue(row.Document, row.Sequence, row.RecipientID, row.RecordedAt, row.ActionID)
+		if err != nil {
+			return err
+		}
+		if !executing {
+			rec, found, err := s.GetSession(ctx, coordinator)
+			if err != nil || !found {
+				return domain.ErrOuterHeld
+			}
+			b, found, err := s.OuterBinding(ctx)
+			if err != nil || !found {
+				return domain.ErrOuterHeld
+			}
+			if err := s.importOuterMailbox(ctx, q, b, rec, []domain.OuterMailboxMessage{m}); err != nil {
+				return err
+			}
 		}
 		if err := appendOuterAudit(ctx, q, domain.OuterAudit{Operation: "mailbox.receipt", State: "record_acknowledged", ProjectID: m.ProjectID, SessionID: actor, ReceiptID: id, RequestID: requestID, Sources: m.Sources, Reason: "record acknowledgement only; no model or delivery acceptance"}); err != nil {
 			return err
@@ -260,7 +353,7 @@ func (s *Store) ReceiptOuterMailbox(ctx context.Context, coordinator domain.Sess
 		return nil
 	})
 	if err != nil {
-		return m, err
+		return domain.OuterMailboxMessage{}, err
 	}
-	return s.GetOuterMailbox(ctx, id)
+	return m, nil
 }

@@ -80,94 +80,97 @@ func (s *Store) LabelOuterFacts(ctx context.Context, b domain.OuterBinding, conv
 	}
 	defer s.writeMu.Unlock()
 	err := s.inTx(ctx, "label outer facts", func(q *gen.Queries) error {
-		doc, err := q.GetOuterBinding(ctx)
+		return s.labelOuterFacts(ctx, q, b, conversation, facts, domain.OuterAudit{Operation: "outer.read", State: "observed", SessionID: b.SessionID})
+	})
+	return facts, err
+}
+
+func (s *Store) labelOuterFacts(ctx context.Context, q *gen.Queries, b domain.OuterBinding, conversation string, facts []domain.OuterFact, audit domain.OuterAudit) error {
+	doc, err := q.GetOuterBinding(ctx)
+	if err != nil {
+		return err
+	}
+	var current domain.OuterBinding
+	if err := json.Unmarshal([]byte(doc), &current); err != nil {
+		return err
+	}
+	if current.Revision != b.Revision {
+		return domain.ErrOuterHeld
+	}
+	known, err := q.ListOuterSources(ctx, conversation)
+	if err != nil {
+		return err
+	}
+	all := []string{}
+	for _, doc := range known {
+		var source domain.OuterSource
+		if err := json.Unmarshal([]byte(doc), &source); err != nil {
+			return err
+		}
+		all = append(all, source.Sources...)
+	}
+	for i := range facts {
+		f := &facts[i]
+		p, err := q.GetProject(ctx, domain.ProjectID(f.Source.ProjectID))
 		if err != nil {
 			return err
 		}
-		var current domain.OuterBinding
-		if err := json.Unmarshal([]byte(doc), &current); err != nil {
-			return err
-		}
-		if current.Revision != b.Revision {
+		if p.ArchivedAt.Valid || !slices.Contains(b.ProjectIDs, string(p.ID)) {
 			return domain.ErrOuterHeld
 		}
-		known, err := q.ListOuterSources(ctx, conversation)
+		f.Source.Label = p.DisplayName
+		if f.Source.Label == "" {
+			f.Source.Label = string(p.ID)
+		}
+		key := f.Source.ProjectID + ":" + f.Source.Kind + ":" + f.Source.ID
+		lineage, err := q.OuterSourceLineage(ctx, key)
 		if err != nil {
 			return err
 		}
-		all := []string{}
-		for _, doc := range known {
+		f.Source.Sources = append(f.Source.Sources, all...)
+		sourceProject := domain.ProjectID(f.Source.ProjectID)
+		imported, err := q.OuterProjectImportedSources(ctx, &sourceProject)
+		if err != nil {
+			return err
+		}
+		// A truncated import history cannot establish the complete source set.
+		if len(imported) > 1000 {
+			return domain.ErrOuterHeld
+		}
+		lineage = append(lineage, imported...)
+		for _, doc := range lineage {
 			var source domain.OuterSource
 			if err := json.Unmarshal([]byte(doc), &source); err != nil {
 				return err
 			}
-			all = append(all, source.Sources...)
+			f.Source.Sources = append(f.Source.Sources, source.Sources...)
+			f.Source.Unknown = f.Source.Unknown || source.Unknown
 		}
-		for i := range facts {
-			f := &facts[i]
-			p, err := q.GetProject(ctx, domain.ProjectID(f.Source.ProjectID))
-			if err != nil {
-				return err
-			}
-			if p.ArchivedAt.Valid || !slices.Contains(b.ProjectIDs, string(p.ID)) {
+		slices.Sort(f.Source.Sources)
+		f.Source.Sources = slices.Compact(f.Source.Sources)
+		for _, id := range f.Source.Sources {
+			if !slices.Contains(b.ProjectIDs, id) {
 				return domain.ErrOuterHeld
 			}
-			f.Source.Label = p.DisplayName
-			if f.Source.Label == "" {
-				f.Source.Label = string(p.ID)
-			}
-			key := f.Source.ProjectID + ":" + f.Source.Kind + ":" + f.Source.ID
-			lineage, err := q.OuterSourceLineage(ctx, key)
-			if err != nil {
-				return err
-			}
-			f.Source.Sources = append(f.Source.Sources, all...)
-			sourceProject := domain.ProjectID(f.Source.ProjectID)
-			imported, err := q.OuterProjectImportedSources(ctx, &sourceProject)
-			if err != nil {
-				return err
-			}
-			// A truncated import history cannot establish the complete source set.
-			if len(imported) > 1000 {
-				return domain.ErrOuterHeld
-			}
-			lineage = append(lineage, imported...)
-			for _, doc := range lineage {
-				var source domain.OuterSource
-				if err := json.Unmarshal([]byte(doc), &source); err != nil {
-					return err
-				}
-				f.Source.Sources = append(f.Source.Sources, source.Sources...)
-				f.Source.Unknown = f.Source.Unknown || source.Unknown
-			}
-			slices.Sort(f.Source.Sources)
-			f.Source.Sources = slices.Compact(f.Source.Sources)
-			for _, id := range f.Source.Sources {
-				if !slices.Contains(b.ProjectIDs, id) {
-					return domain.ErrOuterHeld
-				}
-			}
-			f.Source.Digest = domain.OuterDigest([]any{f.Summary, f.State, f.Receipt, f.Source.Revision, f.CallerState})
-			data, err := json.Marshal(f.Source)
-			if err != nil {
-				return err
-			}
-			if err := q.UpsertOuterSource(ctx, gen.UpsertOuterSourceParams{ConversationID: conversation, SourceKey: key, Document: string(data)}); err != nil {
-				return err
-			}
 		}
-		sources := make([]domain.OuterSource, 0, len(facts))
-		for _, f := range facts {
-			sources = append(sources, f.Source)
+		f.Source.Digest = domain.OuterDigest([]any{f.Summary, f.State, f.Receipt, f.Source.Revision, f.CallerState})
+		data, err := json.Marshal(f.Source)
+		if err != nil {
+			return err
 		}
-		return appendOuterAudit(ctx, q, domain.OuterAudit{Operation: "outer.read", State: "observed", ProjectID: func() string {
-			if len(facts) > 0 {
-				return facts[0].Source.ProjectID
-			}
-			return ""
-		}(), SessionID: b.SessionID, Sources: sources})
-	})
-	return facts, err
+		if err := q.UpsertOuterSource(ctx, gen.UpsertOuterSourceParams{ConversationID: conversation, SourceKey: key, Document: string(data)}); err != nil {
+			return err
+		}
+	}
+	sources := make([]domain.OuterSource, 0, len(facts))
+	for _, f := range facts {
+		sources = append(sources, f.Source)
+	}
+	if len(facts) > 0 {
+		audit.ProjectID = facts[0].Source.ProjectID
+	}
+	audit.Sources = sources
+	return appendOuterAudit(ctx, q, audit)
 }
 
 // RecordOuterEvidence appends inert incoming content and its correlated audit event atomically.

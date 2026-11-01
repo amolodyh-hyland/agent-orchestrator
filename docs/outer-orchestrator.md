@@ -266,8 +266,12 @@ The mailbox migration retains immutable mailbox records and separate immutable r
 acknowledgements. Each Project holds at most 256 messages, each text at most
 8 KiB. The bound refuses additional records when full; it never evicts evidence.
 Reads use an exclusive durable sequence and at most 50 records per page. Scope
-removal preserves messages and transitive source labels; importing removed-source
-content into a remaining conversation holds.
+removal also holds coordinator-local GET/CLI reads, append retries and receipt
+responses when retained transitive sources are no longer selected. Content
+imports and read acknowledgements record the recipient's conversation and
+Project lineage transactionally; a later export from that context cannot drop
+removed sources. Denied imports return no content and preserve the original
+mailbox records and their transitive source labels for audit.
 
 An outer `mailbox.append`/`mailbox.receipt` plan names an existing eligible
 coordinator and exact `mailbox: {id, text}` (receipt omits text). The existing

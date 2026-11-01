@@ -11,6 +11,7 @@ type mailboxStore interface {
 	CheckOuterMailboxCaller(context.Context, domain.SessionID) error
 	GetOuterMailbox(context.Context, string) (domain.OuterMailboxMessage, error)
 	PageOuterMailbox(context.Context, string, domain.SessionID, int64, int) ([]domain.OuterMailboxMessage, error)
+	ReadOuterCoordinatorMailbox(context.Context, domain.SessionID, int64, int) ([]domain.OuterMailboxMessage, error)
 	AppendOuterMailbox(context.Context, domain.SessionID, domain.OuterMailboxSpec) (domain.OuterMailboxMessage, error)
 	ReceiptOuterMailbox(context.Context, domain.SessionID, string) (domain.OuterMailboxMessage, error)
 }
@@ -65,15 +66,12 @@ func (s *Service) Mailbox(ctx context.Context, project string, coordinator domai
 	if err != nil || !found || !p.ArchivedAt.IsZero() {
 		return nil, domain.ErrOuterHeld
 	}
+	if local {
+		return st.ReadOuterCoordinatorMailbox(ctx, coordinator, after, limit)
+	}
 	rows, err := st.PageOuterMailbox(ctx, project, coordinator, after, limit)
 	if err != nil {
 		return nil, err
-	}
-	if local {
-		if err := s.store.AppendOuterAudit(ctx, domain.OuterAudit{Operation: "mailbox.read", State: "observed", ProjectID: project, SessionID: coordinator, Reason: "bounded passive mailbox page"}); err != nil {
-			return nil, err
-		}
-		return rows, nil
 	}
 	rec, found, err := s.store.GetSession(ctx, b.SessionID)
 	if err != nil || !found {
