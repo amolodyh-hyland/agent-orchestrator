@@ -301,6 +301,22 @@ func (q *Queries) ListOuterSources(ctx context.Context, conversationID string) (
 	return items, nil
 }
 
+const outerCallerGenerationExists = `-- name: OuterCallerGenerationExists :one
+SELECT EXISTS(SELECT 1 FROM outer_callers WHERE session_id=?1 AND generation=?2)
+`
+
+type OuterCallerGenerationExistsParams struct {
+	SessionID  string
+	Generation string
+}
+
+func (q *Queries) OuterCallerGenerationExists(ctx context.Context, arg OuterCallerGenerationExistsParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, outerCallerGenerationExists, arg.SessionID, arg.Generation)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const outerPendingInteraction = `-- name: OuterPendingInteraction :one
 SELECT count(*) FROM conversation_activities a JOIN conversation_turns t ON t.id=a.turn_id
 JOIN outer_requests r ON r.turn_id=t.id
@@ -370,6 +386,21 @@ func (q *Queries) ReserveOuterCapacity(ctx context.Context, arg ReserveOuterCapa
 		arg.Foreground,
 		arg.ReservedAt,
 	)
+	return err
+}
+
+const revokeOuterReviewCallers = `-- name: RevokeOuterReviewCallers :exec
+DELETE FROM outer_callers WHERE session_id=?1
+AND json_extract(CASE WHEN substr(generation,1,7)='review:' THEN substr(generation,8) ELSE '{}' END,'$.reviewId')=?2
+`
+
+type RevokeOuterReviewCallersParams struct {
+	SessionID string
+	ReviewID  string
+}
+
+func (q *Queries) RevokeOuterReviewCallers(ctx context.Context, arg RevokeOuterReviewCallersParams) error {
+	_, err := q.db.ExecContext(ctx, revokeOuterReviewCallers, arg.SessionID, arg.ReviewID)
 	return err
 }
 

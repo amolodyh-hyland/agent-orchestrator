@@ -34,6 +34,7 @@ type m3ReviewLauncher struct {
 	launchErr    error
 	dead         bool
 	starts       int
+	notifies     int
 	cancels      int
 }
 
@@ -55,8 +56,16 @@ func (l *m3ReviewLauncher) Cancel(ctx context.Context, handle string, _ domain.R
 	l.cancels++
 	return l.f.chat.InterruptForOwner(ctx, domain.ReviewConversationOwner(strings.TrimPrefix(handle, "review-chat:")))
 }
-func (l *m3ReviewLauncher) Notify(context.Context, string, reviewcore.LaunchSpec) error {
-	return errors.New("unexpected automatic follow-up")
+func (l *m3ReviewLauncher) Notify(ctx context.Context, _ string, s reviewcore.LaunchSpec) error {
+	l.notifies++
+	return l.send(ctx, s)
+}
+func (l *m3ReviewLauncher) send(ctx context.Context, s reviewcore.LaunchSpec) error {
+	if l.beforeWrite != nil {
+		l.beforeWrite()
+	}
+	_, err := l.f.chat.SendForOwner(ctx, domain.ReviewConversationOwner(s.ReviewSessionID), ports.ChatUserMessage{Text: "Review only " + s.TargetSHA + " at " + s.PRURL, Origin: domain.MessageOriginDaemon, ClientMessageID: reviewcore.BatchMessageID(s.BatchID)})
+	return err
 }
 func (l *m3ReviewLauncher) Spawn(ctx context.Context, s reviewcore.LaunchSpec) (reviewcore.LaunchResult, error) {
 	l.starts++
@@ -71,10 +80,7 @@ func (l *m3ReviewLauncher) Spawn(ctx context.Context, s reviewcore.LaunchSpec) (
 	p := l.f.providers[domain.SessionID("review-"+s.ReviewSessionID)]
 	p.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerReady})
 	waitM2(l.f.t, func() bool { return c.State() == ports.ChatControllerReady })
-	if l.beforeWrite != nil {
-		l.beforeWrite()
-	}
-	_, err = l.f.chat.SendForOwner(ctx, owner, ports.ChatUserMessage{Text: "Review only " + s.TargetSHA + " at " + s.PRURL, Origin: domain.MessageOriginDaemon, ClientMessageID: reviewcore.BatchMessageID(s.BatchID)})
+	err = l.send(ctx, s)
 	return reviewcore.LaunchResult{HandleID: "review-chat:" + s.ReviewSessionID, AgentSessionID: c.ProviderConversationID()}, err
 }
 

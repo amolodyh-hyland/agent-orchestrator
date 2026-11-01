@@ -115,15 +115,7 @@ func TestOuterM3ReviewResultTransportSatisfiesNativeFactoryGate(t *testing.T) {
 		t.Fatal(runs, err)
 	}
 	run := runs[0]
-	var credential string
-	for _, start := range f.starts {
-		if start.SessionID == domain.SessionID("review-"+run.ReviewID) {
-			credential = start.Env["AO_SCOPE_CREDENTIAL"]
-		}
-	}
-	if credential == "" {
-		t.Fatal("launched reviewer has no result credential")
-	}
+	credential := m3ResultCredential(t, f, run)
 	path := "/api/v1/sessions/" + string(worker.ID) + "/reviews/submit"
 	result, _ := json.Marshal(map[string]any{"reviews": []map[string]string{{"runId": run.ID, "verdict": "approved", "body": "reviewed exact head", "githubReviewId": "provider-review"}}})
 	if w := call(http.MethodPost, path, credential, result, ""); w.Code != 409 {

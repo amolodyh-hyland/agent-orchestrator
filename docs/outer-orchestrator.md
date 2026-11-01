@@ -230,8 +230,13 @@ Reviewer cancellation has the same final-write check. Reviewer stations use the
 existing 2/1 admission and native acceptance/settlement receipts; ambiguous launch
 or delivery retains its reservation. A definitive preflight rejection releases its station only with journaled no-start evidence; it grants no retry. No result wakes or continues any execution.
 
-The launched reviewer receives a result-only credential for its exact reviewer
-identity, run, head and controller generation. After native turn acceptance it
+Each approved reviewer turn receives a fresh result-only credential for its exact
+reviewer identity, run, head and controller generation, including a Notify sent
+to an existing live reviewer. The sealed turn supplies an explicit
+`AO_SCOPE_CREDENTIAL` override for `ao review submit`; controller startup clears
+inherited credentials. Issuance revokes prior result credentials for that
+reviewer, including contexts authenticated before revocation. Cancellation
+invalidates the current run’s result authority. After native turn acceptance it
 can use the existing `ao review submit` transport to record that verdict through
 the existing review service. The binding is checked again at the atomic verdict
 and audit write. It cannot read other API content, submit sibling results, enable

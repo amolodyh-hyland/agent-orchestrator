@@ -42,3 +42,9 @@ SELECT document FROM outer_sources WHERE conversation_id=? ORDER BY source_key L
 INSERT INTO outer_evidence(id,session_id,source_json,content,recorded_at) VALUES(?,?,?,?,?);
 -- name: ListOuterEvidence :many
 SELECT * FROM outer_evidence WHERE session_id=? ORDER BY recorded_at DESC LIMIT 100;
+
+-- name: RevokeOuterReviewCallers :exec
+DELETE FROM outer_callers WHERE session_id=sqlc.arg(session_id)
+AND json_extract(CASE WHEN substr(generation,1,7)='review:' THEN substr(generation,8) ELSE '{}' END,'$.reviewId')=sqlc.arg(review_id);
+-- name: OuterCallerGenerationExists :one
+SELECT EXISTS(SELECT 1 FROM outer_callers WHERE session_id=sqlc.arg(session_id) AND generation=sqlc.arg(generation));

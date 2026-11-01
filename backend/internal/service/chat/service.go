@@ -822,19 +822,6 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 				env = map[string]string{}
 			}
 			env["AO_SCOPE_CREDENTIAL"] = ""
-			if _, executing := domain.OuterExecutionFrom(ctx); executing {
-				issuer, ok := s.store.(interface {
-					IssueOuterReviewCallerGeneration(context.Context, string, string) (string, error)
-				})
-				if !ok {
-					return nil, domain.ErrOuterHeld
-				}
-				token, err := issuer.IssueOuterReviewCallerGeneration(ctx, owner.ID, generation)
-				if err != nil {
-					return nil, err
-				}
-				env["AO_SCOPE_CREDENTIAL"] = token
-			}
 		}
 		if owner.Kind == domain.ConversationOwnerSession {
 			if issuer, ok := s.store.(interface {
@@ -1546,10 +1533,20 @@ func (s *Service) SendForOwner(ctx context.Context, owner domain.ConversationOwn
 		if _, executing := domain.OuterExecutionFrom(ctx); executing {
 			st, ok := s.store.(interface {
 				BindOuterReviewRequest(context.Context, string, string, string) (domain.OuterRequest, error)
+				IssueOuterReviewCallerGeneration(context.Context, string, string) (string, error)
 			})
 			if !ok {
 				return domain.ConversationTurn{}, domain.ErrOuterHeld
 			}
+			// Result authority belongs to this approved turn, including a Notify
+			// sent to an already live reviewer. A process environment is fixed at
+			// startup and cannot carry a later run's credential. Seal the explicit
+			// override into the same reviewer-only payload before binding it.
+			token, err := st.IssueOuterReviewCallerGeneration(ctx, owner.ID, controller.Generation())
+			if err != nil {
+				return domain.ConversationTurn{}, err
+			}
+			msg.Text += "\n\nResult receipt for this approved review only: prefix your ao review submit command with `AO_SCOPE_CREDENTIAL=" + token + "`. This overrides any credential from a previous turn. Use it only for this run's verdict; it grants no feedback, continuation, or other work authority."
 			r, err := st.BindOuterReviewRequest(ctx, owner.ID, msg.Text, msg.ClientMessageID)
 			if err != nil {
 				return domain.ConversationTurn{}, err

@@ -17,7 +17,7 @@ func (s *Store) IssueOuterReviewCallerGeneration(ctx context.Context, reviewID, 
 		return "", domain.ErrOuterHeld
 	}
 	reviewer, found, err := s.GetReviewByID(ctx, reviewID)
-	if err != nil || !found {
+	if err != nil || !found || reviewer.ControllerGeneration != generation {
 		return "", domain.ErrOuterHeld
 	}
 	spec, err := s.OuterReviewSpec(ctx, "review.trigger", reviewer.SessionID)
@@ -63,6 +63,9 @@ func (s *Store) IssueOuterReviewCallerGeneration(ctx context.Context, reviewID, 
 		if err := appendOuterAudit(ctx, q, domain.OuterAudit{Operation: "review.result.scope", State: "issued", ProjectID: string(reviewer.ProjectID), SessionID: reviewer.SessionID, ReceiptID: runID, RequestID: e.ActionID, Generation: generation, Reason: "exact reviewer result only; no feedback or turn authority"}); err != nil {
 			return err
 		}
+		if err := q.RevokeOuterReviewCallers(ctx, gen.RevokeOuterReviewCallersParams{SessionID: string(worker.ID), ReviewID: reviewID}); err != nil {
+			return err
+		}
 		return q.IssueOuterCaller(ctx, gen.IssueOuterCallerParams{Verifier: callerVerifier(token), SessionID: string(worker.ID), ProjectID: string(worker.ProjectID), Generation: "review:" + string(document)})
 	})
 	return token, err
@@ -83,6 +86,12 @@ func (s *Store) authenticateOuterReviewCaller(ctx context.Context, row gen.Outer
 func (s *Store) checkOuterReviewResult(ctx context.Context, caller domain.OuterCaller, workerID domain.SessionID, runID string) error {
 	scope := caller.ReviewResult
 	if scope == nil || caller.Outer || caller.SessionID != workerID || scope.RunID != runID || scope.ReviewID == "" || !domain.FullCommit(scope.HeadSHA) {
+		return domain.ErrOuterHeld
+	}
+	// Also fence contexts authenticated before a later approved turn revoked
+	// this scope. The verdict writer invokes this under the common writer lock.
+	exists, err := s.qr.OuterCallerGenerationExists(ctx, gen.OuterCallerGenerationExistsParams{SessionID: string(workerID), Generation: caller.Generation})
+	if err != nil || !exists {
 		return domain.ErrOuterHeld
 	}
 	run, found, err := s.GetReviewRun(ctx, runID)

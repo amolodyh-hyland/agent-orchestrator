@@ -717,6 +717,9 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			persistedAgentSessionID = launch.AgentSessionID
 		}
 	} else {
+		// Notify keeps the live native session. Clearing it as for a fresh Chat
+		// launch would make the next idle pass look non-reusable.
+		persistedAgentSessionID = reviewRow.AgentSessionID
 		launchSpec := reviewLaunchSpec(worker, harness, config, launchRun, queue, 0, reviewRow.AgentSessionID, reviewRow.ReviewerLaunchID)
 		launchSpec.InterfaceMode = selectedMode
 		if err := domain.CheckOuterReviewAdmission(ctx, e.store, workerID); err != nil {
