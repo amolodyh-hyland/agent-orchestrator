@@ -23,11 +23,12 @@ func TestValidateSpawnEffort(t *testing.T) {
 		{name: "codex catalog validation", harness: domain.HarnessCodex, effort: "xhigh"},
 		{name: "claude code catalog validation", harness: domain.HarnessClaudeCode, effort: "max"},
 		{name: "command code forwards raw effort", harness: domain.HarnessCommandCode, effort: "high"},
+		{name: "hermes", harness: domain.HarnessHermes, effort: "high"},
 		{name: "copilot supported", harness: domain.HarnessCopilot, effort: "high"},
 		{name: "copilot unsupported", harness: domain.HarnessCopilot, effort: "ultra", wantErr: true, wantMessage: "low, medium, high, xhigh, max"},
-		{name: "gemini unsupported", harness: domain.HarnessGemini, effort: "high", wantErr: true, wantMessage: `harness "gemini"`, wantList: "claude-code, codex, command-code, copilot"},
-		{name: "cursor unsupported", harness: domain.HarnessCursor, effort: "high", wantErr: true, wantMessage: `harness "cursor"`, wantList: "claude-code, codex, command-code, copilot"},
-		{name: "opencode unsupported", harness: domain.HarnessOpenCode, effort: "high", wantErr: true, wantMessage: `harness "opencode"`, wantList: "claude-code, codex, command-code, copilot"},
+		{name: "gemini unsupported", harness: domain.HarnessGemini, effort: "high", wantErr: true, wantMessage: `harness "gemini"`, wantList: "claude-code, codex, command-code, hermes, copilot"},
+		{name: "cursor unsupported", harness: domain.HarnessCursor, effort: "high", wantErr: true, wantMessage: `harness "cursor"`, wantList: "claude-code, codex, command-code, hermes, copilot"},
+		{name: "opencode unsupported", harness: domain.HarnessOpenCode, effort: "high", wantErr: true, wantMessage: `harness "opencode"`, wantList: "claude-code, codex, command-code, hermes, copilot"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -61,6 +62,7 @@ func TestAppliedSpawnEffort(t *testing.T) {
 		{name: "codex", harness: domain.HarnessCodex, effort: "xhigh", want: "xhigh"},
 		{name: "claude code", harness: domain.HarnessClaudeCode, effort: "max", want: "max"},
 		{name: "command code", harness: domain.HarnessCommandCode, effort: "high", want: "high"},
+		{name: "hermes", harness: domain.HarnessHermes, effort: "high", want: "high"},
 		{name: "copilot supported", harness: domain.HarnessCopilot, effort: "high", want: "high"},
 		{name: "copilot unsupported", harness: domain.HarnessCopilot, effort: "ultra"},
 		{name: "gemini", harness: domain.HarnessGemini, effort: "high"},
