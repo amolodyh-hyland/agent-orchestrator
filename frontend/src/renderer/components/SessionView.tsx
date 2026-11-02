@@ -1238,9 +1238,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		const request = state.chatMessageFocusRequest;
 		return request?.sessionId === uiSessionId ? request : undefined;
 	});
+	const revealedChatFocusRequest = useRef<typeof chatFocusRequest>(undefined);
 	useEffect(() => {
-		if (chatFocusRequest?.reviewId) selectReviewerChat(chatFocusRequest.reviewId);
-		else if (chatFocusRequest && session?.mode === "chat") selectSessionTerminal();
+		// History recording changes the selection callbacks after a pane change.
+		// A palette hit is a one-shot request; the next hit has a new request object.
+		if (!chatFocusRequest || revealedChatFocusRequest.current === chatFocusRequest) return;
+		if (chatFocusRequest.reviewId) {
+			revealedChatFocusRequest.current = chatFocusRequest;
+			selectReviewerChat(chatFocusRequest.reviewId);
+		} else if (session?.mode === "chat") {
+			revealedChatFocusRequest.current = chatFocusRequest;
+			selectSessionTerminal();
+		}
 	}, [chatFocusRequest, session?.mode, selectReviewerChat, selectSessionTerminal]);
 	const openCenterFile = useCallback(
 		(path: string, options?: FileOpenOptions) => {

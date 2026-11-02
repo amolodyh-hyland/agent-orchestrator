@@ -201,7 +201,7 @@ func buildProjectRules(cfg projectRulesConfig) (string, error) {
 		parts = append(parts, rules)
 	}
 	if rel := strings.TrimSpace(cfg.RulesFile); rel != "" {
-		if _, err := projectRelativeFile(cfg.ProjectPath, rel); err != nil {
+		if err := validateProjectRelativeFile(cfg.ProjectPath, rel); err != nil {
 			return "", fmt.Errorf("%s: %w", cfg.RulesFileField, err)
 		}
 		data, err := readProjectContextFile(context.Background(), cfg.ProjectPath, rel, domain.MaxProjectContextInstructionBytes)
@@ -215,24 +215,24 @@ func buildProjectRules(cfg projectRulesConfig) (string, error) {
 	return strings.Join(parts, "\n\n"), nil
 }
 
-func projectRelativeFile(projectPath, rel string) (string, error) {
+func validateProjectRelativeFile(projectPath, rel string) error {
 	if strings.TrimSpace(projectPath) == "" {
-		return "", fmt.Errorf("project path is required")
+		return fmt.Errorf("project path is required")
 	}
 	trimmed := strings.TrimSpace(rel)
 	if filepath.IsAbs(trimmed) || strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, `\`) {
-		return "", fmt.Errorf("path must be repo-relative and must not escape the project root")
+		return fmt.Errorf("path must be repo-relative and must not escape the project root")
 	}
 	clean := filepath.Clean(trimmed)
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("path must be repo-relative and must not escape the project root")
+		return fmt.Errorf("path must be repo-relative and must not escape the project root")
 	}
 	for _, seg := range strings.Split(filepath.ToSlash(clean), "/") {
 		if seg == ".." {
-			return "", fmt.Errorf("path must be repo-relative and must not escape the project root")
+			return fmt.Errorf("path must be repo-relative and must not escape the project root")
 		}
 	}
-	return filepath.Join(projectPath, clean), nil
+	return nil
 }
 
 func issueContextSection(issueContext string) string {

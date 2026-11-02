@@ -55,7 +55,7 @@ describe("TitlebarNav on Linux", () => {
 
 	it("shows the history controls beside the settled-open brand", async () => {
 		render(<><div data-slot="sidebar-container" /><TitlebarNav /></>);
-		await screen.findByText("Orchestrator.inc");
+		await screen.findByText("Orchestrator");
 		expect(screen.getByRole("button", { name: "Go back" })).toBeVisible();
 		expect(screen.getByRole("button", { name: "Go forward" })).toBeVisible();
 	});

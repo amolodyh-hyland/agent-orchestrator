@@ -275,7 +275,7 @@ func TestBuildProjectRules_ErrorsNameConfigKey(t *testing.T) {
 }
 
 func TestProjectRelativeFileRejectsTraversal(t *testing.T) {
-	if _, err := projectRelativeFile(t.TempDir(), "../rules.md"); err == nil {
+	if err := validateProjectRelativeFile(t.TempDir(), "../rules.md"); err == nil {
 		t.Fatal("expected traversal path to be rejected")
 	}
 }

@@ -111,18 +111,13 @@ export function SideComposer({
 				description: "Compacts this side chat",
 				source: "AO",
 			},
-			...skills.filter((skill) => skillToken(skill) !== "/compact" && (!onFocusSide || !["/btw", "/side"].includes(skillToken(skill)))),
+			...skills.filter((skill) => skillToken(skill) !== "/compact" && (!onFocusSide || skillToken(skill) !== "/btw")),
 		],
 		[skills, onFocusSide],
 	);
 	const suggestions = trigger?.kind === "skill" && trigger.key !== dismissed ? rankSkills(commands, trigger.query) : [];
 	const choose = (value: string) => {
-		if ((value === "btw" || value === "side") && onFocusSide) {
-			onChange((editor.current?.getSnapshot().text ?? draft.text).replace(/\/[^\s]*$/, "").trim());
-			onFocusSide();
-			setDismissed(trigger?.key);
-			return;
-		}
+
 		const chosen = suggestions.find((item) => item.value === value);
 		if (trigger && chosen && !chosen.disabled) editor.current?.insertToken(trigger, chosen.token ?? chosen.value);
 	};

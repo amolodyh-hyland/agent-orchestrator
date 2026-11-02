@@ -1,5 +1,6 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render as rtlRender, screen, within } from "@testing-library/react";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { chatFixture } from "../../lib/chat-fixture";
@@ -11,8 +12,13 @@ import { TooltipProvider } from "../ui/tooltip";
 // along the way (an image it rendered, say) stays where it is while the next steps
 // arrive under it.
 
+vi.mock("../topbar-tabs/TopbarTabs", () => ({ TopbarTabs: () => null }));
+
 function render(ui: ReactElement) {
-	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>, { wrapper: ({ children }: { children: ReactNode }) => (
+		<QueryClientProvider client={client}>{children}</QueryClientProvider>
+	) });
 }
 
 const at = "2026-10-17T10:00:00Z";

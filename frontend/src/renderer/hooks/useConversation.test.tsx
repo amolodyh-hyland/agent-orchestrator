@@ -1626,7 +1626,7 @@ it.each(["unchanged", "changed", "failed"])("waits for an unresolved catalog ref
 		await refreshing;
 	});
 	if (outcome === "unchanged") {
-		await waitFor(() => expect(send).toHaveBeenCalledWith("$review argument", undefined, undefined, undefined, undefined, expect.objectContaining({ entryId: "entry", snapshotId: "snapshot" })));
+		await waitFor(() => expect(send).toHaveBeenCalledWith("$review argument", undefined, undefined, undefined, undefined, undefined, expect.objectContaining({ entryId: "entry", snapshotId: "snapshot" })));
 	} else {
 		await screen.findByRole("alert");
 		expect(send).not.toHaveBeenCalled();

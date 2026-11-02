@@ -13,6 +13,9 @@ const { dragEnds, dragStarts } = vi.hoisted(() => ({
 	}) => void>(),
 }));
 
+// Queue ordering does not mount the routed grouped-tab shell.
+vi.mock("../topbar-tabs/TopbarTabs", () => ({ TopbarTabs: () => null }));
+
 vi.mock("@dnd-kit/core", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@dnd-kit/core")>();
 	return {

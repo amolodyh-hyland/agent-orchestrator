@@ -1029,6 +1029,7 @@ describe("SessionView", () => {
 		workspaceQueryState.directLoading = undefined;
 		useUiStore.setState({
 			activeShellTerminalHandleId: null,
+			chatMessageFocusRequest: null,
 			workspaceFileOpenRequest: null,
 			// Opening a session leaves the inspector closed (covered by the
 			// "keeps the inspector closed" test); most tests here exercise the
@@ -5848,7 +5849,8 @@ describe("SessionView", () => {
 	it("reveals the Files side panel for an attachment request without opening a center tab", async () => {
 		act(() => useUiStore.getState().requestWorkspaceFileOpen("sess-1", "src/attached.txt", undefined, "panel"));
 		render(<SessionView sessionId="sess-1" />);
-		await waitFor(() => expect(useUiStore.getState().inspectorSessions["sess-1"]).toMatchObject({ isOpen: true, view: "files", filesSource: { kind: "workspace" } }));
+		await waitFor(() => expect(useUiStore.getState().inspectorSessions["sess-1"]).toMatchObject({ isOpen: true, view: "files" }));
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.filesSelection).toBeUndefined();
 		expect(screen.queryByRole("tab", { name: "attached.txt" })).toBeNull();
 	});
 

@@ -49,7 +49,7 @@ describe("TitlebarNav", () => {
 		const nav = container.querySelector('[data-slot="titlebar-nav"]');
 		expect(nav).toHaveClass("top-0", "h-traffic-light-clearance", "left-titlebar-cluster-left");
 		rerender(<TooltipProvider><TitlebarNav isFullScreen /></TooltipProvider>);
-		expect(nav).toHaveClass("top-0", "h-traffic-light-clearance", "left-titlebar-cluster-left-fullscreen");
+		expect(nav).toHaveClass("top-0", "h-toolbar", "left-titlebar-cluster-left-fullscreen");
 		// The history arrows stay in the row in both sidebar states; only the brand is
 		// inert and aria-hidden when the sidebar is closed (it collapses to width 0
 		// rather than unmounting).
@@ -62,7 +62,7 @@ describe("TitlebarNav", () => {
 		render(<><div data-slot="sidebar-container" /><TitlebarNav /></>);
 		const back = screen.getByRole("button", { name: "Go back" });
 		const forward = screen.getByRole("button", { name: "Go forward" });
-		await screen.findByText("Orchestrator.inc");
+		await screen.findByText("Orchestrator");
 		expect(screen.getByRole("button", { name: "Go back" })).toBe(back);
 		expect(screen.getByRole("button", { name: "Go forward" })).toBe(forward);
 		expect(back).toBeVisible();
@@ -71,7 +71,7 @@ describe("TitlebarNav", () => {
 		expect(document.querySelector('[data-slot="titlebar-brand"]')).toHaveAttribute("aria-hidden", "true");
 		expect(screen.getByRole("button", { name: "Go back" })).toBe(back);
 		fireEvent.click(screen.getByRole("button", { name: "Expand sidebar" }));
-		await screen.findByText("Orchestrator.inc");
+		await screen.findByText("Orchestrator");
 		expect(screen.getByRole("button", { name: "Go forward" })).toBe(forward);
 	});
 
@@ -79,7 +79,7 @@ describe("TitlebarNav", () => {
 		useUiStore.setState({ isSidebarOpen: open });
 		availability.canGoBack = true;
 		const { rerender } = render(<><div data-slot="sidebar-container" /><TitlebarNav /></>);
-		if (open) await screen.findByText("Orchestrator.inc");
+		if (open) await screen.findByText("Orchestrator");
 		const back = screen.getByRole("button", { name: "Go back" });
 		const forward = screen.getByRole("button", { name: "Go forward" });
 		expect(forward).toBeDisabled();
