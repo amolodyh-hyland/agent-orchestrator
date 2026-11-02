@@ -2421,6 +2421,11 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 			}
 		}
 		if _, err := c.queuedBatchInput(ctx, preview, nil); err != nil {
+			var boundary nativeSkillBatchBoundary
+			if errors.As(err, &boundary) {
+				limit = boundary.limit
+				continue
+			}
 			if id, ok := invalidBatchTurn(err); ok {
 				if settleErr := c.store.SettleTurnByID(ctx, id, domain.TurnStateFailed, err.Error(), c.now()); settleErr != nil {
 					return settleErr

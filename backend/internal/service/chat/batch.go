@@ -26,6 +26,13 @@ func invalidBatchTurn(err error) (string, bool) {
 	return "", false
 }
 
+type nativeSkillBatchBoundary struct{ limit int }
+
+func (nativeSkillBatchBoundary) Error() string {
+	return "queued native skills require an individual turn"
+}
+func (nativeSkillBatchBoundary) Unwrap() error { return ErrSteerContentUnsupported }
+
 type batchInputItem struct {
 	Kind              string               `json:"kind"`
 	Text              string               `json:"text"`
@@ -47,7 +54,7 @@ func (c *Controller) queuedBatchInput(ctx context.Context, batch []domain.Queued
 		combined.ClientMessageID = batch[0].ClientMessageID
 		combined.Origin = batch[0].Origin
 	}
-	for _, queued := range batch {
+	for i, queued := range batch {
 		msg := ports.ChatUserMessage{
 			Text: queued.Text, Origin: queued.Origin, ClientMessageID: queued.ClientMessageID,
 			SenderSessionID: queued.SenderSessionID, SenderProjectID: queued.SenderProjectID,
@@ -66,6 +73,9 @@ func (c *Controller) queuedBatchInput(ctx context.Context, batch []domain.Queued
 			return ports.ChatUserMessage{}, batchInputError{queued.TurnID, err}
 		}
 		msg = resolved
+		if len(msg.NativeSkills) > 0 && (len(batch) > 1 || steer != nil) {
+			return ports.ChatUserMessage{}, nativeSkillBatchBoundary{limit: max(1, i)}
+		}
 		for _, content := range msg.Content {
 			if content.Type == "excerpt" && content.Excerpt != nil {
 				msg.Excerpts = append(msg.Excerpts, content.Excerpt.Reference)
@@ -97,7 +107,14 @@ func (c *Controller) queuedBatchInput(ctx context.Context, batch []domain.Queued
 		}
 	}
 	if steer != nil {
-		rendered := excerptDeliveryMessage(*steer)
+		resolved, err := c.resolveSkillMessage(ctx, *steer)
+		if err != nil {
+			return ports.ChatUserMessage{}, err
+		}
+		if len(resolved.NativeSkills) > 0 {
+			return ports.ChatUserMessage{}, nativeSkillBatchBoundary{limit: len(batch)}
+		}
+		rendered := excerptDeliveryMessage(resolved)
 		combined.ClientMessageID = rendered.ClientMessageID
 		combined.Origin = rendered.Origin
 		combined.Settings = rendered.Settings
