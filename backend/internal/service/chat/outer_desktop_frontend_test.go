@@ -67,6 +67,8 @@ type outerDesktopFixture struct {
 	router       http.Handler
 	providers    map[domain.SessionID]*outerDesktopConversation
 	starts       []ports.ChatStartConfig
+	logs         bytes.Buffer
+	logWriter    lockedWriter
 }
 
 // Only provisioning is synthetic. New Task uses the real session service,
@@ -92,7 +94,8 @@ func (m outerDesktopCommander) RunBackgroundTask(context.Context, domain.Session
 }
 
 func (f *outerDesktopFixture) wire() {
-	log := slog.New(slog.DiscardHandler)
+	f.logWriter.w = &f.logs
+	log := slog.New(slog.NewTextHandler(&f.logWriter, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	f.chat = chatsvc.New(chatsvc.Options{Store: f.st, Reader: fullSnapshotReader(f.st), PageReader: boundedSnapshotReader(f.st), Sessions: f.st, Log: log, NewID: uuid.NewString, Now: time.Now, DataDir: f.dir,
 		Drivers: fakeRegistry{driver: fakeDriver{start: func(cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
 			provider := newFakeConversation()

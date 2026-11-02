@@ -3869,5 +3869,12 @@
 	"newTask.openHarnessSettings": "Открыть настройки агентов",
 	"newTask.chooseNewBranch": "Выбрать новую ветку",
 	"newTask.newBranchPrompt": "Имя новой ветки",
-	"newTask.newBranchReady": "Ветка {{branch}} выбрана для следующей задачи."
+	"newTask.newBranchReady": "Ветка {{branch}} выбрана для следующей задачи.",
+	"outer.mailbox": "Почтовый ящик координатора",
+	"outer.mailboxInert": "Сообщения и подтверждения записей не запускают работу. Для передачи с выполнением требуется отдельное подтверждение точной отправки.",
+	"outer.mailboxSources": "Метки источников",
+	"outer.recordAcknowledged": "Запись подтверждена",
+	"outer.recordUnacknowledged": "Запись не подтверждена",
+	"outer.firstMailboxPage": "Первая страница",
+	"outer.nextMailboxPage": "Следующая страница"
 }

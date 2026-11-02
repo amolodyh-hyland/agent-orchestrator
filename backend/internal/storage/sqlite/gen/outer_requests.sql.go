@@ -55,6 +55,74 @@ func (q *Queries) AttemptOuterRequest(ctx context.Context, arg AttemptOuterReque
 	return result.RowsAffected()
 }
 
+const bindOuterReviewSession = `-- name: BindOuterReviewSession :execrows
+UPDATE outer_callers SET generation=?1
+WHERE session_id=?2 AND outer_scope=0
+AND json_extract(CASE WHEN substr(generation,1,15)='review-session:' THEN substr(generation,16) ELSE '{}' END,'$.reviewId')=?3
+AND json_extract(CASE WHEN substr(generation,1,15)='review-session:' THEN substr(generation,16) ELSE '{}' END,'$.generation')=?4
+`
+
+type BindOuterReviewSessionParams struct {
+	NextGeneration string
+	SessionID      string
+	ReviewID       string
+	Generation     string
+}
+
+func (q *Queries) BindOuterReviewSession(ctx context.Context, arg BindOuterReviewSessionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bindOuterReviewSession,
+		arg.NextGeneration,
+		arg.SessionID,
+		arg.ReviewID,
+		arg.Generation,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const clearCancelledOuterReviewBindings = `-- name: ClearCancelledOuterReviewBindings :exec
+UPDATE outer_callers SET generation='review-session:' || json_set(substr(generation,16),'$.runId','','$.headSha','')
+WHERE outer_scope=0 AND substr(generation,1,15)='review-session:'
+AND json_extract(substr(generation,16),'$.runId') IN (SELECT id FROM review_run WHERE review_run.session_id=?1 AND status='cancelled')
+`
+
+func (q *Queries) ClearCancelledOuterReviewBindings(ctx context.Context, sessionID domain.SessionID) error {
+	_, err := q.db.ExecContext(ctx, clearCancelledOuterReviewBindings, sessionID)
+	return err
+}
+
+const clearOuterReviewResultBinding = `-- name: ClearOuterReviewResultBinding :exec
+UPDATE outer_callers SET generation='review-session:' || json_set(substr(generation,16),'$.runId','','$.headSha','')
+WHERE outer_scope=0 AND substr(generation,1,15)='review-session:'
+AND json_extract(substr(generation,16),'$.runId')=?1
+`
+
+func (q *Queries) ClearOuterReviewResultBinding(ctx context.Context, runID string) error {
+	_, err := q.db.ExecContext(ctx, clearOuterReviewResultBinding, runID)
+	return err
+}
+
+const countOuterReviewSessions = `-- name: CountOuterReviewSessions :one
+SELECT count(*) FROM outer_callers WHERE session_id=?1 AND outer_scope=0
+AND json_extract(CASE WHEN substr(generation,1,15)='review-session:' THEN substr(generation,16) ELSE '{}' END,'$.reviewId')=?2
+AND json_extract(CASE WHEN substr(generation,1,15)='review-session:' THEN substr(generation,16) ELSE '{}' END,'$.generation')=?3
+`
+
+type CountOuterReviewSessionsParams struct {
+	SessionID  string
+	ReviewID   string
+	Generation string
+}
+
+func (q *Queries) CountOuterReviewSessions(ctx context.Context, arg CountOuterReviewSessionsParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countOuterReviewSessions, arg.SessionID, arg.ReviewID, arg.Generation)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const getOuterCaller = `-- name: GetOuterCaller :one
 SELECT verifier, session_id, project_id, generation, outer_scope FROM outer_callers WHERE verifier=?
 `
@@ -299,6 +367,22 @@ func (q *Queries) ListOuterSources(ctx context.Context, conversationID string) (
 		return nil, err
 	}
 	return items, nil
+}
+
+const outerCallerGenerationExists = `-- name: OuterCallerGenerationExists :one
+SELECT EXISTS(SELECT 1 FROM outer_callers WHERE session_id=?1 AND generation=?2)
+`
+
+type OuterCallerGenerationExistsParams struct {
+	SessionID  string
+	Generation string
+}
+
+func (q *Queries) OuterCallerGenerationExists(ctx context.Context, arg OuterCallerGenerationExistsParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, outerCallerGenerationExists, arg.SessionID, arg.Generation)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const outerPendingInteraction = `-- name: OuterPendingInteraction :one

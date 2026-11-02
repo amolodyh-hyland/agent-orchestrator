@@ -4364,5 +4364,12 @@
 	"files.moreFiles": "+{{count}} more files",
 	"newTask.modelNotice.cloud": "Showing {{agent}}'s default models because this computer isn't logged in to it. Cloud tasks use your cloud connection and can still start.",
 	"artifacts.generating": "Still generating",
-	"settings.agentAccounts.cliLogin": "CLI login"
+	"settings.agentAccounts.cliLogin": "CLI login",
+	"outer.mailbox": "Coordinator mailbox",
+	"outer.mailboxInert": "Messages and record acknowledgements are inert. Executing delivery requires a separate exact send confirmation.",
+	"outer.mailboxSources": "Source labels",
+	"outer.recordAcknowledged": "Record acknowledged",
+	"outer.recordUnacknowledged": "Record unacknowledged",
+	"outer.firstMailboxPage": "First page",
+	"outer.nextMailboxPage": "Next page"
 }

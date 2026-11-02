@@ -1,4 +1,4 @@
-# Outer orchestrator M1 and M2
+# Outer orchestrator M1, M2 and M3
 
 The host binding uses an ordinary orchestrator in its own repository-free Project.
 Explicit desktop setup selects the existing Codex Chat settings. Setup and passive
@@ -209,3 +209,99 @@ providers, both final transport seams, omitted/forged authority, sealed-plan
 changes, concurrent/replayed approval, queue expiry, pause/settings/generation
 changes, source removal, unknown receipts, preserving stop and held adapters.
 No model or provider call is needed for these checks.
+
+
+## M3 exact native reviews
+
+The existing default-off `AO_OUTER_M2_ACTIONS` gate also controls M3. A sealed
+`review.trigger` action names a worker, its already-owned canonical PR URL and
+40-character head SHA in `review`, plus explicit model/effort and fixed `auto`
+permissions in `config`. It uses the existing Codex Chat reviewer with read-only
+launch permissions. Existing passes on that head hold. A missing live reviewer owner or a configuration replacement holds instead of implicitly restoring or switching it. There is no automatic
+re-review, restore, switch, rerequest, submit, thread resolution or fix turn.
+`review.cancel` additionally names the exact running `runId`; sibling passes or
+changed reviewer identity hold cancellation rather than expanding its scope.
+
+The native plan dialog displays those exact bindings. Participant snapshots and
+feedback holds precede review launch. The generated native reviewer prompt is
+bound once to that action's request and reviewer conversation, generation and
+settings. Queue drain and the serialized Codex transport writer revalidate it.
+Reviewer cancellation has the same final-write check. Reviewer stations use the
+existing 2/1 admission and native acceptance/settlement receipts; ambiguous launch
+or delivery retains its reservation. A definitive preflight rejection releases its station only with journaled no-start evidence; it grants no retry. No result wakes or continues any execution.
+
+An approved fresh M3 reviewer receives one session credential solely in its
+process launch environment. No secret is put in model input, transcript text or
+tool-command prefixes. Every approved Spawn/Notify turn rotates daemon-side
+run/head metadata on that existing credential; it sends no new capability. A
+live pre-M3 reviewer without that credential holds before dispatch with a
+journaled no-start receipt, rather than restoring or replacing the controller.
+Old prompt-issued credentials are rejected. Cancellation clears the active
+binding, and the verdict writer rejects cached contexts after binding rotation
+or cancellation. After matching native turn acceptance the reviewer can use the
+existing `ao review submit` transport with its inherited process environment to
+record only the bound verdict through
+the existing review service. The binding is checked again at the atomic verdict
+and audit write. It cannot read other API content, submit sibling results, enable
+feedback or launch another turn. Results retain `autoInjectReview=false` and do
+not release capacity before native settlement. The outer's own `review.submit`
+adapter remains held; independent factory review evidence and head gates still
+require the recorded native verdict and the separate human evidence decision.
+
+
+## M3 run records and native decision requests
+
+The same sealed, default-off manifest supports `run.create`, `run.evidence`,
+`run.evidence.request` and `run.advance.request`. `run` carries the exact `id`,
+`expectedVersion` and, for writes, a strict existing CreateInput/RecordInput JSON
+`payload`. Project/session ownership must agree at every boundary. Claims use
+`actor: "outer-orchestrator"`; they are never self-confirmed. Existing immutable
+run intent, version checks, source verification and independent exact-head review
+gates remain authoritative. Participant snapshots and continuation holds precede
+each operation. Final ledger writes revalidate the sealed action after inspection.
+
+A decision request records the existing preview digest and an inert action receipt.
+The console opens the existing native run decision dialog for that exact run, with
+only evidence and stage controls. The human separately reviews current claims,
+owned source and blockers in that native dialog. A changed version needs a fresh
+preview. Neither stage changes nor requests start, restore or continue an execution;
+feedback, specialist import and monitoring controls are not added to the outer.
+
+
+## M3 inert coordinator mailbox
+
+The mailbox migration retains immutable mailbox records and separate immutable read
+acknowledgements. Each Project holds at most 256 messages, each text at most
+8 KiB. The bound refuses additional records when full; it never evicts evidence.
+Reads use an exclusive durable sequence and at most 50 records per page. Scope
+removal also holds coordinator-local GET/CLI reads, append retries and receipt
+responses when retained transitive sources are no longer selected. Content
+imports and read acknowledgements record the recipient's conversation and
+Project lineage transactionally; a later export from that context cannot drop
+removed sources. Denied imports return no content and preserve the original
+mailbox records and their transitive source labels for audit.
+
+An outer `mailbox.append`/`mailbox.receipt` plan names an existing eligible
+coordinator and exact `mailbox: {id, text}` (receipt omits text). The existing
+native plan confirmation shows sender/recipient, content, sources and single-use
+action receipts. Participant snapshots and feedback holds precede the atomic
+record mutation. A receipt acknowledges only a record, never model acceptance.
+A receipt at the outer can acknowledge only a message addressed to its exact
+current anchor. It never continues that conversation.
+
+A project coordinator can append inert evidence addressed to the outer and read
+or acknowledge its own records using its daemon-issued live scope credential.
+`POST /sessions/{sessionId}/mailbox` accepts only `{id,text}`; the daemon derives
+all owning identities and conservatively labels incoming provenance unknown.
+`POST .../mailbox/{messageId}/receipt` requires the actual recorded recipient.
+Anonymous, stale, worker, outer and cross-Project credentials cannot use that
+project-local path. The ordinary desktop relay holds these routes; outer mutations
+use sealed plans. `ao outer mailbox --project-id ID` reads selected-project pages;
+project coordinators use `--session ID` plus `append` or `receipt` subcommands.
+The native desktop read channel and console provide the same bounded passive view.
+
+No mailbox producer or read/receipt callback sends, queues, ensures, restores,
+wakes a coordinator or outer, or starts child work. Messages remain separate from
+Chat queues. A human must request a separate M2 `send` with exact content and target
+to deliver any executing turn. Mutations share the default-off M2 gate; disabling
+it preserves passive outer history and messages without replay.

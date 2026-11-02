@@ -4712,6 +4712,51 @@ paths:
       summary: Read bounded selected-project evidence with source labels
       tags:
       - outer
+  /api/v1/outer/mailbox:
+    get:
+      operationId: readOuterMailbox
+      parameters:
+      - in: query
+        name: projectId
+        schema:
+          type: string
+      - in: query
+        name: after
+        schema:
+          format: int64
+          type: integer
+      - in: query
+        name: limit
+        schema:
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersOuterMailboxResponse'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read a bounded inert coordinator mailbox page
+      tags:
+      - outer
   /api/v1/outer/plans:
     post:
       operationId: proposeOuterPlan
@@ -10295,6 +10340,151 @@ paths:
       summary: Mark a session terminated and tear down runtime/workspace resources
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/mailbox:
+    get:
+      operationId: readCoordinatorMailbox
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - in: query
+        name: projectId
+        schema:
+          type: string
+      - in: query
+        name: after
+        schema:
+          format: int64
+          type: integer
+      - in: query
+        name: limit
+        schema:
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersOuterMailboxResponse'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read the owned coordinator mailbox without waking it
+      tags:
+      - outer
+    post:
+      operationId: appendCoordinatorMailbox
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DomainOuterMailboxSpec'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DomainOuterMailboxMessage'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Append an inert coordinator message under owned scope
+      tags:
+      - outer
+  /api/v1/sessions/{sessionId}/mailbox/{messageId}/receipt:
+    post:
+      operationId: receiptCoordinatorMailbox
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - in: path
+        name: messageId
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersMailboxMessagePath'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DomainOuterMailboxMessage'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Acknowledge an inert record without delivery or execution
+      tags:
+      - outer
   /api/v1/sessions/{sessionId}/merge-policy:
     patch:
       operationId: setSessionMergePolicy
@@ -16934,6 +17124,22 @@ components:
         deleteArtifacts:
           type: boolean
       type: object
+    ControllersMailboxMessagePath:
+      properties:
+        messageId:
+          type: string
+      required:
+      - messageId
+      type: object
+    ControllersOuterMailboxResponse:
+      properties:
+        messages:
+          items:
+            $ref: '#/components/schemas/DomainOuterMailboxMessage'
+          type: array
+      required:
+      - messages
+      type: object
     ControllersRemoteHostAccountTokenResponse:
       properties:
         hostId:
@@ -18718,6 +18924,91 @@ components:
       - foregroundReserve
       - overage
       - observedAt
+      type: object
+    DomainOuterMailboxMessage:
+      properties:
+        acknowledgedAt:
+          format: date-time
+          type: string
+        acknowledgedBy:
+          type: string
+        actionId:
+          type: string
+        coordinatorId:
+          type: string
+        direction:
+          type: string
+        id:
+          type: string
+        planId:
+          type: string
+        projectId:
+          type: string
+        receiptActionId:
+          type: string
+        recipientId:
+          type: string
+        recordedAt:
+          format: date-time
+          type: string
+        requestId:
+          type: string
+        senderId:
+          type: string
+        sequence:
+          format: int64
+          type: integer
+        sources:
+          items:
+            $ref: '#/components/schemas/OuterSource'
+          type: array
+        text:
+          type: string
+      required:
+      - sequence
+      - id
+      - projectId
+      - coordinatorId
+      - senderId
+      - recipientId
+      - direction
+      - text
+      - sources
+      - recordedAt
+      - acknowledgedAt
+      type: object
+    DomainOuterMailboxSpec:
+      properties:
+        id:
+          type: string
+        text:
+          type: string
+      required:
+      - id
+      type: object
+    DomainOuterReviewSpec:
+      properties:
+        headSha:
+          type: string
+        prUrl:
+          type: string
+        runId:
+          type: string
+      required:
+      - prUrl
+      - headSha
+      type: object
+    DomainOuterRunSpec:
+      properties:
+        expectedVersion:
+          format: int64
+          type: integer
+        id:
+          type: string
+        payload: {}
+      required:
+      - id
+      - expectedVersion
       type: object
     DomainReviewerConfig:
       properties:
@@ -20889,10 +21180,16 @@ components:
           items:
             type: integer
           type: array
+        mailbox:
+          $ref: '#/components/schemas/DomainOuterMailboxSpec'
         operation:
           type: string
         projectId:
           type: string
+        review:
+          $ref: '#/components/schemas/DomainOuterReviewSpec'
+        run:
+          $ref: '#/components/schemas/DomainOuterRunSpec'
         sessionId:
           type: string
         text:
@@ -21123,6 +21420,8 @@ components:
           type: string
         id:
           type: string
+        mailboxDigest:
+          type: string
         mode:
           type: string
         permissionCeiling:
@@ -21133,6 +21432,10 @@ components:
           format: int64
           type: integer
         providerConversationId:
+          type: string
+        reviewDigest:
+          type: string
+        runDigest:
           type: string
         settings:
           $ref: '#/components/schemas/DomainConversationSettings'
@@ -21184,6 +21487,8 @@ components:
         planId:
           type: string
         providerConversationId:
+          type: string
+        reviewId:
           type: string
         scopeRevision:
           format: int64

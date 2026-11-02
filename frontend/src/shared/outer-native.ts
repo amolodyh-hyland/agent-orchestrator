@@ -8,6 +8,7 @@ export const OUTER_READ = "outer:read";
 
 export type OuterReadQuery =
 	| { projection: "view" }
+ | { projection: "mailbox"; projectId: string; after: number; limit: number }
 	| {
 			projection: "facts";
 			projectId: string;
@@ -17,6 +18,7 @@ export type OuterReadQuery =
 	| { projection: "audit"; after: number; limit: number; projectId?: string };
 export type OuterReadData = {
 	view: components["schemas"]["OuterView"];
+ mailbox: components["schemas"]["ControllersOuterMailboxResponse"];
 	facts: components["schemas"]["OuterFactsResponse"];
 	audit: components["schemas"]["OuterAuditResponse"];
 };

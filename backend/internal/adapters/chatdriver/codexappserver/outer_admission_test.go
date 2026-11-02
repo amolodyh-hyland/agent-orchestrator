@@ -147,3 +147,49 @@ func TestOuterAdmissionLeaseEndsAtWriteNotProviderResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestOuterReviewCancelRechecksAtSerializedWrite(t *testing.T) {
+	c, server := newFakeAppServer(t, nil)
+	conversation := &conversation{conn: c, threadID: "review-thread"}
+	c.writeMu.Lock()
+	var held atomic.Bool
+	result := make(chan error, 1)
+	go func() {
+		result <- conversation.InterruptWithAdmission(context.Background(), "exact-review-turn", func(context.Context) (func(), error) {
+			if held.Load() {
+				return nil, domain.ErrOuterHeld
+			}
+			return func() {}, nil
+		})
+	}()
+	deadline := time.After(time.Second)
+	for {
+		c.mu.Lock()
+		pending := len(c.pending)
+		c.mu.Unlock()
+		if pending == 1 {
+			break
+		}
+		select {
+		case <-deadline:
+			c.writeMu.Unlock()
+			t.Fatal("interrupt never reached serialized writer")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	held.Store(true)
+	c.writeMu.Unlock()
+	select {
+	case err := <-result:
+		if !errors.Is(err, domain.ErrOuterHeld) {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("interrupt did not hold")
+	}
+	select {
+	case frame := <-server.requests:
+		t.Fatal("held cancel wrote bytes", frame)
+	default:
+	}
+}

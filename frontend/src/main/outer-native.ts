@@ -157,6 +157,15 @@ function validRead(value: unknown): value is OuterReadQuery {
 	const v = value as Record<string, unknown>;
 	const keys = Object.keys(v).sort().join(",");
 	if (v.projection === "view") return keys === "projection";
+	if (v.projection === "mailbox")
+		return (
+			keys === "after,limit,projectId,projection" &&
+			typeof v.projectId === "string" &&
+			v.projectId.trim().length > 0 &&
+			v.projectId.length <= 256 &&
+			Number.isSafeInteger(v.after) && Number(v.after) >= 0 &&
+			Number.isSafeInteger(v.limit) && Number(v.limit) >= 1 && Number(v.limit) <= 50
+		);
 	if (v.projection === "facts")
 		return (
 			keys === "kind,limit,projectId,projection" &&
@@ -440,6 +449,9 @@ export function registerOuterNative(options: {
 					outerSettings: record.data.session,
 					admission: { stations: 2, heavyJobs: 1, foregroundReserve: record.data.binding?.foregroundReserve },
 					separateGates: "Publishing, installation, spending and managed-policy requirements remain separate; this plan grants none.",
+ reviewBounds: "Review trigger/cancel names one owned PR head. Codex Chat uses fixed read-only review permissions. No re-review or fix continuation is authorized.",
+ runBounds: "Run records and evidence are unconfirmed claims. Decision requests launch no work; evidence and advance require their existing separate native confirmation. No findings continuation is authorized.",
+ mailboxBounds: "Mailbox append and receipt record inert text or acknowledge a record. They never wake a session or submit a turn. Any executing delivery requires its own exact M2 send authority.",
 					sourceClarificationAndDisclosure: plan.plan.sources,
 					actions: plan.plan.actions,
 					submissionDeadline: "Two minutes after confirmation. Each turn is single use; no follow-up authority.",

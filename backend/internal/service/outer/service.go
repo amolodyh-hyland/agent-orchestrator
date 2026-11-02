@@ -58,6 +58,8 @@ type Sessions interface {
 // Service owns explicit outer setup, request binding and passive observation.
 type Service struct {
 	actionsEnabled bool
+	reviews        Reviews
+	runs           Runs
 	store          Store
 	projects       Projects
 	sessions       Sessions

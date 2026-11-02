@@ -7,7 +7,7 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-func TestMigrateFork0233AppliesUpstreamTimestampsExactlyOnce(t *testing.T) {
+func TestMigrateFork0233AppliesMailboxAndUpstreamTimestampsExactlyOnce(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 233)
 	ledger := func() map[int64]int {
 		t.Helper()
@@ -48,6 +48,18 @@ func TestMigrateFork0233AppliesUpstreamTimestampsExactlyOnce(t *testing.T) {
 		t.Fatalf("upgrade fork 0233: %v", err)
 	}
 	after := ledger()
+	if after[234] != 1 {
+		t.Fatalf("mailbox version 234 applied %d times, want once", after[234])
+	}
+	var mailboxObjects int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE
+		(type='table' AND name IN ('outer_mailbox','outer_mailbox_receipts')) OR
+		(type='trigger' AND name IN ('outer_mailbox_immutable','outer_mailbox_retained','outer_mailbox_receipt_immutable','outer_mailbox_receipt_retained'))`).Scan(&mailboxObjects); err != nil {
+		t.Fatal(err)
+	}
+	if mailboxObjects != 6 {
+		t.Fatalf("mailbox upgrade created %d schema objects, want both tables and four audit-retention triggers", mailboxObjects)
+	}
 	for version, count := range before {
 		if after[version] != count {
 			t.Errorf("legacy version %d changed from %d to %d applications", version, count, after[version])

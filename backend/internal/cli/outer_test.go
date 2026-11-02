@@ -58,3 +58,42 @@ func TestOuterPlanCLIOnlyStagesExactManifest(t *testing.T) {
 		t.Fatal("validation performed network I/O")
 	}
 }
+
+func TestOuterMailboxCLIStaysOnInertRoutes(t *testing.T) {
+	cfg := setConfigEnv(t)
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: os.Getpid(), Port: 9999, StartedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AO_SCOPE_CREDENTIAL", "owned-scope")
+	var paths []string
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		w := httptest.NewRecorder()
+		if r.URL.Path == "/internal/telemetry/cli-invoked" {
+			w.WriteHeader(204)
+			return w.Result(), nil
+		}
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		if r.Header.Get("X-AO-Scope-Credential") != "owned-scope" {
+			t.Error("lost owned credential")
+		}
+		_, _ = io.WriteString(w, `{"messages":[]}`)
+		return w.Result(), nil
+	})}
+	for _, args := range [][]string{{"outer", "mailbox", "--project-id", "a", "--after", "7"}, {"outer", "mailbox", "--session", "coordinator"}, {"outer", "mailbox", "append", "--session", "coordinator", "--id", "record", "--text", "inert evidence"}, {"outer", "mailbox", "receipt", "--session", "coordinator", "--id", "record"}} {
+		if _, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }, HTTPClient: client}, args...); err != nil {
+			t.Fatal(args, err)
+		}
+	}
+	want := []string{"GET /api/v1/outer/mailbox", "GET /api/v1/sessions/coordinator/mailbox", "POST /api/v1/sessions/coordinator/mailbox", "POST /api/v1/sessions/coordinator/mailbox/record/receipt"}
+	if strings.Join(paths, "\n") != strings.Join(want, "\n") {
+		t.Fatal(paths)
+	}
+	for _, args := range [][]string{{"outer", "mailbox"}, {"outer", "mailbox", "--project-id", "a", "--limit", "51"}, {"outer", "mailbox", "append"}, {"outer", "mailbox", "receipt", "--session", "coordinator"}} {
+		if _, _, err := executeCLI(t, Deps{HTTPClient: client}, args...); err == nil {
+			t.Fatal("invalid mailbox arguments", args)
+		}
+	}
+	if len(paths) != 4 {
+		t.Fatal("invalid command performed network IO", paths)
+	}
+}

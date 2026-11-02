@@ -45,7 +45,7 @@ func (c *Controller) acquireOuterInput(ctx context.Context, msg ports.ChatUserMe
 	if !bound {
 		return func() {}, nil
 	}
-	if c.reviewID != "" || c.outerInput == nil {
+	if c.outerInput == nil {
 		return nil, domain.ErrOuterHeld
 	}
 	msg.FeedbackControllerGeneration = c.generation

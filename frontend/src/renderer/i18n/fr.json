@@ -4453,5 +4453,12 @@
 	"files.moreFiles": "+{{count}} more files",
 	"newTask.modelNotice.cloud": "Les modèles par défaut de {{agent}} sont affichés car cet ordinateur n’y est pas connecté. Les tâches cloud utilisent votre connexion cloud et peuvent quand même démarrer.",
 	"artifacts.generating": "Still generating",
-	"settings.agentAccounts.cliLogin": "Connexion de la CLI"
+	"settings.agentAccounts.cliLogin": "Connexion de la CLI",
+	"outer.mailbox": "Coordinator mailbox",
+	"outer.mailboxInert": "Messages and record acknowledgements are inert. Executing delivery requires a separate exact send confirmation.",
+	"outer.mailboxSources": "Source labels",
+	"outer.recordAcknowledged": "Record acknowledged",
+	"outer.recordUnacknowledged": "Record unacknowledged",
+	"outer.firstMailboxPage": "First page",
+	"outer.nextMailboxPage": "Next page"
 }

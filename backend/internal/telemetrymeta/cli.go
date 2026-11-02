@@ -83,6 +83,9 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 
 	"ao outer":                    {},
 	"ao outer view":               {},
+	"ao outer mailbox":            {},
+	"ao outer mailbox append":     {},
+	"ao outer mailbox receipt":    {},
 	"ao outer plan":               {},
 	"ao report status":            {},
 	"ao report resolve":           {},
