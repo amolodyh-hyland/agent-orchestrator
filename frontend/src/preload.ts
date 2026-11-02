@@ -32,7 +32,7 @@ import {
 	type TrayOpenSessionTarget,
 } from "./shared/tray";
 import type { DaemonStatus } from "./shared/daemon-status";
-import { CHAT_FOLDER_ATTACHMENT_CHANNEL, type ChatFolderAttachmentPickerResult } from "./shared/chat-folder-attachment";
+import { CHAT_FOLDER_ATTACHMENT_CHANNEL, CHAT_ATTACHMENT_PATH_CHANNEL, type ChatAttachmentPathInput, type ChatFolderAttachmentPickerResult } from "./shared/chat-folder-attachment";
 import type { RemoteHostView } from "./main/remotes-ipc";
 import type { ConnectedHostView } from "./main/remote-registry";
 import type { RemoteHealth } from "./main/remote-request";
@@ -476,6 +476,7 @@ const api = {
 		save: (input: { name: string; bytes: Uint8Array }) => ipcRenderer.invoke("chatImage:save", input) as Promise<boolean>,
 	},
 	chatAttachment: {
+		path: (input: ChatAttachmentPathInput) => ipcRenderer.invoke(CHAT_ATTACHMENT_PATH_CHANNEL, input) as Promise<string>,
 		chooseFolder: () => ipcRenderer.invoke(CHAT_FOLDER_ATTACHMENT_CHANNEL) as Promise<ChatFolderAttachmentPickerResult>,
 	},
 	daemon: {

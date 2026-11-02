@@ -264,7 +264,7 @@ describe("queued message attachments", () => {
 		fireEvent.paste(screen.getByRole("combobox"), { clipboardData: { files: [new File(["context"], "new-file", { type: mimeType })], items: [] } });
 		await screen.findByLabelText("Remove new-file");
 		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
-		await waitFor(() => expect(edit).toHaveBeenCalledWith("q1", "inspect this\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-context.txt", {
+		await waitFor(() => expect(edit).toHaveBeenCalledWith("q1", "inspect this .ao/attachments/attachment-context.txt\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-context.txt", {
 			retainedContent: [0, 1, 2, 3, 4, 5, 6, 7], clientMessageId: expect.any(String), expectedRevision: 0,
 		}));
 	});
@@ -405,7 +405,7 @@ describe("queued message attachments", () => {
 		await waitFor(() => expect(stage).toHaveBeenCalledOnce());
 		fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
 		await act(async () => settle([path]));
-		await waitFor(() => expect(edit).toHaveBeenCalledWith("q1", `inspect this\n\n${suffix}`, { retainedContent: [], clientMessageId: expect.any(String), expectedRevision: 0 }));
+		await waitFor(() => expect(edit).toHaveBeenCalledWith("q1", `inspect this ${path}\n\n${suffix}`, { retainedContent: [], clientMessageId: expect.any(String), expectedRevision: 0 }));
 		expect(send).not.toHaveBeenCalled();
 	});
 

@@ -5504,6 +5504,13 @@ describe("SessionView", () => {
 		expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("summary");
 	});
 
+	it("reveals the Files side panel for an attachment request without opening a center tab", async () => {
+		act(() => useUiStore.getState().requestWorkspaceFileOpen("sess-1", "src/attached.txt", undefined, "panel"));
+		render(<SessionView sessionId="sess-1" />);
+		await waitFor(() => expect(useUiStore.getState().inspectorSessions["sess-1"]).toMatchObject({ isOpen: true, view: "files", filesSource: { kind: "workspace" } }));
+		expect(screen.queryByRole("tab", { name: "attached.txt" })).toBeNull();
+	});
+
 	it("opens a requested markdown artifact in the Artifacts view", () => {
 		const worker = workspaces[0].sessions[0];
 		worker.artifactFiles = [{ kind: "markdown", name: "report.md", path: "out/report.md", size: 10, updatedAt: "2026-06-10T00:00:00Z" }];

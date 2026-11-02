@@ -503,6 +503,7 @@ if (typeof window !== "undefined") {
 			onEvent: () => () => undefined,
 		},
 		chatAttachment: {
+			path: vi.fn(async (input: { path: string }) => input.path),
 			chooseFolder: async () => null,
 		},
 		cloudCp: {

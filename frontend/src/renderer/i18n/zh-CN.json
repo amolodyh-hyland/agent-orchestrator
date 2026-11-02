@@ -1,4 +1,11 @@
 {
+	"chat.path.panelUnavailable": "无法在会话的文件面板中打开此路径。",
+	"chat.path.revealMac": "在 Finder 中显示",
+	"chat.path.revealWindows": "在文件资源管理器中显示",
+	"chat.path.reveal": "在文件管理器中显示",
+	"chat.path.openSidePanel": "在侧边面板中打开",
+	"chat.path.copy": "复制路径",
+	"chat.path.actionFailed": "无法打开或复制该路径。",
 	"outer.title": "外层编排器",
 	"outer.help": "在 Codex 主 Chat 中询问所选项目的情况。每次发送都对应一个人工请求。支持的跨项目操作必须通过原生对话框确认精确计划。",
 	"outer.setup": "设置外层 Chat",

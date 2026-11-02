@@ -1852,10 +1852,22 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		});
 	}, [uiSessionId]);
 	const openArtifactPreview = useOpenArtifactPreview(session?.id, session?.hostId);
+	const lastFilePanelRequest = useRef<typeof workspaceFileOpenRequest>(null);
 	useEffect(() => {
-		if (!workspaceFileOpenRequest || !session) return;
+		if (!workspaceFileOpenRequest) {
+			lastFilePanelRequest.current = null;
+			return;
+		}
+		if (!session) return;
 		if (sessionUiKey(workspaceFileOpenRequest.sessionId, workspaceFileOpenRequest.hostId) !== uiSessionId) return;
 		const { nonce, path, source } = workspaceFileOpenRequest;
+		if (source === "panel" && !session.cloud) {
+			if (lastFilePanelRequest.current === workspaceFileOpenRequest) return;
+			lastFilePanelRequest.current = workspaceFileOpenRequest;
+			prepareFilesInspector();
+			setFilesSource(uiSessionId, { kind: "workspace" });
+			return;
+		}
 		if (source === "artifact") {
 			// Same routing as the Summary panel's artifact rows: HTML opens in
 			// the Browser panel, everything else in the Artifacts view.
@@ -1876,6 +1888,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		openArtifactPreview,
 		openCenterFile,
 		prepareFilesInspector,
+		setFilesSource,
 		session,
 		uiSessionId,
 		workspaceFileOpenRequest,

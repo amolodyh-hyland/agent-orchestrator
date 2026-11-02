@@ -6,7 +6,7 @@ import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { Activity, Profiler } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { $getRoot, $isTextNode, type LexicalEditor } from "lexical";
+import { $getRoot, $isElementNode, $isTextNode, UNDO_COMMAND, REDO_COMMAND, type LexicalEditor } from "lexical";
 import { ChatComposer } from "./ChatComposer";
 import { sendReferenceToChat } from "../../lib/chat-context-bus";
 import { attachmentURL } from "./messageAttachments";
@@ -97,10 +97,12 @@ it("stages outer Send with the visible scope and settings snapshot without a ren
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
-	const promise = new Promise<T>((resolvePromise) => {
+	let reject!: (reason: unknown) => void;
+	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
 		resolve = resolvePromise;
+		reject = rejectPromise;
 	});
-	return { promise, resolve };
+	return { promise, resolve, reject };
 }
 
 async function typeInComposer(field: HTMLElement, text: string) {
@@ -2259,8 +2261,58 @@ describe("attachments", () => {
 		await typeInComposer(field, "Please inspect this folder");
 		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
 		await waitFor(() => expect(onSend.mock.calls.at(-1)?.[0]).toBe(
-			`Please inspect this folder\n\nAttached files (read these files in the workspace):\n- ${path}`,
+			`${path} Please inspect this folder\n\nAttached files (read these files in the workspace):\n- ${path}`,
 		));
+	});
+
+	it("replaces selected text with an accepted folder in one undo/redo step", async () => {
+		const pick = deferred<{ path: string; name: string; machineName: string }>();
+		const { field } = renderComposer({ onStageAttachments: vi.fn(), onChooseFolder: () => pick.promise });
+		await typeInComposer(field, "Read here please");
+		selectComposerText(field, 5, 9);
+		await userEvent.click(screen.getByRole("button", { name: "Add attachment" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Attach folder" }));
+		expect(lexicalEditorText(field)).toBe("Read here please");
+		await act(async () => pick.resolve({ path: "/work/Folder", name: "Folder", machineName: "dev-mac" }));
+		await waitFor(() => expect(lexicalEditorText(field)).toBe("Read /work/Folder please"));
+		const editor = (field as HTMLElement & { __lexicalEditor: LexicalEditor }).__lexicalEditor;
+		await act(async () => editor.dispatchCommand(UNDO_COMMAND, undefined));
+		expect(lexicalEditorText(field)).toBe("Read here please");
+		await act(async () => editor.dispatchCommand(REDO_COMMAND, undefined));
+		expect(lexicalEditorText(field)).toBe("Read /work/Folder please");
+		expect(screen.getByRole("button", { name: "Remove Folder" })).toBeVisible();
+	});
+
+	it.each([null, { error: "not_readable" }, new Error("picker failed")])("preserves a selected range when the folder picker cancels or fails: %s", async (result) => {
+		const pick = deferred<null | { error: "not_readable" }>();
+		const chooseFolder = vi.fn(() => pick.promise);
+		const { field } = renderComposer({ onStageAttachments: vi.fn(), onChooseFolder: chooseFolder });
+		await typeInComposer(field, "Read here");
+		selectComposerText(field, 5, 9);
+		await userEvent.click(screen.getByRole("button", { name: "Add attachment" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Attach folder" }));
+		expect(lexicalEditorText(field)).toBe("Read here");
+		await act(async () => {
+			if (result instanceof Error) pick.reject(result);
+			else pick.resolve(result as null | { error: "not_readable" });
+		});
+		expect(lexicalEditorText(field)).toBe("Read here");
+		expect(field.querySelector('[data-composer-token="file"]')).toBeNull();
+	});
+
+	it("preserves a selected range when durable file staging fails", async () => {
+		const stage = deferred<string[]>();
+		const onStageAttachments = vi.fn(() => stage.promise);
+		const { field } = renderComposer({ onStageAttachments });
+		await typeInComposer(field, "Read here");
+		selectComposerText(field, 5, 9);
+		fireEvent.paste(field, { clipboardData: clipboardData([png("failed.png")]) });
+		expect(lexicalEditorText(field)).toBe("Read here");
+		await waitFor(() => expect(onStageAttachments).toHaveBeenCalledTimes(1));
+		await act(async () => stage.reject(new Error("staging failed")));
+		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("attach"));
+		expect(lexicalEditorText(field)).toBe("Read here");
+		expect(field.querySelector('[data-composer-token="image"]')).toBeNull();
 	});
 
 	it("disables Attach folder for remote sessions with an explanation", async () => {
@@ -2299,13 +2351,13 @@ describe("attachments", () => {
 		await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(1));
 	});
 
-	it("shows image-only pastes once in the attachment strip", async () => {
+	it("shows image-only pastes at the caret and in the attachment strip", async () => {
 		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-a.png", ".ao/attachments/attachment-b.png"]);
 		const { field } = renderComposer({ onStageAttachments: stage });
 		fireEvent.paste(field, { clipboardData: clipboardData([png("a.png"), png("b.png")]) });
 		await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(2));
-		expect(field.querySelector('[data-composer-token="image"]')).toBeNull();
-		expect(field.textContent).toBe("");
+		expect(field.querySelectorAll('[data-composer-token="image"]')).toHaveLength(2);
+		expect(composerWireText(field)).toBe(".ao/attachments/attachment-a.png .ao/attachments/attachment-b.png ");
 	});
 
 	it("places a pasted image inline at the caret and drops it with its attachment", async () => {
@@ -2319,9 +2371,9 @@ describe("attachments", () => {
 			expect(node).not.toBeNull();
 			return node as HTMLElement;
 		});
-		expect(chip).toHaveTextContent("Image 1");
-		expect(chip).toHaveAttribute("title", "a.png");
-		expect(field.textContent).toBe("compare Image 1 ");
+		expect(chip).toHaveTextContent("a.png");
+		expect(chip).toHaveAttribute("title", ".ao/attachments/attachment-a.png");
+		expect(field.textContent).toBe("compare a.png ");
 
 		await userEvent.click(screen.getByLabelText("Remove a.png"));
 		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).toBeNull());
@@ -2398,8 +2450,8 @@ describe("attachments", () => {
 		]);
 		await waitFor(() =>
 			expect(onSend).toHaveBeenCalledWith(
-				// Pasting into an empty draft names the image only in the attachment block.
-				"what is wrong here\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-ab12cd34ef.png",
+				// The inline reference and the durable attachment block both retain the path.
+				".ao/attachments/attachment-ab12cd34ef.png what is wrong here\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-ab12cd34ef.png",
 			),
 		);
 		// Consumed, so the next message does not silently resend them.
@@ -2544,7 +2596,7 @@ describe("attachments", () => {
 		await userEvent.keyboard("{Enter}");
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("attachments were kept");
-		expect(field.textContent).toBe("inspect this");
+		expect(composerWireText(field)).toBe(".ao/attachments/attachment-retry.png inspect this");
 		expect(screen.getAllByRole("listitem")).toHaveLength(1);
 
 		await userEvent.keyboard("{Enter}");
@@ -2638,7 +2690,7 @@ describe("attachments", () => {
 		}
 	});
 
-	it("keeps a failed text-durability boundary after attachment persistence succeeds", async () => {
+	it("makes a failed text save durable again when a file chip persists the full draft", async () => {
 		const sessionId = "composer-text-storage-failure";
 		const durableStorage = window.localStorage;
 		let failTextWrite = true;
@@ -2659,7 +2711,7 @@ describe("attachments", () => {
 				onSend={vi.fn()}
 				draftSessionId={sessionId}
 				onStageAttachments={vi.fn().mockResolvedValue([
-					".ao/attachments/attachment-after-text-failure.png",
+					".ao/attachments/attachment-after-text-failure.txt",
 				])}
 			/>,
 		);
@@ -2670,7 +2722,8 @@ describe("attachments", () => {
 
 			fireEvent.paste(field, { clipboardData: clipboardData([textFile("safe-attachment.txt")]) });
 			await screen.findByLabelText("Remove safe-attachment.txt");
-			expect(getChatDraftBoundary(sessionId)).toBe("persistence-failed");
+			await waitFor(() => expect(getChatDraftBoundary(sessionId)).toBeUndefined());
+			expect(readChatSessionDraft(sessionId).composer.text).toBe("unsafe text .ao/attachments/attachment-after-text-failure.txt ");
 		} finally {
 			view.unmount();
 			localStorage.mockRestore();
@@ -3214,4 +3267,63 @@ it.each([
 	expect(screen.getByRole("list", { name: "Attached files" }).querySelector("img"))
 		.toHaveAttribute("src", attachmentURL(assetBaseUrl ?? getApiBaseUrl(), assetSessionId ?? draftSessionId, path));
 	expect(props.onStageAttachments).toHaveBeenCalledOnce();
+});
+
+it.each(["paste", "drop", "picker"])("inserts a non-image attachment at the caret through %s and keeps removal in sync", async (source) => {
+	const path = ".ao/attachments/attachment-notes.txt";
+	const { field, onSend } = renderComposer({ onStageAttachments: vi.fn().mockResolvedValue([path]), draftSessionId: `inline-${source}` });
+	await typeInComposer(field, "Read here");
+	await placeLexicalCaret(field, 5);
+	const file = textFile("notes.txt");
+	if (source === "paste") fireEvent.paste(field, { clipboardData: clipboardData([file]) });
+	else if (source === "drop") fireEvent.drop(field, { dataTransfer: { files: [file] } });
+	else fireEvent.change(field.closest("form")!.querySelector('input[type="file"]')!, { target: { files: [file] } });
+	await screen.findByLabelText("Remove notes.txt");
+	await waitFor(() => expect(composerWireText(field)).toBe(`Read ${path} here`));
+	const chip = field.querySelector('[data-composer-token="file"]')!;
+	expect(chip).toHaveTextContent("attachment-notes.txt");
+	expect(chip).toHaveAttribute("title", path);
+	fireEvent.contextMenu(screen.getByRole("listitem"), { button: 2 });
+	await userEvent.click(await screen.findByRole("menuitem", { name: "Copy path" }));
+	await userEvent.click(screen.getByRole("button", { name: "Remove notes.txt" }));
+	await waitFor(() => expect(composerWireText(field)).toBe("Read here"));
+	expect(field.querySelector('[data-composer-token="file"]')).toBeNull();
+	fireEvent.submit(field.closest("form")!);
+	await waitFor(() => expect(onSend.mock.calls[0]?.[0]).toBe("Read here"));
+});
+
+it("keeps a staged attachment after its inline reference is deleted", async () => {
+	const path = ".ao/attachments/attachment-notes.txt";
+	const { field, onSend } = renderComposer({ onStageAttachments: vi.fn().mockResolvedValue([path]) });
+	await typeInComposer(field, "Read here");
+	await placeLexicalCaret(field, 5);
+	fireEvent.paste(field, { clipboardData: clipboardData([textFile("notes.txt")]) });
+	await waitFor(() => expect(composerWireText(field)).toBe(`Read ${path} here`));
+	const lexical = (field as HTMLElement & { __lexicalEditor: LexicalEditor }).__lexicalEditor;
+	act(() => lexical.update(() => {
+		const paragraph = $getRoot().getFirstChildOrThrow();
+		const tail = $isElementNode(paragraph) ? paragraph.getLastDescendant() : null;
+		if ($isTextNode(tail)) tail.select(0, 0);
+	}, { discrete: true }));
+	fireEvent.keyDown(field, { key: "Backspace" });
+	await waitFor(() => expect(field.querySelector('[data-composer-token="file"]')).toBeNull());
+	expect(screen.getByLabelText("Remove notes.txt")).toBeInTheDocument();
+	fireEvent.submit(field.closest("form")!);
+	await waitFor(() => expect(onSend.mock.calls[0]?.[0]).toContain(`\n- ${path}`));
+});
+
+it("removes a file from the saved draft while browsing sent messages", async () => {
+	const path = ".ao/attachments/attachment-saved-notes.txt";
+	const sessionId = "composer-history-removed-file";
+	const { field } = renderComposer({ draftSessionId: sessionId, sentMessages: ["earlier ask"], onStageAttachments: vi.fn().mockResolvedValue([path]) });
+	await typeInComposer(field, "Read");
+	fireEvent.paste(field, { clipboardData: clipboardData([textFile("notes.txt")]) });
+	await screen.findByLabelText("Remove notes.txt");
+	await placeLexicalCaret(field, 0);
+	fireEvent.keyDown(field, { key: "ArrowUp" });
+	expect(composerWireText(field)).toBe("earlier ask");
+	await userEvent.click(screen.getByLabelText("Remove notes.txt"));
+	expect(readChatSessionDraft(sessionId).composer.text).toBe("Read ");
+	fireEvent.keyDown(field, { key: "ArrowDown" });
+	expect(composerWireText(field)).toBe("Read ");
 });

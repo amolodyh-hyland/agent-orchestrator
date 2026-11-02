@@ -122,9 +122,9 @@ test("a pasted image sits inline in the prose, in the composer and in history @T
 	await page.goto(`/#/projects/fake-proj/sessions/${id}`);
 
 	// History: the path in the prose is a chip that opens the image.
-	const bubble = page.locator(".cursor-chat-human-message");
-	await expect(bubble.locator("p")).toHaveText("The header in Image 1 is too tall");
-	await bubble.locator("p").getByRole("button", { name: "Open image: Image 1" }).click();
+	const body = page.locator(".cursor-chat-human-message [data-chat-message-body]");
+	await expect(body).toHaveText("The header in Image 1 is too tall");
+	await body.getByRole("button", { name: "Open image: Image 1" }).click();
 	await expect(page.getByRole("dialog")).toBeVisible();
 	await page.keyboard.press("Escape");
 
@@ -138,9 +138,9 @@ test("a pasted image sits inline in the prose, in the composer and in history @T
 		transfer.items.add(new File([bytes], "image.png", { type: "image/png" }));
 		document.activeElement?.dispatchEvent(new ClipboardEvent("paste", { clipboardData: transfer, bubbles: true, cancelable: true }));
 	}, png);
-	await expect(field.locator('[data-composer-token="image"]')).toHaveText("Image 1");
+	await expect(field.locator('[data-composer-token="image"]')).toHaveText("image.png");
 	await page.keyboard.type("shorter");
-	await expect(field).toHaveText("Make this one Image 1 shorter");
+	await expect(field).toHaveText("Make this one image.png shorter");
 	await page.screenshot({ path: test.info().outputPath("composer.png") });
 	await page.keyboard.press("Enter");
 	await expect.poll(() => sent).toEqual([

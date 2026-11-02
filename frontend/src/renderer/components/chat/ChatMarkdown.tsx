@@ -120,6 +120,8 @@ const OpenChatLink = createContext<{
 	openSession?: (url: string) => void;
 	workspacePaths: string[];
 }>({ workspacePaths: [] });
+export function useChatFileActions() { return useContext(OpenChatLink); }
+
 const EMPTY_WORKSPACE_PATHS: string[] = [];
 
 export function ChatLinkProvider({

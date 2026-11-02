@@ -545,3 +545,12 @@ it("bridges dictation commands and scopes event listener disposal", async () => 
 	dispose();
 	expect(electronMocks.off).toHaveBeenCalledWith(DICTATION_EVENT_CHANNEL, eventHandler);
 });
+
+it("forwards attachment reveal and absolute-path resolution over IPC", async () => {
+	const input = { path: ".ao/attachments/attachment-a.txt", sessionId: "ao-1", action: "resolve" as const };
+	electronMocks.invoke.mockResolvedValueOnce("/work/.ao/attachments/attachment-a.txt");
+	await expect(exposedBridge().chatAttachment.path(input)).resolves.toBe("/work/.ao/attachments/attachment-a.txt");
+	expect(electronMocks.invoke).toHaveBeenLastCalledWith("chatAttachment:path", input);
+	await exposedBridge().chatAttachment.path({ path: "/work/folder", action: "reveal" });
+	expect(electronMocks.invoke).toHaveBeenLastCalledWith("chatAttachment:path", { path: "/work/folder", action: "reveal" });
+});

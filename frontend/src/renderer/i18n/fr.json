@@ -1,4 +1,11 @@
 {
+	"chat.path.panelUnavailable": "Impossible d’ouvrir ce chemin dans le panneau Fichiers de la session.",
+	"chat.path.revealMac": "Afficher dans le Finder",
+	"chat.path.revealWindows": "Afficher dans l’Explorateur de fichiers",
+	"chat.path.reveal": "Afficher dans le gestionnaire de fichiers",
+	"chat.path.openSidePanel": "Ouvrir dans le panneau latéral",
+	"chat.path.copy": "Copier le chemin",
+	"chat.path.actionFailed": "Impossible d’ouvrir ou de copier ce chemin.",
 	"outer.title": "Orchestrateur global",
 	"outer.help": "Posez des questions sur les projets sélectionnés dans le Chat principal de Codex. Chaque envoi constitue une demande humaine. Les actions entre projets prises en charge nécessitent la confirmation native d’un plan exact.",
 	"outer.setup": "Configurer le Chat global",
