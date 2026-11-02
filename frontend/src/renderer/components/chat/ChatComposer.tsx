@@ -1,4 +1,6 @@
 import { DictationControls, type DictationControlHandle } from "./DictationControls";
+import { hasCodeSelection } from "../diffs/SelectionStableContent";
+import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { useOuterNativeAction } from "../../hooks/useOuter";
 import type { OuterSendExpectation } from "../../../shared/outer-native";
@@ -60,11 +62,17 @@ import {
 	Loader2,
 	Pencil,
 	Play,
+	Paperclip,
+	Plus,
 	Square,
 	X,
 } from "lucide-react";
+import { OptionMenu, OptionMenuContent, OptionMenuLabel, OptionMenuTrigger } from "../ui/option-menu";
+import { ComposerMenuRow } from "./TurnSettingsBar";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { formatCapturedFileReferences, type ChatFileReference } from "../../../shared/chat-file-reference";
+import { chatDraftAnnotations, writeChatFileReferences } from "../../lib/chat-drafts";
 import { ChatAnnotationSummary } from "./ChatAnnotationSummary";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { cn } from "../../lib/utils";
@@ -124,13 +132,21 @@ import {
 	type ChatDraftRetainedAttachment,
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
-import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath } from "./messageAttachments";
+import { parseRefKey } from "../../lib/hosts";
+import { AttachmentPathContext, AttachmentPathMenu } from "./AttachmentPathChip";
+import { attachmentURL, IMAGE_ATTACHMENT_PATH, proseBesideImages, removeInlineAttachmentPath } from "./messageAttachments";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
 
 // These responses precede AppendUserMessage. Provider/transport errors can
 // follow durable acceptance and must keep the original delivery ID for recovery.
+/** The agent switch that runs before a send failed, so the message never left. */
+export const AGENT_SWITCH_FAILED = "AGENT_SWITCH_FAILED";
 const DEFINITIVE_SEND_REJECTIONS = new Set([
+	AGENT_SWITCH_FAILED,
+	// The new chat page could not create the session this brief would start.
+	"TASK_CREATE_FAILED",
+	"CHAT_FILE_REFERENCE_INVALID", "CHAT_ANNOTATION_LIMIT", "CHAT_FILE_REFERENCES_SIDE_UNSUPPORTED",
 	// Cloud validation failures reject the request before durable acceptance.
 	"validation_error",
 	"INVALID_BODY",
@@ -147,11 +163,15 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 	"CHAT_SKILL_UNAVAILABLE",
 	"CHAT_RESUME_FAILED",
 	"CHAT_INTERFACE_TRANSITION",
+	// A shared session refused the send because someone else holds its
+	// composer; nothing was accepted, so the text goes back to the draft.
+	"COMPOSER_LOCKED",
+	"COMPOSER_LEASE_LOST",
 	// Excerpts are verified before AppendUserMessage, so retrying the same
 	// references can only fail again; return them to the draft for removal.
 	"CHAT_EXCERPT_INVALID",
 	"CHAT_EXCERPT_STALE",
-	// A /btw or /side request the daemon refused never opened a side chat, so a
+	// A /btw request the daemon refused never opened a side chat, so a
 	// retry cannot succeed; return the draft instead of locking the composer.
 	"CHAT_SIDE_UNAVAILABLE",
 	"CHAT_SIDE_UNSUPPORTED",
@@ -221,7 +241,10 @@ export const ChatComposer = memo(function ChatComposer({
 	disabled,
 	disabledPlaceholder,
 	starting,
+	holdAttachments,
+	onHeldAttachmentsChange,
 	settings,
+	addMenuItems,
 	approval,
 	elicitation,
 	skills = [],
@@ -245,13 +268,14 @@ export const ChatComposer = memo(function ChatComposer({
 	onCancelQueuedEdit,
 	onQueuedDraftChange,
 	onDraftEmptyChange,
+	onDraftInput,
 	queuedDraftScope,
 	onQueuedAttachmentsChange,
 	onQueuedRetainedAttachmentsChange,
 	savingQueuedEditPending,
 	queuedEditRecovery,
 	commandError,
-	attachedTop = false,
+	notice,
 	queuedDock,
 	onCompact,
 	compacting,
@@ -268,15 +292,23 @@ export const ChatComposer = memo(function ChatComposer({
 	emptyPlaceholder,
 	promptSuggestion,
 	onSelectAnnotation,
+	onOpenFile,
+	pathActionsRemote = remoteHost,
 	sentMessages,
 	sentMessagesScope,
+	fileReferencesEnabled = false,
+	fileReferenceDelivery,
 }: {
+	onOpenFile?: (path: string) => void;
+	pathActionsRemote?: boolean;
 	nativeSession?: { sessionId: string; outer: boolean; expected?: OuterSendExpectation };
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 	/** This conversation's sent human messages, oldest first, recalled with Up and Down. */
 	sentMessages?: readonly string[];
 	/** The conversation branch `sentMessages` belongs to; changing it ends an open walk. */
 	sentMessagesScope?: string;
+	fileReferencesEnabled?: boolean;
+	fileReferenceDelivery?: import("../../../shared/chat-file-reference").FileReferenceDelivery;
 	focusRef?: Ref<ChatComposerHandle>;
 	onSend: (
 		text: string,
@@ -284,9 +316,12 @@ export const ChatComposer = memo(function ChatComposer({
 		clientMessageId?: string,
 		retainedContent?: number[],
 		excerpts?: ChatDraftExcerptReference[],
+	fileReferences?: ChatFileReference[],
 		skillSelection?: ChatSkillSelection | null,
 	) => void | Promise<unknown>;
 	settings?: ReactNode;
+	/** Mode rows for the add menu. With them the plus button opens a menu instead of the file picker. */
+	addMenuItems?: ReactNode;
 	/** A provider decision that temporarily replaces ordinary message entry. */
 	approval?: ReactNode;
 	/** A provider question, docked above the composer until it is answered. */
@@ -301,6 +336,13 @@ export const ChatComposer = memo(function ChatComposer({
 	/** Explains why message entry is temporarily blocked. */
 	disabledPlaceholder?: string;
 	starting?: boolean;
+	/**
+	 * Files that cannot be staged yet (no workspace to write into) stay in the
+	 * composer with their bytes and go to `onSend` with the message, for a chat
+	 * whose session is created by that send.
+	 */
+	holdAttachments?: boolean;
+	onHeldAttachmentsChange?: (attachments: FileAttachmentPayload[], preparing: boolean) => void;
 	/** A contextual prompt shown before an otherwise empty conversation begins. */
 	emptyPlaceholder?: string;
 	/** A proposed next message, kept out of the draft until accepted with Tab. */
@@ -353,6 +395,8 @@ export const ChatComposer = memo(function ChatComposer({
 	onQueuedDraftChange?: (text: string, skillSelection?: ComposerSkillSelection | null) => void;
 	/** Called when the draft turns empty or non-empty, including after a restore. */
 	onDraftEmptyChange?: (empty: boolean) => void;
+	/** Every edit of the draft text or move of its caret, with the text and caret after it. */
+	onDraftInput?: (text: string, caret?: number) => void;
 	queuedDraftScope?: ChatDraftScope;
 	onQueuedAttachmentsChange?: (attachments: ChatDraftAttachment[]) => void;
 	onQueuedRetainedAttachmentsChange?: (attachments: ChatDraftRetainedAttachment[]) => void;
@@ -362,8 +406,8 @@ export const ChatComposer = memo(function ChatComposer({
 	queuedEditRecovery?: boolean;
 	/** A failed send, approval, interrupt, or settings mutation. */
 	commandError?: string;
-	/** A queued-message dock owns the shared rounded top edge. */
-	attachedTop?: boolean;
+	/** A notice attached to the form, below queued messages and input requests. */
+	notice?: ReactNode;
 	/** Queued messages rendered above the composer. */
 	queuedDock?: ReactNode;
 	/** Run AO's built-in `/compact` command instead of sending it to the agent. */
@@ -413,10 +457,14 @@ export const ChatComposer = memo(function ChatComposer({
 		? chatQueuedAttachmentScopeKey(queuedDraftScope, draftSeed?.id ?? "undefined")
 		: draftScopeKey;
 	const boundarySessionId = draftSessionId ?? queuedDraftScope?.sessionId;
+	const attachmentHost = remoteHost && boundarySessionId?.startsWith("remote:") ? parseRefKey(boundarySessionId.slice(7)) : undefined;
 	const [retainedAttachments, setRetainedAttachments] = useState<StoredComposerAttachment[]>(draftSeed?.attachments ?? []);
 	const visibleRetainedAttachments = editingQueuedTurnId ? retainedAttachments : [];
-	const [hasText, setHasText] = useState(false);
-	const hasTextRef = useRef(false);
+	// Seeded from the saved draft, so a remounted composer is not reported empty
+	// for the moment before its editor loads that text.
+	const [hasText, setHasText] = useState(() =>
+		Boolean(draftScope && !queuedDraftScope && readChatSessionDraft(draftScope).composer.text.trim()));
+	const hasTextRef = useRef(hasText);
 	const [trigger, setTrigger] = useState<ComposerTrigger>();
 	/**
 	 * The trigger position the user dismissed with Escape. Held so the menu stays
@@ -472,6 +520,8 @@ export const ChatComposer = memo(function ChatComposer({
 	const editor = useRef<ComposerEditorHandle>(null);
 	const formRef = useRef<HTMLFormElement>(null);
 	const filePicker = useRef<HTMLInputElement>(null);
+	const addMenuTrigger = useRef<HTMLButtonElement>(null);
+	const [addMenuBox, setAddMenuBox] = useState<{ lift: number; shift: number; width: number }>();
 	const submitInFlight = useRef<Promise<void> | null>(null);
 	// Disabling the active editor can move focus to the document body. Remember
 	// keyboard-origin submissions so focus can return once the editor is enabled.
@@ -492,14 +542,24 @@ export const ChatComposer = memo(function ChatComposer({
 	// Code selected in a file or diff view ("Ask in chat") arrives here as a
 	// reference chip. Only the session's ordinary prompt accepts it; a queued-turn
 	// edit has no draftSessionId and stays out of the way.
-	useEffect(() => {
-		if (!draftSessionId) return;
-		return subscribeChatComposerReferences(draftSessionId, (reference) => {
-			editor.current?.insertReference(reference.path, reference.display, reference.wire);
+ useEffect(() => {
+  if (!draftSessionId || !draftScope) return;
+  return subscribeChatComposerReferences(draftSessionId, (reference) => {
+   const draft = readChatSessionDraft(draftScope);
+   if (getChatComposerMutation(draftScope).pending || draft.composer.delivery) return false;
+   const files = draft.composer.fileReferences ?? [];
+   if(files.some(file => file.path===reference.path && file.side===reference.side && file.line===reference.line && file.endLine===reference.endLine && file.scope===reference.scope && file.commitSha===reference.commitSha && JSON.stringify(file.source)===JSON.stringify(reference.source) && JSON.stringify(file.lines)===JSON.stringify(reference.lines)))return true;
+   if (files.length + (draft.composer.excerpts?.length ?? 0) >= 8) { setSendError("chat.draft.annotationLimit"); return false; }
+   const order = Math.max(Date.now(), ...files.map(item => item.order + 1), ...(draft.composer.excerpts ?? []).map(item => (item.order ?? 0) + 1));
+   const result = writeChatFileReferences(draftScope, [...files, { ...reference, order }]);
+   composerRevision.current = result.draft.composer.revision;
+   setTextDraftPersistenceError(result.ok ? null : "chat.draft.saveFailed");
+			if (!result.ok) return false;
 			// The Chat surface may only now be coming forward from behind a file tab.
 			window.requestAnimationFrame(() => window.requestAnimationFrame(() => editor.current?.focus()));
+			return true;
 		});
-	}, [draftSessionId]);
+	}, [draftSessionId, draftScope]);
 	const restoredSeedKey = useRef<string | undefined>(undefined);
 	const restoredSessionId = useRef<string | undefined>(undefined);
 	const persistedDraft = useMemo(
@@ -520,10 +580,14 @@ export const ChatComposer = memo(function ChatComposer({
 		getComposerMutation,
 	);
 	const optimisticSend = Boolean(durableDelivery?.draft && composerMutation.pending);
-	const contextReferences = draftScope
+	const chatReferences = draftScope
 		? readChatSessionDraft(draftScope).composer.excerpts ?? []
 		: [];
-	const [appliedAcceptanceSequence, setAppliedAcceptanceSequence] = useState(0);
+ const fileReferences = draftScope ? readChatSessionDraft(draftScope).composer.fileReferences ?? [] : [];
+ const contextReferences = chatDraftAnnotations({ revision: 0, text: "", attachments: [], excerpts: chatReferences, fileReferences }).map(annotation => annotation.kind === "chat"
+  ? annotation.reference
+  : { kind: "file" as const, id: annotation.reference.id, text: annotation.reference.path, order: annotation.reference.order, fileReference: annotation.reference });
+ const [appliedAcceptanceSequence, setAppliedAcceptanceSequence] = useState(0);
 	const composerRevision = useRef(persistedDraft?.composer.revision ?? 0);
 	const unsavedText = useRef<{ text: string; revision: number } | undefined>(undefined);
 	const synchronouslyClearedDeliveryRevision = useRef<number | undefined>(undefined);
@@ -609,7 +673,13 @@ export const ChatComposer = memo(function ChatComposer({
 		prepareAttachments: onStageAttachments ? prepareAttachments : undefined,
 		onAttachmentsChange: persistAttachments,
 	});
-	const canAttach = Boolean(onStageAttachments) && !queuedEditRecovery;
+	const { pendingAttachments } = fileAttachments;
+	const canAttach = (Boolean(onStageAttachments) || Boolean(holdAttachments)) && !queuedEditRecovery;
+	useEffect(() => {
+		if (!holdAttachments || !onHeldAttachmentsChange) return;
+		onHeldAttachmentsChange(fileAttachments.attachments.flatMap(({ stagedPath, mimeType, data, name }) =>
+			!stagedPath && data ? [{ mimeType, data, name }] : []), fileAttachments.preparing);
+	}, [fileAttachments.attachments, fileAttachments.preparing, holdAttachments, onHeldAttachmentsChange]);
 
 	const slashCommands = useMemo<ChatSkill[]>(() => {
 		if (!onCompact || compactUnavailable === "This agent cannot compact its history") return skills;
@@ -714,7 +784,7 @@ export const ChatComposer = memo(function ChatComposer({
 	}, [sendInFlight]);
 	const sendConcealed = sendInFlight && !concealExpired;
 	const canSend =
-		(hasText || staged) &&
+		hasDraft &&
 		(savingQueuedEdit || !busy) &&
 		!disabled &&
 		!steerPending &&
@@ -823,7 +893,11 @@ export const ChatComposer = memo(function ChatComposer({
 		editor.current?.focus();
 	}, [autoFocus, disabled]);
 
+	const previousAutoFocusKey = useRef(autoFocusKey);
 	useEffect(() => {
+		const changedSession = previousAutoFocusKey.current !== autoFocusKey;
+		previousAutoFocusKey.current = autoFocusKey;
+		if (!changedSession && (window.getSelection()?.isCollapsed === false || hasCodeSelection(document.body))) return;
 		focusEditor();
 	}, [autoFocusKey, focusEditor]);
 
@@ -841,9 +915,12 @@ export const ChatComposer = memo(function ChatComposer({
 	useEffect(() => {
 		if (!autoFocus) return;
 
-		const onWindowFocus = () => focusEditor();
+		const onWindowFocus = () => {
+			if (isDialogOrMenuOpen() || window.getSelection()?.isCollapsed === false || hasCodeSelection(document.body)) return;
+			focusEditor();
+		};
 		const onVisibilityChange = () => {
-			if (document.visibilityState === "visible") focusEditor();
+			if (document.visibilityState === "visible") onWindowFocus();
 		};
 
 		window.addEventListener("focus", onWindowFocus);
@@ -1112,10 +1189,9 @@ export const ChatComposer = memo(function ChatComposer({
 			setDurableDelivery(delivery);
 			return;
 		}
-		const observedSteer =
-			delivery.kind === "steer" &&
-			acceptedClientMessageIds?.has(delivery.clientMessageId);
-		if (delivery.state !== "accepted" && !observedSteer) return;
+		// The chat already holds this message (or steer): it arrived though its answer was lost.
+		const observed = acceptedClientMessageIds?.has(delivery.clientMessageId);
+		if (delivery.state !== "accepted" && !observed) return;
 		if (automaticDeliveryRecoveryAttempted.current === delivery.clientMessageId) return;
 		automaticDeliveryRecoveryAttempted.current = delivery.clientMessageId;
 		acceptAndClearDurableDelivery(delivery);
@@ -1163,6 +1239,7 @@ export const ChatComposer = memo(function ChatComposer({
 		}
 	}, [draftScope]);
 
+	const draftCaretRef = useRef<number | undefined>(undefined);
 	const onEditorChange = useCallback((snapshot: ComposerEditorSnapshot) => {
 		// Changing Lexical's editability can publish the optimistic visual clear.
 		if (optimisticSend && !snapshot.text && !textRef.current) return;
@@ -1178,6 +1255,10 @@ export const ChatComposer = memo(function ChatComposer({
 		if (preservedSkillToken.current && !selectedTokenPresent(snapshot.text, preservedSkillToken.current)) queuedSelectionCleared.current = true;
 		onQueuedDraftChange?.(snapshot.text, selectedSkill.current ?? (queuedSelectionCleared.current ? null : undefined));
 		if (snapshot.text !== previousText && !historyBrowse.current) persistComposerText(snapshot.text);
+		if (snapshot.text !== previousText || snapshot.caret !== draftCaretRef.current) {
+			draftCaretRef.current = snapshot.caret;
+			onDraftInput?.(snapshot.text, snapshot.caret);
+		}
 		if (hasTextRef.current !== snapshot.hasText) {
 			hasTextRef.current = snapshot.hasText;
 			setHasText(snapshot.hasText);
@@ -1201,7 +1282,7 @@ export const ChatComposer = memo(function ChatComposer({
 			dismissedKeyRef.current = null;
 			setDismissedKey(null);
 		}
-	}, [onQueuedDraftChange, optimisticSend, persistComposerText, nativeSession]);
+	}, [onDraftInput, onQueuedDraftChange, optimisticSend, persistComposerText, nativeSession]);
 	// A walk holds one branch's prompts. Once another branch or conversation is
 	// active they are abandoned history, so put the user's own draft back.
 	const walkedScope = useRef(sentMessagesScope);
@@ -1287,7 +1368,6 @@ export const ChatComposer = memo(function ChatComposer({
 		(snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab"): string | undefined => {
 			const currentTrigger = snapshot.trigger;
 			if (!currentTrigger) return undefined;
-			if (key === "Enter" && /^\/(btw|side)$/.test(snapshot.text.trim()) && skills.some((skill) => skill.name === snapshot.text.trim().slice(1) && skill.source === "AO")) return undefined;
 			if (key === "Enter" && snapshot.text.trim() === "/compact" && onCompact) {
 				return undefined;
 			}
@@ -1355,6 +1435,7 @@ export const ChatComposer = memo(function ChatComposer({
 		setSteerOutcomeNotice(null);
 
 		if (!recoveringDelivery && !savingQueuedEdit && body === "/compact" && onCompact) {
+			if (fileReferences.length) { setSendError("chat.draft.fileReferencesCompactUnsupported"); return; }
 			if (draftScope && !mutationToken) return;
 			let mutationFinished = false;
 			setSubmitting(true);
@@ -1398,9 +1479,9 @@ export const ChatComposer = memo(function ChatComposer({
 			...settledPaths,
 		];
 		// Staging that just settled has filled its inline chips, so read the text the
-		// user sees now. First drop chips whose image is gone (an undo can restore
+		// user sees now. First drop chips whose attachment is gone (an undo can restore
 		// one); typed paths are the user's text and stay.
-		editor.current?.pruneImages(attachedPaths);
+		editor.current?.pruneAttachments(attachedPaths);
 		currentText = textRef.current;
 		body = proseBesideImages(currentText.trim(), attachedPaths);
 		const hasAttachments = settledAttachments.length > 0 || visibleRetainedAttachments.length > 0;
@@ -1418,10 +1499,18 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 			return;
 		}
-		if (hasAttachments && settledPaths.length !== settledAttachments.length) {
+		// Held files carry their bytes to the send instead of a staged path.
+		const heldPayloads = holdAttachments
+			? settledAttachments.flatMap(({ stagedPath, mimeType, data, name }) => !stagedPath && data ? [{ mimeType, data, name }] : [])
+			: [];
+		if (hasAttachments && settledPaths.length + heldPayloads.length !== settledAttachments.length) {
 			setSendError("chat.draft.filesUnavailable");
 			return;
 		}
+		const sendPayloads = (native: FileAttachmentPayload[]) => {
+			const all = [...native, ...heldPayloads];
+			return all.length > 0 ? all : undefined;
+		};
 		const selection = recoveringDelivery?.skillSelection ?? selectedSkill.current;
 		let availableSkills = skills;
 		if (!recoveringDelivery && !queuedEditRecovery && selection && selectedTokenPresent(body, selection.selection.token)) {
@@ -1433,8 +1522,8 @@ export const ChatComposer = memo(function ChatComposer({
 		}
 		const skillSelection = selection && selectedTokenPresent(body, selection.selection.token) ? selection.selection : undefined;
 		const requiresStructuredSend = skillSelection && availableSkills.some((skill) => skill.bindingRef === skillSelection.bindingRef && skill.transport === "native_skill");
-		const shouldSteer = Boolean(forceSteer && !requiresStructuredSend && !savingQueuedEdit && contextReferences.length === 0);
-		const message = withAttachmentReferences(body, attachedPaths) || (contextReferences.length > 0 ? `Use the attached ${contextReferences.length} chat excerpt(s) as context` : "");
+		const shouldSteer = Boolean(forceSteer && !requiresStructuredSend && !savingQueuedEdit && contextReferences.length === 0 && fileReferences.length === 0);
+		const message = withAttachmentReferences(body, attachedPaths) || (contextReferences.length > 0 ? `Use the attached ${contextReferences.length} ${fileReferences.length ? "annotation(s)" : "chat excerpt(s)"} as context` : "");
 		// Ordinary delivery reserves its exact draft before these staged reads await.
 		// Queue editors use their existing owner/revision CAS before mutation.
 		const attachmentScope = queuedDraftScope ?? draftScope;
@@ -1509,13 +1598,14 @@ export const ChatComposer = memo(function ChatComposer({
 					}
 				} else if (savingQueuedEdit) {
 					await onSend(message, nativePayloads.length ? nativePayloads : undefined, undefined,
-						visibleRetainedAttachments.flatMap((item) => item.contentIndex === undefined ? [] : [item.contentIndex]), undefined, skillSelection ?? (queuedSelectionCleared.current ? null : undefined));
+						visibleRetainedAttachments.flatMap((item) => item.contentIndex === undefined ? [] : [item.contentIndex]), undefined, fileReferences.length ? fileReferences : undefined,
+						...(skillSelection ? [skillSelection] as const : queuedSelectionCleared.current ? [null] as const : []));
 					// The parent leaves this editor only after proving durable cleanup.
 					return;
 				} else if (skillSelection) {
-					await onSend(message, nativePayloads.length ? nativePayloads : undefined, undefined, undefined, undefined, skillSelection);
-				} else if (nativePayloads.length > 0) {
-					await onSend(message, nativePayloads);
+					await onSend(message, nativePayloads.length ? nativePayloads : undefined, undefined, undefined, undefined, undefined, skillSelection);
+				} else if (nativePayloads.length > 0 || heldPayloads.length > 0) {
+					await onSend(message, sendPayloads(nativePayloads));
 				} else {
 					await onSend(message);
 				}
@@ -1542,7 +1632,11 @@ export const ChatComposer = memo(function ChatComposer({
 			return;
 		}
 
-		const requestText = recoveringDelivery
+  if ((recoveringDelivery?.fileReferences?.length || fileReferences.length) && (fileReferenceDelivery ?? (fileReferencesEnabled ? "structured" : "unsupported")) === "unsupported") {
+   setSendError("chat.draft.fileReferencesUnsupported");
+   return;
+  }
+  const requestText = recoveringDelivery
 			? recoveringDelivery.requestText
 			: message;
 		const prepared = prepareChatComposerDelivery(draftScope, {
@@ -1564,7 +1658,8 @@ export const ChatComposer = memo(function ChatComposer({
 						}]
 					: [],
 			),
-			excerpts: recoveringDelivery?.excerpts ?? contextReferences,
+			excerpts: recoveringDelivery?.excerpts ?? chatReferences,
+			fileReferences: recoveringDelivery?.fileReferences ?? fileReferences,
 			requestText,
 			clientMessageId: recoveringDelivery?.clientMessageId ?? crypto.randomUUID(),
 		});
@@ -1623,20 +1718,20 @@ export const ChatComposer = memo(function ChatComposer({
 					return;
 				}
 			} else {
-				const deliveryAttachments =
-					sendNativeImages && nativePayloads.length > 0 ? nativePayloads : undefined;
-				if (delivery.excerpts?.length || delivery.skillSelection) {
-					await onSend(
-						delivery.requestText,
-						deliveryAttachments,
-						delivery.clientMessageId,
-						undefined,
-						delivery.excerpts,
-						...(delivery.skillSelection ? [delivery.skillSelection.selection] as const : []),
-					);
-				} else {
-					await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId);
-				}
+				const deliveryAttachments = sendPayloads(sendNativeImages ? nativePayloads : []);
+    if (delivery.fileReferences?.length) {
+     if (fileReferenceDelivery === "text") {
+      await onSend(formatCapturedFileReferences(delivery.requestText, delivery.fileReferences, delivery.fileReferenceFormat === "quoted-v1"), deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts);
+     } else {
+      await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, delivery.fileReferences, delivery.skillSelection?.selection);
+     }
+    } else if (delivery.skillSelection) {
+     await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, undefined, delivery.skillSelection.selection);
+    } else if (delivery.excerpts?.length) {
+     await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts);
+    } else {
+     await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId);
+    }
 			}
 			acceptAndClearDurableDelivery(delivery, mutationToken);
 			mutationFinished = true;
@@ -1668,7 +1763,8 @@ export const ChatComposer = memo(function ChatComposer({
 				setDeliveryUncertain(false);
 				setDeliveryRecoveryNotice(null);
 				setTextDraftPersistenceError(cleared.ok ? null : "chat.draft.saveFailed");
-				setSendError(apiErrorMessage(error));
+				// A failed agent switch is reported in its own strip above the box.
+				setSendError(apiErrorCode(error) === AGENT_SWITCH_FAILED ? null : apiErrorMessage(error));
 				return;
 			}
 			setDeliveryUncertain(true);
@@ -1811,34 +1907,31 @@ export const ChatComposer = memo(function ChatComposer({
 		return true;
 	}
 
-	/** The image left the draft, which is held aside while a recalled message shows. */
-	function removeImageFromSavedDraft(path: string) {
+	/** The attachment left the draft, which is held aside while a recalled message shows. */
+	function removeAttachmentFromSavedDraft(path: string) {
 		const browse = historyBrowse.current;
 		if (!browse) return;
-		const draft = removeInlineImagePath(browse.draft, path);
+		const draft = removeInlineAttachmentPath(browse.draft, path);
 		if (draft === browse.draft) return;
 		historyBrowse.current = { ...browse, draft };
 		persistComposerText(draft);
 	}
 
-	// Images get an inline chip only beside prose that can refer to them.
-	// Image-only drafts already show every image in the attachment strip.
 	function attachFiles(files: File[]) {
-		// Reserve the spot now: staging can take a while, and the user keeps typing.
-		const reservation = proseBesideImages(textRef.current.trim(), composerImages.map((image) => image.path)) &&
-			files.some((file) => file.type.startsWith("image/"))
-			? editor.current?.reserveImages()
-			: undefined;
+		if (!files.length) return;
+		const reservation = editor.current?.reserveAttachments();
 		void fileAttachments.addFiles(files).then((added) => {
 			if (!reservation) return;
-			editor.current?.fillImages(reservation, added.flatMap((attachment) =>
-				attachment.stagedPath && isInlineImagePath(attachment.stagedPath) ? [attachment.stagedPath] : []));
+			editor.current?.fillAttachments(reservation, added.flatMap((attachment) =>
+				attachment.stagedPath ? [attachment.stagedPath] : []));
 		});
 	}
 
 	async function attachFolder() {
 		if (!onChooseFolder || remoteHost || disabled || submitInFlight.current || draftMutationPending || fileAttachments.preparing) return;
 		setFolderAttachmentError(null);
+		const reservation = editor.current?.reserveAttachments();
+		let added: FileAttachment[] = [];
 		try {
 			const selection = await onChooseFolder();
 			if (!selection) return;
@@ -1846,9 +1939,11 @@ export const ChatComposer = memo(function ChatComposer({
 				setFolderAttachmentError(FOLDER_ATTACHMENT_ERROR_KEYS[selection.error]);
 				return;
 			}
-			await fileAttachments.addFolders([selection]);
+			added = await fileAttachments.addFolders([selection]);
 		} catch {
 			setFolderAttachmentError("chat.composer.folderAttachFailed");
+		} finally {
+			if (reservation) editor.current?.fillAttachments(reservation, added.flatMap((attachment) => attachment.stagedPath ? [attachment.stagedPath] : []));
 		}
 	}
 
@@ -1922,7 +2017,10 @@ export const ChatComposer = memo(function ChatComposer({
 						{elicitation}
 					</div>
 				) : null}
-				{form}
+				{notice}
+				<AttachmentPathContext.Provider value={{ sessionId: assetSessionId ?? attachmentHost?.id ?? boundarySessionId, hostId: attachmentHost?.host, remoteHost: pathActionsRemote, onOpenFile }}>
+					{form}
+				</AttachmentPathContext.Provider>
 			</div>
 		);
 
@@ -1930,7 +2028,6 @@ export const ChatComposer = memo(function ChatComposer({
 		return withQueueStack(
 			<form
 				onSubmit={(event) => event.preventDefault()}
-				data-attached-top={attachedTop && !queuedDock && !elicitation ? true : undefined}
 				className="cursor-chat-composer relative flex flex-col gap-1.5 px-3 py-3"
 			>
 				{approval}
@@ -1963,9 +2060,10 @@ export const ChatComposer = memo(function ChatComposer({
 				data-dragging={dragging || undefined}
 				data-starting={starting || undefined}
 				aria-busy={starting || undefined}
-				data-attached-top={attachedTop && !queuedDock && !elicitation ? true : undefined}
 			onClick={(e) => {
 					if (controlsDisabled) return;
+					// Portal menus still bubble clicks here; focusing the editor would close them.
+					if (!e.currentTarget.contains(e.target as Node)) return;
 					if ((e.target as HTMLElement).closest('[contenteditable="true"], [data-composer-preview]')) return;
 					// The focusable context tooltip must keep its focus on click.
 					if (
@@ -2003,14 +2101,15 @@ export const ChatComposer = memo(function ChatComposer({
 						</button>
 					</div>
 				) : null}
-				{staged || contextReferences.length > 0 ? (
+				{staged || pendingAttachments.length > 0 || contextReferences.length > 0 ? (
 					<div className="flex flex-wrap items-center gap-1.5" data-testid="composer-attachments-and-annotations">
-						{staged ? (
+						{staged || pendingAttachments.length > 0 ? (
 							<ul className="contents" aria-label="Attached files">
 								{stripAttachments.map(({ file, path, preview }) => {
 									return (
+									<AttachmentPathMenu key={file.id} path={path ?? ""} folder={file.kind === "folder"}>
 									<li
-										key={file.id}
+										tabIndex={0}
 										className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1"
 									>
 										{preview ? (
@@ -2024,7 +2123,7 @@ export const ChatComposer = memo(function ChatComposer({
 										)}
 										<span
 											className="max-w-[120px] truncate text-xs text-muted-foreground"
-											title={file.kind === "folder" ? path : file.name}
+											title={path ?? file.name}
 										>
 											{file.name}
 										</span>
@@ -2035,17 +2134,21 @@ export const ChatComposer = memo(function ChatComposer({
 										) : null}
 										<button
 											type="button"
+											onMouseDown={(event) => {
+												if (event.button === 0) event.preventDefault();
+											}}
 											onClick={() => {
 											if (submitInFlight.current) return;
 											if (path) {
-											editor.current?.removeImage(path);
-											removeImageFromSavedDraft(path);
+											editor.current?.removeAttachment(path);
+											removeAttachmentFromSavedDraft(path);
 										}
 											if (visibleRetainedAttachments.some((attachment) => attachment.id === file.id)) {
 												const next = retainedAttachments.filter((attachment) => attachment.id !== file.id);
 												setRetainedAttachments(next);
 												onQueuedRetainedAttachmentsChange?.(next);
 											} else fileAttachments.remove(file.id);
+											editor.current?.focus();
 											}}
 											disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
 											aria-label={`Remove ${file.name}`}
@@ -2054,8 +2157,24 @@ export const ChatComposer = memo(function ChatComposer({
 											<X aria-hidden="true" className="size-3" />
 										</button>
 									</li>
+									</AttachmentPathMenu>
 									);
 								})}
+								{pendingAttachments.map((file) => (
+									<li
+										key={file.id}
+										role="status"
+										aria-label={`Attaching ${file.name}`}
+										className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1 motion-safe:animate-pulse"
+									>
+										<div aria-hidden="true" className="size-6 rounded-sm bg-surface" />
+										<span aria-hidden="true" className="relative max-w-[120px] truncate text-xs">
+											<span className="invisible">{file.name}</span>
+											<span className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 rounded-sm bg-surface" />
+										</span>
+										<span aria-hidden="true" className="size-3 rounded-sm bg-surface" />
+									</li>
+								))}
 							</ul>
 						) : null}
 						{contextReferences.length > 0 ? (
@@ -2065,15 +2184,22 @@ export const ChatComposer = memo(function ChatComposer({
 								disabled={controlsDisabled || draftMutationPending}
 								onRemoveAll={() => {
 									if (!draftScope || submitInFlight.current) return;
-									const result = writeChatExcerptReferences(draftScope, []);
+         const removedFiles = writeChatFileReferences(draftScope, []);
+         if (!removedFiles.ok) { setTextDraftPersistenceError("chat.draft.saveFailed"); return; }
+         const result = writeChatExcerptReferences(draftScope, []);
 									composerRevision.current = result.draft.composer.revision;
 									setTextDraftPersistenceError(result.ok ? null : "chat.draft.saveFailed");
 								}}
 								onRemove={(excerpt) => {
 									if (!draftScope || submitInFlight.current || !excerpt.id) return;
+         if (fileReferences.some(ref => ref.id === excerpt.id)) {
+          const result = writeChatFileReferences(draftScope, fileReferences.filter(ref => ref.id !== excerpt.id));
+          composerRevision.current = result.draft.composer.revision;
+          setTextDraftPersistenceError(result.ok ? null : "chat.draft.saveFailed"); return;
+         }
 									const result = writeChatExcerptReferences(
 										draftScope,
-										contextReferences.filter((item) => item.id !== excerpt.id),
+										chatReferences.filter((item) => item.id !== excerpt.id),
 									);
 									composerRevision.current = result.draft.composer.revision;
 									setTextDraftPersistenceError(result.ok ? null : "chat.draft.saveFailed");
@@ -2087,6 +2213,7 @@ export const ChatComposer = memo(function ChatComposer({
 					<ComposerEditor
 						ref={editor}
 						images={composerImages}
+						attachments={stripAttachments.flatMap(({ file, path }) => path ? [{ path, folder: file.kind === "folder" }] : [])}
 						promptSuggestion={willQueue || starting || editingQueuedTurnId || staged ? undefined : promptSuggestion}
 						disabled={composerEditorDisabled}
 						concealed={sendConcealed && !optimisticSend}
@@ -2137,11 +2264,6 @@ export const ChatComposer = memo(function ChatComposer({
 							{translateDraft("chat.draft.abandon")}
 						</Button>
 					</div>
-				) : null}
-				{fileAttachments.preparing ? (
-					<p role="status" className="px-1.5 text-xs leading-snug text-muted-foreground">
-						Saving attachments… Wait before leaving this chat.
-					</p>
 				) : null}
 
 				{/* A refused steer is an ordinary outcome, not a failure: the text is still
@@ -2236,12 +2358,56 @@ export const ChatComposer = memo(function ChatComposer({
 										event.target.value = "";
 									}}
 								/>
+								{addMenuItems ? (
+									<OptionMenu
+										onOpenChange={(open) => {
+											// Measured on open: the panel sits on the chat box, as wide as it.
+											const button = addMenuTrigger.current;
+											const box = button?.closest("form")?.getBoundingClientRect();
+											const origin = button?.getBoundingClientRect();
+											if (open && box && origin) setAddMenuBox({ lift: origin.top - box.top + 6, shift: box.left - origin.left, width: box.width });
+										}}
+									>
+										<OptionMenuTrigger
+											ref={addMenuTrigger}
+											showCaret={false}
+											disabled={controlsDisabled}
+											aria-label="Add"
+											title="Add files or change mode"
+											className="size-7 shrink-0 justify-center rounded-full bg-transparent p-0 text-muted-foreground hover:bg-interactive-active hover:text-foreground data-[state=open]:bg-interactive-active"
+										>
+											<Plus aria-hidden="true" className="size-3.5" />
+										</OptionMenuTrigger>
+										<OptionMenuContent
+											align="start"
+											side="top"
+											sideOffset={addMenuBox?.lift}
+											alignOffset={addMenuBox?.shift}
+											avoidCollisions={false}
+											style={addMenuBox ? { width: addMenuBox.width } : undefined}
+											className="chat-settings-menu max-w-none text-[12px]!"
+										>
+											<OptionMenuLabel>Add</OptionMenuLabel>
+											<ComposerMenuRow
+												icon={Paperclip}
+												title="Files"
+												description="Attach files to this message"
+												disabled={queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
+												onSelect={() => filePicker.current?.click()}
+											/>
+											<ComposerMenuRow icon={Paperclip} title="Folder" description="Attach a folder to this message" disabled={remoteHost || queuedEditRecovery || draftMutationPending || fileAttachments.preparing} onSelect={() => void attachFolder()} />
+											{addMenuItems}
+										</OptionMenuContent>
+									</OptionMenu>
+								) : (
 								<ChatAttachmentMenu
 									disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
 									onAttachFile={() => filePicker.current?.click()}
 									onAttachFolder={() => void attachFolder()}
 									folderDisabled={remoteHost}
 								/>
+
+								)}
 							</>
 						) : null}
 						<DictationControls
@@ -2276,7 +2442,7 @@ export const ChatComposer = memo(function ChatComposer({
 										className={cn(
 											"size-7 rounded-full border-transparent focus-visible:ring-ring/40",
 											canStopTurn || canContinueTurn || sendActionEnabled
-												? "bg-foreground text-background hover:bg-foreground/90 hover:text-background dark:hover:bg-foreground/90 dark:hover:text-background"
+												? "bg-foreground text-on-foreground hover:bg-foreground/90 hover:text-on-foreground dark:hover:bg-foreground/90 dark:hover:text-on-foreground"
 												: "bg-primary text-primary-foreground",
 										)}
 									>
@@ -2284,7 +2450,7 @@ export const ChatComposer = memo(function ChatComposer({
 											<Square aria-hidden="true" className="size-2.5 fill-current" />
 										) : canContinueTurn && !continuing ? (
 											<Play aria-hidden="true" className="size-3 translate-x-px fill-current" />
-										) : continuing || submitting || steerPending || savingQueuedEditPending || sendPending ? (
+										) : continuing || (!starting && (submitting || steerPending || savingQueuedEditPending || sendPending)) ? (
 											<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
 										) : showsSteer ? (
 											<CornerUpRight aria-hidden="true" className="size-3.5" />

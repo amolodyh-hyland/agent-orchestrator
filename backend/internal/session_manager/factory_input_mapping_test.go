@@ -79,13 +79,13 @@ func TestFactoryRawInputResolvesTerminalOwnership(t *testing.T) {
 	}
 	release()
 	release()
-	if err := f.manager.beginAgentOperation(context.Background(), f.worker.ID, agentOperationSwitch); err != nil {
+	if err := f.manager.beginAgentOperation(context.Background(), f.worker.ID, agentOperationProviderSwitch); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := f.manager.AcquireSessionInput(domain.SessionID(f.reviewer)); ok {
 		t.Fatal("reviewer bypassed its worker's exclusive operation")
 	}
-	f.manager.endAgentOperation(f.worker.ID, agentOperationSwitch)
+	f.manager.endAgentOperation(f.worker.ID, agentOperationProviderSwitch)
 	f.enroll(t)
 	for _, tc := range []struct {
 		handle  string

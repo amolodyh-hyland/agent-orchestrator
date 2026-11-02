@@ -460,6 +460,7 @@ var (
 	// ErrWorkspaceBranchCheckedOutElsewhere reports the requested branch is
 	// already checked out in another worktree of the same repo.
 	ErrWorkspaceBranchCheckedOutElsewhere = errors.New("workspace: branch is already checked out in another worktree")
+	ErrWorkspaceBranchAlreadyExists       = errors.New("workspace: branch name already exists")
 	// ErrWorkspaceBranchNotFetched reports the requested branch exists nowhere
 	// reachable (no local head, no remote-tracking branch, no tag).
 	ErrWorkspaceBranchNotFetched = errors.New("workspace: branch is not fetched")
@@ -494,6 +495,12 @@ var (
 	// recoverable on their own; the operator has to unlock or remove the
 	// registration first.
 	ErrWorkspaceLocked = errors.New("workspace: registered worktree is locked")
+	// ErrWorkspacePathOccupied reports that the path a new worktree must be
+	// created at is already taken by something git does not track as a
+	// worktree of the project's repository and that is not a recoverable
+	// leftover of one. The adapter never moves or deletes such a path; the
+	// user has to clear it before the workspace can be created.
+	ErrWorkspacePathOccupied = errors.New("workspace: worktree path is occupied")
 	// ErrWorkspaceDeferred reports that a recognized transient handle-release
 	// failure survived the workspace removal retry budget, even though git has
 	// already unregistered the worktree so nothing is being reconciled. Session
@@ -531,18 +538,14 @@ var (
 	ErrRuntimeProbeInconclusive = errors.New("runtime: liveness probe inconclusive")
 )
 
-// WorkspaceTaskNamer finalizes an unlaunched task's branch and directory names.
-// Even on error, the returned info describes the current paths and branches.
+// WorkspaceTaskNamer renames a launched task's temporary branch. The checkout
+// never moves, so the returned info differs only in branch names, and on error
+// it still describes the branches Git holds, which may differ per repository.
+// RevertTaskBranch exactly undoes a rename the caller could not record, with
+// the same result contract.
 type WorkspaceTaskNamer interface {
-	NameTaskWorkspace(ctx context.Context, info WorkspaceProjectInfo, branch, name string) (WorkspaceProjectInfo, error)
-	RepairTaskWorkspace(ctx context.Context, info WorkspaceProjectInfo) (WorkspaceProjectInfo, error)
-}
-
-// WorkspaceTaskNamingRecovery keeps an interrupted rename recoverable until
-// the caller acknowledges that the resulting paths are durably stored.
-type WorkspaceTaskNamingRecovery interface {
-	RecoverTaskWorkspace(ctx context.Context, projectID domain.ProjectID, id domain.SessionID) (WorkspaceProjectInfo, bool, error)
-	CompleteTaskWorkspaceNaming(ctx context.Context, info WorkspaceProjectInfo) error
+	RenameTaskBranch(ctx context.Context, info WorkspaceProjectInfo, branch string) (WorkspaceProjectInfo, error)
+	RevertTaskBranch(ctx context.Context, renamed, original WorkspaceProjectInfo) (WorkspaceProjectInfo, error)
 }
 
 // WorkspaceConfig is the spec for creating or restoring a session's workspace.
@@ -556,9 +559,9 @@ type WorkspaceConfig struct {
 	Branch        string
 	// FreshBranch never checks out a leftover local branch for a new
 	// speculative task; a collision gets a new suffixed branch instead.
-	FreshBranch bool
-	// ExactBranch requires a new branch with this exact name and refuses collisions.
-	ExactBranch bool
+	FreshBranch      bool
+	RequireNewBranch bool
+	ExactBranch      bool
 	// BaseBranch is the explicitly configured branch new session branches are
 	// created from. Empty asks the workspace adapter to resolve an authoritative
 	// repository default; it must never infer from the checked-out branch.
@@ -593,14 +596,15 @@ type WorkspaceInfo struct {
 // WorkspaceProjectConfig describes a multi-repo workspace session. RootRepoPath
 // and child RepoPath values are absolute paths to the canonical repositories.
 type WorkspaceProjectConfig struct {
-	ProjectID     domain.ProjectID
-	SessionID     domain.SessionID
-	Kind          domain.SessionKind
-	SessionPrefix string
-	Branch        string
-	FreshBranch   bool
-	ExactBranch   bool
-	RootRepoPath  string
+	ProjectID        domain.ProjectID
+	SessionID        domain.SessionID
+	Kind             domain.SessionKind
+	SessionPrefix    string
+	Branch           string
+	FreshBranch      bool
+	RequireNewBranch bool
+	RootRepoPath     string
+	ExactBranch      bool
 	// BaseBranch applies only to RootRepoPath. Empty asks the workspace adapter
 	// to resolve that repository's default independently from every child.
 	BaseBranch string

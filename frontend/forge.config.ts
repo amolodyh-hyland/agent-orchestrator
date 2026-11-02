@@ -19,6 +19,7 @@ import { MULTICA_DESKTOP_STAGE_DIR, stageMulticaDesktop } from "./scripts/stage-
 import { MULTICA_CLI_STAGE_DIR, stageMulticaCli } from "./scripts/stage-multica-cli.mjs";
 import { BUNDLED_TMUX_VERSION } from "./scripts/tmux-version.mjs";
 import { UPDATES_DISABLED_MARKER } from "./src/main/updates-disabled";
+import { checkMacDmgLayout } from "./scripts/build-mac-dmg.mjs";
 
 // Default GitHub release target (production). Releases land on Untrivial-ai
 // (the org the repo was transferred to in July 2026; AgentWrapper and aoagents
@@ -34,7 +35,7 @@ const DEFAULT_RELEASE_REPO = "Untrivial-ai/agent-orchestrator";
 // shortcut on Windows (#2414) or "could not find the Electron app binary" on deb.
 const EXECUTABLE_NAME = "agent-orchestrator";
 const AUTH_PROTOCOL = {
-	name: "Agent Orchestrator authentication callback",
+	name: "Orchestrator authentication callback",
 	schemes: ["ao-app"],
 };
 const AUTH_PROTOCOL_MIME_TYPE = "x-scheme-handler/ao-app";
@@ -67,6 +68,37 @@ async function prepareNativeDependencies(platform: NodeJS.Platform, arch: string
 	});
 }
 
+// Packager app name. It sets the bundle filename ("<name>.app"), which the
+// installed path, updater, and `ao start` keep using, so it is not the label
+// people see in Finder.
+const PACKAGER_NAME = "Agent Orchestrator";
+
+// Finder uses the localized label only when the base display name matches the
+// bundle filename, but the packager defaults it to the executable name. Set it,
+// then copy the localized label into every regional lproj Finder might pick.
+// Must run before signing so the plist and localized strings are sealed.
+// Throws on failure so the Forge hook can pass it to its callback.
+export function labelMacBundle(
+	buildPath: string,
+	setDisplayName: (plistPath: string, name: string) => void = setPlistDisplayName,
+): void {
+	const contents = path.join(buildPath, `${PACKAGER_NAME}.app`, "Contents");
+	setDisplayName(path.join(contents, "Info.plist"), PACKAGER_NAME);
+	const resources = path.join(contents, "Resources");
+	const label = readFileSync(path.join(resources, "en.lproj", "InfoPlist.strings"));
+	for (const locale of readdirSync(resources).filter((entry) => entry.endsWith(".lproj"))) {
+		writeFileSync(path.join(resources, locale, "InfoPlist.strings"), label);
+	}
+}
+
+function setPlistDisplayName(plistPath: string, name: string): void {
+	const result = spawnSync("plutil", ["-replace", "CFBundleDisplayName", "-string", name, plistPath], {
+		encoding: "utf8",
+	});
+	if (result.error) throw result.error;
+	if (result.status !== 0) throw new Error(`Setting macOS display name failed: ${result.stderr}`);
+}
+
 export function multicaDesktopOutDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
 	return env.AO_MULTICA_DESKTOP_OUT?.trim() || undefined;
 }
@@ -86,11 +118,13 @@ export function extraResourcesForPlatform(
 ): string[] {
 	return [
 		"daemon",
+		// AO Browser Bridge (Chrome extension); the daemon finds it beside daemon/.
+		"browser-extension",
 		"agent-browser",
 		"resources/acp-runtime",
 		...(bundleMultica ? [MULTICA_DESKTOP_STAGE_DIR, UPDATES_DISABLED_MARKER] : []),
 		...(bundleMulticaCli ? [MULTICA_CLI_STAGE_DIR] : []),
-		...(platform === "darwin" ? ["update-helper", "wake-helper"] : []),
+		...(platform === "darwin" ? ["update-helper", "wake-helper", "cloudflared", "assets/mac/en.lproj"] : []),
 		...(platform === "darwin" || platform === "win32" ? ["dictation-helper"] : []),
 		...(platform === "darwin" || platform === "linux" ? ["tmux"] : []),
 		"assets/icon.png",
@@ -256,11 +290,11 @@ const config: ForgeConfig = {
 		// the .node binary outside app.asar.
 		ignore: ignoreFromVitePackage,
 		appBundleId: "dev.agent-orchestrator.desktop",
-		extendInfo: {
+		extendInfo: { LSHasLocalizedDisplayName: true, CFBundleDevelopmentRegion: "en",
 			NSMicrophoneUsageDescription: "Record speech on this device to insert editable text into your message.",
 			NSSpeechRecognitionUsageDescription: "Transcribe your speech on this device. Audio is never sent to a server.",
 		},
-		name: "Agent Orchestrator",
+		name: PACKAGER_NAME,
 		executableName: EXECUTABLE_NAME,
 		protocols: [AUTH_PROTOCOL],
 		appCategoryType: "public.app-category.developer-tools",
@@ -269,6 +303,15 @@ const config: ForgeConfig = {
 		// deb/rpm makers below, and the runtime window icon from src/main.ts.
 		icon: "assets/icon",
 		extraResource: extraResourcesForPlatform(process.platform),
+		afterCopyExtraResources: [(buildPath, _version, platform, _arch, callback) => {
+			if (platform !== "darwin") return callback();
+			try {
+				labelMacBundle(buildPath);
+				callback();
+			} catch (error) {
+				callback(error as Error);
+			}
+		}],
 		// Notarization. Two paths:
 		//  - CI: an App Store Connect API key. APPLE_API_KEY is a PATH to the .p8
 		//    (the workflow decodes APPLE_API_KEY_BASE64 to a temp file), plus the
@@ -382,6 +425,11 @@ const config: ForgeConfig = {
 					const helper = path.join(resourcesPath, "update-helper", "ao-update-progress");
 					if (!existsSync(helper)) throw new Error(`packaged macOS update helper missing from ${helper}`);
 					if (!existsSync(path.join(resourcesPath, "wake-helper", "ao-wake"))) throw new Error(`packaged macOS wake helper missing from ${resourcesPath}`);
+					// Run it: remote access depends on this signed copy starting, not just existing.
+					const cloudflared = path.join(resourcesPath, "cloudflared", "cloudflared");
+					if (!existsSync(cloudflared)) throw new Error(`packaged cloudflared missing from ${cloudflared}`);
+					const cloudflaredVersion = spawnSync(cloudflared, ["--version"], { encoding: "utf8", timeout: 10_000 });
+					if (cloudflaredVersion.status !== 0) throw new Error(`packaged cloudflared failed to run at ${cloudflared}: ${cloudflaredVersion.error?.message || cloudflaredVersion.stderr}`);
 				}
 				if (multicaDesktopOutDir()) {
 					const missing = missingMulticaResources(resourcesPath);
@@ -445,11 +493,17 @@ const config: ForgeConfig = {
 		// the artifact CI ships for x64 — completely unverified: a regression of
 		// exactly the crash #3879 fixed could ship without any automated gate
 		// catching it.
+		//
+		// Before any of that, fail the build if the dmg lost its install window
+		// layout (.DS_Store, background, icon positions). Without them Finder
+		// shows a large plain window with two small icons in a corner, and
+		// nothing else would notice. Runs on unsigned builds too.
 		postMake: async (_forgeConfig, makeResults) => {
 			for (const result of makeResults) {
 				if (result.platform !== "darwin") continue;
 				for (const artifact of result.artifacts) {
 					if (artifact.endsWith(".dmg")) {
+						await checkMacDmgLayout(artifact);
 						if (await sealDmg(artifact)) await verifyDmg(artifact);
 					} else if (artifact.endsWith(".zip") && isSigningConfigured()) {
 						await verifyMacArtifact(artifact);
@@ -502,7 +556,8 @@ const config: ForgeConfig = {
 		new MakerAppImage(
 			{
 				appId: "dev.agent-orchestrator.desktop",
-				productName: "Agent Orchestrator",
+				productName: "Orchestrator",
+				appImage: { artifactName: "Agent Orchestrator-${version}.${ext}" },
 				icon: "assets/icon.png",
 				protocols: [AUTH_PROTOCOL],
 			},

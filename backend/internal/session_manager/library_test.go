@@ -53,7 +53,7 @@ func TestLibraryTaskAdmissionCoversEveryRawTerminalWrite(t *testing.T) {
 		t.Fatal("closed library admission bypassed")
 	}
 	library.allowed = true
-	m.agentOperations["task-1"] = agentOperationSwitch
+	m.agentOperations["task-1"] = agentOperationProviderSwitch
 	if _, ok := m.AcquireSessionInput("task-1"); ok || library.held != 0 {
 		t.Fatal("exclusive-operation refusal leaked library lease")
 	}

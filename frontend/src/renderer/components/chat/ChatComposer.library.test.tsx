@@ -27,7 +27,7 @@ it.each(["/", "$"])("inserts the backend %s marker and preserves arguments witho
 	expect(send).not.toHaveBeenCalled();
 	await typeInLexicalEditor(field, 'file.ts --focus "a b"');
 	await userEvent.keyboard("{Enter}");
-	await waitFor(() => expect(send).toHaveBeenCalledWith(`${marker}review file.ts --focus "a b"`, undefined, undefined, undefined, undefined, expect.objectContaining({ entryId: "entry-one", snapshotId: "snapshot-one", token: `${marker}review` })));
+	await waitFor(() => expect(send).toHaveBeenCalledWith(`${marker}review file.ts --focus "a b"`, undefined, undefined, undefined, undefined, undefined, expect.objectContaining({ entryId: "entry-one", snapshotId: "snapshot-one", token: `${marker}review` })));
 });
 
 it("keeps same labels and names with distinct IDs selectable independently", async () => {
@@ -38,7 +38,7 @@ it("keeps same labels and names with distinct IDs selectable independently", asy
 	expect(lexicalEditorText(field)).toBe("$review ");
 	await typeInLexicalEditor(field, "second");
 	await userEvent.keyboard("{Enter}");
-	await waitFor(() => expect(send.mock.calls[0]?.[5]).toMatchObject({ entryId: "entry-two", bindingRef: "binding-two" }));
+	await waitFor(() => expect(send.mock.calls[0]?.[6]).toMatchObject({ entryId: "entry-two", bindingRef: "binding-two" }));
 });
 
 it.each(["conflict", "restart_required", "changed_content", "revoked", "unsupported_format", "policy_denied"])("cannot select a %s row by mouse, Enter or Tab", async (status) => {
@@ -83,13 +83,13 @@ it("retains the opaque binding through draft remount and delivery", async () => 
 	const second = setup([row()], { draftSessionId: sessionId });
 	expect(lexicalEditorText(second.field)).toBe("$review file.ts");
 	await userEvent.keyboard("{Enter}");
-	await waitFor(() => expect(second.send.mock.calls[0]?.[5]).toMatchObject({ entryId: "entry-one", snapshotId: "snapshot-one" }));
+	await waitFor(() => expect(second.send.mock.calls[0]?.[6]).toMatchObject({ entryId: "entry-one", snapshotId: "snapshot-one" }));
 });
 
 it("submits exact text and identity to a fake conversation and rejects a stale selection", async () => {
 	let generation = "controller-one";
 	const received: { text: string; selection?: ChatSkillSelection }[] = [];
-	const fakeSend = vi.fn(async (text: string, _attachments?: unknown, _messageId?: string, _retained?: number[], _excerpts?: unknown, selection?: ChatSkillSelection | null) => {
+	const fakeSend = vi.fn(async (text: string, _attachments?: unknown, _messageId?: string, _retained?: number[], _excerpts?: unknown, _fileReferences?: unknown, selection?: ChatSkillSelection | null) => {
 		if (selection?.controllerGeneration !== generation) throw { code: "CHAT_SKILL_UNAVAILABLE", message: "stale_selection" };
 		received.push({ text, selection: selection ?? undefined });
 	});
@@ -144,7 +144,7 @@ it("does not attach a saved draft's selection to recalled history and restores i
 	expect(lexicalEditorText(field)).toBe("$review draft");
 	act(() => lexical.update(() => $getRoot().selectEnd(), { discrete: true }));
 	await userEvent.keyboard("{Enter}");
-	await waitFor(() => expect(send.mock.calls[0]?.[5]).toMatchObject({ entryId: "entry-one" }));
+	await waitFor(() => expect(send.mock.calls[0]?.[6]).toMatchObject({ entryId: "entry-one" }));
 });
 
 it("preserves a native dollar skill that shares an application command name", async () => {
@@ -176,7 +176,7 @@ it.each(["native_skill", "native_text"])("keeps provider-correct steering behavi
 	await typeInLexicalEditor(field, "argument");
 	await userEvent.keyboard("{Meta>}{Enter}{/Meta}");
 	if (transport === "native_skill") {
-		await waitFor(() => expect(send.mock.calls[0]?.[5]).toMatchObject({ entryId: "entry-one" }));
+		await waitFor(() => expect(send.mock.calls[0]?.[6]).toMatchObject({ entryId: "entry-one" }));
 		expect(steer).not.toHaveBeenCalled();
 	} else {
 		await waitFor(() => expect(steer).toHaveBeenCalledWith("/review argument"));

@@ -24,6 +24,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -127,6 +128,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	}
 	appendTerminalCompatibilityFlags(&providerArgs)
 	appendReasoningEffortFlag(&providerArgs, cfg.Config.Effort)
+	appendFastTierFlag(&providerArgs, cfg.Config.Launch)
 	return agentruntime.BuildLaunchCommand(agentruntime.LaunchConfig{
 		Harness:          agentruntime.HarnessCodex,
 		Binary:           binary,
@@ -166,6 +168,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	}
 	appendTerminalCompatibilityFlags(&providerArgs)
 	appendReasoningEffortFlag(&providerArgs, cfg.Config.Effort)
+	appendFastTierFlag(&providerArgs, cfg.Config.Launch)
 	return agentruntime.BuildRestoreCommand(agentruntime.RestoreConfig{
 		Harness:          agentruntime.HarnessCodex,
 		Binary:           binary,
@@ -192,6 +195,17 @@ func codexPermissionPolicy(mode ports.PermissionMode) agentruntime.PermissionPol
 		return agentruntime.PermissionAgentDefault
 	}
 	return agentruntime.PermissionPolicy(mode)
+}
+
+// appendFastTierFlag starts Codex on its faster service tier. "priority" is the
+// tier's id in Codex's own model list and session records.
+func appendFastTierFlag(args *[]string, launch domain.AgentLaunchOptions) {
+	switch {
+	case launch.FastMode:
+		*args = append(*args, "-c", "service_tier="+codexTOMLConfigString("priority"))
+	case launch.FastModeOff:
+		*args = append(*args, "-c", "service_tier="+codexTOMLConfigString("default"))
+	}
 }
 
 func appendReasoningEffortFlag(args *[]string, effort string) {
@@ -326,7 +340,9 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	defer cancel()
 
 	started := time.Now()
-	out, err := aoprocess.CommandContext(probeCtx, binary, "login", "status").CombinedOutput()
+	cmd := aoprocess.CommandContext(probeCtx, binary, "login", "status")
+	cmd.Env = agentlaunch.ProcessEnvForLaunchBinary(probeCtx, binary)
+	out, err := cmd.CombinedOutput()
 	status, recognized := codexAuthStatusFromOutput(out)
 	if !recognized {
 		status = ports.AgentAuthStatusUnknown

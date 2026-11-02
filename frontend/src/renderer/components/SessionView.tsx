@@ -1,5 +1,8 @@
+import { BrowserIcon } from "./icons";
+import { getApiBaseUrl } from "../lib/api-client";
+import { baseUrlForHost } from "../lib/host-clients";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Globe2, Loader2, PanelRight, Plus } from "lucide-react";
+import { Loader2, PanelRight, Plus } from "lucide-react";
 import { useBlocker, useRouter } from "@tanstack/react-router";
 import { motion } from "motion/react";
 import {
@@ -14,6 +17,7 @@ import {
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
+import { isFileViewCapture } from "../../shared/chat-file-reference";
 import { defaultShortcutBindings, shortcutBindingLabel } from "../../shared/shortcuts";
 import { BrowserPanelView, useBrowserAnnotationQueue } from "./BrowserPanel";
 import { CenterPane } from "./CenterPane";
@@ -21,7 +25,6 @@ import type { FileOpenOptions, FileViewMode } from "./FileContentPane";
 import { SessionChatSurface } from "./chat/SessionChatSurface";
 import { CloudSessionChatSurface } from "./chat/CloudSessionChatSurface";
 import { ReviewerChatSurface } from "./chat/ReviewerChatSurface";
-import { NotificationCenter } from "./NotificationCenter";
 import { SessionInspectorRail, initialInspectorSize, inspectorSizing, sizingGeometryEqual, INSPECTOR_SPRING_MS, INSPECTOR_SPRING_EASING, type InspectorSizing } from "./SessionInspectorRail";
 import { SessionFileExplorer } from "./SessionFileExplorer";
 import { FilesTopbarHostContext } from "./files-topbar-host";
@@ -31,21 +34,20 @@ import { CloudSessionStartupLoader } from "./CloudSessionStartupLoader";
 import { SessionFileTab } from "./SessionFileTabs";
 import { SessionFileWorkspace } from "./SessionFileWorkspace";
 import { SessionFilesPopOut } from "./SessionFilesPopOut";
-import { isArtifactPreviewUrl } from "../lib/artifact-preview";
+import { sessionBrowserUnavailable } from "../lib/artifact-preview";
 import { SessionBrowserPopOut } from "./SessionBrowserPopOut";
+import { SessionTabMenu } from "./TerminalAgentControls";
 import { SessionInspector } from "./SessionInspector";
 import type { ArtifactOpenRequest } from "./SessionArtifactsView";
-import { ShellTopbar } from "./ShellTopbar";
-import { SwitchAgentDialog } from "./SwitchAgentDialog";
+import { SessionTopbarActions } from "./SessionTopbarActions";
+import { PageTopbar, PageTopbarTrailingAction } from "./PageTopbar";
 import { SessionTopbarHost } from "./SessionTopbarPortal";
-import { canShowSwitchAgentAction, TerminalSwitchAgentButton } from "./TerminalSwitchAgentButton";
 import { TopbarButton } from "./TopbarButton";
 import type { SessionTabActions } from "./topbar-tabs/TopbarTab";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { useAgentAccountLabel } from "../hooks/useAgentAccounts";
 import { useBrowserView } from "../hooks/useBrowserView";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
-import { useOpenArtifactPreview } from "../hooks/useOpenArtifactPreview";
 import {
 	adoptedShellHandle,
 	useCloseShellTerminal,
@@ -56,14 +58,16 @@ import {
 import { useSessionInterfaceSwitch } from "../hooks/useSessionInterfaceSwitch";
 import { canResumeAgent, resumeAgentOnOpen } from "../hooks/useCanResumeAgent";
 import { useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
-import { conversationQueryKey } from "../hooks/useConversation";
+import { conversationQueryKey, conversationSettled } from "../hooks/useConversation";
 import { discardCapturedPendingFileAttachments } from "../hooks/useFileAttachments";
-import { useAgentSwitchRouteVisibility } from "../hooks/useAgentSwitchVisibility";
 import { useCloudCp } from "../hooks/useCloudCp";
 import type { CloudCpAOReviewRun, CloudCpSessionReviewState } from "../lib/cloud-cp";
 import {
+	refetchCloudProjectsForUnknownSessions,
+	refreshCloudSessionLifecycle,
 	toCloudWorkspaceSession,
 	useCloudSessionQuery,
+	useRemoteSessionProjectKind,
 	useWorkspaceQuery,
 	useWorkspaceSession,
 	workspaceQueryKeyForHost,
@@ -79,11 +83,12 @@ import {
 	type SessionNavigationLocation,
 	type SessionNavigationTarget,
 } from "../lib/navigation-history";
-import { cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage } from "../lib/cloud-lifecycle";
+import { cloudChatStartingInPlace, cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage, isWorkspaceStartupError, resumeCloudSession } from "../lib/cloud-lifecycle";
+import { FREESTYLE_PROVIDER } from "../lib/cloud-offering";
 import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
+import { latestScriptRun } from "../lib/cloud-script-runs";
+import { recordCloudScriptStepEvents, useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
-import { useSessionHandoffMenu } from "../hooks/useSessionHandoffMenu";
-import { clearSwitchAgentState } from "../hooks/useSwitchAgent";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useHostConnection } from "../hooks/useHostConnection";
@@ -92,6 +97,7 @@ import { sessionUiKey } from "../lib/hosts";
 import { resolveSessionWorkspacePath, sessionWorkspaceFilesQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { isAbsoluteFileReference, matchWorkspaceFilePath, normalizeWorkspaceFileReference } from "../lib/workspace-file-path";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
+import { filesProjectKind } from "../lib/files-review-selection";
 import { aoBridge } from "../lib/bridge";
 import {
 	chatDraftDialogCopy,
@@ -101,6 +107,7 @@ import {
 	closeSessionFile,
 	EMPTY_SESSION_FILE_TABS,
 	openSessionFile,
+ sessionFileTabKey,
 	type SessionFileTabState,
 } from "../lib/session-file-tabs";
 import { isMacPlatform } from "../lib/platform";
@@ -110,7 +117,10 @@ import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { isOrchestratorSession, sessionAgentExited, sessionIsActive, type SessionArtifact, type WorkspaceSummary } from "../types/workspace";
 import { terminalTargetBelongsToSession, type TerminalTarget } from "../types/terminal";
 import { useCloudSessionPresence } from "../hooks/useCloudSessionPresence";
+import { SessionPeopleControl } from "./SessionPeople";
+import { SharedProjectPanel } from "./SharedProjectPanel";
 import { focusAfterPaint, useSessionShortcut } from "../hooks/useAppShortcut";
+import { openComposerModelPicker } from "../lib/composer-shortcuts";
 import { inspectorIsOpen, useResolvedTheme, useUiStore, type InspectorView } from "../stores/ui-store";
 import { useMulticaStore } from "../stores/multica-store";
 import { useSideChatsAvailable } from "../lib/side-chats";
@@ -119,7 +129,7 @@ import {
 	inspectorMaxWidthCss,
 } from "../lib/inspector-width";
 
-type CenterFileOpenRequest = { commitSha?: string; editing: boolean; key: number; line?: number; mode: FileViewMode; scope?: FileOpenOptions["scope"] };
+type CenterFileOpenRequest = { path?: string; source?: FileOpenOptions["source"]; annotationRange?: FileOpenOptions["annotationRange"]; previousPath?: string; commitSha?: string; editing: boolean; key: number; line?: number; mode: FileViewMode; scope?: FileOpenOptions["scope"] };
 const EMPTY_AUXILIARY_TAB_ORDER: string[] = [];
 // Centre-file open requests take keys from this process-wide counter, not a
 // per-mount one: the display mode remembered for a request (ui-store) outlives a
@@ -214,9 +224,8 @@ type SessionViewProps = {
 	hostId?: string;
 };
 
-// The session detail screen: terminal + git rail. On Win/Linux the shell owns
-// ShellTopbar above this view; when the platform hides the shell topbar
-// (macOS), the same topbar mounts here so the outer panel stays full-height.
+// The session detail screen: terminal + git rail, with shared tab-strip chrome
+// and session actions inside the center panel on every desktop platform.
 // Rendered by both the project-scoped and cross-project session routes.
 // The persistent shell cache owns terminal lifetime by logical session + handle:
 // route switches retain the xterm instance and latest output, while a replacement
@@ -240,11 +249,22 @@ function cloudStartupStage(observedState: string | undefined, workerConnected: b
 
 function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedState, workerConnected, terminalOnly, completed = false, startupNote, coderWorkspaceUrl }: { sessionId: string; orgId: string; createdAt?: string; observedState?: string; workerConnected: boolean; terminalOnly: boolean; completed?: boolean; startupNote?: string; coderWorkspaceUrl?: string }) {
 	const { baseUrl, client } = useCloudCp();
+	const queryClient = useQueryClient();
+	// The project's Setup log, fed by this loader's own stream and poll below.
+	const scriptRuns = useCloudScriptRuns(orgId || undefined, sessionId, { fetch: false });
+	const latestSetup = terminalOnly ? undefined : latestScriptRun(scriptRuns, "setup");
+	const setupRun = latestSetup?.status === "running" || latestSetup?.status === "failed" ? latestSetup : undefined;
 	const factIndex = cloudStartupStage(observedState, workerConnected, terminalOnly);
 	const [factProgress, setFactProgress] = useState({ index: factIndex, since: createdAt ?? new Date().toISOString() });
 	const [remoteProgress, setRemoteProgress] = useState({ index: factIndex, since: createdAt ?? new Date().toISOString() });
 	const [progress, setProgress] = useState({ index: terminalOnly ? 3 : 0, since: createdAt ?? new Date().toISOString() });
 	const replayCutoff = useRef(Date.now() - 60 * 60 * 1_000);
+	// The loader comes down once the sessions list says the worker connected.
+	// Its own stream and poll learn that first, and refresh the list then
+	// instead of leaving the loader up until the list's next poll.
+	const listedConnected = useRef(workerConnected);
+	listedConnected.current = workerConnected;
+	const mountedAt = useRef(Date.now());
 	// The loader's own poll learns the workspace link as soon as the workspace
 	// exists, ahead of the session list's slower refresh.
 	const [polledWorkspaceUrl, setPolledWorkspaceUrl] = useState<string>();
@@ -258,6 +278,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 			after: 0,
 			signal: controller.signal,
 			onEvent: (event) => {
+				if (event.sessionId === sessionId) recordCloudScriptStepEvents(queryClient, orgId, sessionId, [event]);
 				const occurredAt = Date.parse(event.createdAt);
 				if (event.sessionId !== sessionId || !Number.isFinite(occurredAt) || occurredAt < replayCutoff.current) return;
 				// sandbox.provisioning only marks the start of workspace creation;
@@ -266,10 +287,13 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 					: event.type === "agent.ready" ? 3
 					: undefined;
 				if (index !== undefined) setProgress((current) => index > current.index ? { index, since: event.createdAt } : current);
+				// A connect from before this loader (allowing for clock skew) is an
+				// earlier worker's, not the one it waits for.
+				if (index === 2 && !listedConnected.current && occurredAt >= mountedAt.current - 5_000) void refreshCloudSessionLifecycle(queryClient);
 			},
 		});
 		return () => controller.abort();
-	}, [baseUrl, orgId, sessionId, terminalOnly]);
+	}, [baseUrl, orgId, queryClient, sessionId, terminalOnly]);
 	useEffect(() => {
 		setFactProgress((current) => current.index === factIndex ? current : { index: factIndex, since: new Date().toISOString() });
 	}, [factIndex]);
@@ -281,6 +305,8 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 			try {
 				const { session } = await client.getSession(orgId, sessionId, { signal: controller.signal });
 				if (controller.signal.aborted) return;
+				refetchCloudProjectsForUnknownSessions(queryClient, baseUrl, orgId, [session]);
+				if (session.runtimeConnected && !listedConnected.current) void refreshCloudSessionLifecycle(queryClient);
 				const index = cloudStartupStage(session.observedState, session.runtimeConnected);
 				setPolledWorkspaceUrl(session.coderWorkspaceUrl);
 				setRemoteProgress((current) => current.index === index ? current : { index, since: new Date().toISOString() });
@@ -295,7 +321,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 			controller.abort();
 			if (timer !== undefined) window.clearTimeout(timer);
 		};
-	}, [client, orgId, sessionId, terminalOnly]);
+	}, [baseUrl, client, orgId, queryClient, sessionId, terminalOnly]);
 	useEffect(() => {
 		if (!orgId || terminalOnly) return;
 		const controller = new AbortController();
@@ -307,6 +333,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 				for (;;) {
 					const page = await client.listChatEvents(orgId, sessionId, { after, limit: 500 }, { signal: controller.signal });
 					if (controller.signal.aborted) return;
+					recordCloudScriptStepEvents(queryClient, orgId, sessionId, page.events);
 					for (const event of page.events) {
 						// Complete the replay before painting a stage. Old epochs can
 						// contain agent.ready long before this workspace restart.
@@ -332,10 +359,10 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 			controller.abort();
 			if (timer !== undefined) window.clearTimeout(timer);
 		};
-	}, [client, orgId, sessionId, terminalOnly]);
+	}, [client, orgId, queryClient, sessionId, terminalOnly]);
 	const confirmedFacts = remoteProgress.index > factProgress.index ? remoteProgress : factProgress;
 	const target = confirmedFacts.index > progress.index ? confirmedFacts : progress;
-	return <CloudSessionStartupLoader activeIndex={target.index} completed={completed} startupNote={startupNote} coderWorkspaceUrl={polledWorkspaceUrl ?? coderWorkspaceUrl} />;
+	return <CloudSessionStartupLoader activeIndex={target.index} completed={completed} startupNote={startupNote} coderWorkspaceUrl={polledWorkspaceUrl ?? coderWorkspaceUrl} setupRun={setupRun} />;
 }
 
 function CloudInterfaceSwitchLoader({ target }: { target: "chat" | "tui" }) {
@@ -401,10 +428,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// The unscoped /sessions/:id route is local; Cloud sessions have project routes.
 	// Newly-created Cloud sessions can be routed before the list cache refreshes.
 	const cloudLookupEnabled = Boolean(cloudOrgId && projectId && !ambiguousRoute && (isCloudRoute || (!routedWorkspace && !listedSession)));
+	// A project shared from another organization is looked up in that one.
+	const routeCloudOrgId = routedWorkspace?.cloudOrgId ?? cloudOrgId;
 	const cloudRouteSession = useCloudSessionQuery(
-		cloudOrgId,
+		routeCloudOrgId,
 		sessionId,
 		cloudLookupEnabled,
+		!listedSession,
 	);
 	const localLookupEnabled = !ambiguousRoute && !isCloudRoute && (
 		!cloudOrgId || !projectId || Boolean(listedSession && !listedSession.cloud) ||
@@ -416,12 +446,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		? workspaces.find((workspace) => workspace.kind === "cloud" && workspace.id === cloudRouteSession.data?.projectId)
 		: undefined;
 	const cloudSessionWorkspace = directCloudWorkspace ?? (isCloudRoute ? routedWorkspace : undefined);
-	const directCloudSession = cloudOrgId && cloudRouteSession.data && (!routedWorkspace || isCloudRoute) &&
+	const directCloudSession = routeCloudOrgId && cloudRouteSession.data && (!routedWorkspace || isCloudRoute) &&
 		projectId === cloudRouteSession.data.projectId
 		? toCloudWorkspaceSession(cloudRouteSession.data, {
 			id: cloudSessionWorkspace?.id ?? cloudRouteSession.data.projectId,
 			displayName: cloudSessionWorkspace?.name ?? "Cloud project",
-		}, cloudOrgId)
+		}, routeCloudOrgId)
 		: undefined;
 	const fallbackSession = !projectId || workspaceSessionQuery.data?.workspaceId === projectId
 		? workspaceSessionQuery.data : undefined;
@@ -429,6 +459,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		? undefined : fallbackSession;
 	const session = hostId ? (remoteBase && !remoteSessionQuery.isError && remoteSessionQuery.data?.workspaceId === (projectId ?? remoteSessionQuery.data?.workspaceId) ? remoteSessionQuery.data : undefined)
 		: ambiguousRoute ? undefined : listedSession ?? directCloudSession ?? scopedFallback;
+	// The Files review offers only what the session's kind of project has.
+	const remoteWorkspaceKind = useRemoteSessionProjectKind(sessionId, hostId);
+	const sessionWorkspaceKind = hostId ? remoteWorkspaceKind : workspaces.find((workspace) => workspace.id === session?.workspaceId)?.kind;
+	const filesKind = session ? filesProjectKind(session, sessionWorkspaceKind) : undefined;
 	const interfaceContext = hostId ?? (session ? session.cloud ?? null : cloudOrgId && projectId ? { orgId: cloudOrgId } : undefined);
 	const interfaceUi = useSessionInterfaceSwitch(sessionId, session, interfaceContext);
 	const accountLabel = useAgentAccountLabel(Boolean(interfaceUi.accountMoveTarget));
@@ -439,9 +473,26 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// under someone who is watching the agent work.
 	useCloudSessionPresence(session?.cloud?.orgId, session?.cloud ? session.id : undefined, Boolean(session?.cloud));
 	const { draftBoundaries: chatDraftBoundaries, confirmUnsafeDraftLeave } = interfaceUi;
-	const developerMode = useUiStore((state) => state.developerMode);
 	const remoteHostsEnabled = useUiStore((state) => state.remoteHosts);
 	const setRemoteHosts = useUiStore((state) => state.setRemoteHosts);
+	useBlocker({
+		disabled: chatDraftBoundaries.length === 0,
+		enableBeforeUnload: chatDraftBoundaries.length > 0,
+		shouldBlockFn: async () => {
+			const decision = await confirmUnsafeDraftLeave();
+			if (decision.kind === "cancelled") {
+				if (hostId && !remoteHostsEnabled) setRemoteHosts(true);
+				return true;
+			}
+			if (decision.kind === "confirmed") {
+				// Route navigation is the boundary itself, so confirmed in-flight file
+				// work can be invalidated now. Interface switches defer this until the
+				// exact durable transition reports completed.
+				discardCapturedPendingFileAttachments(decision.pendingAttachments);
+			}
+			return false;
+		},
+	});
 	useEffect(() => {
 		aoBridge.app.setChatDraftRisk?.(chatDraftBoundaries, chatDraftDialogCopy(chatDraftBoundaries));
 	}, [chatDraftBoundaries, t]);
@@ -462,7 +513,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const setInspectorViewForSession = useUiStore((state) => state.setInspectorView);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const setFilesChangedOnly = useUiStore((state) => state.setFilesChangedOnly);
-	const setFilesSource = useUiStore((state) => state.setFilesSource);
+	const resetFilesSelection = useUiStore((state) => state.resetFilesSelection);
 	const workspaceFileOpenRequest = useUiStore((state) => state.workspaceFileOpenRequest);
 	const clearWorkspaceFileOpenRequest = useUiStore((state) => state.clearWorkspaceFileOpenRequest);
 	const initializeInspectorSession = useUiStore((state) => state.initializeInspectorSession);
@@ -553,7 +604,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		shouldBlockFn: async () => {
 			const decision = await confirmUnsafeDraftLeave();
 			if (decision.kind === "cancelled") {
-				if (hostId && developerMode && !remoteHostsEnabled) setRemoteHosts(true);
+				if (hostId && !remoteHostsEnabled) setRemoteHosts(true);
 				return true;
 			}
 			if (decision.kind === "confirmed") {
@@ -714,9 +765,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		// and the address/tabs never spend a frame underneath the native view.
 		setBrowserPopOutState({ sessionId, phase: "open" });
 	}, [browserPopOutPhase, browserPopoutTopbarHost, sessionId]);
-	const [handoffDialogOpen, setHandoffDialogOpen] = useState(false);
-	const handoffDialogContainerRef = useRef<HTMLDivElement | null>(null);
-	const [handoffDialogContainer, setHandoffDialogContainer] = useState<HTMLDivElement | null>(null);
 	// One SessionView serves every local session, so session-scoped UI state must
 	// reset on a switch. Reset during render, not in an effect: children must never
 	// mount (or fetch) against the previous session's reviewer, popout, or dialog.
@@ -727,12 +775,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		setReviewerChatId(null);
 		setBrowserPopOutState({ sessionId, phase: "docked" });
 		setFilesPoppedOut(false);
-		setHandoffDialogOpen(false);
 	}
-	const bindHandoffDialogContainer = useCallback((node: HTMLDivElement | null) => {
-		handoffDialogContainerRef.current = node;
-		setHandoffDialogContainer(node);
-	}, []);
 	const stopTerminalLiveResize = useCallback(() => {
 		if (terminalLiveResizeTimerRef.current !== null) {
 			window.clearTimeout(terminalLiveResizeTimerRef.current);
@@ -769,7 +812,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// replaces the pane; while AO still retries, the loader carries the reason.
 	const startupProblem = cloudStartupProblem(session);
 	const startupFailure = startupProblem && startupProblem.phase !== "retrying" ? startupProblem : undefined;
-	const cloudReconnecting = useTerminalResetStore((state) => Boolean(state.reconnecting[sessionId]));
+	// Set by a restore and cleared only by the session's terminal pane once the
+	// fresh worker's terminal exists, so it means anything only while that pane
+	// can mount: a Chat-mode session never mounts one, and would otherwise keep
+	// the "Connecting your terminal" loader up for good. Its own lifecycle stage
+	// still raises the loader while the restored workspace comes up.
+	const cloudReconnectRequested = useTerminalResetStore((state) => Boolean(state.reconnecting[sessionId]));
 	const [terminalAttachment, setTerminalAttachment] = useState({ sessionId: "", attached: false });
 	const terminalAttached = terminalAttachment.sessionId === sessionId && terminalAttachment.attached;
 	const onSessionTerminalAttached = useCallback((attached: boolean) => {
@@ -789,6 +837,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// the actual terminal attachment before dismissing the startup view.
 	// browserOnly limits the orchestrator's inspector tabs, not its terminal.
 	const expectsTerminal = session?.mode !== "chat" && (!browserOnly || Boolean(session?.cloud));
+	const cloudReconnecting = cloudReconnectRequested && expectsTerminal;
 	const sessionReady = expectsTerminal ? terminalAttached : cloudStage === "connected";
 	useEffect(() => {
 		if (session?.kind !== "orchestrator" || session.cloud || session.mode === "chat") return;
@@ -807,7 +856,24 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// relay drop mid-turn). A terminal re-mint (cloudReconnecting, covers a blank
 	// flash) and a genuine workspace restart still raise the loader.
 	const cloudSessionResolving = cloudLookupEnabled && cloudRouteSession.isLoading;
-	const showLifecycleLoader = !startupFailure && ((!session && cloudSessionResolving) || (hasConnectedOnce
+	// A Freestyle Chat session starting or waking stays on its conversation, not
+	// the startup screen: its composer shimmers and its messages queue until the
+	// worker connects (cloudChatStartingInPlace). Latched until it connects, so
+	// the moment its sandbox reports running before the worker does never
+	// flashes the screen in. Other providers keep the startup screen: a Coder
+	// start shows its steps and its workspace link there.
+	const chatStartingInPlaceRef = useRef("");
+	const freestyleChat = session?.mode === "chat" && session.cloud?.sandboxProvider === FREESTYLE_PROVIDER;
+	if (cloudChatStartingInPlace(session)) chatStartingInPlaceRef.current = sessionId;
+	else if (!freestyleChat || cloudStage === "connected" || isCloudPausedStage(cloudStage)) chatStartingInPlaceRef.current = "";
+	const chatStartingInPlace = chatStartingInPlaceRef.current === sessionId;
+	// Waking an idle-paused session keeps its paused badge until the worker is
+	// back, rather than raising the startup screen over the conversation.
+	const chatWakingRef = useRef("");
+	if (freestyleChat && (isCloudPausedStage(cloudStage) || cloudStage === "resuming_workspace")) chatWakingRef.current = sessionId;
+	else if (!chatStartingInPlace) chatWakingRef.current = "";
+	const chatWaking = chatWakingRef.current === sessionId && chatStartingInPlace;
+	const showLifecycleLoader = !startupFailure && !chatStartingInPlace && ((!session && cloudSessionResolving) || (hasConnectedOnce
 		? (cloudReconnecting || workspaceRestarting)
 		: (cloudReconnecting || (cloudStage != null && !isCloudPausedStage(cloudStage) && !sessionReady))));
 	const loaderVisibleLongEnoughRef = useRef("");
@@ -826,27 +892,31 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		return () => window.clearTimeout(timer);
 	}, [showCompletedLoader]);
 	const cloudResumeRef = useRef("");
-	const requestCloudResume = useCallback(async () => {
+	const requestCloudResume = useCallback(async (prepareWorkspace: boolean) => {
 		if (!session?.cloud) return;
-		await cloudCpClient.resumeSession(session.cloud.orgId, session.id);
-		await cloudCpClient.requestWorkspaceCheckout(session.cloud.orgId, session.id);
+		await resumeCloudSession(cloudCpClient, session.cloud.orgId, session.id);
+		if (prepareWorkspace) await cloudCpClient.requestWorkspaceCheckout(session.cloud.orgId, session.id);
 		await refreshWorkspaces();
 	}, [cloudCpClient, refreshWorkspaces, session]);
 	useEffect(() => {
 		if (!session?.cloud || cloudResumeRef.current === session.id) return;
 		cloudResumeRef.current = session.id;
-		void requestCloudResume().catch(() => {
+		// Opening the session asks the worker to prepare its workspace, which
+		// retries a failed checkout. A failed Setup is not re-run just because
+		// the session is viewed: its scripts can have side effects, so only the
+		// failure card's Retry runs it again.
+		const problem = cloudStartupProblem(session);
+		const setupFailed = problem?.phase === "failed" && problem.code === "project_setup_failed";
+		// Only a connected worker can prepare its workspace again. A session
+		// still waking has none (the request is refused), and the worker it
+		// wakes prepares the workspace as it starts. A recorded checkout failure
+		// still asks, in case the list has not yet seen its worker connect.
+		const workerCanPrepare = session.runtimeConnected === true || (problem?.phase === "failed" && isWorkspaceStartupError(problem.code));
+		void requestCloudResume(!setupFailed && workerCanPrepare).catch(() => {
 			// Keep the paused lifecycle projection visible. A later message, shell
 			// open, or route visit can issue a fresh explicit resume intent.
 		});
 	}, [requestCloudResume, session]);
-	const routeVisibilityOperation =
-		session?.activeAgentSwitch &&
-		session.activeAgentSwitch.state !== "completed" &&
-		session.activeAgentSwitch.state !== "failed"
-			? "active"
-			: "history";
-	useAgentSwitchRouteVisibility(`session/${uiSessionId}`, routeVisibilityOperation);
 	const reviewerQuery = useQuery({
 		queryKey: sessionReviewsQueryKey(sessionId, hostId),
 		enabled: Boolean(
@@ -1163,44 +1233,64 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		}));
 		recordSessionNavigationLocation({ kind: "reviewer-chat", reviewId });
 	}, [recordSessionNavigationLocation, setActiveShellTerminal, uiSessionId]);
-	const openCenterFile = useCallback((path: string, options?: FileOpenOptions) => {
-		setReviewerChatId(null);
-		setActiveShellTerminal(null);
-		setTerminalTarget({ kind: "worker" });
-		const key = nextCenterFileRequestKey();
-		setCenterFileRequestsBySession((current) => {
-			const sessionRequests = current[uiSessionId] ?? {};
-			return {
-				...current,
-				[uiSessionId]: {
-					...sessionRequests,
-					[path]: {
-						commitSha: options?.commitSha,
-						editing: options?.editing ?? false,
-						key,
-						line: options?.line,
-						mode: options?.mode ?? "file",
-						scope: options?.scope,
+	// Reveal the requested transcript before it scrolls to the palette hit.
+	const chatFocusRequest = useUiStore((state) => {
+		const request = state.chatMessageFocusRequest;
+		return request?.sessionId === uiSessionId ? request : undefined;
+	});
+	const revealedChatFocusRequest = useRef<typeof chatFocusRequest>(undefined);
+	useEffect(() => {
+		// History recording changes the selection callbacks after a pane change.
+		// A palette hit is a one-shot request; the next hit has a new request object.
+		if (!chatFocusRequest || revealedChatFocusRequest.current === chatFocusRequest) return;
+		if (chatFocusRequest.reviewId) {
+			revealedChatFocusRequest.current = chatFocusRequest;
+			selectReviewerChat(chatFocusRequest.reviewId);
+		} else if (session?.mode === "chat") {
+			revealedChatFocusRequest.current = chatFocusRequest;
+			selectSessionTerminal();
+		}
+	}, [chatFocusRequest, session?.mode, selectReviewerChat, selectSessionTerminal]);
+	const openCenterFile = useCallback(
+		(path: string, options?: FileOpenOptions) => {
+			const filePath = path;
+			// Live paths retain their existing identities; snapshots coexist with them.
+			path = sessionFileTabKey(path, options?.source);
+			setReviewerChatId(null);
+			setActiveShellTerminal(null);
+			setTerminalTarget({ kind: "worker" });
+			const key = nextCenterFileRequestKey();
+			setCenterFileRequestsBySession((current) => {
+				const sessionRequests = current[uiSessionId] ?? {};
+				if (dirtyFiles[path] && sessionRequests[path]) return current;
+				return {
+					...current,
+					[uiSessionId]: {
+						...sessionRequests,
+						[path]: {
+							path: filePath,
+							source: options?.source,
+ annotationRange: options?.annotationRange ? {...options.annotationRange,requestKey:key}:undefined,
+							previousPath: options?.previousPath,
+							commitSha: options?.commitSha,
+							editing: options?.editing ?? false,
+							key,
+							line: options?.line,
+							mode: options?.mode ?? "file",
+							scope: options?.scope,
+						},
 					},
-				},
-			};
-		});
-		setFileTabsBySession((current) => ({
-			...current,
-			[uiSessionId]: openSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, path),
-		}));
-		recordSessionNavigationLocation({
-			kind: "file",
-			path,
-			request: {
-				commitSha: options?.commitSha,
-				editing: options?.editing ?? false,
-				line: options?.line,
-				mode: options?.mode ?? "file",
-				scope: options?.scope,
-			},
-		});
-	}, [recordSessionNavigationLocation, setActiveShellTerminal, uiSessionId]);
+				};
+			});
+			setFileTabsBySession((current) => ({
+				...current,
+				[uiSessionId]: openSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, path),
+			}));
+			recordSessionNavigationLocation({ kind: "file", path, request: { commitSha: options?.commitSha, editing: options?.editing ?? false, line: options?.line, mode: options?.mode ?? "file", scope: options?.scope } });
+		},
+		[recordSessionNavigationLocation, setActiveShellTerminal, uiSessionId, dirtyFiles],
+	);
+
 	const markCenterFileEditingConsumed = useCallback((path: string, requestKey: number) => {
 		consumedCenterEditingRequestsRef.current.add(`${uiSessionId}:${path}:${requestKey}`);
 	}, [uiSessionId]);
@@ -1540,14 +1630,20 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						dirty={Boolean(dirtyFiles[path])}
 						onActivate={() => activateCenterFile(path)}
 						onClose={() => closeCenterFile(path)}
-						path={path}
+						path={centerFileRequestsBySession[uiSessionId]?.[path]?.path ?? path}
+						sourceLabel={
+							centerFileRequestsBySession[uiSessionId]?.[path]?.source?.kind === "snapshot"
+								? (centerFileRequestsBySession[uiSessionId]?.[path]?.source as { label?: string })?.label
+								: undefined
+						}
 					/>
 				),
 				onSelect: () => activateCenterFile(path),
 				onClose: () => closeCenterFile(path),
 			})),
-		[activateCenterFile, closeCenterFile, dirtyFiles, fileTabs.activePath, fileTabs.openPaths],
+		[activateCenterFile, closeCenterFile, dirtyFiles, fileTabs.activePath, fileTabs.openPaths, centerFileRequestsBySession, uiSessionId],
 	);
+
 	const activeWorkspaceTabKey = fileTabs.activePath ? `file:${fileTabs.activePath}` : undefined;
 	const previewUrl = session?.previewUrl?.trim() || undefined;
 	const previewRevision = session?.previewRevision;
@@ -1563,7 +1659,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// A completed session's HTML artifact is static output the daemon keeps
 	// serving, so an artifact preview the user opened stays visible; every other
 	// preview of a terminated session is a stale DB fact and is still torn down.
-	const browserTerminated = terminated && !(isArtifactPreviewUrl(previewUrl) && !hostId);
+	const browserTerminated = sessionBrowserUnavailable(session, hostId);
 	const browserView = useBrowserView({
 		sessionId: uiSessionId,
 		origin: hostId ? { hostId, sessionId, proxyBase: remoteBase ?? "" } : undefined,
@@ -1571,6 +1667,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		active: browserSlotVisible,
 		poppedOut: browserPoppedOut,
 		terminated: browserTerminated,
+		sessionEnded: session?.isTerminated,
 		previewUrl,
 		previewRevision,
 	});
@@ -1655,10 +1752,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					body: { viewId, active },
 				});
 				if (error) throw error;
-				// Remote conversations already refresh every two seconds.
+				// Remote conversations already refresh every two seconds. A ready or
+				// working chat hears every change through events, and a wake emits
+				// one, so only a chat still waking or stopped is refreshed here;
+				// refreshing a settled one reloaded every page it had on each return.
 				if (active && !left && !refreshed && !hostId) {
 					refreshed = true;
-					void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
+					if (!conversationSettled(queryClient, sessionId)) {
+						void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
+					}
 					void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 				}
 			} finally {
@@ -1684,56 +1786,49 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			void setViewActive(false).catch(() => {});
 		};
 	}, [chatViewActive, hostId, queryClient, sessionId]);
-	const {
-		agentSwitch: handoffAgentSwitch,
-		switchControlPresentation: handoffControlPresentation,
-		switchError: handoffSwitchError,
-	} = useSessionHandoffMenu(session);
-	const handleHandoffDialogOpenChange = useCallback(
-		(nextOpen: boolean) => {
-			setHandoffDialogOpen(nextOpen);
-			if (!nextOpen && handoffSwitchError && session) {
-				clearSwitchAgentState(queryClient, session.id, hostId);
-			}
-		},
-		[handoffSwitchError, hostId, queryClient, session],
-	);
-	useEffect(() => {
-		if (handoffSwitchError) setHandoffDialogOpen(true);
-	}, [handoffSwitchError]);
-	const handoffMenuItem = useMemo(() => session && !session.cloud && canShowSwitchAgentAction(session, handoffControlPresentation) ? (
-		<TerminalSwitchAgentButton
-			key={session.id}
-			variant="menu-item"
-			agentSwitch={handoffAgentSwitch}
-			onOpenChange={handleHandoffDialogOpenChange}
-			open={handoffDialogOpen}
-			presentation={handoffControlPresentation}
-			session={session}
-			switchError={handoffSwitchError}
-		/>
-	) : null, [handoffAgentSwitch, handoffControlPresentation, handoffDialogOpen, handoffSwitchError, handleHandoffDialogOpenChange, session]);
-	const sessionTabActions = useMemo<SessionTabActions>(() => {
-		if (!interfaceUi.menuItem && !handoffMenuItem && !interfaceUi.inlineStatus) {
-			return null;
-		}
-		return {
-			menuItems: <>{interfaceUi.menuItem}{handoffMenuItem}</>,
-			...(interfaceUi.inlineStatus ? { inlineStatus: interfaceUi.inlineStatus } : {}),
-		};
-	}, [handoffMenuItem, interfaceUi.inlineStatus, interfaceUi.menuItem]);
+	// A local session's tab menu holds the interface switch and, in a terminal, its agent; Cloud cannot switch agent.
+	const agentWorking = chatDraftBoundaries.length > 0 || session?.isTerminated === true ||
+		session?.activity?.state === "active" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked";
+	// SessionTabMenu renders nothing without a switch or an agent picker; pass no
+	// action then, so the tab keeps its avatar on hover.
+	const sessionTabMenuEmpty = !interfaceUi.switchAction && !interfaceUi.switchControl && interfaceUi.target !== "chat";
+	const sessionTabControl = !session || session.cloud || sessionTabMenuEmpty
+		? (session?.cloud ? interfaceUi.switchControl : null)
+		: (
+			<SessionTabMenu
+				key={uiSessionId}
+				session={session}
+				hostId={hostId}
+				blocked={agentWorking}
+				switchTarget={interfaceUi.target}
+				switchAction={interfaceUi.switchAction}
+				switchControl={interfaceUi.switchControl}
+			/>
+		);
+
+	const sessionTabActions: SessionTabActions = !session || session.cloud || sessionTabMenuEmpty
+ ? (sessionTabControl ? {menuItems: null, inlineStatus: sessionTabControl} : null)
+ : { menuItems: null, renderMenu: (entries) => <SessionTabMenu key={uiSessionId} session={session} hostId={hostId} blocked={agentWorking} switchTarget={interfaceUi.target} switchAction={interfaceUi.switchAction} switchControl={interfaceUi.switchControl} tabMenuItems={entries} menuLabel={t(hostId ? "session.actionsMenu" : "shell.tabs.options")} /> };
 	const sessionHeaderActions = (
 		<div
-			className="session-topbar-session-chrome flex shrink-0 items-center"
+			className="session-topbar-session-chrome workspace-topbar-actions flex shrink-0 items-center"
 			data-compact-session-chrome="false"
 		>
 			{hostId ? <span className="max-w-40 truncate px-3 text-xs text-muted-foreground" title={hostId}>{hostLabel ?? hostId}</span> : null}
-			<ShellTopbar embedded />
+			{/* Who else is here, or Share; only the session's own organization can share it. */}
+			{session?.cloud && session.isTerminated !== true ? (
+				<SessionPeopleControl
+					orgId={session.cloud.orgId}
+					projectId={session.workspaceId}
+					sessionId={session.id}
+					canShare={session.cloud.orgId === cloudOrgId}
+				/>
+			) : null}
+			<SessionTopbarActions />
 		</div>
 	);
-	useEffect(() => {
-		setHandoffDialogOpen(false);
-	}, [sessionId]);
+	// While an interface switch runs, its status replaces the tab menu and stays visible.
+	const sessionTabActionPinned = Boolean(interfaceUi.switchControl && !interfaceUi.switchAction);
 
 	// The pane shows one terminal at a time, so selecting a shell or the reviewer
 	// takes the agent's terminal off screen while the route still points here.
@@ -1822,10 +1917,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	const handleOpenFiles = useCallback(() => {
 		markFileViewerPerformance("files-click");
-		setFilesSource(uiSessionId, { kind: "workspace" });
+		// Opens on the checked-out branch's default review: its uncommitted
+		// changes, or its commits when the worktree is clean.
+		resetFilesSelection(uiSessionId);
 		prepareFilesInspector();
 		void fetchWorkspaceFiles();
-	}, [fetchWorkspaceFiles, prepareFilesInspector, setFilesSource, uiSessionId]);
+	}, [fetchWorkspaceFiles, prepareFilesInspector, resetFilesSelection, uiSessionId]);
 
 	const handleOpenReviewFile = useCallback(
 		(target: { line?: number; path: string }) => {
@@ -1851,31 +1948,38 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			};
 		});
 	}, [uiSessionId]);
-	const openArtifactPreview = useOpenArtifactPreview(session?.id, session?.hostId);
+	const lastFilePanelRequest = useRef<typeof workspaceFileOpenRequest>(null);
 	useEffect(() => {
-		if (!workspaceFileOpenRequest || !session) return;
+		if (!workspaceFileOpenRequest) {
+			lastFilePanelRequest.current = null;
+			return;
+		}
+		if (!session) return;
 		if (sessionUiKey(workspaceFileOpenRequest.sessionId, workspaceFileOpenRequest.hostId) !== uiSessionId) return;
-		const { nonce, path, source } = workspaceFileOpenRequest;
+		const { line, nonce, path, source } = workspaceFileOpenRequest;
+		if (source === "panel" && !session.cloud) {
+			if (lastFilePanelRequest.current === workspaceFileOpenRequest) return;
+			lastFilePanelRequest.current = workspaceFileOpenRequest;
+			prepareFilesInspector();
+			resetFilesSelection(uiSessionId);
+			return;
+		}
 		if (source === "artifact") {
-			// Same routing as the Summary panel's artifact rows: HTML opens in
-			// the Browser panel, everything else in the Artifacts view.
-			const artifact = session.artifactFiles?.find((file) => file.path === path);
-			if (artifact?.kind === "html" && artifact.previewUrl) openArtifactPreview(artifact.previewUrl);
-			else handleOpenArtifact({ path });
+			handleOpenArtifact({ path });
 		} else if (session.cloud) {
 			prepareFilesInspector();
 			openCenterFile(path, { mode: "file" });
 		} else {
-			handleOpenFile(path);
+			handleOpenFile(path, line);
 		}
 		clearWorkspaceFileOpenRequest(nonce);
 	}, [
 		clearWorkspaceFileOpenRequest,
 		handleOpenArtifact,
 		handleOpenFile,
-		openArtifactPreview,
 		openCenterFile,
 		prepareFilesInspector,
+		resetFilesSelection,
 		session,
 		uiSessionId,
 		workspaceFileOpenRequest,
@@ -2064,7 +2168,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		"reopen-closed-tab",
 		() => {
 			const path = closedFilePathsRef.current[uiSessionId]?.pop();
-			if (path) openCenterFile(path, { mode: "file" });
+			if (path) {const request=centerFileRequestsBySession[uiSessionId]?.[path];openCenterFile(request?.path ?? path, { ...request, editing:false, mode: "file" });}
 		},
 		hasInspector,
 	);
@@ -2080,18 +2184,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		},
 		hasInspector,
 	);
-	useSessionShortcut(
-		"model-picker",
-		() => {
-			const picker = document.querySelector<HTMLElement>("[data-shortcut-target='model-picker']:not([disabled])");
-			if (!picker) return;
-			// Radix menu triggers open on pointerdown or Enter, never on a synthetic click.
-			picker.dataset.shortcutOpened = "";
-			picker.focus();
-			picker.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-		},
-		hasInspector,
-	);
+	useSessionShortcut("model-picker", openComposerModelPicker, hasInspector);
 
 	const inspectorMotionReadyRef = useRef<string | null>(null);
 	const handleInspectorCloseAnimationComplete = useCallback(() => {
@@ -2149,8 +2242,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			: !remoteBase || remoteCode === "UPSTREAM_UNAVAILABLE" || remoteCode === "HOST_IDENTITY_UNVERIFIED"
 				? "remote.hostOffline" : remoteSessionQuery.isError ? "remote.loadSessionFailed" : "session.notFound") : undefined;
 		return (
-			<div className="grid h-full place-items-center p-6 text-center font-mono text-xs text-passive" role={remoteError ? "alert" : undefined}>
-				{remoteError ?? t("session.notFound")}
+			<div className="flex h-full min-h-0 flex-col bg-background" data-testid="session-missing">
+				<PageTopbar />
+				<div className="grid min-h-0 flex-1 place-items-center p-6 text-center font-mono text-xs text-passive" role={remoteError ? "alert" : undefined}>
+					{remoteError ?? t("session.notFound")}
+				</div>
 			</div>
 		);
 	}
@@ -2189,19 +2285,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							className="relative z-chrome flex min-h-inspector-tabs w-full shrink-0 overflow-hidden"
 							data-testid="session-topbar-host"
 						/>
-						<div className="relative min-h-0 flex-1" ref={bindHandoffDialogContainer}>
-							{isCloudPausedStage(cloudStage) ? <CloudPausedStatus stage={cloudStage} /> : null}
-							{startupFailure && session?.cloud ? (
-								<CloudSessionStartupError coderWorkspaceUrl={session.cloud.coderWorkspaceUrl} orgId={session.cloud.orgId} problem={startupFailure} sessionId={session.id} />
+						<div className="relative min-h-0 flex-1">
+							{isOrchestrator && session?.cloud && routedWorkspace ? (
+								<SharedProjectPanel hostId={hostId} orchestrator={session} sessions={routedWorkspace.sessions} />
 							) : null}
-							{session && !session.cloud && handoffDialogContainer ? (
-								<SwitchAgentDialog
-									agentSwitch={handoffAgentSwitch}
-									container={handoffDialogContainer}
-									onOpenChange={handleHandoffDialogOpenChange}
-									open={handoffDialogOpen}
-									session={session}
-								/>
+							{isCloudPausedStage(cloudStage) ? <CloudPausedStatus stage={cloudStage} /> : chatWaking ? <CloudPausedStatus stage="paused" /> : null}
+							{/* In Chat, a failed checkout or Setup shows in the conversation, as a failed local start does. */}
+							{startupFailure && session?.cloud && !(showChatSurface && startupFailure.phase === "failed" && isWorkspaceStartupError(startupFailure.code)) ? (
+								<CloudSessionStartupError coderWorkspaceUrl={session.cloud.coderWorkspaceUrl} ended={terminated} orgId={session.cloud.orgId} problem={startupFailure} sessionId={session.id} />
 							) : null}
 							{/* The committed mode owns the agent surface. Auxiliary shell and
 							    reviewer targets remain terminal surfaces in either mode. */}
@@ -2209,7 +2300,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								className={cn("h-full min-h-0", fileTabs.activePath && "invisible pointer-events-none")}
 								inert={fileTabs.activePath ? true : undefined}
 							>
-							{showChatSurface && session?.cloud && (routedTerminalTarget.kind === "worker" || routedTerminalTarget.kind === "reviewer") && !reviewerChatId ? (
+							{/* Every Cloud Chat target stays on the Cloud surface: the local one
+							    asks this machine's daemon, which has never heard of a Cloud
+							    session and answers "session not found". */}
+							{showChatSurface && session?.cloud && !reviewerChatId ? (
 								<CloudSessionChatSurface
 									controllerTransitioning={interfaceUi.controllerTransitioning}
 									headerActions={sessionHeaderActions}
@@ -2223,6 +2317,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									reviewerTerminal={reviewerTerminal}
 									onOpenReviewerTerminal={selectReviewerTerminal}
 									reviewerTarget={routedTerminalTarget.kind === "reviewer" ? routedTerminalTarget : undefined}
+
+									shellTerminals={shellTerminals}
+									shellTarget={routedTerminalTarget.kind === "shell" ? routedTerminalTarget : undefined}
+									onSelectShellTerminal={selectShellTerminal}
+									onCloseShellTerminal={closeShellTerminalByHandle}
+									onRenameShellTerminal={renameShellTerminalByHandle}
 									daemonReady={hostId ? Boolean(remoteBase) : daemonStatus.state === "ready"}
 									theme={theme}
 									auxiliaryTabOrder={resolvedAuxiliaryTabOrder}
@@ -2259,8 +2359,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									theme={theme}
 									headerActions={sessionHeaderActions}
 									sessionTabAction={sessionTabActions}
+									sessionTabActionPinned={sessionTabActionPinned}
 									tabStripAction={newShellTerminalAction}
-									handoffDialogOpen={handoffDialogOpen}
 									workspaceTabs={centerFileTabs}
 									workspaceActiveTabKey={activeWorkspaceTabKey}
 									workspaceFileActive={Boolean(fileTabs.activePath)}
@@ -2274,6 +2374,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									agentResuming={quietResume}
 									newWorkDisabled={interfaceUi.newWorkDisabled}
 									onConversationWorkChange={interfaceUi.onConversationWorkChange}
+									interfaceSwitch={{ control: interfaceUi.switchControl, errorNotice: interfaceUi.switchErrorNotice }}
 									onOpenShell={addShellTerminal}
 									openingShell={openShellTerminal.isPending}
 									shellError={
@@ -2281,6 +2382,16 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									}
 									onOpenFiles={browserOnly ? undefined : handleOpenFiles}
 									onOpenFile={handleOpenFile}
+         onOpenFileAnnotation={(reference,resolution)=>{
+          if(reference.sessionId!==sessionId || resolution.state==="unavailable")return;
+          const path=resolution.path??reference.path;
+          const source: NonNullable<FileOpenOptions["source"]> = reference.source.kind==="pull_request"
+           ? {kind:"pull_request",number:reference.source.number!,url:reference.source.url??"",label:`PR #${reference.source.number}`,snapshot:reference.source.snapshot}
+           : reference.source.kind==="artifact"
+           ? {kind:"artifact",rawUrl:`${(hostId?baseUrlForHost(hostId):getApiBaseUrl())}/api/v1/sessions/${encodeURIComponent(sessionId)}/artifact-files/${path.split("/").map(encodeURIComponent).join("/")}?raw=true`}
+           : {kind:"workspace"};
+          openCenterFile(path,{source,previousPath:reference.previousPath,commitSha:reference.commitSha,scope:reference.scope as FileOpenOptions["scope"],mode:isFileViewCapture(reference)?"file":"diff",annotationRange:resolution.state==="changed" ? undefined : {...reference,line:resolution.line??reference.line,endLine:resolution.endLine??reference.endLine,lines:reference.lines.map(row=>({...row,oldNo:row.oldNo==null?null:row.oldNo+(resolution.oldLineOffset??0),newNo:row.newNo==null?null:row.newNo+(resolution.newLineOffset??0)})),requestKey:0}});
+         }}
 									onOpenLinkInBrowser={browserView.openLink}
 								/>
 								{reviewerChatId ? (
@@ -2313,18 +2424,17 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									theme={theme}
 									topbarActions={sessionHeaderActions}
 									sessionTabAction={sessionTabActions}
+									sessionTabActionPinned={sessionTabActionPinned}
 									tabStripAction={newShellTerminalAction}
-									handoffDialogOpen={handoffDialogOpen}
 									workspaceTabs={centerFileTabs}
 									workspaceActiveTabKey={activeWorkspaceTabKey}
-									workspaceFileActive={Boolean(fileTabs.activePath)}
 									auxiliaryTabOrder={resolvedAuxiliaryTabOrder}
 									onAuxiliaryTabOrderChange={setAuxiliaryTabOrder}
 								/>
 							)}
 							</div>
-							{fileTabs.activePath ? (
-								<div className="absolute inset-0">
+							{(session?.cloud ? Boolean(fileTabs.activePath) : fileTabs.openPaths.length > 0) ? (
+								<div className={cn("absolute inset-0",!fileTabs.activePath && "invisible pointer-events-none")} inert={!fileTabs.activePath ? true:undefined}>
 					{session?.cloud ? (
 						<CloudFileContentPane
 							annotation={fileAnnotation}
@@ -2333,32 +2443,50 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							initialLine={activeCenterFileInitialLine}
 							initialMode={activeCenterFileRequest?.mode ?? "file"}
 							initialRequestKey={activeCenterFileRequest?.key ?? 0}
-							onDirtyChange={setCenterFileDirty}
 							onModeChange={recordCenterFileMode}
-							path={fileTabs.activePath}
-							scope={activeCenterFileRequest?.scope}
+														onDirtyChange={setCenterFileDirty}
+							path={fileTabs.activePath!}
+							// Uncommitted is local-only; a cloud review's nearest scope is combined.
+							scope={activeCenterFileRequest?.scope === "uncommitted" ? "combined" : activeCenterFileRequest?.scope}
 							session={session}
 							split={filesSplit}
 						/>
 									) : (
-										<SessionFileWorkspace
-											hostId={hostId}
-											annotation={fileAnnotation}
-											commitSha={activeCenterFileRequest?.commitSha}
-							initialEditing={activeCenterFileInitialEditing}
-							initialLine={activeCenterFileInitialLine}
-											initialMode={activeCenterFileRequest?.mode ?? "file"}
-											initialRequestKey={activeCenterFileRequest?.key ?? 0}
-											onDirtyChange={setCenterFileDirty}
-											onModeChange={recordCenterFileMode}
-							onInitialEditingConsumed={markCenterFileEditingConsumed}
-							onInitialLineConsumed={markCenterFileLineConsumed}
-											path={fileTabs.activePath}
-											sessionId={sessionId}
-											split={filesSplit}
-											scope={activeCenterFileRequest?.scope}
-										/>
-									)}
+										<>
+											{fileTabs.openPaths.map((fileKey) => {
+												const request = centerFileRequestsBySession[uiSessionId]?.[fileKey];
+												const token = request ? `${uiSessionId}:${fileKey}:${request.key}` : "";
+												return (
+													<div
+														key={fileKey}
+														className={cn("absolute inset-0", fileTabs.activePath !== fileKey && "invisible pointer-events-none [content-visibility:hidden]")}
+														inert={fileTabs.activePath !== fileKey ? true : undefined}
+													>
+														<SessionFileWorkspace
+															active={fileTabs.activePath === fileKey && !filesPoppedOut}
+															fileKey={fileKey}
+															hostId={hostId}
+															source={request?.source} annotationRange={request?.annotationRange}
+															previousPath={request?.previousPath}
+															annotation={fileAnnotation}
+															commitSha={request?.commitSha}
+															initialEditing={Boolean(request?.editing && !consumedCenterEditingRequestsRef.current.has(token))}
+															initialLine={request?.line != null && !consumedCenterLineRequestsRef.current.has(token) ? request.line : undefined}
+															initialMode={request?.mode ?? "file"}
+															initialRequestKey={request?.key ?? 0}
+															onModeChange={recordCenterFileMode}
+														onDirtyChange={setCenterFileDirty}
+															onInitialEditingConsumed={markCenterFileEditingConsumed}
+															onInitialLineConsumed={markCenterFileLineConsumed}
+															path={request?.path ?? fileKey}
+															sessionId={sessionId}
+															split={filesSplit}
+															scope={request?.scope}
+														/>
+													</div>
+												);
+											})}
+										</>									)}
 								</div>
 							) : null}
 							{interfaceUi.notice}
@@ -2395,6 +2523,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 											onOpenFile={openCenterFile}
 											onSplitChange={setFilesSplit}
 											onToggleMaximized={handleToggleFilesPopOut}
+											checkedOutBranch={session.branch}
+											projectKind={filesKind}
 											sessionId={session.id}
 											split={filesSplit}
 										/>
@@ -2419,47 +2549,43 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					</SessionInspectorRail>
 				) : null}
 			</div>
-			{hasInspector ? (
-				<div className="session-pinned-actions" data-testid="session-pinned-actions" style={noDragStyle}>
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<TopbarButton
-								aria-label={
-									browserOnly
-										? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
-										: isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")
-								}
-								aria-pressed={isInspectorOpen}
-								onClick={handleToggleInspector}
-								style={noDragStyle}
-								variant="icon"
-							>
-								{browserOnly ? (
-									<span className="relative inline-flex">
-										<Globe2 aria-hidden="true" className="size-icon-md" />
-										{!isInspectorOpen && browserUnseen ? (
-											<span
-												aria-hidden="true"
-												className="pointer-events-none absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-primary ring-2 ring-background"
-												data-testid="orchestrator-browser-unseen-indicator"
-											/>
-										) : null}
-									</span>
-								) : (
-									<PanelRight className="size-icon-md" aria-hidden="true" />
-								)}
-							</TopbarButton>
-						</TooltipTrigger>
-						<TooltipContent side="bottom">
-							{browserOnly
-								? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
-								: isInspectorOpen ? t("shell.closeInspectorTitle") : t("shell.openInspectorTitle")}
-						</TooltipContent>
-					</Tooltip>
-					{/* Keep the global notification action trailing at the window edge. */}
-					<NotificationCenter style={noDragStyle} />
-				</div>
-			) : null}
+			<PageTopbarTrailingAction>
+				{hasInspector ? <Tooltip>
+					<TooltipTrigger asChild>
+						<TopbarButton
+							aria-label={
+								browserOnly
+									? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
+									: isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")
+							}
+							aria-pressed={isInspectorOpen}
+							onClick={handleToggleInspector}
+							style={noDragStyle}
+							variant="icon"
+						>
+							{browserOnly ? (
+								<span className="relative inline-flex">
+									<BrowserIcon aria-hidden="true" className="size-icon-md" />
+									{!isInspectorOpen && browserUnseen ? (
+										<span
+											aria-hidden="true"
+											className="pointer-events-none absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-primary ring-2 ring-background"
+											data-testid="orchestrator-browser-unseen-indicator"
+										/>
+									) : null}
+								</span>
+							) : (
+								<PanelRight className="size-icon-md" aria-hidden="true" />
+							)}
+						</TopbarButton>
+					</TooltipTrigger>
+					<TooltipContent side="bottom">
+						{browserOnly
+							? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
+							: isInspectorOpen ? t("shell.closeInspectorTitle") : t("shell.openInspectorTitle")}
+					</TooltipContent>
+				</Tooltip> : null}
+			</PageTopbarTrailingAction>
 			{interfaceUi.cloudLoader
 				? <CloudInterfaceSwitchLoader target={interfaceUi.target} />
 				: showLifecycleLoader || showCompletedLoader
@@ -2489,10 +2615,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									<CloudWorkspaceDiff annotation={fileAnnotation} isMaximized onOpenFile={openCenterFile} onSplitChange={setFilesSplit} onToggleMaximized={handleToggleFilesPopOut} session={session} split={filesSplit} />
 								) : (
 									<SessionFileExplorer
+ onOpenFile={openCenterFile}
 										hostId={hostId}
 										isMaximized
 										onSplitChange={setFilesSplit}
 										onToggleMaximized={handleToggleFilesPopOut}
+										checkedOutBranch={session.branch}
+										projectKind={filesKind}
 										sessionId={session.id}
 										split={filesSplit}
 									/>

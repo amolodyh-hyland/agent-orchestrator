@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type JSX, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type Ref } from "react";
-import { cn } from "../../lib/utils";
+import { SessionTabsTopbar } from "../PageTopbar";
 import { useTopbarTabsStore } from "../../stores/topbar-tabs-store";
 import { TopbarTabs } from "./TopbarTabs";
 import type { TopbarTabsProps } from "./TopbarTabs";
@@ -9,6 +9,8 @@ import { topbarDragStyle, topbarNoDragStyle } from "./topbar-drag-region";
 
 export type TopbarToolbarProps = {
 	actions: ReactNode;
+	className?: string;
+	fullscreen?: boolean;
 	subTabs?: ReactNode;
 	tabAction?: SessionTabActions;
 	onRenamed?: TopbarTabsProps["onRenamed"];
@@ -26,6 +28,8 @@ export type TopbarToolbarProps = {
 
 export function TopbarToolbar({
 	actions,
+	className,
+	fullscreen,
 	subTabs,
 	tabAction,
 	onRenamed,
@@ -59,61 +63,27 @@ export function TopbarToolbar({
 	}, [hideActions]);
 
 	return (
-		<div
-			className="topbar-toolbar flex w-full shrink-0 flex-col bg-sidebar"
-			data-density={density}
-			data-testid="session-topbar-toolbar"
-		>
-			<div
-				className="session-topbar-surface relative flex min-w-0 items-start"
-				data-testid="session-workspace-topbar"
-				style={{ minHeight: "var(--topbar-row-h)" }}
-			>
-				<div
-					className={cn("min-w-0 flex-1", clearanceClassName)}
-					data-testid="session-terminal-region"
-					ref={clearanceRef}
-					style={topbarDragStyle()}
-					onKeyDown={(event) => {
-						if (event.key === "Tab" && event.ctrlKey && !event.altKey && !event.metaKey) {
-							onTabsKeyDown?.(event);
-						}
-					}}
-				>
-					{remoteSessionTab !== undefined ? (
-						<div
-							className="flex items-stretch"
-							role="tablist"
-							style={{ height: "var(--topbar-row-h)", paddingRight: actionsReservePx, ...topbarNoDragStyle() }}
-						>
-							{remoteSessionTab}
-							<TopbarDragFiller />
-						</div>
-					) : (
-						<TopbarTabs
-							actionsReservePx={actionsReservePx}
-							onRenamed={onRenamed}
-							onSelectActiveSession={onSelectActiveSession}
-							tabAction={tabAction ? () => tabAction : undefined}
-						/>
-					)}
-				</div>
-				{hideActions ? null : (
-					<div
-						className="absolute right-0 top-0 flex items-center gap-1 pl-2 pr-3"
-						data-testid="session-action-region"
-						ref={actionRegionRef}
-						style={{ height: "var(--topbar-row-h)", ...topbarNoDragStyle() }}
-					>
-						{actions}
+		<div className={["topbar-toolbar flex w-full shrink-0 flex-col bg-sidebar", className].filter(Boolean).join(" ")} data-density={density} data-testid="session-topbar-toolbar">
+			<SessionTabsTopbar
+				fullscreen={fullscreen}
+				className="relative h-auto! min-h-(--topbar-row-h) [&_.session-topbar-actions]:absolute [&_.session-topbar-actions]:right-0 [&_.session-topbar-actions]:top-0"
+				clearanceClassName={clearanceClassName}
+				clearanceRef={clearanceRef}
+				hideActions={hideActions}
+				actions={<div ref={actionRegionRef} className="flex items-center gap-1 pl-2 pr-3" style={{ height: "var(--topbar-row-h)", ...topbarNoDragStyle() }}>{actions}</div>}
+				tabs={
+					<div className="min-w-0 flex-1" style={topbarDragStyle()} onKeyDown={(event) => {
+						if (event.key === "Tab" && event.ctrlKey && !event.altKey && !event.metaKey) onTabsKeyDown?.(event);
+					}}>
+						{remoteSessionTab !== undefined ? (
+							<div className="flex items-stretch" role="tablist" style={{ height: "var(--topbar-row-h)", paddingRight: actionsReservePx, ...topbarNoDragStyle() }}>
+								{remoteSessionTab}<TopbarDragFiller />
+							</div>
+						) : <TopbarTabs actionsReservePx={actionsReservePx} onRenamed={onRenamed} onSelectActiveSession={onSelectActiveSession} tabAction={tabAction ? () => tabAction : undefined} />}
 					</div>
-				)}
-			</div>
-			{subTabs ? (
-				<div className="flex h-8 items-stretch" data-testid="session-sub-tabs" style={topbarDragStyle()}>
-					{subTabs}
-				</div>
-			) : null}
+				}
+			/>
+			{subTabs ? <div className="flex h-8 items-stretch" data-testid="session-sub-tabs" style={topbarDragStyle()}>{subTabs}</div> : null}
 		</div>
 	);
 }

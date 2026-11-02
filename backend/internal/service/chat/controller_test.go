@@ -400,6 +400,12 @@ type fakeDriver struct {
 	probe     func() error
 	start     func(ports.ChatStartConfig) (ports.ChatConversation, error)
 	resume    func(ports.ChatResumeConfig) (ports.ChatConversation, error)
+	// supports, when set, is the agent's answer to which permission modes it runs in.
+	supports func(ports.PermissionMode) bool
+}
+
+func (d fakeDriver) SupportsPermissionMode(mode ports.PermissionMode) bool {
+	return d.supports == nil || d.supports(mode)
 }
 
 type sequenceDriver struct {
@@ -883,7 +889,7 @@ func TestReviewerChatUsesItsOwnProviderHost(t *testing.T) {
 	}
 }
 
-func TestPendingAgentSwitchFreshStartUsesReservedProviderScope(t *testing.T) {
+func TestPendingProviderHandoffFreshStartUsesReservedProviderScope(t *testing.T) {
 	st := openStore(t)
 	now := time.Date(2026, 8, 21, 10, 0, 0, 0, time.UTC)
 	record, found, err := st.GetSession(context.Background(), testSession)
@@ -922,7 +928,7 @@ func TestPendingAgentSwitchFreshStartUsesReservedProviderScope(t *testing.T) {
 	}
 }
 
-func TestPendingAgentSwitchResumeUsesReservedProviderScope(t *testing.T) {
+func TestPendingProviderHandoffResumeUsesReservedProviderScope(t *testing.T) {
 	st := openStore(t)
 	now := time.Date(2026, 8, 21, 11, 0, 0, 0, time.UTC)
 	record, found, err := st.GetSession(context.Background(), testSession)
@@ -1004,6 +1010,9 @@ func TestOrdinaryResumeRejectsProviderHandleOutsideActiveBranch(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "does not match session handle") {
 		t.Fatalf("ordinary resume error = %v, want active-branch handle mismatch", err)
+	}
+	if !errors.Is(err, ports.ErrChatResumeFailed) {
+		t.Fatalf("mismatch error = %v, want ErrChatResumeFailed so the API answers 409", err)
 	}
 	if resumeCalls != 0 {
 		t.Fatalf("driver resume calls = %d, want mismatch rejected before provider launch", resumeCalls)
@@ -2764,7 +2773,7 @@ func TestInterfaceHandoffDoesNotAnchorReplayBeforeProviderCoordinationBoundary(t
 	}
 
 	// This completed turn belongs to the provider that owned the session before
-	// the agent switch. The new provider receives it through hidden handoff
+	// the provider handoff. The new provider receives it through hidden handoff
 	// instructions, so its native thread cannot replay the old provider IDs.
 	created, err := st.AppendUserMessage(context.Background(), existing.ID, testSession, "old-generation",
 		domain.ConversationMessage{
@@ -3192,6 +3201,16 @@ func newHarnessWithConversationAndStoreForHarness(
 ) *harness {
 	t.Helper()
 	st := openStore(t)
+	if agentHarness != domain.HarnessCodex {
+		record, found, err := st.GetSession(context.Background(), testSession)
+		if err != nil || !found {
+			t.Fatalf("read seeded session: found=%v, err=%v", found, err)
+		}
+		record.Harness = agentHarness
+		if err := st.UpdateSession(context.Background(), record); err != nil {
+			t.Fatalf("set seeded harness: %v", err)
+		}
+	}
 	base := newFakeConversation()
 	if conv == nil {
 		conv = base
@@ -3416,6 +3435,30 @@ func TestProviderPromptFailureSettlesTurnAndRecordsRecoveryOnce(t *testing.T) {
 		if activity.Kind == domain.ActivityKindError || strings.Contains(activity.ProviderItemID, "ao-reauth-") {
 			t.Fatalf("terminal failure was duplicated as an activity: %#v", activity)
 		}
+	}
+}
+
+func TestProviderPromptFailurePersistsConfigurationCodeWithoutReauth(t *testing.T) {
+	h := newHarness(t)
+	turn, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: "hello", ClientMessageID: "missing-key-prompt", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New("ACP internal detail"),
+		FailureCode: domain.ConversationFailureProviderKeyMissing,
+	})
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateFailed
+	})
+	if got := snapshot.Turns[0].FailureCode; got != domain.ConversationFailureProviderKeyMissing {
+		t.Fatalf("failure code = %q", got)
+	}
+	if snapshot.Turns[0].ErrorMessage != "ACP internal detail" || snapshot.Conversation.Account != nil && snapshot.Conversation.Account.ReauthRequiredAt != nil {
+		t.Fatalf("turn/account = %+v / %+v", snapshot.Turns[0], snapshot.Conversation.Account)
 	}
 }
 
