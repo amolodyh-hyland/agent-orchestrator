@@ -1598,7 +1598,8 @@ export const ChatComposer = memo(function ChatComposer({
 					}
 				} else if (savingQueuedEdit) {
 					await onSend(message, nativePayloads.length ? nativePayloads : undefined, undefined,
-						visibleRetainedAttachments.flatMap((item) => item.contentIndex === undefined ? [] : [item.contentIndex]), undefined, fileReferences, skillSelection ?? (queuedSelectionCleared.current ? null : undefined));
+						visibleRetainedAttachments.flatMap((item) => item.contentIndex === undefined ? [] : [item.contentIndex]), undefined, fileReferences.length ? fileReferences : undefined,
+						...(skillSelection ? [skillSelection] as const : queuedSelectionCleared.current ? [null] as const : []));
 					// The parent leaves this editor only after proving durable cleanup.
 					return;
 				} else if (skillSelection) {
@@ -1724,8 +1725,10 @@ export const ChatComposer = memo(function ChatComposer({
      } else {
       await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, delivery.fileReferences, delivery.skillSelection?.selection);
      }
-    } else if (delivery.excerpts?.length || delivery.skillSelection) {
-     await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, undefined, delivery.skillSelection?.selection);
+    } else if (delivery.skillSelection) {
+     await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, undefined, delivery.skillSelection.selection);
+    } else if (delivery.excerpts?.length) {
+     await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts);
     } else {
      await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId);
     }

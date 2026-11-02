@@ -171,6 +171,30 @@ func (s *Store) SetSessionProvisionedWorkspace(
 	return rows > 0, nil
 }
 
+// SetSessionConfirmedWorkspace retains the first checkout of a confirmed spawn.
+func (s *Store) SetSessionConfirmedWorkspace(
+	ctx context.Context,
+	id domain.SessionID,
+	branch, workspacePath, workspaceRepoPath string,
+	now time.Time,
+) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	// sqlc 1.31's SQLite parameter rewrite drops this query's assignment '=';
+	// use the same direct-writer pattern as the guarded seed deletion below.
+	result, err := s.writeDB.ExecContext(ctx, `UPDATE sessions SET
+        branch = ?, workspace_path = ?, workspace_repo_path = ?, updated_at = ?
+        WHERE id = ? AND is_terminated = 0
+          AND provision_state IN ('ready', 'provisioning')
+          AND (workspace_path = '' OR workspace_path = ?)`,
+		branch, workspacePath, workspaceRepoPath, now, id, workspacePath)
+	if err != nil {
+		return false, fmt.Errorf("record confirmed workspace for %s: %w", id, err)
+	}
+	rows, err := result.RowsAffected()
+	return rows > 0, err
+}
+
 // SetSessionTaskBranch records a background task branch rename on the session
 // and its repository rows together. repoBranches maps each repository row to
 // the branch its checkout holds, which after a failed undo can differ.

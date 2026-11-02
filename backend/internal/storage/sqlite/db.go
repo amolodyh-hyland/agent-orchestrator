@@ -1345,7 +1345,8 @@ func repairRenumberedProviderSwitchingMigrationHistory(db *sql.DB) error {
 		version int64
 		mainHas string
 	}{
-		{version: 201}, {version: 216},
+		{201, `SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name = 'metadata_revision'`},
+		{216, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'project_context_snapshots'`},
 		{196, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'session_artifact_versions'`},
 		{199, `SELECT COUNT(*) FROM pragma_table_info('conversation_messages') WHERE name = 'continuation'`},
 		{200, `SELECT COUNT(*) FROM pragma_table_info('session_artifact_versions') WHERE name = 'source'`},

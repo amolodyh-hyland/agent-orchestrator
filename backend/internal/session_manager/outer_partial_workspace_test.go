@@ -108,3 +108,37 @@ func TestOuterM2PartialWorkspaceInventorySurvivesFailedSpawnAndRestart(t *testin
 		})
 	}
 }
+
+func TestConfirmedWorkspaceWriteCannotReplacePublishedOrTerminatedRoot(t *testing.T) {
+	st := sqlitetest.MustOpen(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	rec, err := st.CreateSession(ctx, domain.SessionRecord{
+		Kind: domain.KindWorker, Harness: domain.HarnessCodex,
+		ProvisionState: domain.SessionProvisionReady, CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated, err := st.SetSessionConfirmedWorkspace(ctx, rec.ID, "confirmed", "/first", "/source", now); err != nil || !updated {
+		t.Fatalf("publish confirmed seed: %v, %v", updated, err)
+	}
+	if updated, err := st.SetSessionConfirmedWorkspace(ctx, rec.ID, "other", "/other", "/other-source", now); err != nil || updated {
+		t.Fatalf("replaced published root: %v, %v", updated, err)
+	}
+	rec, _, err = st.GetSession(ctx, rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.IsTerminated = true
+	if err := st.UpdateSession(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	if updated, err := st.SetSessionConfirmedWorkspace(ctx, rec.ID, "after-stop", "/first", "/source", now); err != nil || updated {
+		t.Fatalf("wrote terminated root: %v, %v", updated, err)
+	}
+	rec, _, err = st.GetSession(ctx, rec.ID)
+	if err != nil || rec.Metadata.Branch != "confirmed" || rec.Metadata.WorkspacePath != "/first" {
+		t.Fatalf("root ownership changed: %+v, %v", rec.Metadata, err)
+	}
+}

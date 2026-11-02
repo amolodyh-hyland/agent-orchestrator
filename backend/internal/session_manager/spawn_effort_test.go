@@ -194,7 +194,7 @@ func TestEffectiveAndRestoredAgentConfigFilterCopilotEffort(t *testing.T) {
 			if got := effectiveAgentConfig(domain.HarnessCopilot, domain.KindWorker, project).Effort; got != tc.wantEffort {
 				t.Fatalf("effectiveAgentConfig() effort = %q, want %q", got, tc.wantEffort)
 			}
-			rec := domain.SessionRecord{Harness: domain.HarnessCopilot, Kind: domain.KindWorker}
+			rec := domain.SessionRecord{Harness: domain.HarnessCopilot, Kind: domain.KindWorker, Metadata: domain.SessionMetadata{Effort: tc.projectEffort}}
 			if got := restoredAgentConfig(rec, project).Effort; got != tc.wantEffort {
 				t.Fatalf("restoredAgentConfig() effort = %q, want %q", got, tc.wantEffort)
 			}
@@ -221,8 +221,8 @@ func TestSpawn_CodexTUIExplicitEffortUsesCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn() with unlisted effort error = %v, want unvalidated launch", err)
 	}
-	if calls != 1 {
-		t.Fatalf("catalog calls = %d, want 1", calls)
+	if calls != 2 {
+		t.Fatalf("catalog calls = %d, want saved lookup plus refresh", calls)
 	}
 
 	calls = 0

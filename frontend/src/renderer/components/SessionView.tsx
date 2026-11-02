@@ -1799,7 +1799,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	const sessionTabActions: SessionTabActions = !session || session.cloud || sessionTabMenuEmpty
  ? (sessionTabControl ? {menuItems: null, inlineStatus: sessionTabControl} : null)
- : { menuItems: null, renderMenu: (entries) => <SessionTabMenu key={uiSessionId} session={session} hostId={hostId} blocked={agentWorking} switchTarget={interfaceUi.target} switchAction={interfaceUi.switchAction} switchControl={interfaceUi.switchControl} tabMenuItems={entries} menuLabel={t("shell.tabs.options")} /> };
+ : { menuItems: null, renderMenu: (entries) => <SessionTabMenu key={uiSessionId} session={session} hostId={hostId} blocked={agentWorking} switchTarget={interfaceUi.target} switchAction={interfaceUi.switchAction} switchControl={interfaceUi.switchControl} tabMenuItems={entries} menuLabel={t(hostId ? "session.actionsMenu" : "shell.tabs.options")} /> };
 	const sessionHeaderActions = (
 		<div
 			className="session-topbar-session-chrome workspace-topbar-actions flex shrink-0 items-center"

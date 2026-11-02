@@ -94,7 +94,7 @@ type Manager struct {
 // inputFence serializes one terminal's pane writes. refs counts holders and
 // waiters so the entry is dropped once nobody needs it.
 type inputFence struct {
-	mu   sync.Mutex
+	gate chan struct{}
 	refs int
 }
 
@@ -204,24 +204,35 @@ func NewManager(src Source, events EventSource, log *slog.Logger, opts ...Option
 }
 
 // lockInputFence takes terminalID's write fence and returns its unlock.
-func (m *Manager) lockInputFence(terminalID string) (unlock func()) {
+func (m *Manager) lockInputFence(terminalID string) func() {
+	unlock, _ := m.lockInputFenceContext(context.Background(), terminalID)
+	return unlock
+}
+
+// lockInputFenceContext permits a bounded drain without leaving a mutex waiter.
+func (m *Manager) lockInputFenceContext(ctx context.Context, terminalID string) (func(), error) {
 	m.fencesMu.Lock()
 	f := m.fences[terminalID]
 	if f == nil {
-		f = &inputFence{}
+		f = &inputFence{gate: make(chan struct{}, 1)}
 		m.fences[terminalID] = f
 	}
 	f.refs++
 	m.fencesMu.Unlock()
-	f.mu.Lock()
-	return func() {
-		f.mu.Unlock()
+	dropRef := func() {
 		m.fencesMu.Lock()
 		f.refs--
 		if f.refs == 0 {
 			delete(m.fences, terminalID)
 		}
 		m.fencesMu.Unlock()
+	}
+	select {
+	case f.gate <- struct{}{}:
+		return func() { <-f.gate; dropRef() }, nil
+	case <-ctx.Done():
+		dropRef()
+		return nil, ctx.Err()
 	}
 }
 
@@ -1038,16 +1049,10 @@ func (m *Manager) FenceLibraryInput(ctx context.Context, terminalID string) (fun
 		a.markExited()
 		m.forget(a)
 	}
-	drained := make(chan struct{})
-	go func() {
-		unlock := m.lockInputFence(terminalID)
-		unlock()
-		close(drained)
-	}()
-	select {
-	case <-drained:
-		return release, nil
-	case <-ctx.Done():
-		return release, ctx.Err()
+	unlock, err := m.lockInputFenceContext(ctx, terminalID)
+	if err != nil {
+		return release, err
 	}
+	unlock()
+	return release, nil
 }

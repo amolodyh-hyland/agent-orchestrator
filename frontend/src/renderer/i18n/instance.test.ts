@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { RUSSIAN_FORK_ENGLISH_FALLBACK_KEYS, RUSSIAN_FORK_PLURAL_FALLBACK_KEYS } from "./russian-fork-fallback-keys";
 import { APP_LOCALES, coerceLocale, DEFAULT_LOCALE } from "./locales";
 import { createAppI18n as createBaseAppI18n, createLazyAppI18n, loadLocaleCatalog, type TranslationCatalogs } from "./instance";
 import { createFullAppI18n as createAppI18n } from "./all-messages";
@@ -25,6 +26,26 @@ const allCatalogs = {
 	"pt-BR": ptBRMessages,
 	ru: ruMessages,
 } as const;
+
+const russianFallbackKeys = new Set<string>(RUSSIAN_FORK_ENGLISH_FALLBACK_KEYS);
+const russianPluralFallbackKeys = new Set<string>(RUSSIAN_FORK_PLURAL_FALLBACK_KEYS);
+function catalogValue(locale: typeof APP_LOCALES[number], key: string): string | string[] | undefined {
+	const catalog = allCatalogs[locale] as Record<string, string | string[]>;
+	return catalog[key] ?? (locale === "ru" && russianFallbackKeys.has(key)
+		? (enMessages as Record<string, string | string[]>)[key] : undefined);
+}
+
+it("limits Russian English fallback to the reviewed fork-only key list", () => {
+	const missing = Object.keys(enMessages).filter((key) => !(key in ruMessages)).sort();
+	expect([...russianFallbackKeys].sort()).toEqual(missing);
+	expect(RUSSIAN_FORK_ENGLISH_FALLBACK_KEYS).toHaveLength(636);
+	expect(russianFallbackKeys.size).toBe(RUSSIAN_FORK_ENGLISH_FALLBACK_KEYS.length);
+	for (const key of russianPluralFallbackKeys) {
+		const base = key.replace(/_(zero|one|two|few|many|other)$/, "");
+		expect(key in ruMessages, `remove translated exception ${key}`).toBe(false);
+		expect(russianFallbackKeys.has(`${base}_other`), `unreviewed plural ${key}`).toBe(true);
+	}
+});
 
 function emptyCatalogs(): TranslationCatalogs {
 	return Object.fromEntries(APP_LOCALES.map((locale) => [locale, {}])) as TranslationCatalogs;
@@ -195,10 +216,9 @@ describe("app i18next instance", () => {
 	it("keeps locale catalogs covering every English key with non-empty values", () => {
 		const enKeys = Object.keys(enMessages).sort();
 		for (const locale of APP_LOCALES) {
-			const catalog = allCatalogs[locale];
 			for (const key of enKeys) {
-				expect(key in catalog, `${locale} is missing ${key}`).toBe(true);
-				expect(String(catalog[key as keyof typeof catalog] ?? "").length, `${locale}.${key} empty`).toBeGreaterThan(
+				expect(catalogValue(locale, key), `${locale} is missing ${key}`).toBeDefined();
+				expect(String(catalogValue(locale, key) ?? "").length, `${locale}.${key} empty`).toBeGreaterThan(
 					0,
 				);
 			}
@@ -212,13 +232,12 @@ describe("app i18next instance", () => {
 		};
 		for (const locale of APP_LOCALES) {
 			if (locale === "en") continue;
-			const catalog = allCatalogs[locale] as unknown as Record<keyof typeof enMessages, string | string[]>;
 			for (const key of Object.keys(enMessages) as (keyof typeof enMessages)[]) {
 				const english = variables(enMessages[key]);
 				// i18next always passes count to plural keys, so a locale may add it where English
 				// hardcodes "1" (Russian uses the one form for 21, 31, ...). It may never drop it.
 				const mayAddCount = /_(zero|one|two|few|many|other)$/.test(key) && !english.includes("count");
-				const actual = variables(catalog[key]).filter((name) => !(mayAddCount && name === "count"));
+				const actual = variables(catalogValue(locale, key)!).filter((name) => !(mayAddCount && name === "count"));
 				expect(actual, `${locale} placeholder mismatch for ${key}`).toEqual(english);
 			}
 		}
@@ -236,7 +255,7 @@ describe("app i18next instance", () => {
 			for (const base of pluralBases) {
 				for (const category of requiredCategories) {
 					expect(
-						`${base}_${category}` in allCatalogs[locale],
+						`${base}_${category}` in allCatalogs[locale] || (locale === "ru" && (russianFallbackKeys.has(`${base}_${category}`) || russianPluralFallbackKeys.has(`${base}_${category}`))),
 						`${locale} is missing ${base}_${category}`,
 					).toBe(true);
 				}
@@ -289,7 +308,6 @@ describe("lazy locale catalogs", () => {
 it("provides every library review and composer label in every locale", () => {
 	const keys = Object.keys(enMessages).filter((key) => key.startsWith("library."));
 	for (const locale of APP_LOCALES) {
-		const catalog = allCatalogs[locale] as unknown as Record<string, string>;
-		for (const key of keys) expect(catalog[key], `${locale} is missing ${key}`).toBeTruthy();
+		for (const key of keys) expect(catalogValue(locale, key), `${locale} is missing ${key}`).toBeTruthy();
 	}
 });

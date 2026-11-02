@@ -118,7 +118,8 @@ export function describeHarness(input: HarnessDescribeInput) {
 		&& ["provider_unsupported", "provider_inconclusive", "provider_unreachable", "probe_timeout", "probe_cancelled"].includes(step.code))
 		|| readinessAgent?.authentication.diagnostics?.some((step) => step.code === "model_selection_unresolved");
 	const renewsOnRun = authStatus === "configured" && Boolean(readinessAgent?.authentication.diagnostics?.some((step) => step.code === "token_renewal_pending"));
-	const authSummary = renewsOnRun ? t("settings.harness.loggedIn")
+	const nativeSignIn = authStatus === "configured" && Boolean(readinessAgent?.authentication.diagnostics?.some((step) => step.code === "cli_managed_credential"));
+	const authSummary = renewsOnRun || nativeSignIn ? t("settings.harness.loggedIn")
 		: authStatus === "configured" ? t(unverifiedProvider ? "settings.harness.health.authUnverified" : isSetupAction ? "settings.harness.configured" : "settings.harness.installed")
 		: authStatus === "authorized" ? t("settings.harness.loggedIn")
 		: authStatus === "not_applicable" || (!input.authPlansPending && (!authPlan || authPlan.action === "instructions")) ? t("settings.harness.installed")

@@ -2545,7 +2545,7 @@ func (s *Store) ClaimQueuedBatch(ctx context.Context, conversationID string, dis
 			rows = rows[:limit]
 		}
 		for _, row := range rows {
-			changed, err := q.ReserveQueuedConversationTurnForPromotion(ctx, gen.ReserveQueuedConversationTurnForPromotionParams{
+			changed, err := q.ReserveQueuedConversationTurnForBatch(ctx, gen.ReserveQueuedConversationTurnForBatchParams{
 				PromotionStartedAt: sql.NullTime{Time: now, Valid: true}, ID: row.ID, ConversationID: conversationID,
 			})
 			if checkErr := expectBatchRow("reserve queued batch turn", row.ID, changed, err); checkErr != nil {

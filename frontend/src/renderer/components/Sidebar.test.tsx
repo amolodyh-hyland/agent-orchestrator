@@ -512,6 +512,7 @@ function fireDrag(
 
 beforeEach(() => {
 	window.localStorage.clear();
+	useSidebarOrderStore.setState({ projectOrder: [] });
 	useTopbarTabsStore.setState({ colorCoding: false, projectColors: {} });
 	dragEnds.clear();
 	dragOvers.clear();

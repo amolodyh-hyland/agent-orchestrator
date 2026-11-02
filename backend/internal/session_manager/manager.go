@@ -380,6 +380,7 @@ type Store interface {
 	SetSessionProvisionState(ctx context.Context, id domain.SessionID, state domain.SessionProvisionState, message string, now time.Time) (bool, error)
 	SetSessionProvisionSteps(ctx context.Context, id domain.SessionID, steps []domain.SessionProvisionStep, now time.Time) error
 	SetSessionProvisionedWorkspace(ctx context.Context, id domain.SessionID, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error)
+	SetSessionConfirmedWorkspace(ctx context.Context, id domain.SessionID, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error)
 	SetSessionTaskBranch(ctx context.Context, id domain.SessionID, expectedBranch, branch string, repoBranches map[string]string, now time.Time) (bool, error)
 	SetSessionBranchNaming(ctx context.Context, id domain.SessionID, naming bool) error
 	ClearSessionBranchNaming(ctx context.Context) error
@@ -909,6 +910,7 @@ func (m *Manager) WaitAgentSwitchWorkers(ctx context.Context) error {
 	return waitForWorkers(ctx, &m.agentSwitchWorkers)
 }
 
+// New constructs the session manager from its runtime, storage and service ports.
 func New(d Deps) *Manager {
 	m := &Manager{
 		runtime:                        d.Runtime,
@@ -1735,7 +1737,7 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		// the harness cannot honor. Unflagged or inherited effort still clears
 		// silently so role/project defaults keep working for every harness.
 		if cfg.EffortOverride && strings.TrimSpace(requested.Effort) != "" && appliedSpawnEffort(cfg.Harness, requested.Effort) == "" {
-			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, and command-code agents, hermes agents, and for copilot at a supported level", ports.ErrUnsupportedEffort, cfg.Harness)
+			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, command-code, and hermes agents, and for copilot at a supported level", ports.ErrUnsupportedEffort, cfg.Harness)
 		}
 		resolved.Effort = appliedSpawnEffort(cfg.Harness, resolved.Effort)
 		return resolved, nil
@@ -2219,7 +2221,7 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 		defer cancel()
 	}
 	if cfg.OuterActionID != "" && info.Root.Path != "" {
-		updated, recordErr := m.store.SetSessionProvisionedWorkspace(persistCtx, id, info.Root.Branch, info.Root.Path, info.Root.RepoPath, m.clock())
+		updated, recordErr := m.store.SetSessionConfirmedWorkspace(persistCtx, id, info.Root.Branch, info.Root.Path, info.Root.RepoPath, m.clock())
 		if recordErr != nil {
 			err = errors.Join(err, recordErr)
 		} else if !updated {
@@ -2545,7 +2547,7 @@ func restoredAgentConfig(rec domain.SessionRecord, cfg domain.ProjectConfig) por
 	// Model and effort are durable session choices for every harness. Empty
 	// values mean provider defaults, not today's project or role defaults.
 	merged.Model = rec.Metadata.Model
-	merged.Effort = rec.Metadata.Effort
+	merged.Effort = appliedSpawnEffort(rec.Harness, rec.Metadata.Effort)
 	if permission := restoredSessionPermission(rec); permission != "" {
 		merged.Permissions = permission
 	}
@@ -2642,7 +2644,7 @@ func validateSpawnEffort(harness domain.AgentHarness, effort string) error {
 		return nil
 	}
 	switch harness {
-	case domain.HarnessCodex, domain.HarnessClaudeCode, domain.HarnessCommandCode:
+	case domain.HarnessCodex, domain.HarnessClaudeCode, domain.HarnessCommandCode, domain.HarnessHermes:
 		return nil
 	case domain.HarnessCopilot:
 		if containsString(copilotagent.EffortLevels, effort) {
@@ -2650,13 +2652,13 @@ func validateSpawnEffort(harness domain.AgentHarness, effort string) error {
 		}
 		return fmt.Errorf("%w %q for harness %q (supported: %s)", ports.ErrUnsupportedEffort, effort, harness, strings.Join(copilotagent.EffortLevels, ", "))
 	default:
-		return fmt.Errorf("%w: harness %q cannot apply an effort override (supported harnesses: claude-code, codex, command-code, copilot)", ports.ErrUnsupportedEffort, harness)
+		return fmt.Errorf("%w: harness %q cannot apply an effort override (supported harnesses: claude-code, codex, command-code, hermes, copilot)", ports.ErrUnsupportedEffort, harness)
 	}
 }
 
 func appliedSpawnEffort(harness domain.AgentHarness, effort string) string {
 	switch harness {
-	case domain.HarnessCodex, domain.HarnessClaudeCode, domain.HarnessCommandCode:
+	case domain.HarnessCodex, domain.HarnessClaudeCode, domain.HarnessCommandCode, domain.HarnessHermes:
 		return effort
 	case domain.HarnessCopilot:
 		if containsString(copilotagent.EffortLevels, effort) {

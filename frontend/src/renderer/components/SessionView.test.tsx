@@ -293,7 +293,7 @@ vi.mock("../hooks/useSettings", () => ({
 vi.mock("./chat/SessionChatSurface", async () => {
 	const { memo } = await vi.importActual<typeof import("react")>("react");
 	const { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } = await vi.importActual<typeof import("./ui/dropdown-menu")>("./ui/dropdown-menu");
-	const SessionTabMenu = ({ actions }: { actions?: SessionTabActions }) => actions?.inlineStatus ? (
+	const SessionTabMenu = ({ actions }: { actions?: SessionTabActions }) => !actions ? null : actions.renderMenu ? <>{actions.renderMenu(null)}</> : actions?.inlineStatus ? (
 		<span>{actions.inlineStatus}</span>
 	) : (
 		<DropdownMenu>
@@ -455,7 +455,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 
 vi.mock("./chat/CloudSessionChatSurface", async (importOriginal) => {
 	const { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } = await vi.importActual<typeof import("./ui/dropdown-menu")>("./ui/dropdown-menu");
-	const SessionTabMenu = ({ actions }: { actions?: SessionTabActions }) => actions?.inlineStatus ? (
+	const SessionTabMenu = ({ actions }: { actions?: SessionTabActions }) => !actions ? null : actions.renderMenu ? <>{actions.renderMenu(null)}</> : actions?.inlineStatus ? (
 		<span>{actions.inlineStatus}</span>
 	) : (
 		<DropdownMenu>
@@ -514,7 +514,7 @@ vi.mock("./chat/ReviewerChatSurface", () => ({
 
 vi.mock("./CenterPane", async () => {
 	const { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } = await vi.importActual<typeof import("./ui/dropdown-menu")>("./ui/dropdown-menu");
-	const SessionTabMenu = ({ actions }: { actions?: SessionTabActions }) => actions?.inlineStatus ? (
+	const SessionTabMenu = ({ actions }: { actions?: SessionTabActions }) => !actions ? null : actions.renderMenu ? <>{actions.renderMenu(null)}</> : actions?.inlineStatus ? (
 		<span>{actions.inlineStatus}</span>
 	) : (
 		<DropdownMenu>

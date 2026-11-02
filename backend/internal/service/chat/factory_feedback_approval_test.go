@@ -71,7 +71,7 @@ func TestFactoryFeedbackDeferredTransportChecksAfterPreparation(t *testing.T) {
 	svc.SetFeedbackAdmission(admission)
 	c := newController("session", domain.SessionConversationOwner("session"), domain.ConversationRecord{}, "generation", domain.HarnessCodex, provider, st, nil, svc.log, func() string { return "id" }, time.Now, nil, nil, nil)
 	c.feedbackInput = svc.acquireFeedbackInput
-	if _, err := c.dispatch(ctx, "turn", ports.ChatUserMessage{Text: "approved findings", Origin: domain.MessageOriginAutomation}, time.Now(), false, nil); err != nil {
+	if _, err := c.dispatch(ctx, "turn", ports.ChatUserMessage{Text: "approved findings", Origin: domain.MessageOriginAutomation}, time.Now(), false, nil, false); err != nil {
 		t.Fatal(err)
 	}
 	if provider.acquire == nil || len(admission.actions) != 1 || admission.actions[0] != "prepare" {

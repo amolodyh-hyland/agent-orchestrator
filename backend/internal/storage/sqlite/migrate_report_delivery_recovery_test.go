@@ -26,8 +26,21 @@ func appendPreReceiptUpgradeMessage(ctx context.Context, db *sql.DB, conversatio
 	if err := q.InsertConversationTurn(ctx, gen.InsertConversationTurnParams{ID: turn, ConversationID: conversation, HandledBySessionID: session, ControllerGeneration: generation, State: domain.TurnStateQueued, RequestedAt: now}); err != nil {
 		return false, err
 	}
-	err = q.InsertConversationMessage(ctx, gen.InsertConversationMessageParams{ID: message.ID, ConversationID: conversation, TurnID: sql.NullString{String: turn, Valid: true}, Sequence: sequence, Role: domain.MessageRoleUser, Origin: message.Origin, Text: message.Text, ClientMessageID: message.ClientMessageID, CreatedAt: now, UpdatedAt: now})
+	_, err = db.ExecContext(ctx, `INSERT INTO conversation_messages (id,conversation_id,turn_id,sequence,role,origin,text,client_message_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`, message.ID, conversation, turn, sequence, domain.MessageRoleUser, message.Origin, message.Text, message.ClientMessageID, now, now)
 	return err == nil, err
+}
+
+// Current conversation reads include timestamp-era columns unavailable in these
+// legacy upgrade fixtures. Seed only the original schema, as the old app did.
+func createPreReceiptUpgradeConversation(ctx context.Context, db *sql.DB, id string, project domain.ProjectID, session domain.SessionID, now time.Time) (domain.ConversationRecord, error) {
+	branch := id + "-root"
+	if _, err := db.ExecContext(ctx, `INSERT INTO conversations (id,scope,project_id,session_id,current_session_id,active_branch_id,created_at,updated_at) VALUES (?,'project',?,NULL,?,?,?,?)`, id, project, session, branch, now, now); err != nil {
+		return domain.ConversationRecord{}, err
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO conversation_branches (id,conversation_id,session_id,created_at) VALUES (?,?,?,?)`, branch, id, session, now); err != nil {
+		return domain.ConversationRecord{}, err
+	}
+	return domain.ConversationRecord{ID: id}, nil
 }
 
 func (d *noUpgradeResend) Submit(context.Context, domain.SessionID, string, reportsvc.PreparedBatch) (domain.ReportDeliveryReceipt, error) {
@@ -57,7 +70,7 @@ func TestReportUpgradeRecoversPreMigrationChatDelivery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			conversation, err := st.CreateConversation(ctx, "legacy-conversation", domain.ConversationScopeProject, "upgrade", orch.ID, now)
+			conversation, err := createPreReceiptUpgradeConversation(ctx, db, "legacy-conversation", "upgrade", orch.ID, now)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -79,7 +92,7 @@ func TestReportUpgradeRecoversPreMigrationChatDelivery(t *testing.T) {
 					if err := st.BindTurnToProvider(ctx, "legacy-turn", "native-turn", now); err != nil {
 						t.Fatal(err)
 					}
-					if _, err := st.ProjectProviderEvent(ctx, conversation.ID, orch.ID, "old-generation", "old-start", "turn.started", `{"kind":"turn.started","providerTurnId":"native-turn","providerConversationId":"native-conversation"}`, now, func(context.Context) error { return nil }); err != nil {
+					if _, err := db.ExecContext(ctx, `INSERT INTO conversation_provider_events (conversation_id,session_id,provider_event_id,method,payload_json,received_at) VALUES (?,?,?,'turn.started',?,?)`, conversation.ID, orch.ID, "old-start", `{"kind":"turn.started","providerTurnId":"native-turn","providerConversationId":"native-conversation"}`, now); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -162,7 +175,7 @@ func TestReportUpgradeHoldsReleasedPendingPiggyback(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			conversation, err := st.CreateConversation(ctx, "piggyback-conversation", domain.ConversationScopeProject, "upgrade", orch.ID, now)
+			conversation, err := createPreReceiptUpgradeConversation(ctx, db, "piggyback-conversation", "upgrade", orch.ID, now)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -199,7 +212,7 @@ func TestReportUpgradeHoldsReleasedPendingPiggyback(t *testing.T) {
 				t.Fatal(err)
 			}
 			if mode == "tui" {
-				if err := st.SettleTurn(ctx, conversation.ID, "possibly-started-native-turn", domain.TurnStateFailed, "ambiguous provider response", now); err != nil {
+				if _, err := db.ExecContext(ctx, `UPDATE conversation_turns SET state='failed',error_message='ambiguous provider response',completed_at=? WHERE provider_turn_id='possibly-started-native-turn'`, now); err != nil {
 					t.Fatal(err)
 				}
 				transition, created, err := st.CreateSessionInterfaceTransition(ctx, domain.SessionInterfaceTransition{
@@ -289,15 +302,15 @@ func TestReportUpgradeKeepsTUIAttemptEligibleWithOtherChatHistory(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			conversation, err := st.CreateConversation(ctx, "old-chat", domain.ConversationScopeProject, "upgrade", orch.ID, now)
+			conversation, err := createPreReceiptUpgradeConversation(ctx, db, "old-chat", "upgrade", orch.ID, now)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if created, err := appendPreReceiptUpgradeMessage(ctx, db, conversation.ID, orch.ID, "old-generation", domain.ConversationMessage{ID: "old-message", ClientMessageID: "old-human-client", Origin: domain.MessageOriginHuman, Text: "old prompt\n<ao-worker-reports>\nolder reports\n</ao-worker-reports>"}, "old-turn", now); err != nil || !created {
 				t.Fatalf("old Chat message=%v err=%v", created, err)
 			}
-			if changed, err := st.CommitSessionControllerEpoch(ctx, orch.ID, domain.SessionModeChat, domain.SessionModeTUI, "native-conversation", now); err != nil || !changed {
-				t.Fatalf("switch=%v err=%v", changed, err)
+			if _, err := db.ExecContext(ctx, `UPDATE sessions SET session_mode='tui',provider_conversation_id='native-conversation' WHERE id=?`, orch.ID); err != nil {
+				t.Fatalf("seed legacy TUI session: %v", err)
 			}
 			now = now.Add(time.Hour)
 			reportAt := now

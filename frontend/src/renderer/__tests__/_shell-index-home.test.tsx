@@ -36,6 +36,10 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 
 vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: undefined }) }));
 
+// ShellCenter's persistent settings and sharing hosts are covered separately.
+vi.mock("../components/SettingsDialog", () => ({ SettingsPane: () => null, useSettingsPage: () => null }));
+vi.mock("../components/OpenShareLinkDialog", () => ({ ShareLinkHost: () => null }));
+
 vi.mock("../components/CenterPanelShell", () => ({
 	CenterPanelShell: ({ children }: { children: ReactNode }) => <div data-testid="center-panel-shell">{children}</div>,
 }));
@@ -309,11 +313,11 @@ describe("shell index route", () => {
 });
 
 describe("shell center route tabs", () => {
-	it("renders the flat tab row above shell chrome on board routes", () => {
+	it("renders the flat tab row above the outlet on board routes", () => {
 		render(<ShellCenter isHomeRoute={false} isSessionRoute={false} selfFramedCenterPanel={false} startingOrchestrator={false} startingCloudOrchestrator={false} />);
 
 		const row = screen.getByTestId("topbar-tabs-row");
-		const shellTopbar = screen.getByTestId("shell-topbar");
+		const shellTopbar = screen.getByTestId("route-outlet");
 		expect(row.compareDocumentPosition(shellTopbar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 

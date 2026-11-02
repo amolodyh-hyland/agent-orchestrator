@@ -406,13 +406,12 @@ describe("ShellTopbar Multica issue link", () => {
 		expect(within(actions).getAllByTestId("multica-issue-link-chip")).toHaveLength(1);
 	});
 
-	it("renders once in the standalone session actions, outside the identity", () => {
+	it("renders once in the standalone session actions", () => {
 		renderTopbar(sessionWith());
 
 		const actions = screen.getByTestId("workspace-topbar-actions");
 		expect(within(actions).getAllByTestId("multica-issue-link-chip")).toHaveLength(1);
-		expect(within(screen.getByTestId("session-topbar-identity")).queryByTestId("multica-issue-link-chip"))
-			.not.toBeInTheDocument();
+		expect(screen.queryByTestId("session-topbar-identity")).not.toBeInTheDocument();
 	});
 
 	it.each([false, true])("does not render for an orchestrator session (embedded: %s)", (embedded) => {

@@ -1626,7 +1626,7 @@ func (c *Controller) sendLocked(
 	if providerOverride != nil {
 		providerMessage = *providerOverride
 	}
-	turn, err := c.dispatch(ctx, turnID, providerMessage, now, false, followers)
+	turn, err := c.dispatch(ctx, turnID, providerMessage, now, false, followers, providerOverride != nil)
 	dispatched = err == nil
 	return turn, err
 }
@@ -1758,7 +1758,7 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 		Content:         content,
 		Origin:          prompt.Origin,
 		ClientMessageID: key,
-	}, now, false, nil)
+	}, now, false, nil, false)
 }
 
 // retryPromptContent reconstructs provider-neutral durable prompt blocks and
@@ -1968,6 +1968,12 @@ func (c *Controller) checkFactoryMessage(ctx context.Context, msg ports.ChatUser
 }
 
 func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (ports.ChatTurnRef, error) {
+	return c.sendPreparedTurn(ctx, msg, false)
+}
+
+// skillsResolved is internal to queue composition: every original message was
+// validated against its binding before the combined provider input was formed.
+func (c *Controller) sendPreparedTurn(ctx context.Context, msg ports.ChatUserMessage, skillsResolved bool) (ports.ChatTurnRef, error) {
 	if err := c.checkFactoryMessage(ctx, msg); err != nil {
 		return ports.ChatTurnRef{}, err
 	}
@@ -1986,7 +1992,7 @@ func (c *Controller) sendTurn(ctx context.Context, msg ports.ChatUserMessage) (p
 		attempt := msg
 		attempt.Settings.Approval = mode
 		var sendErr error
-		if !outerTarget {
+		if !outerTarget && !skillsResolved {
 			attempt, sendErr = c.resolveSkillMessage(ctx, attempt)
 		}
 		if sendErr != nil {
@@ -2112,6 +2118,7 @@ func (c *Controller) dispatch(
 	requestedAt time.Time,
 	claimed bool,
 	followers []string,
+	skillsResolved bool,
 ) (domain.ConversationTurn, error) {
 	// Every dispatch carries the conversation's choices, including one AO makes on
 	// the user's behalf: a queued message draining, or a relay from `ao send`. A
@@ -2163,7 +2170,7 @@ func (c *Controller) dispatch(
 	c.dispatchingTurnID = turnID
 	c.dispatchedApproval, c.hasDispatchedApproval = msg.Settings.Approval, true
 	c.mu.Unlock()
-	ref, err := c.sendTurn(ctx, excerptDeliveryMessage(msg))
+	ref, err := c.sendPreparedTurn(ctx, excerptDeliveryMessage(msg), skillsResolved)
 	if err != nil {
 		failFollowers("batch delivery to provider is uncertain: " + err.Error())
 		c.mu.Lock()
@@ -2402,6 +2409,17 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 		if err != nil {
 			return err
 		}
+		// Exact sealed requests retain their original provider input.
+		if len(preview) > 1 {
+			outerTarget, err := domain.IsOuterControlledSession(ctx, c.store, c.sessionID)
+			if err != nil {
+				return err
+			}
+			if outerTarget || errors.Is(domain.CheckFactoryFeedback(ctx, c.store, c.sessionID), domain.ErrFactoryFeedbackHeld) {
+				limit = 1
+				preview = preview[:1]
+			}
+		}
 		if _, err := c.queuedBatchInput(ctx, preview, nil); err != nil {
 			if id, ok := invalidBatchTurn(err); ok {
 				if settleErr := c.store.SettleTurnByID(ctx, id, domain.TurnStateFailed, err.Error(), c.now()); settleErr != nil {
@@ -2429,7 +2447,7 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 		return err
 	}
 	followers := queuedBatchIDs(batch[1:])
-	if _, err := c.dispatch(ctx, batch[0].TurnID, msg, c.now(), true, followers); err != nil {
+	if _, err := c.dispatch(ctx, batch[0].TurnID, msg, c.now(), true, followers, true); err != nil {
 		c.log.Error("failed to dispatch queued batch", "session", c.sessionID,
 			"firstTurn", batch[0].TurnID, "count", len(batch), "error", err)
 		return err

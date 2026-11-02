@@ -524,7 +524,7 @@ export function CenterPane({
 											icon={
 												<AgentAvatar
 													provider={tab.terminal.harness}
-													className="size-terminal-agent-icon"
+													className="size-icon-sm!"
 													decorative
 												/>
 											}
@@ -543,6 +543,7 @@ export function CenterPane({
 										/>
 									) : tab.kind === "shell" ? (
 										<ShellTerminalTab
+											appearance="connected"
 											isActive={target.kind === "shell" && target.handleId === tab.terminal.handleId && !workspaceActiveTabKey}
 											onClose={() => onCloseShellTerminal?.(tab.terminal.handleId)}
 											onRename={
@@ -580,6 +581,7 @@ export function CenterPane({
 	) : null;
 	const terminalTopbar = (
 		<TopbarToolbar
+			fullscreen={isFullscreen}
 			actions={
 				<>
 					{tabStripAction ? <div data-testid="session-tab-strip-action">{tabStripAction}</div> : null}

@@ -737,6 +737,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 											);
 										}}
 										onClearAfter={() => clearAfter({ id: cloud.id, createdAt: cloud.createdAt }, "cloud")}
+										onDismiss={() => handleClearCloud(cloud)}
 										disabled={clearingAll || clearingNotificationIds.size > 0}
 									>
 										<CloudNotificationItem
@@ -778,6 +779,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 									label={notification.title}
 									onRead={() => markNotificationRead(notification, hostId)}
 									onClearAfter={() => clearAfter({ id: notification.id, createdAt: notification.createdAt }, notificationSourceKey(hostId))}
+									onDismiss={() => handleClear(notification, hostId)}
 									disabled={clearingAll || clearingNotificationIds.size > 0}
 								>
 									<NotificationItem
@@ -852,19 +854,23 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	);
 }
 
-function NotificationRowMenu({ children, label, source, onRead, onClearAfter, disabled }: {
+function NotificationRowMenu({ children, label, source, onRead, onClearAfter, onDismiss, disabled }: {
 	children: ReactNode;
 	label: string;
 	source?: string;
 	onRead: () => void;
 	onClearAfter: () => void;
+	onDismiss: () => Promise<boolean>;
 	disabled: boolean;
 }) {
 	const { t } = useTranslation();
+	const rowRef = useRef<HTMLDivElement>(null);
+	useSwipeToDismiss(rowRef, onDismiss, !disabled);
 	return (
 		<ContextMenu>
 			<ContextMenuTrigger asChild>
 				<div
+					ref={rowRef}
 					role="listitem"
 					aria-label={`${t("notify.title")}: ${label}`}
 					data-notification-source={source}
@@ -966,10 +972,8 @@ const NotificationItem = memo(function NotificationItem({
 	const openRow = () => {
 		if (canOpenSession) onOpenSession(notification);
 	};
-	const rowRef = useRef<HTMLDivElement>(null);
-	useSwipeToDismiss(rowRef, () => onClear(notification), !clearDisabled);
 	return (
-		<div ref={rowRef} className="touch-pan-y select-none border-b border-border last:border-b-0" role="listitem">
+		<div className="touch-pan-y select-none border-b border-border last:border-b-0">
 			<div
 				className={cn(
 					"group grid grid-cols-[1rem_minmax(0,1fr)_auto] items-start gap-x-2.5 pl-3.5 pr-3 py-3 text-left transition-none hover:bg-interactive-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60",
@@ -1158,10 +1162,8 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 	const openRow = () => {
 		if (canOpenSession && projectId) onOpenSession(projectId, sessionId);
 	};
-	const rowRef = useRef<HTMLDivElement>(null);
-	useSwipeToDismiss(rowRef, () => onClear(notification), !clearDisabled);
 	return (
-		<div ref={rowRef} className="touch-pan-y select-none border-b border-border last:border-b-0" data-notification-source="cloud" role="listitem">
+		<div className="touch-pan-y select-none border-b border-border last:border-b-0" data-notification-source="cloud">
 			<div
 				className={cn(
 					"group grid grid-cols-[1rem_minmax(0,1fr)_auto] items-start gap-x-2.5 pl-3.5 pr-3 py-3 text-left transition-none hover:bg-interactive-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60",

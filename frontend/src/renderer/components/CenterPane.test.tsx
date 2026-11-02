@@ -570,7 +570,7 @@ describe("CenterPane toolbar session label", () => {
 		const toolbar = screen.getByTestId("session-topbar-toolbar");
 		const surface = screen.getByTestId("session-workspace-topbar");
 		expect(toolbar).toHaveClass("topbar-toolbar");
-		expect(surface.style.minHeight).toBe("var(--topbar-row-h)");
+		expect(surface.closest("header")).toHaveClass("min-h-(--topbar-row-h)");
 		expect(screen.queryByTestId("session-sub-tabs")).not.toBeInTheDocument();
 	});
 

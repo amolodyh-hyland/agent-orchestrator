@@ -248,6 +248,22 @@ func (f *fakeStore) SetSessionProvisionedWorkspace(_ context.Context, id domain.
 	return true, nil
 }
 
+func (f *fakeStore) SetSessionConfirmedWorkspace(_ context.Context, id domain.SessionID, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error) {
+	rec, ok := f.sessions[id]
+	canPublish := !rec.IsTerminated &&
+		(rec.ProvisionState == domain.SessionProvisionReady || rec.ProvisionState == domain.SessionProvisionProvisioning) &&
+		(rec.Metadata.WorkspacePath == "" || rec.Metadata.WorkspacePath == workspacePath)
+	if !ok || !canPublish {
+		return false, nil
+	}
+	rec.Metadata.Branch = branch
+	rec.Metadata.WorkspacePath = workspacePath
+	rec.Metadata.WorkspaceRepoPath = workspaceRepoPath
+	rec.UpdatedAt = now
+	f.sessions[id] = rec
+	return true, nil
+}
+
 func (f *fakeStore) SetSessionTaskBranch(_ context.Context, id domain.SessionID, expectedBranch, branch string, repoBranches map[string]string, now time.Time) (bool, error) {
 	rec, ok := f.sessions[id]
 	if !ok || rec.Metadata.Branch != expectedBranch {

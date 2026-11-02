@@ -278,7 +278,8 @@ beforeEach(async () => {
 });
 
 describe("GlobalSettingsForm", () => {
-	it("offers navigation gestures off by default and saves the switch", async () => {
+	it("saves the navigation gestures switch", async () => {
+		useUiStore.setState({ navigationGestures: false });
 		const user = userEvent.setup();
 		renderForm("general");
 		const toggle = screen.getByRole("switch", { name: "Navigation gestures" });

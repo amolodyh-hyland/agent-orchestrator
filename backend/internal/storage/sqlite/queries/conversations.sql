@@ -1131,6 +1131,16 @@ WHERE conversation_turns.conversation_id = ?
   AND conversation_turns.promotion_started_at IS NULL
 ORDER BY conversation_turns.requested_at, conversation_turns.rowid;
 
+-- Automatic draining may reserve a report-linked turn. Manual promotion below
+-- deliberately cannot, because its native acceptance receipt owns delivery.
+-- name: ReserveQueuedConversationTurnForBatch :execrows
+UPDATE conversation_turns
+SET promotion_started_at = sqlc.arg(promotion_started_at)
+WHERE conversation_turns.id = sqlc.arg(id)
+  AND conversation_turns.conversation_id = sqlc.arg(conversation_id)
+  AND state = 'queued'
+  AND promotion_started_at IS NULL;
+
 -- Claim one selected queue item before contacting the provider. execrows is the
 -- compare-and-set result: zero means the turn is absent, settled, or already being
 -- promoted, and the provider must not be called.

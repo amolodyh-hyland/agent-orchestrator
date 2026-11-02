@@ -1945,7 +1945,7 @@ describe("CreateProjectFlow project import validation", () => {
 
 		screen.getByRole("button", { name: "On this computer" }).focus();
 		await user.keyboard("{Enter}");
-		await waitFor(() => expect(screen.getByRole("button", { name: "Clone a repo" })).toHaveFocus());
+		await waitFor(() => expect(screen.getByRole("button", { name: "Create a project without a repository" })).toHaveFocus());
 
 		screen.getByRole("button", { name: "Back" }).focus();
 		await user.keyboard("{Enter}");

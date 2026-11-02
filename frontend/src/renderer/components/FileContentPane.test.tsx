@@ -5,8 +5,8 @@ import { useState, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { MAX_FILE_DRAFTS, resetFileDraftsForTests, setFileDraft } from "../lib/file-draft-store";
 import { useUiStore } from "../stores/ui-store";
-import { EMPTY_TOPBAR_TABS, findSession } from "../lib/topbar-tabs";
-import { useTopbarTabsStore } from "../stores/topbar-tabs-store";
+import { findSession } from "../lib/topbar-tabs";
+import { resetTopbarTabsStoreForTests, useTopbarTabsStore } from "../stores/topbar-tabs-store";
 import { FileContentPane } from "./FileContentPane";
 import type { FileViewMode } from "./FileContentPane";
 import type { FileAnnotationModel } from "./WorkspaceDiffView";
@@ -55,14 +55,7 @@ describe("FileContentPane", () => {
 	beforeEach(() => {
 		resetFileDraftsForTests();
 		localStorage.clear();
-		useTopbarTabsStore.setState({
-			tabs: EMPTY_TOPBAR_TABS,
-			overflow: "scroll",
-			density: "comfortable",
-			colorCoding: false,
-			projectColors: {},
-			lastEviction: null,
-		});
+		resetTopbarTabsStoreForTests();
 		getMock.mockReset();
 		putMock.mockReset();
 		subscribeMock.mockClear();

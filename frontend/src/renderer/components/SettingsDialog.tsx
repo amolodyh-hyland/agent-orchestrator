@@ -133,7 +133,13 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const [projectSaveState, setProjectSaveState] = useState<ProjectSettingsSaveState>(initialProjectSaveState);
 	const [cueBusy, setCueBusy] = useState(false);
 	useEffect(() => {
-		if (pendingProjectSection && projectSaveState.phase === "saved" && !projectSaveState.dirty) {
+		// A new failure cancels the destination; an explicit retry may choose it again.
+		if (projectSaveState.phase === "failed") setPendingProjectSection(null);
+	}, [projectSaveState]);
+	useEffect(() => {
+		if (pendingProjectSection && projectSaveState.dirty && !projectSaveState.requestPending && projectSaveState.phase === "pending") {
+			(document.getElementById("project-settings-form") as HTMLFormElement | null)?.requestSubmit();
+		} else if (pendingProjectSection && !projectSaveState.dirty && !projectSaveState.requestPending && (projectSaveState.phase === "saved" || projectSaveState.phase === "idle")) {
 			pendingProjectSection.navigate();
 			setPendingProjectSection(null);
 		}

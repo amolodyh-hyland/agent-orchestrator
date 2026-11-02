@@ -18,6 +18,9 @@ import type { ConversationActivity, ConversationItem, ConversationMessage, Conve
 import type { WorkspaceSummary } from "../../types/workspace";
 import { TooltipProvider } from "../ui/tooltip";
 
+// Worker timeline assertions do not mount the routed session tab shell.
+vi.mock("../topbar-tabs/TopbarTabs", () => ({ TopbarTabs: () => null }));
+
 const at = (minute: number) => `2026-10-22T03:${String(minute).padStart(2, "0")}:00Z`;
 
 function automation(turnId: string, minute: number, text: string): ConversationMessage {

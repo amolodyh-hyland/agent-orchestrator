@@ -2439,7 +2439,7 @@ describe("attachments", () => {
 
 	it("holds pasted files without a workspace and sends their bytes with the message", async () => {
 		const { onSend, field } = renderComposer({ draftSessionId: "composer-held-attachments", holdAttachments: true });
-		expect(screen.getByLabelText("Attach a file")).toBeTruthy();
+		expect(field.closest("form")!.querySelector('input[type="file"]')).not.toBeNull();
 		await typeInComposer(field, "what is this");
 		fireEvent.paste(field, { clipboardData: clipboardData([png("a.png"), textFile()]) });
 		await screen.findByLabelText("Remove notes.txt");

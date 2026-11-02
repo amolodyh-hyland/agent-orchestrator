@@ -91,6 +91,7 @@ func (c *Controller) queuedBatchInput(ctx context.Context, batch []domain.Queued
 			ContentStart:      len(combined.Content), ContentCount: len(msg.Content),
 		})
 		combined.Content = append(combined.Content, msg.Content...)
+		combined.NativeSkills = append(combined.NativeSkills, msg.NativeSkills...)
 		if len(batch) == 1 && steer == nil {
 			return msg, nil
 		}

@@ -94,8 +94,17 @@ func TestTelemetryIncrementalVacuumUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	after := pages()
-	if reclaimed := before - after; reclaimed <= 0 || reclaimed > 256 {
+	// SQLite may also remove a pointer-map page when reclaiming the requested
+	// freelist pages. Bound the work by freelist pages, not total file pages.
+	freeAfter, err := s.FreelistCount(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reclaimed := free - freeAfter; reclaimed <= 0 || reclaimed > 256 {
 		t.Fatalf("reclaimed %d pages, want 1..256", reclaimed)
+	}
+	if after >= before {
+		t.Fatalf("incremental vacuum did not shrink page count: %d -> %d", before, after)
 	}
 	bytesAfter := fileSize()
 	if bytesAfter >= bytesBefore {

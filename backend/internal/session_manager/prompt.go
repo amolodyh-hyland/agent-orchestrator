@@ -201,6 +201,9 @@ func buildProjectRules(cfg projectRulesConfig) (string, error) {
 		parts = append(parts, rules)
 	}
 	if rel := strings.TrimSpace(cfg.RulesFile); rel != "" {
+		if _, err := projectRelativeFile(cfg.ProjectPath, rel); err != nil {
+			return "", fmt.Errorf("%s: %w", cfg.RulesFileField, err)
+		}
 		data, err := readProjectContextFile(context.Background(), cfg.ProjectPath, rel, domain.MaxProjectContextInstructionBytes)
 		if err != nil {
 			return "", fmt.Errorf("read %s %s: %w", cfg.RulesFileField, rel, err)

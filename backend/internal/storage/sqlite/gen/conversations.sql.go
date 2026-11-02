@@ -2100,6 +2100,31 @@ func (q *Queries) ReplaceUntouchedConversationProvider(ctx context.Context, arg 
 	return result.RowsAffected()
 }
 
+const reserveQueuedConversationTurnForBatch = `-- name: ReserveQueuedConversationTurnForBatch :execrows
+UPDATE conversation_turns
+SET promotion_started_at = ?1
+WHERE conversation_turns.id = ?2
+  AND conversation_turns.conversation_id = ?3
+  AND state = 'queued'
+  AND promotion_started_at IS NULL
+`
+
+type ReserveQueuedConversationTurnForBatchParams struct {
+	PromotionStartedAt sql.NullTime
+	ID                 string
+	ConversationID     string
+}
+
+// Automatic draining may reserve a report-linked turn. Manual promotion below
+// deliberately cannot, because its native acceptance receipt owns delivery.
+func (q *Queries) ReserveQueuedConversationTurnForBatch(ctx context.Context, arg ReserveQueuedConversationTurnForBatchParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, reserveQueuedConversationTurnForBatch, arg.PromotionStartedAt, arg.ID, arg.ConversationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const reserveQueuedConversationTurnForPromotion = `-- name: ReserveQueuedConversationTurnForPromotion :execrows
 UPDATE conversation_turns
 SET promotion_started_at = ?1

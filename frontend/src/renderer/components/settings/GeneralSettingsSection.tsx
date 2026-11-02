@@ -341,8 +341,6 @@ export function GeneralSettingsSection({
 						onCheckedChange={setColorCoding}
 					/>
 				</SettingsRow>
-			</SettingsSection>
-			<SettingsSection title={t("settings.appearance")} grouped>
 				<SettingsRow label={t("settings.renderMath")} description={t("settings.renderMathHint")}>
 					<Switch aria-label={t("settings.renderMath")} checked={renderMath} onCheckedChange={setRenderMath} />
 				</SettingsRow>

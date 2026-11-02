@@ -30,9 +30,10 @@ INSERT INTO goose_db_version (version_id, is_applied) VALUES (201, 1);`)
 				if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 201 AND is_applied = 1`).Scan(&receipts); err != nil {
 					t.Fatal(err)
 				}
-				want := 0
+				// The fork has a legitimate 0201 receipt before any foreign one.
+				want := 1
 				if foreign {
-					want = 1
+					want = 2
 					var value string
 					if err := db.QueryRow(`SELECT value FROM foreign_201`).Scan(&value); err != nil || value != "preserved" {
 						t.Fatalf("foreign data = %q, %v", value, err)

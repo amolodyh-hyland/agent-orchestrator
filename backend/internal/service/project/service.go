@@ -1117,10 +1117,6 @@ func normalizedProjectRevision(revision int64) int64 {
 	return revision
 }
 
-func nextProjectRevision(revision int64) int64 {
-	return normalizedProjectRevision(revision) + 1
-}
-
 func projectConfigPtr(projectConfig domain.ProjectConfig) *domain.ProjectConfig {
 	if projectConfig.IsZero() {
 		return nil

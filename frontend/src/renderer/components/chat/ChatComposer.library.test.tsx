@@ -27,7 +27,7 @@ it.each(["/", "$"])("inserts the backend %s marker and preserves arguments witho
 	expect(send).not.toHaveBeenCalled();
 	await typeInLexicalEditor(field, 'file.ts --focus "a b"');
 	await userEvent.keyboard("{Enter}");
-	await waitFor(() => expect(send).toHaveBeenCalledWith(`${marker}review file.ts --focus "a b"`, undefined, undefined, undefined, undefined, expect.objectContaining({ entryId: "entry-one", snapshotId: "snapshot-one", token: `${marker}review` })));
+	await waitFor(() => expect(send).toHaveBeenCalledWith(`${marker}review file.ts --focus "a b"`, undefined, undefined, undefined, undefined, undefined, expect.objectContaining({ entryId: "entry-one", snapshotId: "snapshot-one", token: `${marker}review` })));
 });
 
 it("keeps same labels and names with distinct IDs selectable independently", async () => {
