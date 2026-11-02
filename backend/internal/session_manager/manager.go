@@ -6419,6 +6419,9 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 	setProtectedEnv(env, EnvBrowserRuntimeToken, "", caseInsensitive)
 	setProtectedEnv(env, EnvBrowserRuntimeTokenStdin, "", caseInsensitive)
 	accountErr := m.applyAgentAccountEnv(id, accountID, env, caseInsensitive)
+	if err := m.agentAssetEnv(context.Background(), project, env); err != nil {
+		return env, fmt.Errorf("resolve agent asset sources: %w", err)
+	}
 	path, err := hookPATHForOS(m.executable, os.Getenv, projectEnv, m.dataDir, caseInsensitive)
 	if err != nil {
 		m.logger.Warn("session PATH not pinned to the daemon binary; `ao hooks` callbacks may resolve to a different ao and activity tracking will stall",
@@ -7266,6 +7269,9 @@ func (m *Manager) superviseAgentProcessMode(agent ports.Agent, id domain.Session
 func (m *Manager) wrapAgentProcessWithLaunchID(agent ports.Agent, id domain.SessionID, env map[string]string, argv []string, launchID string, force bool) ([]string, error) {
 	if strings.TrimSpace(launchID) == "" {
 		return nil, errors.New("empty launch id")
+	}
+	if launcher, ok := agent.(ports.AgentAssetSourceLauncher); ok {
+		argv = launcher.ApplyAssetSources(argv, env)
 	}
 	// Every provider generation is fenced, including providers that report
 	// process exit through native hooks and therefore do not need the wrapper.

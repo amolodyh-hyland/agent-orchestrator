@@ -110,6 +110,7 @@ type containerReapConfig struct {
 // client. The CLI sets common fields via flags and the whole object via
 // --config-json.
 type projectConfig struct {
+	AgentAssetSources *[]string            `json:"agentAssetSources,omitempty"`
 	ContainerReap     *containerReapConfig `json:"containerReap,omitempty"`
 	CanonicalRepoURL  string               `json:"canonicalRepoURL,omitempty"`
 	DefaultBranch     string               `json:"defaultBranch,omitempty"`

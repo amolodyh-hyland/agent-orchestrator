@@ -18,7 +18,8 @@ import (
 // AppSettings is the durable preference set. Field-compatible with
 // service/settings.Snapshot, which the daemon wiring adapts.
 type AppSettings struct {
-	HarnessDefaults map[string]domain.HarnessDefault
+	AgentAssetSources []string
+	HarnessDefaults   map[string]domain.HarnessDefault
 	// DefaultSessionMode is the interface a new session gets when the spawn does
 	// not name one. Never applied to an existing session: only an explicit
 	// interface transition changes a live session's committed mode, so
@@ -40,11 +41,16 @@ func (s *Store) GetAppSettings(ctx context.Context) (AppSettings, error) {
 		return AppSettings{}, fmt.Errorf("read app settings: %w", err)
 	}
 	defaults := make(map[string]domain.HarnessDefault)
+	var sources []string
+	if err := json.Unmarshal([]byte(row.AgentAssetSources), &sources); err != nil {
+		return AppSettings{}, fmt.Errorf("read agent asset sources: %w", err)
+	}
 	if err := json.Unmarshal([]byte(row.HarnessDefaults), &defaults); err != nil {
 		return AppSettings{}, fmt.Errorf("read harness defaults: %w", err)
 	}
 	return AppSettings{
-		HarnessDefaults: defaults,
+		AgentAssetSources: sources,
+		HarnessDefaults:   defaults,
 		// Normalized on read: a value written by a build that knows a mode this
 		// one does not must still resolve to something dispatchable.
 		DefaultSessionMode: domain.NormalizeSessionMode(row.DefaultSessionMode),
@@ -52,6 +58,23 @@ func (s *Store) GetAppSettings(ctx context.Context) (AppSettings, error) {
 		VersionRefresh:     row.VersionRefresh,
 		UpdatedAt:          row.UpdatedAt,
 	}, nil
+}
+
+// SetAgentAssetSources persists the complete global source list.
+func (s *Store) SetAgentAssetSources(ctx context.Context, sources []string, now time.Time) error {
+	if err := domain.ValidateAgentAssetSources(sources); err != nil {
+		return err
+	}
+	if sources == nil {
+		sources = []string{}
+	}
+	data, err := json.Marshal(sources)
+	if err != nil {
+		return err
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.qw.SetAgentAssetSources(ctx, gen.SetAgentAssetSourcesParams{AgentAssetSources: string(data), UpdatedAt: now})
 }
 
 // SetDefaultSessionMode persists the default interface for new sessions.

@@ -9,6 +9,8 @@ import (
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentassets"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -16,6 +18,9 @@ var _ ports.ChatIsolatedForker = (*Driver)(nil)
 
 // ForkIntoHost copies retained provider context without changing the parent host.
 func (d *Driver) ForkIntoHost(ctx context.Context, sourceID, lastTurnID string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+	if d.cfg.Harness == domain.HarnessClaudeCode {
+		cfg.AdditionalDirectories = append(append([]string{}, cfg.AdditionalDirectories...), agentassets.ClaudeRoots(cfg.Env)...)
+	}
 	if sourceID == "" || lastTurnID != "" {
 		return nil, fmt.Errorf("%w: ACP forks require a source session and copy current context only", ports.ErrChatCapabilityUnavailable)
 	}

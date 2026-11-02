@@ -287,6 +287,7 @@ var outerMutationManifest = map[string]string{
 	"PATCH /api/v1/settings/harness-defaults/{agent}":                                                  "native_only",
 	"PATCH /api/v1/settings/session-interface":                                                         "native_only",
 	"PATCH /api/v1/settings/version-refresh":                                                           "native_only",
+	"PATCH /api/v1/settings/agent-asset-sources":                                                       "native_only",
 	"POST /api/v1/shell-terminals":                                                                     "native_only",
 	"PATCH /api/v1/shell-terminals/{handleId}":                                                         "native_only",
 	"DELETE /api/v1/shell-terminals/{handleId}":                                                        "native_only",

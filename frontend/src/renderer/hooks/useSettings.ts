@@ -18,6 +18,7 @@ export type HarnessDefault = Pick<components["schemas"]["HarnessDefault"], "disa
 export const settingsQueryKey = ["settings"] as const;
 
 export interface Settings {
+	agentAssetSources?: string[];
 	harnessDefaults?: Record<string, HarnessDefault>;
 	/** Applies to sessions created from now on; never to an existing one. */
 	defaultSessionMode: SessionMode;
@@ -54,6 +55,7 @@ export function useSettings(hostId?: string, enabled = true) {
 			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).GET("/api/v1/settings");
 			if (error) throw error;
 			return {
+				agentAssetSources: data?.agentAssetSources ?? [],
 				defaultSessionMode: (data?.defaultSessionMode ?? "tui") as SessionMode,
 				harnessDefaults: data?.harnessDefaults ?? {},
 				chatHarnesses: data?.chatHarnesses ?? [],
@@ -76,6 +78,18 @@ export function useSettings(hostId?: string, enabled = true) {
 		isLoading: query.isLoading,
 		error: query.error ? apiErrorMessage(query.error) : undefined,
 	};
+}
+
+export function useUpdateAgentAssetSources() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: async (agentAssetSources: string[]) => {
+			const { data, error } = await apiClient.PATCH("/api/v1/settings/agent-asset-sources", { body: { agentAssetSources } });
+			if (error) throw error;
+			return data;
+		},
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: settingsQueryKey }),
+	});
 }
 
 export function useUpdateSessionInterface() {

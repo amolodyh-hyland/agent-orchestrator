@@ -24,6 +24,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentassets"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -254,6 +255,9 @@ func claudeACPLaunchEnv(
 	// This prevents the adapter's optional native Claude package from becoming
 	// a second installation managed by AO.
 	env["CLAUDE_CODE_EXECUTABLE"] = binary
+	if len(agentassets.ClaudeRoots(input)) > 0 {
+		env[agentassets.ClaudeInstructionsEnv] = "1"
+	}
 	// Claude Code withholds its to-do tools (TaskCreate, TaskUpdate, ...) from
 	// SDK-driven sessions unless this is set, so the agent has nothing to call
 	// and AO never receives the plan updates behind the chat's plan panel. A

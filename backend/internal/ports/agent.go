@@ -217,6 +217,11 @@ type AgentRuntimeLaunchEnv interface {
 	AugmentRuntimeLaunchEnv(env map[string]string, dataDir string, sessionID domain.SessionID, launchID string)
 }
 
+// AgentAssetSourceLauncher adds supported native source inputs to terminal launches.
+type AgentAssetSourceLauncher interface {
+	ApplyAssetSources(argv []string, env map[string]string) []string
+}
+
 // AgentTerminalVersionRefresher opts a terminal adapter into unattended upgrades.
 // GetRestoreCommand must name the exact captured conversation, preserve its
 // model/provider, instructions and permission options, and never silently fall

@@ -17,6 +17,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentassets"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -304,6 +305,10 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	}
 
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
+	if err := configureAssetSkills(ctx, conv, cfg.Env); err != nil {
+		_ = conv.Terminate()
+		return nil, err
+	}
 	conv.readOnly = cfg.ReadOnly
 	conv.disableNetwork = cfg.DisableNetwork
 	conv.launchMode = cfg.Permissions
@@ -393,6 +398,10 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	}
 
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
+	if err := configureAssetSkills(ctx, conv, cfg.Env); err != nil {
+		_ = conv.Terminate()
+		return nil, err
+	}
 	conv.readOnly = cfg.ReadOnly
 	conv.launchMode = cfg.Permissions
 	params := map[string]any{
@@ -600,6 +609,22 @@ func (d *Driver) connectSession(
 		return nil, false, err
 	}
 	return conv, false, nil
+}
+
+func configureAssetSkills(ctx context.Context, conv *conversation, env map[string]string) error {
+	roots, err := agentassets.CodexSkillRoots(ctx, env)
+	if err != nil {
+		return err
+	}
+	if len(roots) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, handshakeTimeout)
+	defer cancel()
+	if err := conv.conn.request(ctx, "skills/extraRoots/set", map[string]any{"extraRoots": roots}, nil); err != nil {
+		return fmt.Errorf("configure native skill roots (requires Codex skills/extraRoots/set support): %w", err)
+	}
+	return nil
 }
 
 func (d *Driver) initialize(ctx context.Context, conv *conversation) error {
@@ -811,6 +836,10 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID,
 	if reconnected {
 		_ = conv.Close()
 		return nil, errors.New("side provider host already owns a conversation")
+	}
+	if err := configureAssetSkills(ctx, conv, cfg.Env); err != nil {
+		_ = conv.Terminate()
+		return nil, err
 	}
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
 	conv.readOnly = cfg.ReadOnly

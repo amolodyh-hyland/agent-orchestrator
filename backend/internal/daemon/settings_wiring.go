@@ -23,12 +23,17 @@ func (s settingsStore) GetAppSettings(ctx context.Context) (settingssvc.Snapshot
 		return settingssvc.Snapshot{}, err
 	}
 	return settingssvc.Snapshot{
+		AgentAssetSources:  row.AgentAssetSources,
 		DefaultSessionMode: row.DefaultSessionMode,
 		HarnessDefaults:    row.HarnessDefaults,
 		CloudOffering:      row.CloudOffering,
 		VersionRefresh:     row.VersionRefresh,
 		UpdatedAt:          row.UpdatedAt,
 	}, nil
+}
+
+func (s settingsStore) SetAgentAssetSources(ctx context.Context, sources []string, now time.Time) error {
+	return s.store.SetAgentAssetSources(ctx, sources, now)
 }
 
 func (s settingsStore) SetDefaultSessionMode(
