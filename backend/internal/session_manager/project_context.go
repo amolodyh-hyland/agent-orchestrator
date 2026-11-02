@@ -300,6 +300,21 @@ func (m *Manager) resolveExistingProjectRoleRules(ctx context.Context, project d
 		if value := strings.TrimSpace(project.Config.OrchestratorRules); value != "" {
 			parts = append(parts, value)
 		}
+		if relative := strings.TrimSpace(project.Config.OrchestratorRulesFile); relative != "" {
+			if !validProjectContextRelativePath(relative) {
+				return "", &ProjectContextResolutionError{BindingID: "orchestratorRulesFile", Reason: "path_escape"}
+			}
+			data, err := readProjectContextFile(ctx, project.Path, relative, domain.MaxProjectContextInstructionBytes)
+			if err != nil {
+				return "", &ProjectContextResolutionError{BindingID: "orchestratorRulesFile", Reason: contextReason(err)}
+			}
+			if !utf8.Valid(data) {
+				return "", &ProjectContextResolutionError{BindingID: "orchestratorRulesFile", Reason: "invalid_utf8"}
+			}
+			if value := strings.TrimSpace(string(data)); value != "" {
+				parts = append(parts, value)
+			}
+		}
 	}
 	joined := strings.Join(parts, "\n\n")
 	if len(joined) > domain.MaxProjectContextInstructionBytes {

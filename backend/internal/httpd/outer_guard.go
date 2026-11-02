@@ -99,6 +99,19 @@ func outerGuard(router chi.Router, svc *outer.Service) func(http.Handler) http.H
 }
 
 var outerMutationManifest = map[string]string{
+	"DELETE /api/v1/projects/{id}/permissions":                                                         "project.permissions",
+	"POST /api/v1/sessions/{sessionId}/conversation/file-references/resolve":                           "session.scoped",
+	"PATCH /api/v1/sessions/{sessionId}/conversation/turns/{turnId}/auto-resume":                       "session.scoped",
+	"POST /api/v1/sessions/{sessionId}/provider-switch":                                                "switch",
+	"POST /api/v1/sessions/{sessionId}/workspace/history/selection":                                    "session.scoped",
+	"POST /api/v1/agents/{agent}/chat/prewarm":                                                         "native_only",
+	"POST /api/v1/browser/chrome":                                                                      "native_only",
+	"DELETE /api/v1/browser/chrome":                                                                    "native_only",
+	"POST /api/v1/computer-use/call":                                                                   "native_only",
+	"POST /api/v1/computer-use/daemon/start":                                                           "native_only",
+	"POST /api/v1/computer-use/permissions/grant":                                                      "native_only",
+	"POST /api/v1/projects/clone/check":                                                                "native_only",
+	"PATCH /api/v1/settings/computer-use":                                                              "native_only",
 	"POST /api/v1/outer/plans":                                                                         "outer.plan.propose",
 	"POST /api/v1/awake/downloads":                                                                     "native_only",
 	"DELETE /api/v1/awake/history":                                                                     "native_only",

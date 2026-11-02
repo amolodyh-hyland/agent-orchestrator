@@ -99,6 +99,8 @@ type libraryDispatchStore struct {
 	failed bool
 }
 
+func (*libraryDispatchStore) RecordProviderInput(context.Context, string, string) error { return nil }
+
 func (*libraryDispatchStore) BindTurnToProvider(context.Context, string, string, time.Time) error {
 	return nil
 }
@@ -117,7 +119,7 @@ func TestLibraryDeferredMainDispatchRejectsCompletedRevocation(t *testing.T) {
 	controller.libraryInput = svc.acquireLibraryInput
 	done := make(chan error, 1)
 	go func() {
-		_, err := controller.dispatch(context.Background(), "turn", ports.ChatUserMessage{Text: "continue"}, time.Now())
+		_, err := controller.dispatch(context.Background(), "turn", ports.ChatUserMessage{Text: "continue"}, time.Now(), false, nil, false)
 		done <- err
 	}()
 	select {

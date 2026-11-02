@@ -219,6 +219,7 @@ var shippedMigrations = map[int64]string{
 	200: "0200_session_artifact_version_source.sql",
 	201: "0201_project_container_metadata.sql",
 	202: "0202_allow_memcode_harness.sql",
+	// 0203 was an unmerged Hermes candidate; retain its reservation.
 	206: "0206_awake.sql",
 	210: "0210_agent_accounts.sql",
 	211: "0211_account_transitions.sql",
@@ -230,6 +231,35 @@ var shippedMigrations = map[int64]string{
 	217: "0217_session_permission_ceiling.sql",
 	218: "0218_multica_delegations.sql",
 	219: "0219_multica_confirmation_verification.sql",
+
+	20261019142324385: "20261019142324385_allow_hermes_harness.sql",
+	20261019220421171: "20261019220421171_usage_limit_auto_resume.sql",
+	20261019220421514: "20261019220421514_usage_limit_reset_cdc.sql",
+	20261020090353460: "20261020090353460_allow_ao_action_activity.sql",
+	20261020131539535: "20261020131539535_provider_switching.sql",
+	20261021051727800: "20261021051727800_conversation_batch_members.sql",
+	20261021142844923: "20261021142844923_index_conversation_activity_provider_item_lookup.sql",
+	20261021230230412: "20261021230230412_provider_events_session_index.sql",
+	20261022054735000: "20261022054735000_device_model_catalogs.sql",
+	20261022144835405: "20261022144835405_provider_events_turn_completed_index.sql",
+	20261022172135175: "20261022172135175_session_branch_naming.sql",
+	20261023055441558: "20261023055441558_automation_model_settings.sql",
+	20261023123504180: "20261023123504180_app_settings_computer_use.sql",
+	20261024194546592: "20261024194546592_conversation_messages_search.sql",
+	20261026083409462: "20261026083409462_deepseek_chat_failure_code.sql",
+	20261026185532680: "20261026185532680_usage_telemetry_measurements.sql",
+	20261028124744441: "20261028124744441_telemetry_incremental_vacuum.sql",
+	20261029072736970: "20261029072736970_session_telemetry.sql",
+	20261030044053264: "20261030044053264_usage_telemetry_details.sql",
+	20261030141527623: "20261030141527623_session_end_telemetry_claim.sql",
+	20261101055144579: "20261101055144579_conversation_message_authored_by_user.sql",
+}
+
+// reservedLegacyMigrations allows the approved M3 migration to land after this
+// sync without changing its preassigned ID. It is optional until M3 lands; no
+// other sequential migration may follow it. Move it into shippedMigrations in M3.
+var reservedLegacyMigrations = map[int64]string{
+	234: "0234_outer_mailbox.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -245,7 +275,8 @@ var shippedMigrations = map[int64]string{
 // Any such migration whose schema the generated queries depend on must add a
 // schemaRepairs entry in db.go.
 func burnedVersion(v int64) bool {
-	return v == 22
+	// 203 was used by the historical Hermes candidate and must not be reused.
+	return v == 22 || v == 203
 }
 
 // TestMigrationVersionLedger enforces the append-only migration ledger: every
@@ -286,6 +317,9 @@ func TestMigrationVersionLedger(t *testing.T) {
 			continue
 		}
 		shipped, ok := shippedMigrations[version]
+		if !ok {
+			shipped, ok = reservedLegacyMigrations[version]
+		}
 		switch {
 		case ok && shipped != e.Name():
 			t.Errorf("migration version %d was renamed from %q to %q: installs that already applied it will never run the new file", version, shipped, e.Name())

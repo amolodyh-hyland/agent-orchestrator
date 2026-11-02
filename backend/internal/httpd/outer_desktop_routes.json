@@ -15,6 +15,10 @@
     "operation": "native_only",
     "mode": "confirm"
   },
+  "DELETE /api/v1/browser/chrome": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
   "DELETE /api/v1/cues/{cueId}": {
     "operation": "native_only",
     "mode": "confirm"
@@ -37,6 +41,10 @@
   },
   "DELETE /api/v1/projects/{id}": {
     "operation": "project.remove",
+    "mode": "confirm"
+  },
+  "DELETE /api/v1/projects/{id}/permissions": {
+    "operation": "project.permissions",
     "mode": "confirm"
   },
   "DELETE /api/v1/push/devices/{token}": {
@@ -139,6 +147,10 @@
     "operation": "conversation.held",
     "mode": "confirm"
   },
+  "PATCH /api/v1/sessions/{sessionId}/conversation/turns/{turnId}/auto-resume": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
   "PATCH /api/v1/sessions/{sessionId}/merge-policy": {
     "operation": "session.scoped",
     "mode": "confirm"
@@ -152,6 +164,10 @@
     "mode": "confirm"
   },
   "PATCH /api/v1/settings/cloud-offering": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "PATCH /api/v1/settings/computer-use": {
     "operation": "native_only",
     "mode": "confirm"
   },
@@ -239,6 +255,10 @@
     "operation": "native_only",
     "mode": "confirm"
   },
+  "POST /api/v1/agents/{agent}/chat/prewarm": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
   "POST /api/v1/agents/{agent}/install": {
     "operation": "native_only",
     "mode": "confirm"
@@ -303,7 +323,23 @@
     "operation": "native_only",
     "mode": "confirm"
   },
+  "POST /api/v1/browser/chrome": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
   "POST /api/v1/browser/commands": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/computer-use/call": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/computer-use/daemon/start": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
+  "POST /api/v1/computer-use/permissions/grant": {
     "operation": "native_only",
     "mode": "confirm"
   },
@@ -369,6 +405,10 @@
   },
   "POST /api/v1/projects/clone": {
     "operation": "project.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/projects/clone/check": {
+    "operation": "native_only",
     "mode": "confirm"
   },
   "POST /api/v1/projects/clone/cleanup": {
@@ -511,6 +551,10 @@
     "operation": "conversation.held",
     "mode": "confirm"
   },
+  "POST /api/v1/sessions/{sessionId}/conversation/file-references/resolve": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
   "POST /api/v1/sessions/{sessionId}/conversation/inputs/{requestId}/resolve": {
     "operation": "conversation.held",
     "mode": "confirm"
@@ -639,6 +683,10 @@
     "operation": "session.scoped",
     "mode": "confirm"
   },
+  "POST /api/v1/sessions/{sessionId}/provider-switch": {
+    "operation": "switch",
+    "mode": "confirm"
+  },
   "POST /api/v1/sessions/{sessionId}/renders": {
     "operation": "session.scoped",
     "mode": "confirm"
@@ -704,6 +752,10 @@
     "mode": "confirm"
   },
   "POST /api/v1/sessions/{sessionId}/workspace/diffs": {
+    "operation": "session.scoped",
+    "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/workspace/history/selection": {
     "operation": "session.scoped",
     "mode": "confirm"
   },

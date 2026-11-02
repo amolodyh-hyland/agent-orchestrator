@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attachmentName, attachmentTileSize, isFolderAttachmentPath, isImageAttachment, isSameAttachmentLoad, stagedAttachmentParts, withAttachmentReferences } from "./messageAttachments";
+import { attachmentName, isFolderAttachmentPath, attachmentTileSize, editableMessageText, isImageAttachment, isSameAttachmentLoad, stagedAttachmentParts, withAttachmentReferences, withEditedBody } from "./messageAttachments";
 
 describe("mobile Chat staged attachments", () => {
 	it("strips the desktop composer suffix so the image can render instead of the raw path list", () => {
@@ -81,5 +81,19 @@ describe("mobile Chat staged attachments", () => {
 		expect(isImageAttachment(".ao/attachments/attachment-a.JPG")).toBe(true);
 		expect(isImageAttachment(".ao/attachments/attachment-a.webp")).toBe(true);
 		expect(isImageAttachment(".ao/attachments/attachment-a.pdf")).toBe(false);
+	});
+});
+
+describe("editable message text", () => {
+	it("edits the body and keeps AO's staged attachment block", () => {
+		const text = withAttachmentReferences("Look at this", [".ao/attachments/image-a.png"]);
+		const parts = editableMessageText(text);
+		expect(parts).toEqual({ body: "Look at this", attachments: [".ao/attachments/image-a.png"] });
+		expect(withEditedBody("Look closer", parts.attachments)).toBe(withAttachmentReferences("Look closer", parts.attachments));
+	});
+
+	it("leaves plain prompts whole", () => {
+		expect(editableMessageText("Just text")).toEqual({ body: "Just text", attachments: [] });
+		expect(withEditedBody("Edited  ", [])).toBe("Edited");
 	});
 });

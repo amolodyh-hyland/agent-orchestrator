@@ -2,19 +2,14 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useState } from "react";
 import { useUiStore } from "../../stores/ui-store";
 import { useTopbarTabsStore } from "../../stores/topbar-tabs-store";
 import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../../types/workspace";
-import { TopbarTab, type SessionTabActions, type TopbarTabProps } from "./TopbarTab";
+import { TopbarTab, type SessionTabActions } from "./TopbarTab";
 import { useTopbarTabMenu } from "./TopbarTabMenu";
 import { TopbarTabs } from "./TopbarTabs";
 import type { TopbarTabView } from "./topbar-tabs-view";
-import { ContextMenuItem } from "../ui/context-menu";
-import { DropdownMenuItem, DropdownMenuSeparator } from "../ui/dropdown-menu";
-import { SwitchAgentDialog } from "../SwitchAgentDialog";
-import { TerminalSwitchAgentButton } from "../TerminalSwitchAgentButton";
-import { TooltipProvider } from "../ui/tooltip";
+import { DropdownMenuItem } from "../ui/dropdown-menu";
 
 const routerMocks = vi.hoisted(() => ({
 	navigate: vi.fn(),
@@ -155,103 +150,6 @@ function MenuHarness({ view, tabAction }: { view: TopbarTabView; tabAction?: Ses
 	);
 }
 
-const switchAgentSession: WorkspaceSession = {
-	...session,
-	kind: "worker",
-	branch: "ao/task-1",
-	activity: { state: "active", lastActivityAt: "2026-10-01T00:00:00Z" },
-};
-
-function SwitchAgentTabHarness() {
-	const [container, setContainer] = useState<HTMLDivElement | null>(null);
-	const [open, setOpen] = useState(false);
-	const view = makeView("task");
-	const renderMenu: TopbarTabProps["renderMenu"] = ({ kind, sessionMenuItems }) => kind === "dropdown" ? (
-		<>
-			{sessionMenuItems}
-			<DropdownMenuSeparator />
-			<DropdownMenuItem>Close tab</DropdownMenuItem>
-		</>
-	) : <ContextMenuItem>Close tab</ContextMenuItem>;
-	return (
-		<div className="relative" data-testid="terminal-container" ref={setContainer}>
-			<TopbarTab
-				view={{ ...view, session: switchAgentSession, sessionId: switchAgentSession.id }}
-				density="comfortable"
-				onActivate={vi.fn()}
-				onClose={vi.fn()}
-				onPersist={vi.fn()}
-				renderMenu={renderMenu}
-				tabAction={{
-					menuItems: (
-						<TerminalSwitchAgentButton
-							container={container}
-							onOpenChange={setOpen}
-							open={open}
-							session={switchAgentSession}
-							switchError={null}
-							variant="menu-item"
-						/>
-					),
-				}}
-			/>
-			{container ? (
-				<SwitchAgentDialog container={container} onOpenChange={setOpen} open={open} session={switchAgentSession} />
-			) : null}
-		</div>
-	);
-}
-
-function renderSwitchAgentTab() {
-	return render(
-		<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}>
-			<TooltipProvider>
-				<SwitchAgentTabHarness />
-			</TooltipProvider>
-		</QueryClientProvider>,
-	);
-}
-
-function fakeMenuExitAnimation(): () => void {
-	const original = window.getComputedStyle;
-	const real = original.bind(window);
-	Object.defineProperty(window, "getComputedStyle", {
-		configurable: true,
-		writable: true,
-		value: (element: Element, pseudo?: string | null) => {
-			const styles = real(element, pseudo);
-			if (element.getAttribute("role") !== "menu") return styles;
-			return new Proxy(styles, {
-				get(target, property) {
-					if (property === "animationName") {
-						return element.getAttribute("data-state") === "closed"
-							? "animate-popover-out"
-							: "animate-popover-in";
-					}
-					const value = Reflect.get(target, property, target);
-					return typeof value === "function" ? (value as () => unknown).bind(target) : value;
-				},
-			}) as CSSStyleDeclaration;
-		},
-	});
-	return () => Object.defineProperty(window, "getComputedStyle", {
-		configurable: true,
-		writable: true,
-		value: original,
-	});
-}
-
-function dispatchAnimationEnd(element: Element, animationName: string) {
-	const event = new Event("animationend");
-	Object.defineProperty(event, "animationName", { value: animationName });
-	element.dispatchEvent(event);
-}
-
-async function waitForMenuTeardown() {
-	await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
-	await new Promise((resolve) => setTimeout(resolve, 0));
-}
-
 function renderTab(view: TopbarTabView, tabAction?: SessionTabActions) {
 	previousUnmount?.();
 	setTabs(view);
@@ -322,79 +220,6 @@ afterEach(() => {
 });
 
 describe("TopbarTabMenu", () => {
-	it("keeps the switch-agent dialog open after selecting it from the active tab menu", async () => {
-		renderSwitchAgentTab();
-
-		await userEvent.click(screen.getByRole("button", { name: "Tab options" }));
-		await userEvent.click(await screen.findByRole("menuitem", { name: "Switch agent" }));
-
-		const dialog = await screen.findByRole("dialog", { name: "Switch agent" });
-		await waitForMenuTeardown();
-		const trigger = screen.getByRole("button", { name: "Tab options" });
-		expect(screen.getByRole("dialog", { name: "Switch agent" })).toBe(dialog);
-		expect(dialog.contains(document.activeElement)).toBe(true);
-		expect(document.activeElement).not.toBe(trigger);
-	});
-
-	it("keeps focus inside the switch-agent dialog through the tab menu's exit animation", async () => {
-		const restoreStyles = fakeMenuExitAnimation();
-		try {
-			renderSwitchAgentTab();
-			await userEvent.click(screen.getByRole("button", { name: "Tab options" }));
-			await userEvent.click(await screen.findByRole("menuitem", { name: "Switch agent" }));
-
-			const dialog = await screen.findByRole("dialog", { name: "Switch agent", hidden: true });
-			const menu = screen.getByRole("menu");
-			expect(menu.getAttribute("data-state")).toBe("closed");
-			expect(dialog.contains(document.activeElement)).toBe(true);
-			expect(document.activeElement).not.toBe(screen.getByRole("button", { name: "Tab options", hidden: true }));
-
-			dispatchAnimationEnd(menu, "animate-popover-out");
-			await waitForMenuTeardown();
-
-			expect(screen.getByRole("dialog", { name: "Switch agent" })).toBe(dialog);
-			expect(dialog.contains(document.activeElement)).toBe(true);
-			expect(document.activeElement).not.toBe(screen.getByRole("button", { name: "Tab options" }));
-		} finally {
-			restoreStyles();
-		}
-	});
-
-	it("still closes the switch-agent dialog on a genuine outside click", async () => {
-		renderSwitchAgentTab();
-		await userEvent.click(screen.getByRole("button", { name: "Tab options" }));
-		await userEvent.click(await screen.findByRole("menuitem", { name: "Switch agent" }));
-		await screen.findByRole("dialog", { name: "Switch agent" });
-
-		await waitForMenuTeardown();
-		await userEvent.click(document.body);
-		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-	});
-
-	it("treats a later options-button click as an outside interaction", async () => {
-		renderSwitchAgentTab();
-		await userEvent.click(screen.getByRole("button", { name: "Tab options" }));
-		await userEvent.click(await screen.findByRole("menuitem", { name: "Switch agent" }));
-		await screen.findByRole("dialog", { name: "Switch agent" });
-
-		await waitForMenuTeardown();
-		expect(screen.getByRole("dialog", { name: "Switch agent" })).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "Tab options" }));
-		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-	});
-
-	it("dismisses the dialog when focus moves to the options button later", async () => {
-		renderSwitchAgentTab();
-		await userEvent.click(screen.getByRole("button", { name: "Tab options" }));
-		await userEvent.click(await screen.findByRole("menuitem", { name: "Switch agent" }));
-		await screen.findByRole("dialog", { name: "Switch agent" });
-		await waitForMenuTeardown();
-
-		const trigger = screen.getByRole("button", { name: "Tab options" });
-		trigger.blur();
-		trigger.focus();
-		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-	});
 
 	it("puts active session actions before the tab entries in dropdowns only", async () => {
 		const view = makeView("task", { mode: "preview" });

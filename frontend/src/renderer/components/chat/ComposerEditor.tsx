@@ -89,6 +89,8 @@ export type ComposerEditorSnapshot = {
 	text: string;
 	hasText: boolean;
 	trigger?: ComposerTrigger;
+	/** The caret's offset into text; undefined without a selection in the editor. */
+	caret?: number;
 };
 
 export type ComposerPromptSuggestion = { id: string; text: string; onDismiss?: () => void };
@@ -1001,24 +1003,58 @@ function $wrapSelectionWithMarkdown(opening: string, closing: string, codeBlock 
 	return true;
 }
 
+// The text content of container's descendants before target, in document
+// order, counted as $serializeComposer counts it.
+function $textBefore(container: LexicalNode, target: LexicalNode): number {
+	if (!$isElementNode(container)) return 0;
+	let count = 0;
+	for (const child of container.getChildren()) {
+		if (child.is(target)) return count;
+		if ($isElementNode(child) && child.isParentOf(target)) return count + $textBefore(child, target);
+		count += child.getTextContent().length;
+	}
+	return count;
+}
+
+/** Where the selection's focus sits in $serializeComposer's text. */
+function $caretOffset(): number | undefined {
+	const selection = $getSelection();
+	if (!$isRangeSelection(selection)) return undefined;
+	const point = selection.focus;
+	const node = point.getNode();
+	let offset = 0;
+	for (const paragraph of $getRoot().getChildren()) {
+		if (paragraph.is(node) || ($isElementNode(paragraph) && paragraph.isParentOf(node))) {
+			const within = point.type === "element" && $isElementNode(node)
+				? node.getChildren().slice(0, point.offset).reduce((sum, child) => sum + child.getTextContent().length, 0)
+				: point.offset;
+			return offset + $textBefore(paragraph, node) + within;
+		}
+		offset += paragraph.getTextContent().length + 1;
+	}
+	return undefined;
+}
+
 function editorSnapshot(): ComposerEditorSnapshot {
 	const text = $serializeComposer();
+	const caret = $caretOffset();
 	const selection = $getSelection();
 	if (!$isRangeSelection(selection) || !selection.isCollapsed()) {
-		return { text, hasText: text.trim().length > 0 };
+		return { text, hasText: text.trim().length > 0, caret };
 	}
 
 	const anchor = selection.anchor;
 	const node = anchor.getNode();
 	if (!$isTextNode(node) || anchor.type !== "text") {
-		return { text, hasText: text.trim().length > 0 };
+		return { text, hasText: text.trim().length > 0, caret };
 	}
 
 	const active = findActiveTrigger(node.getTextContent(), anchor.offset);
-	if (!active) return { text, hasText: text.trim().length > 0 };
+	if (!active) return { text, hasText: text.trim().length > 0, caret };
 	return {
 		text,
 		hasText: text.trim().length > 0,
+		caret,
 		trigger: {
 			...active,
 			key: `${node.getKey()}:${active.start}`,
@@ -1041,6 +1077,7 @@ const EditorBridge = forwardRef<
 		menuOpen: boolean;
 		promptSuggestion?: ComposerPromptSuggestion;
 		onDismissSuggestion: () => void;
+		onEmptyChange: (empty: boolean) => void;
 		/** Paths of the files and images attached right now. */
 		attachedImages: () => string[];
 		compositionState: { current: boolean };
@@ -1049,7 +1086,7 @@ const EditorBridge = forwardRef<
 		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
 	}
->(function EditorBridge({ disabled, menuOpen, promptSuggestion, onDismissSuggestion, attachedImages, compositionState, compositionEndScheduler, onChange, onComplete, onEnter }, ref) {
+>(function EditorBridge({ disabled, menuOpen, promptSuggestion, onEmptyChange, onDismissSuggestion, attachedImages, compositionState, compositionEndScheduler, onChange, onComplete, onEnter }, ref) {
 	const [editor] = useLexicalComposerContext();
 	const lastSelection = useRef<RangeSelection | null>(null);
 	// A range stays intact while the picker/stager is pending. Only acceptance
@@ -1219,7 +1256,7 @@ const EditorBridge = forwardRef<
 		const formatAfterComposition = () => formatAfterTextUpdate(true);
 		compositionEndScheduler.current = formatAfterComposition;
 		const dismissIfNotEmpty = () => {
-			if (promptSuggestion && $serializeComposer().length > 0) onDismissSuggestion();
+			onEmptyChange($serializeComposer().length === 0);
 		};
 		editor.getEditorState().read(dismissIfNotEmpty);
 		const unregister = editor.registerUpdateListener(({ editorState, prevEditorState, tags }) => {
@@ -1253,7 +1290,7 @@ const EditorBridge = forwardRef<
 				compositionEndScheduler.current = () => undefined;
 			}
 		};
-	}, [compositionEndScheduler, compositionState, editor, onChange, onDismissSuggestion, promptSuggestion]);
+	}, [compositionEndScheduler, compositionState, editor, onChange, onDismissSuggestion, promptSuggestion, onEmptyChange]);
 
 	useEffect(() => {
 		const commands = [
@@ -1393,7 +1430,6 @@ const EditorBridge = forwardRef<
 				// restore. Outgoing text is trimmed; ordinary prose stays unchanged.
 				const trailingTrigger = findActiveTrigger(promptSuggestion.text, promptSuggestion.text.length);
 				selection.insertText(promptSuggestion.text + (trailingTrigger ? " " : ""));
-				onDismissSuggestion();
 				if (event) {
 					completionHandledEvents.add(event);
 					event.preventDefault();
@@ -1526,7 +1562,8 @@ export const ComposerEditor = forwardRef<
 	const { t } = useTranslation();
 	const suggestionDescriptionId = useId();
 	const [dismissedSuggestionId, setDismissedSuggestionId] = useState<string>();
-	const suggestion = !disabled && !concealed && promptSuggestion?.id !== dismissedSuggestionId
+	const [empty, setEmpty] = useState(true);
+	const suggestion = empty && !disabled && !concealed && promptSuggestion?.id !== dismissedSuggestionId
 		? promptSuggestion
 		: undefined;
 	const dismissSuggestion = useCallback(() => {
@@ -1609,7 +1646,7 @@ export const ComposerEditor = forwardRef<
 								if (event.defaultPrevented) event.stopPropagation();
 							}}
 							className={cn(
-								"chat-composer-scrollbar max-h-40 has-[.chat-composer-code-block]:max-h-[min(24rem,50vh)] min-h-[4.5rem] w-full overflow-y-auto overscroll-contain bg-transparent py-1 pl-[7px] pr-0 text-base! leading-relaxed text-foreground caret-foreground outline-none selection:bg-foreground selection:text-background",
+								"chat-composer-scrollbar max-h-40 has-[.chat-composer-code-block]:max-h-[min(24rem,50vh)] min-h-[4.5rem] w-full overflow-y-auto overscroll-contain bg-transparent py-1 pl-[7px] pr-0 text-base! leading-relaxed text-foreground caret-foreground outline-none selection:bg-foreground selection:text-on-foreground",
 								suggestion && "absolute inset-0 overflow-visible overscroll-auto",
 								concealed ? "invisible" : disabled && "opacity-50",
 							)}
@@ -1631,6 +1668,7 @@ export const ComposerEditor = forwardRef<
 					menuOpen={menuOpen}
 					promptSuggestion={suggestion}
 					onDismissSuggestion={dismissSuggestion}
+					onEmptyChange={setEmpty}
 					attachedImages={attachedImages}
 					compositionState={compositionState}
 					compositionEndScheduler={compositionEndScheduler}

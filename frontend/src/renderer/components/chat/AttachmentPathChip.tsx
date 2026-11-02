@@ -49,7 +49,7 @@ export function AttachmentPathMenu({ path, folder, children, actions }: {
 				) : null}
 				{onOpenFile && (!folder || (sessionId && (!remoteHost || hostId))) ? (
 					<ContextMenuItem onSelect={() => {
-						if (sessionId && (!remoteHost || hostId)) useUiStore.getState().requestWorkspaceFileOpen(sessionId, path, hostId, "panel", folder);
+						if (sessionId && (!remoteHost || hostId)) useUiStore.getState().requestWorkspaceFileOpen(sessionId, path, hostId, "panel", undefined, folder);
 						else onOpenFile(path);
 					}}>
 						<PanelRight aria-hidden="true" />{t("chat.path.openSidePanel")}

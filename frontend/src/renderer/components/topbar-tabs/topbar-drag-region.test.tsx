@@ -134,7 +134,7 @@ describe("macOS topbar drag regions", () => {
 
 	it("keeps the traffic-light clearance region draggable and the remote strip draggable through a filler", () => {
 		const { unmount } = render(tree(<TopbarToolbar actions={null} remoteSessionTab={<button role="tab" type="button">Remote</button>} />));
-		expect(region(screen.getByTestId("session-terminal-region"))).toBe("drag");
+		expect(effectiveRegion(screen.getByTestId("session-terminal-region"))).toBe("drag");
 		const filler = screen.getByTestId("topbar-tabs-drag-filler");
 		expect(region(filler)).toBe("drag");
 		expect(filler.parentElement).toHaveAttribute("role", "tablist");
@@ -175,9 +175,12 @@ describe("macOS topbar drag regions", () => {
 		expect(region(screen.getByTestId("session-sub-tabs"))).toBe("drag");
 	});
 
-	it("declares no app region on non-mac platforms", () => {
+	it("declares no app region on non-mac platforms", async () => {
 		platformMocks.isMacPlatform.mockReturnValue(false);
-		render(tree(<TopbarToolbar actions={<button type="button">Action</button>} />));
+		// PageTopbar captures the native platform once when its module loads.
+		vi.resetModules();
+		const { TopbarToolbar: NonMacTopbarToolbar } = await import("./TopbarToolbar");
+		render(tree(<NonMacTopbarToolbar actions={<button type="button">Action</button>} />));
 
 		const toolbar = screen.getByTestId("session-topbar-toolbar");
 		expect(Array.from(toolbar.querySelectorAll("*")).filter((node) => region(node) !== "")).toEqual([]);

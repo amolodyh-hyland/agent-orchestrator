@@ -30,6 +30,7 @@ type chatServiceDeps struct {
 	Drivers            ports.ChatDriverRegistry
 	Activity           *lifecycle.Manager
 	Log                *slog.Logger
+	OnAccountChanged   func(domain.SessionID, domain.AgentHarness)
 }
 
 // chatAgentService is what the Codex account hooks need from the agent service.
@@ -143,6 +144,9 @@ func newChatServiceOptions(ctx context.Context, deps chatServiceDeps) (chatsvc.O
 		Log:      deps.Log,
 		NewID:    uuid.NewString,
 		OnAccountChanged: func(sessionID domain.SessionID, generation string, harness domain.AgentHarness) {
+			if deps.OnAccountChanged != nil {
+				deps.OnAccountChanged(sessionID, harness)
+			}
 			agentSvc := currentAgents()
 			if harness != domain.HarnessCodex || agentSvc == nil || agentSvc.CodexAccountSwitchInProgress() {
 				return
