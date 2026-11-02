@@ -132,7 +132,9 @@ import {
 	type ChatDraftRetainedAttachment,
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
-import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath } from "./messageAttachments";
+import { parseRefKey } from "../../lib/hosts";
+import { AttachmentPathContext, AttachmentPathMenu } from "./AttachmentPathChip";
+import { attachmentURL, IMAGE_ATTACHMENT_PATH, proseBesideImages, removeInlineAttachmentPath } from "./messageAttachments";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
 
@@ -290,11 +292,15 @@ export const ChatComposer = memo(function ChatComposer({
 	emptyPlaceholder,
 	promptSuggestion,
 	onSelectAnnotation,
+	onOpenFile,
+	pathActionsRemote = remoteHost,
 	sentMessages,
 	sentMessagesScope,
 	fileReferencesEnabled = false,
 	fileReferenceDelivery,
 }: {
+	onOpenFile?: (path: string) => void;
+	pathActionsRemote?: boolean;
 	nativeSession?: { sessionId: string; outer: boolean; expected?: OuterSendExpectation };
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 	/** This conversation's sent human messages, oldest first, recalled with Up and Down. */
@@ -451,6 +457,7 @@ export const ChatComposer = memo(function ChatComposer({
 		? chatQueuedAttachmentScopeKey(queuedDraftScope, draftSeed?.id ?? "undefined")
 		: draftScopeKey;
 	const boundarySessionId = draftSessionId ?? queuedDraftScope?.sessionId;
+	const attachmentHost = remoteHost && boundarySessionId?.startsWith("remote:") ? parseRefKey(boundarySessionId.slice(7)) : undefined;
 	const [retainedAttachments, setRetainedAttachments] = useState<StoredComposerAttachment[]>(draftSeed?.attachments ?? []);
 	const visibleRetainedAttachments = editingQueuedTurnId ? retainedAttachments : [];
 	// Seeded from the saved draft, so a remounted composer is not reported empty
@@ -1472,9 +1479,9 @@ export const ChatComposer = memo(function ChatComposer({
 			...settledPaths,
 		];
 		// Staging that just settled has filled its inline chips, so read the text the
-		// user sees now. First drop chips whose image is gone (an undo can restore
+		// user sees now. First drop chips whose attachment is gone (an undo can restore
 		// one); typed paths are the user's text and stay.
-		editor.current?.pruneImages(attachedPaths);
+		editor.current?.pruneAttachments(attachedPaths);
 		currentText = textRef.current;
 		body = proseBesideImages(currentText.trim(), attachedPaths);
 		const hasAttachments = settledAttachments.length > 0 || visibleRetainedAttachments.length > 0;
@@ -1897,34 +1904,31 @@ export const ChatComposer = memo(function ChatComposer({
 		return true;
 	}
 
-	/** The image left the draft, which is held aside while a recalled message shows. */
-	function removeImageFromSavedDraft(path: string) {
+	/** The attachment left the draft, which is held aside while a recalled message shows. */
+	function removeAttachmentFromSavedDraft(path: string) {
 		const browse = historyBrowse.current;
 		if (!browse) return;
-		const draft = removeInlineImagePath(browse.draft, path);
+		const draft = removeInlineAttachmentPath(browse.draft, path);
 		if (draft === browse.draft) return;
 		historyBrowse.current = { ...browse, draft };
 		persistComposerText(draft);
 	}
 
-	// Images get an inline chip only beside prose that can refer to them.
-	// Image-only drafts already show every image in the attachment strip.
 	function attachFiles(files: File[]) {
-		// Reserve the spot now: staging can take a while, and the user keeps typing.
-		const reservation = proseBesideImages(textRef.current.trim(), composerImages.map((image) => image.path)) &&
-			files.some((file) => file.type.startsWith("image/"))
-			? editor.current?.reserveImages()
-			: undefined;
+		if (!files.length) return;
+		const reservation = editor.current?.reserveAttachments();
 		void fileAttachments.addFiles(files).then((added) => {
 			if (!reservation) return;
-			editor.current?.fillImages(reservation, added.flatMap((attachment) =>
-				attachment.stagedPath && isInlineImagePath(attachment.stagedPath) ? [attachment.stagedPath] : []));
+			editor.current?.fillAttachments(reservation, added.flatMap((attachment) =>
+				attachment.stagedPath ? [attachment.stagedPath] : []));
 		});
 	}
 
 	async function attachFolder() {
 		if (!onChooseFolder || remoteHost || disabled || submitInFlight.current || draftMutationPending || fileAttachments.preparing) return;
 		setFolderAttachmentError(null);
+		const reservation = editor.current?.reserveAttachments();
+		let added: FileAttachment[] = [];
 		try {
 			const selection = await onChooseFolder();
 			if (!selection) return;
@@ -1932,9 +1936,11 @@ export const ChatComposer = memo(function ChatComposer({
 				setFolderAttachmentError(FOLDER_ATTACHMENT_ERROR_KEYS[selection.error]);
 				return;
 			}
-			await fileAttachments.addFolders([selection]);
+			added = await fileAttachments.addFolders([selection]);
 		} catch {
 			setFolderAttachmentError("chat.composer.folderAttachFailed");
+		} finally {
+			if (reservation) editor.current?.fillAttachments(reservation, added.flatMap((attachment) => attachment.stagedPath ? [attachment.stagedPath] : []));
 		}
 	}
 
@@ -2009,7 +2015,9 @@ export const ChatComposer = memo(function ChatComposer({
 					</div>
 				) : null}
 				{notice}
-				{form}
+				<AttachmentPathContext.Provider value={{ sessionId: assetSessionId ?? attachmentHost?.id ?? boundarySessionId, hostId: attachmentHost?.host, remoteHost: pathActionsRemote, onOpenFile }}>
+					{form}
+				</AttachmentPathContext.Provider>
 			</div>
 		);
 
@@ -2096,8 +2104,9 @@ export const ChatComposer = memo(function ChatComposer({
 							<ul className="contents" aria-label="Attached files">
 								{stripAttachments.map(({ file, path, preview }) => {
 									return (
+									<AttachmentPathMenu key={file.id} path={path ?? ""} folder={file.kind === "folder"}>
 									<li
-										key={file.id}
+										tabIndex={0}
 										className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1"
 									>
 										{preview ? (
@@ -2111,7 +2120,7 @@ export const ChatComposer = memo(function ChatComposer({
 										)}
 										<span
 											className="max-w-[120px] truncate text-xs text-muted-foreground"
-											title={file.kind === "folder" ? path : file.name}
+											title={path ?? file.name}
 										>
 											{file.name}
 										</span>
@@ -2128,8 +2137,8 @@ export const ChatComposer = memo(function ChatComposer({
 											onClick={() => {
 											if (submitInFlight.current) return;
 											if (path) {
-											editor.current?.removeImage(path);
-											removeImageFromSavedDraft(path);
+											editor.current?.removeAttachment(path);
+											removeAttachmentFromSavedDraft(path);
 										}
 											if (visibleRetainedAttachments.some((attachment) => attachment.id === file.id)) {
 												const next = retainedAttachments.filter((attachment) => attachment.id !== file.id);
@@ -2145,6 +2154,7 @@ export const ChatComposer = memo(function ChatComposer({
 											<X aria-hidden="true" className="size-3" />
 										</button>
 									</li>
+									</AttachmentPathMenu>
 									);
 								})}
 								{pendingAttachments.map((file) => (
@@ -2200,6 +2210,7 @@ export const ChatComposer = memo(function ChatComposer({
 					<ComposerEditor
 						ref={editor}
 						images={composerImages}
+						attachments={stripAttachments.flatMap(({ file, path }) => path ? [{ path, folder: file.kind === "folder" }] : [])}
 						promptSuggestion={willQueue || starting || editingQueuedTurnId || staged ? undefined : promptSuggestion}
 						disabled={composerEditorDisabled}
 						concealed={sendConcealed && !optimisticSend}

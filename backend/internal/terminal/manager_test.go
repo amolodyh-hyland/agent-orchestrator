@@ -334,7 +334,7 @@ func TestBufferedInputReplayUpdatesLastInputAt(t *testing.T) {
 			defer cancel()
 			c := &connState{mgr: mgr, conn: newFakeConn(), ctx: ctx, cancel: cancel, out: newOutQueue(), terms: map[string]*attachment{}, writers: map[string]*inputWriter{}}
 			defer c.cleanup()
-			c.openTerminal("t1", 24, 80, "")
+			c.openTerminalAuthorized("t1", 24, 80, "", "")
 			mgr.writeInput("t1", c.lookup("t1"), []byte(tc.data), func() {})
 			replayedAt := time.Now()
 			close(attached)

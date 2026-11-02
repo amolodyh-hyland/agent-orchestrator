@@ -90,7 +90,7 @@ func TestRemoveLocalOAuthTokenForgetsSetupToken(t *testing.T) {
 	}
 }
 
-func TestAuthStatusForRuntimeProbesSavedSetupToken(t *testing.T) {
+func TestAuthStatusForRuntimeUsesSavedSetupTokenWithoutExtractingNativeCredentials(t *testing.T) {
 	dataDir := withSavedSetupToken(t)
 	InvalidateAuthCache()
 	t.Cleanup(InvalidateAuthCache)
@@ -120,11 +120,11 @@ func TestAuthStatusForRuntimeProbesSavedSetupToken(t *testing.T) {
 	t.Cleanup(func() { claudeValidator = previousValidator })
 
 	status, _, _, err := (&Plugin{resolvedBinary: "/fixture/claude"}).AuthStatusForRuntime(context.Background(), dataDir)
-	if err != nil || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("AuthStatusForRuntime = %q, err = %v; want the saved token verified", status, err)
+	if err != nil || status != ports.AgentAuthStatusConfigured {
+		t.Fatalf("AuthStatusForRuntime = %q, err = %v; want the native CLI login status", status, err)
 	}
-	if !probed {
-		t.Fatal("the saved setup token was not sent to the provider probe")
+	if probed {
+		t.Fatal("a native CLI-managed login must not trigger a separate provider credential probe")
 	}
 }
 

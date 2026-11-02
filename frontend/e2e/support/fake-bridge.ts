@@ -135,7 +135,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 					save: async () => true,
 				},
-				chatAttachment: { chooseFolder: async () => null },
+				chatAttachment: { chooseFolder: async () => null, path: async (input) => input.path.startsWith("/") ? input.path : `/mock/workspace/${input.path}` },
 				cloudArtifact: {
 					fetch: async () => new Uint8Array(),
 					onFrameNavigated: () => () => undefined,
@@ -1095,7 +1095,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 					save: async () => true,
 				},
-				chatAttachment: { chooseFolder: async () => null },
+				chatAttachment: { chooseFolder: async () => null, path: async (input) => input.path.startsWith("/") ? input.path : `/mock/workspace/${input.path}` },
 				cloudArtifact: {
 					fetch: async () => new Uint8Array(),
 					onFrameNavigated: () => () => undefined,

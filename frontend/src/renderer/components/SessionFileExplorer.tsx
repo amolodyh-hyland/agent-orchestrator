@@ -16,6 +16,7 @@ import {
 	Search,
 } from "lucide-react";
 import {
+	resolveSessionWorkspacePath,
 	sessionSourceFileQueryOptions,
 	sessionWorkspaceFilesQueryOptions,
 	clearMissingWorkspace,
@@ -114,6 +115,7 @@ export function SessionFileExplorer({
 	useLayoutEffect(() => markFileViewerPerformance("files-shell-painted"), []);
 
 	const changedOnly = useUiStore((state) => state.inspectorSessions[uiKey]?.filesChangedOnly ?? true);
+	const resetFilesSelection = useUiStore((state) => state.resetFilesSelection);
 	const setFilesChangedOnly = useUiStore((state) => state.setFilesChangedOnly);
 
 	const filesQuery = useQuery({
@@ -150,7 +152,7 @@ export function SessionFileExplorer({
 	const hasChanges = filesData ? hasReviewableChanges(filesData) : false;
 	const showChanges = changedOnly && (!filesData || hasChanges || onOtherBranch);
  const source = review.target.source ?? WORKSPACE_SOURCE;
-	const splitView = !showChanges && isMaximized;
+	const splitView = !showChanges && (isMaximized || source.kind === "pull_request" || Boolean(previewRequest));
 	const showChangesTrigger = Boolean(filesData) && (hasChanges || onOtherBranch);
 	const branchMenu = review.branchMenu;
 
@@ -163,6 +165,30 @@ export function SessionFileExplorer({
 	useEffect(() => {
 		window.localStorage.setItem("ao.files.diffStyle", split ? "split" : "unified");
 	}, [split]);
+
+	const panelRequest = useUiStore((state) => state.workspaceFileOpenRequest);
+	useEffect(() => {
+		if (panelRequest?.source !== "panel" || sessionUiKey(panelRequest.sessionId, panelRequest.hostId) !== uiKey) return;
+		let active = true;
+		void (async () => {
+			try {
+				const resolved = await resolveSessionWorkspacePath(sessionId, panelRequest.path, hostId);
+				if (!active) return;
+				if (resolved?.kind !== "workspace") throw new Error("outside workspace");
+				resetFilesSelection(uiKey);
+				setFilesChangedOnly(uiKey, false);
+				setTreeOpen(true);
+				setFilter(panelRequest.directory && resolved.path !== "." ? `${resolved.path.replace(/[\\/]+$/, "")}/` : "");
+				setSelectedPath(panelRequest.directory ? null : resolved.path);
+				setPreviewRequest(panelRequest.directory ? null : { key: panelRequest.nonce, mode: "file" });
+			} catch {
+				if (active) useUiStore.getState().showGlobalToast(t("chat.path.panelUnavailable"), undefined, "error");
+			} finally {
+				if (active) useUiStore.getState().clearWorkspaceFileOpenRequest(panelRequest.nonce);
+			}
+		})();
+		return () => { active = false; };
+	}, [hostId, panelRequest, sessionId, setFilesChangedOnly, resetFilesSelection, t, uiKey]);
 
 	// Give the hovered/focused row a short head start, without issuing a
 	// request for every row the pointer crosses or competing with a busy read.

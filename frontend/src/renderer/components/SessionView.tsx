@@ -1939,10 +1939,22 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			};
 		});
 	}, [uiSessionId]);
+	const lastFilePanelRequest = useRef<typeof workspaceFileOpenRequest>(null);
 	useEffect(() => {
-		if (!workspaceFileOpenRequest || !session) return;
+		if (!workspaceFileOpenRequest) {
+			lastFilePanelRequest.current = null;
+			return;
+		}
+		if (!session) return;
 		if (sessionUiKey(workspaceFileOpenRequest.sessionId, workspaceFileOpenRequest.hostId) !== uiSessionId) return;
 		const { line, nonce, path, source } = workspaceFileOpenRequest;
+		if (source === "panel" && !session.cloud) {
+			if (lastFilePanelRequest.current === workspaceFileOpenRequest) return;
+			lastFilePanelRequest.current = workspaceFileOpenRequest;
+			prepareFilesInspector();
+			resetFilesSelection(uiSessionId);
+			return;
+		}
 		if (source === "artifact") {
 			handleOpenArtifact({ path });
 		} else if (session.cloud) {
@@ -1958,6 +1970,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		handleOpenFile,
 		openCenterFile,
 		prepareFilesInspector,
+		resetFilesSelection,
 		session,
 		uiSessionId,
 		workspaceFileOpenRequest,

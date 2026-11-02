@@ -7,7 +7,7 @@ import { ChatComposer } from "./ChatComposer";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { QueuedMessageDock } from "./QueuedMessageDock";
 import { chatFixture } from "../../lib/chat-fixture";
-import { typeInLexicalEditor } from "../../test/lexical";
+import { lexicalEditorText, placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { TooltipProvider } from "../ui/tooltip";
 
 const routeMocks = vi.hoisted(() => ({ navigate: vi.fn(), params: { projectId: undefined, sessionId: undefined } }));
@@ -194,28 +194,36 @@ describe("ChatComposer steering", () => {
 		}
 	});
 
-	it("stages attachment-only drafts and includes them in steer", async () => {
+	it("shows an image-only inline reference and steers one reference block and native image", async () => {
+		const path = ".ao/attachments/attachment-shot.png";
 		const onSteer = vi.fn().mockResolvedValue(undefined);
 		const onSend = vi.fn();
-		const stage = vi.fn().mockResolvedValue([".ao/attachments/shot.png"]);
+		const stage = vi.fn().mockResolvedValue([path]);
 		composer({ onSteer, onSend, onStageAttachments: stage, nativeImages: true });
 
 		const field = screen.getByRole("combobox");
 		await userEvent.click(field);
 		fireEvent.paste(field, { clipboardData: { files: [png()], items: [] } });
-		await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(1));
+		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).toHaveAttribute("data-value", path));
+		expect(lexicalEditorText(field).trim()).toBe(path);
+		expect(screen.getAllByRole("listitem")).toHaveLength(1);
 
 		await userEvent.keyboard("{Control>}{Enter}{/Control}");
 		await waitFor(() => expect(stage).toHaveBeenCalledOnce());
 		expect(onSteer).toHaveBeenCalledWith(
-			"Attached files (read these files in the workspace):\n- .ao/attachments/shot.png",
+			`Attached files (read these files in the workspace):\n- ${path}`,
 			[{ mimeType: "image/png", data: expect.any(String) }],
 		);
+		// Image-only sends elide redundant path prose, while keeping one native payload.
+		expect(onSteer.mock.calls[0][0].split(path)).toHaveLength(2);
+		expect(onSteer.mock.calls[0][1]).toHaveLength(1);
+		expect(onSteer).toHaveBeenCalledOnce();
 		expect(onSend).not.toHaveBeenCalled();
 		await waitFor(() => expect(screen.queryAllByRole("listitem")).toHaveLength(0));
 	});
 
-	it("waits for a pasted image read and ignores repeated Enter while steering", async () => {
+	it("waits for a pasted image, steers its inline path beside prose, and ignores repeated Enter", async () => {
+		const path = ".ao/attachments/attachment-slow.png";
 		let finishRead!: () => void;
 		class SlowFileReader {
 			error: Error | null = null;
@@ -236,8 +244,8 @@ describe("ChatComposer steering", () => {
 		const steerPromise = new Promise<void>((resolve) => {
 			finishSteer = resolve;
 		});
-		const onSteer = vi.fn(() => steerPromise);
-		const stage = vi.fn().mockResolvedValue([".ao/attachments/slow.png"]);
+		const onSteer = vi.fn<NonNullable<Parameters<typeof ChatComposer>[0]["onSteer"]>>(() => steerPromise);
+		const stage = vi.fn().mockResolvedValue([path]);
 		composer({ onSteer, onStageAttachments: stage, nativeImages: true });
 
 		const field = screen.getByRole("combobox");
@@ -259,12 +267,56 @@ describe("ChatComposer steering", () => {
 		await waitFor(() => expect(stage).toHaveBeenCalledOnce());
 		await waitFor(() =>
 			expect(onSteer).toHaveBeenCalledWith(
-				"inspect this\n\nAttached files (read these files in the workspace):\n- .ao/attachments/slow.png",
+				`inspect this ${path}\n\nAttached files (read these files in the workspace):\n- ${path}`,
 				[{ mimeType: "image/png", data: "iVBORw==" }],
 			),
 		);
+		expect(field.querySelector('[data-composer-token="image"]')).toHaveAttribute("data-value", path);
+		expect(lexicalEditorText(field).trim()).toBe(`inspect this ${path}`);
+		expect(onSteer.mock.calls[0][0].split("\n\n")[0]).toBe(`inspect this ${path}`);
+		expect(onSteer.mock.calls[0][1]).toHaveLength(1);
 		expect(onSteer).toHaveBeenCalledOnce();
 		await act(async () => finishSteer());
+	});
+
+	it.each(["send", "steer"] as const)("serializes the visible mid-prose attachment identically for %s", async (delivery) => {
+		const path = ".ao/attachments/attachment-parity.png";
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const onSteer = vi.fn().mockResolvedValue(undefined);
+		composer({ onSend, onSteer, onStageAttachments: vi.fn().mockResolvedValue([path]), nativeImages: true });
+		const field = screen.getByRole("combobox");
+		await typeInLexicalEditor(field, "Inspect please");
+		await placeLexicalCaret(field, 8);
+		fireEvent.paste(field, { clipboardData: { files: [png("parity.png")], items: [] } });
+		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).toHaveAttribute("title", path));
+		expect(lexicalEditorText(field)).toBe(`Inspect ${path} please`);
+
+		await userEvent.keyboard(delivery === "steer" ? "{Control>}{Enter}{/Control}" : "{Enter}");
+		const submit = delivery === "steer" ? onSteer : onSend;
+		await waitFor(() => expect(submit).toHaveBeenCalledWith(
+			`Inspect ${path} please\n\nAttached files (read these files in the workspace):\n- ${path}`,
+			[{ mimeType: "image/png", data: expect.any(String) }],
+		));
+		expect(submit.mock.calls[0][0].split("\n\n")[0]).toBe(`Inspect ${path} please`);
+		expect(submit.mock.calls[0][1]).toHaveLength(1);
+		expect(submit).toHaveBeenCalledOnce();
+		expect(delivery === "steer" ? onSend : onSteer).not.toHaveBeenCalled();
+	});
+
+	it("does not retain an inline path or native payload after removing its attachment before steer", async () => {
+		const path = ".ao/attachments/attachment-removed.png";
+		const onSteer = vi.fn().mockResolvedValue(undefined);
+		composer({ onSteer, onStageAttachments: vi.fn().mockResolvedValue([path]), nativeImages: true });
+		const field = screen.getByRole("combobox");
+		await typeInLexicalEditor(field, "Inspect this");
+		fireEvent.paste(field, { clipboardData: { files: [png("removed.png")], items: [] } });
+		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).toHaveAttribute("data-value", path));
+		await userEvent.click(screen.getByLabelText("Remove removed.png"));
+		expect(field.querySelector('[data-composer-token="image"]')).toBeNull();
+		expect(lexicalEditorText(field)).toBe("Inspect this ");
+		await userEvent.click(field);
+		await userEvent.keyboard("{Control>}{Enter}{/Control}");
+		await waitFor(() => expect(onSteer).toHaveBeenCalledWith("Inspect this"));
 	});
 
 	it("reports the daemon's refusal without a second message of its own", () => {

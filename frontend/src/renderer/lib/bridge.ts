@@ -102,6 +102,7 @@ export const aoBridge: AoBridge =
 			},
 		},
 		chatAttachment: {
+			path: async () => { throw new Error("Desktop app is required to resolve an attachment path."); },
 			chooseFolder: async () => null,
 		},
 		cloudArtifact: {

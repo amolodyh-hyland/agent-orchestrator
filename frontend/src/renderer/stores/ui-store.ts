@@ -135,7 +135,8 @@ export type WorkspaceFileOpenRequest = {
 	hostId?: string;
 	path: string;
 	/** "artifact" resolves `path` against the session's artifact files instead of its workspace. */
-	source?: "artifact";
+	source?: "artifact" | "panel";
+	directory?: boolean;
 	/** 1-based line to reveal, e.g. a palette content hit. */
 	line?: number;
 	nonce: number;
@@ -284,7 +285,7 @@ export type UiState = {
 	dismissGlobalToast: (nonce: number) => void;
 	clearGlobalToast: () => void;
 	requestNewTask: (projectId: string, hostId?: string) => void;
-	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string, source?: "artifact", line?: number) => void;
+	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string, source?: "artifact" | "panel", line?: number, directory?: boolean) => void;
 	clearWorkspaceFileOpenRequest: (nonce: number) => void;
 	requestChatMessageFocus: (sessionId: string, messageId: string, text: string, reviewId?: string) => void;
 	clearChatMessageFocusRequest: (nonce: number) => void;
@@ -777,7 +778,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 		}
 		set((state) => ({ newTaskRequest: { projectId, hostId, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
 	},
-	requestWorkspaceFileOpen: (sessionId, path, hostId, source, line) =>
+	requestWorkspaceFileOpen: (sessionId, path, hostId, source, line, directory) =>
 		set((state) => ({
 			workspaceFileOpenRequest: {
 				sessionId,
@@ -785,6 +786,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 				...(hostId ? { hostId } : {}),
 				...(source ? { source } : {}),
 				...(line ? { line } : {}),
+				...(directory ? { directory } : {}),
 				nonce: (state.workspaceFileOpenRequest?.nonce ?? 0) + 1,
 			},
 		})),
