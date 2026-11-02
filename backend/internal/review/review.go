@@ -422,6 +422,17 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		if harness != domain.ReviewerCodex || config != opts.Config || selectedMode != domain.ReviewerInterfaceChat || (hasReview && (reviewRow.InterfaceMode != selectedMode || hasConfigOverride)) {
 			return TriggerResult{}, errors.Join(domain.ErrOuterHeld, domain.ErrOuterReviewNotStarted)
 		}
+		if hasReview {
+			gate, ok := e.store.(interface {
+				CheckOuterReviewSession(stdctx.Context, string) error
+			})
+			if !ok {
+				return TriggerResult{}, errors.Join(domain.ErrOuterHeld, domain.ErrOuterReviewNotStarted)
+			}
+			if err := gate.CheckOuterReviewSession(ctx, reviewRow.ID); err != nil {
+				return TriggerResult{}, err
+			}
+		}
 	}
 	// Another reviewer that is still working keeps running: a worker may ask
 	// several reviewers for opinions on the same commit at once. Only idle

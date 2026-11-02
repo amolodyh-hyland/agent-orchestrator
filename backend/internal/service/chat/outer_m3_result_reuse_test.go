@@ -3,11 +3,15 @@ package chat_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -31,29 +35,19 @@ func (s *m3ResultReviewService) TriggerRequested(ctx context.Context, worker dom
 	return result, err
 }
 
-// Read the capability actually delivered to the provider, rather than assuming
-// that starting a process delivered a credential for every later Notify turn.
+// Only the owned provider bootstrap receives this credential, in its process
+// environment. Tests never recover it from model input or shared content.
 func m3ResultCredential(t *testing.T, f *m2Fixture, run domain.ReviewRun) string {
 	t.Helper()
-	p := f.providers[domain.SessionID("review-"+run.ReviewID)]
-	var text string
-	waitM2(t, func() bool {
-		texts := p.sentTexts()
-		if len(texts) == 0 {
-			return false
+	for _, start := range f.starts {
+		if start.SessionID == domain.SessionID("review-"+run.ReviewID) {
+			if token := start.Env["AO_SCOPE_CREDENTIAL"]; token != "" {
+				return token
+			}
 		}
-		text = texts[len(texts)-1]
-		return strings.Contains(text, run.TargetSHA)
-	})
-	_, suffix, found := strings.Cut(text, "AO_SCOPE_CREDENTIAL=")
-	if !found || len(suffix) < 43 {
-		t.Fatal("approved reviewer turn has no result credential")
 	}
-	r, err := f.st.GetOuterRequest(context.Background(), run.BatchID)
-	if err != nil || r.Request.Payload != text {
-		t.Fatal("result credential was not sealed into the admitted payload", err)
-	}
-	return suffix[:43]
+	t.Fatal("reviewer launch environment has no session credential")
+	return ""
 }
 
 func TestOuterM3ReviewResultRotatesThroughNotify(t *testing.T) {
@@ -81,28 +75,42 @@ func TestOuterM3ReviewResultRotatesThroughNotify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	other, err := f.provision(ctx, ports.SpawnConfig{ProjectID: "a", Kind: domain.KindWorker}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerToken, err := f.st.IssueOuterCaller(ctx, worker.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherToken, err := f.st.IssueOuterCaller(ctx, other.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readers := map[domain.SessionID]string{worker.ID: workerToken, other.ID: otherToken}
 	worker.ReviewerHarness, worker.ReviewerConfig = domain.ReviewerCodex, spec.Config
 	if err := f.st.UpdateSession(ctx, worker); err != nil {
 		t.Fatal(err)
 	}
-	// Establish an idle reviewer created outside M3. It has no result scope and
-	// must remain the same live process when the first approved M3 head arrives.
-	if _, err := engine.TriggerWithOptions(domain.WithOuterNativeAction(ctx, domain.OuterNativeAction{Operation: "review.trigger", ProjectID: "a", SessionID: spec.SessionID}), spec.SessionID, reviewcore.TriggerOptions{Harness: domain.ReviewerCodex, Config: spec.Config, InterfaceMode: domain.ReviewerInterfaceChat, PRURL: spec.Review.PRURL, Source: domain.ReviewTriggerManual}); err != nil {
-		t.Fatal(err)
+	// Start the owned process with M3's environment-only credential. Later
+	// approved heads must reuse it without delivering any new capability.
+	initialPlan := f.propose(spec)
+	f.approve(initialPlan)
+	if reviews.triggerErr != nil {
+		t.Fatal(reviews.triggerErr)
 	}
 	runs, err := f.st.ListReviewRunsBySession(ctx, spec.SessionID)
 	if err != nil || len(runs) != 1 {
-		t.Fatal("pre-M3 run", err)
+		t.Fatal("initial M3 run", err)
 	}
 	initial := runs[0]
 	p := f.providers[domain.SessionID("review-"+initial.ReviewID)]
 	if texts := p.sentTexts(); len(texts) != 1 || strings.Contains(texts[0], "AO_SCOPE_CREDENTIAL=") {
-		t.Fatal("pre-M3 reviewer unexpectedly has per-turn result authority")
+		t.Fatal("reviewer received a credential in model input")
 	}
-	for _, start := range f.starts {
-		if start.SessionID == domain.SessionID("review-"+initial.ReviewID) && start.Env["AO_SCOPE_CREDENTIAL"] != "" {
-			t.Fatal("reviewer inherited a worker credential")
-		}
+	launchToken := m3ResultCredential(t, f, initial)
+	if _, err := f.st.AuthenticateOuterCaller(ctx, launchToken); !errors.Is(err, domain.ErrOuterHeld) {
+		t.Fatal("launch credential has result authority before native acceptance", err)
 	}
 	conversation, err := f.st.ConversationForReview(ctx, initial.ReviewID)
 	if err != nil {
@@ -111,14 +119,16 @@ func TestOuterM3ReviewResultRotatesThroughNotify(t *testing.T) {
 	waitM2(t, func() bool { messages, _ := f.st.ConversationMessages(ctx, conversation.ID); return len(messages) > 0 })
 	messages, _ := f.st.ConversationMessages(ctx, conversation.ID)
 	initialTurn := messages[0].TurnID
+	waitM2(t, func() bool { r, _ := f.st.GetOuterRequest(ctx, initial.BatchID); return !r.SubmittedAt.IsZero() })
 	p.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1", NativeAcceptance: true})
-	if _, err := svc.Submit(ctx, spec.SessionID, initial.ID, domain.VerdictApproved, "pre-M3 result", ""); err != nil {
-		t.Fatal(err)
-	}
+	waitM2(t, func() bool { r, _ := f.st.GetOuterRequest(ctx, initial.BatchID); return !r.AcceptedAt.IsZero() })
+	assertM3ResultCredentialConfined(t, f, router, initial, readers)
+	submit(launchToken, initial, http.StatusOK)
 	p.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateCompleted, NativeSettlement: true})
 	waitM2(t, func() bool {
 		turn, _ := f.st.TurnByID(ctx, initialTurn)
-		return turn.State == domain.TurnStateCompleted
+		capacity, _ := f.st.OuterCapacity(ctx)
+		return turn.State == domain.TurnStateCompleted && len(capacity) == 0
 	})
 	// The fixture omits daemon harness hooks. Supply their idle observation only
 	// after native completion, so admission sees an idle reusable reviewer.
@@ -135,6 +145,13 @@ func TestOuterM3ReviewResultRotatesThroughNotify(t *testing.T) {
 	recordIdle()
 	reviewer, _, _ := f.st.GetReviewByID(ctx, initial.ReviewID)
 
+	db, err := sql.Open("sqlite", filepath.Join(f.dir, "ao.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	legacyToken := strings.Repeat("z", 43)
+	legacyVerifier := sha256.Sum256([]byte(legacyToken))
 	var previousToken string
 	var previousRun domain.ReviewRun
 	var previousCaller domain.OuterCaller
@@ -189,16 +206,26 @@ func TestOuterM3ReviewResultRotatesThroughNotify(t *testing.T) {
 		if err != nil || caller.ReviewResult == nil || caller.ReviewResult.RunID != run.ID || caller.ReviewResult.HeadSHA != run.TargetSHA {
 			t.Fatal("fresh credential not bound to this run/head", err)
 		}
+		if i == 0 {
+			// A persisted prompt-issued token from the old implementation must
+			// remain denied even with an otherwise valid exact run/head scope.
+			document, _ := json.Marshal(caller.ReviewResult)
+			if _, err := db.Exec("INSERT INTO outer_callers(verifier,session_id,project_id,generation,outer_scope) VALUES(?,?,?,?,0)", hex.EncodeToString(legacyVerifier[:]), string(worker.ID), string(worker.ProjectID), "review:"+string(document)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		submit(legacyToken, run, http.StatusConflict)
+		assertM3ResultCredentialConfined(t, f, router, run, readers, legacyToken)
+		for _, participantToken := range readers {
+			submit(participantToken, run, http.StatusConflict)
+		}
+		submit("", run, http.StatusConflict)
 		if previousToken != "" {
-			if token == previousToken {
-				t.Fatal("Notify reused the previous credential")
+			if token != previousToken || token != launchToken {
+				t.Fatal("Notify replaced the launch credential")
 			}
 			submit(token, previousRun, 409)
-			submit(previousToken, run, 409)
 			submit(previousToken, previousRun, 409)
-			if _, err := f.st.AuthenticateOuterCaller(ctx, previousToken); !errors.Is(err, domain.ErrOuterHeld) {
-				t.Fatal("previous credential still authenticates", err)
-			}
 			stale := domain.WithOuterCaller(ctx, previousCaller)
 			if _, err := f.st.UpdateReviewRunResult(stale, previousRun.ID, domain.ReviewRunComplete, domain.VerdictApproved, "exact head reviewed", "", false); !errors.Is(err, domain.ErrOuterHeld) {
 				t.Fatal("already authenticated revoked context passed the final writer", err)
@@ -223,6 +250,15 @@ func TestOuterM3ReviewResultRotatesThroughNotify(t *testing.T) {
 			}
 			if _, err := f.st.UpdateReviewRunResult(domain.WithOuterCaller(ctx, caller), run.ID, domain.ReviewRunComplete, domain.VerdictApproved, "late", "", false); !errors.Is(err, domain.ErrOuterHeld) {
 				t.Fatal("cancelled context passed final writer", err)
+			}
+			verifier := sha256.Sum256([]byte(token))
+			var document string
+			if err := db.QueryRow("SELECT generation FROM outer_callers WHERE verifier=?", hex.EncodeToString(verifier[:])).Scan(&document); err != nil {
+				t.Fatal(err)
+			}
+			var binding domain.OuterReviewResultScope
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(document, "review-session:")), &binding); err != nil || binding.RunID != "" || binding.HeadSHA != "" {
+				t.Fatal("cancellation retained an active result binding", err)
 			}
 			stored, _, _ := f.st.GetReviewRun(ctx, run.ID)
 			if launcher.cancels != 1 || stored.Status != domain.ReviewRunCancelled || stored.Verdict != domain.VerdictNone {

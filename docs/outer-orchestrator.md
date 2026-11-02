@@ -230,14 +230,17 @@ Reviewer cancellation has the same final-write check. Reviewer stations use the
 existing 2/1 admission and native acceptance/settlement receipts; ambiguous launch
 or delivery retains its reservation. A definitive preflight rejection releases its station only with journaled no-start evidence; it grants no retry. No result wakes or continues any execution.
 
-Each approved reviewer turn receives a fresh result-only credential for its exact
-reviewer identity, run, head and controller generation, including a Notify sent
-to an existing live reviewer. The sealed turn supplies an explicit
-`AO_SCOPE_CREDENTIAL` override for `ao review submit`; controller startup clears
-inherited credentials. Issuance revokes prior result credentials for that
-reviewer, including contexts authenticated before revocation. Cancellation
-invalidates the current run’s result authority. After native turn acceptance it
-can use the existing `ao review submit` transport to record that verdict through
+An approved fresh M3 reviewer receives one session credential solely in its
+process launch environment. No secret is put in model input, transcript text or
+tool-command prefixes. Every approved Spawn/Notify turn rotates daemon-side
+run/head metadata on that existing credential; it sends no new capability. A
+live pre-M3 reviewer without that credential holds before dispatch with a
+journaled no-start receipt, rather than restoring or replacing the controller.
+Old prompt-issued credentials are rejected. Cancellation clears the active
+binding, and the verdict writer rejects cached contexts after binding rotation
+or cancellation. After matching native turn acceptance the reviewer can use the
+existing `ao review submit` transport with its inherited process environment to
+record only the bound verdict through
 the existing review service. The binding is checked again at the atomic verdict
 and audit write. It cannot read other API content, submit sibling results, enable
 feedback or launch another turn. Results retain `autoInjectReview=false` and do

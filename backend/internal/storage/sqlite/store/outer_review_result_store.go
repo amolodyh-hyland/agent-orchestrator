@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 
@@ -12,37 +13,24 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-func (s *Store) IssueOuterReviewCallerGeneration(ctx context.Context, reviewID, generation string) (string, error) {
-	if generation == "" {
-		return "", domain.ErrOuterHeld
-	}
+const outerReviewSessionPrefix = "review-session:"
+
+// IssueOuterReviewSessionGeneration bootstraps a process credential, not result
+// authority. Only an approved turn can bind it to a run. The secret goes solely
+// to the owned reviewer's launch environment and is never returned by an API.
+func (s *Store) IssueOuterReviewSessionGeneration(ctx context.Context, reviewID, generation string) (string, error) {
 	reviewer, found, err := s.GetReviewByID(ctx, reviewID)
-	if err != nil || !found || reviewer.ControllerGeneration != generation {
+	if err != nil || !found || generation == "" || reviewer.IsArchived || reviewer.Harness != domain.ReviewerCodex || reviewer.InterfaceMode != domain.ReviewerInterfaceChat {
 		return "", domain.ErrOuterHeld
 	}
-	spec, err := s.OuterReviewSpec(ctx, "review.trigger", reviewer.SessionID)
-	if err != nil {
+	if _, err := s.OuterReviewSpec(ctx, "review.trigger", reviewer.SessionID); err != nil {
 		return "", err
-	}
-	e, _ := domain.OuterExecutionFrom(ctx)
-	runs, err := s.ListReviewRunsBySession(ctx, reviewer.SessionID)
-	if err != nil {
-		return "", err
-	}
-	var runID string
-	for _, run := range runs {
-		if run.ReviewID == reviewID && run.BatchID == e.ActionID && run.Status == domain.ReviewRunRunning && run.PRURL == spec.Review.PRURL && run.TargetSHA == spec.Review.HeadSHA {
-			if runID != "" {
-				return "", domain.ErrOuterHeld
-			}
-			runID = run.ID
-		}
 	}
 	worker, found, err := s.GetSession(ctx, reviewer.SessionID)
-	if err != nil || !found || runID == "" {
+	if err != nil || !found || worker.IsTerminated || worker.ProjectID != reviewer.ProjectID {
 		return "", domain.ErrOuterHeld
 	}
-	scope := domain.OuterReviewResultScope{ReviewID: reviewID, RunID: runID, HeadSHA: spec.Review.HeadSHA, Generation: s.callerGeneration(worker, "review", generation)}
+	scope := domain.OuterReviewResultScope{ReviewID: reviewID, Generation: s.callerGeneration(worker, "review", generation)}
 	document, err := json.Marshal(scope)
 	if err != nil {
 		return "", err
@@ -59,21 +47,95 @@ func (s *Store) IssueOuterReviewCallerGeneration(ctx context.Context, reviewID, 
 	if err := s.CheckOuterOperation(ctx, "review.trigger", reviewer.ProjectID, reviewer.SessionID); err != nil {
 		return "", err
 	}
-	err = s.inTx(ctx, "issue exact reviewer result scope", func(q *gen.Queries) error {
-		if err := appendOuterAudit(ctx, q, domain.OuterAudit{Operation: "review.result.scope", State: "issued", ProjectID: string(reviewer.ProjectID), SessionID: reviewer.SessionID, ReceiptID: runID, RequestID: e.ActionID, Generation: generation, Reason: "exact reviewer result only; no feedback or turn authority"}); err != nil {
+	err = s.inTx(ctx, "bootstrap reviewer session credential", func(q *gen.Queries) error {
+		if err := appendOuterAudit(ctx, q, domain.OuterAudit{Operation: "review.session.scope", State: "issued", ProjectID: string(reviewer.ProjectID), SessionID: reviewer.SessionID, Generation: generation, Reason: "owned process environment only; no active result binding"}); err != nil {
 			return err
 		}
-		if err := q.RevokeOuterReviewCallers(ctx, gen.RevokeOuterReviewCallersParams{SessionID: string(worker.ID), ReviewID: reviewID}); err != nil {
-			return err
-		}
-		return q.IssueOuterCaller(ctx, gen.IssueOuterCallerParams{Verifier: callerVerifier(token), SessionID: string(worker.ID), ProjectID: string(worker.ProjectID), Generation: "review:" + string(document)})
+		return q.IssueOuterCaller(ctx, gen.IssueOuterCallerParams{Verifier: callerVerifier(token), SessionID: string(worker.ID), ProjectID: string(worker.ProjectID), Generation: outerReviewSessionPrefix + string(document)})
 	})
 	return token, err
 }
 
+// CheckOuterReviewSession holds legacy reviewers before the engine changes
+// their activity or creates a run. BindOuterReviewResult rechecks at dispatch.
+func (s *Store) CheckOuterReviewSession(ctx context.Context, reviewID string) error {
+	reviewer, found, err := s.GetReviewByID(ctx, reviewID)
+	if err != nil || !found || reviewer.ControllerGeneration == "" {
+		return errors.Join(domain.ErrOuterHeld, domain.ErrOuterReviewNotStarted)
+	}
+	if _, err := s.OuterReviewSpec(ctx, "review.trigger", reviewer.SessionID); err != nil {
+		return err
+	}
+	worker, found, err := s.GetSession(ctx, reviewer.SessionID)
+	if err != nil || !found {
+		return domain.ErrOuterHeld
+	}
+	count, err := s.qr.CountOuterReviewSessions(ctx, gen.CountOuterReviewSessionsParams{SessionID: string(worker.ID), ReviewID: reviewID, Generation: s.callerGeneration(worker, "review", reviewer.ControllerGeneration)})
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return errors.Join(domain.ErrOuterHeld, domain.ErrOuterReviewNotStarted)
+	}
+	return nil
+}
+
+// BindOuterReviewResult rotates only daemon-side metadata. A live process without
+// a matching launch credential must hold; no secret is minted or sent on a turn.
+func (s *Store) BindOuterReviewResult(ctx context.Context, reviewID, generation string) error {
+	reviewer, found, err := s.GetReviewByID(ctx, reviewID)
+	if err != nil || !found || generation == "" || reviewer.ControllerGeneration != generation {
+		return domain.ErrOuterHeld
+	}
+	spec, err := s.OuterReviewSpec(ctx, "review.trigger", reviewer.SessionID)
+	if err != nil {
+		return err
+	}
+	e, _ := domain.OuterExecutionFrom(ctx)
+	runs, err := s.ListReviewRunsBySession(ctx, reviewer.SessionID)
+	if err != nil {
+		return err
+	}
+	var runID string
+	for _, run := range runs {
+		if run.ReviewID == reviewID && run.BatchID == e.ActionID && run.Status == domain.ReviewRunRunning && run.PRURL == spec.Review.PRURL && run.TargetSHA == spec.Review.HeadSHA {
+			if runID != "" {
+				return domain.ErrOuterHeld
+			}
+			runID = run.ID
+		}
+	}
+	worker, found, err := s.GetSession(ctx, reviewer.SessionID)
+	if err != nil || !found || runID == "" {
+		return domain.ErrOuterHeld
+	}
+	scope := domain.OuterReviewResultScope{ReviewID: reviewID, RunID: runID, HeadSHA: spec.Review.HeadSHA, Generation: s.callerGeneration(worker, "review", generation)}
+	document, err := json.Marshal(scope)
+	if err != nil {
+		return err
+	}
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
+	defer s.writeMu.Unlock()
+	if err := s.CheckOuterOperation(ctx, "review.trigger", reviewer.ProjectID, reviewer.SessionID); err != nil {
+		return err
+	}
+	return s.inTx(ctx, "bind exact reviewer result scope", func(q *gen.Queries) error {
+		count, err := q.BindOuterReviewSession(ctx, gen.BindOuterReviewSessionParams{SessionID: string(worker.ID), ReviewID: reviewID, Generation: scope.Generation, NextGeneration: outerReviewSessionPrefix + string(document)})
+		if err != nil {
+			return err
+		}
+		if count != 1 {
+			return errors.Join(domain.ErrOuterHeld, domain.ErrOuterReviewNotStarted)
+		}
+		return appendOuterAudit(ctx, q, domain.OuterAudit{Operation: "review.result.scope", State: "bound", ProjectID: string(reviewer.ProjectID), SessionID: reviewer.SessionID, ReceiptID: runID, RequestID: e.ActionID, Generation: generation, Reason: "exact run/head binding on existing process credential; no feedback or turn authority"})
+	})
+}
+
 func (s *Store) authenticateOuterReviewCaller(ctx context.Context, row gen.OuterCaller) (domain.OuterCaller, error) {
 	var scope domain.OuterReviewResultScope
-	if row.OuterScope != 0 || json.Unmarshal([]byte(strings.TrimPrefix(row.Generation, "review:")), &scope) != nil {
+	if row.OuterScope != 0 || json.Unmarshal([]byte(strings.TrimPrefix(row.Generation, outerReviewSessionPrefix)), &scope) != nil {
 		return domain.OuterCaller{}, domain.ErrOuterHeld
 	}
 	caller := domain.OuterCaller{ProjectID: domain.ProjectID(row.ProjectID), SessionID: domain.SessionID(row.SessionID), Generation: row.Generation, ReviewResult: &scope}

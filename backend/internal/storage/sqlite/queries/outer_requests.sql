@@ -43,8 +43,24 @@ INSERT INTO outer_evidence(id,session_id,source_json,content,recorded_at) VALUES
 -- name: ListOuterEvidence :many
 SELECT * FROM outer_evidence WHERE session_id=? ORDER BY recorded_at DESC LIMIT 100;
 
--- name: RevokeOuterReviewCallers :exec
-DELETE FROM outer_callers WHERE session_id=sqlc.arg(session_id)
-AND json_extract(CASE WHEN substr(generation,1,7)='review:' THEN substr(generation,8) ELSE '{}' END,'$.reviewId')=sqlc.arg(review_id);
+-- name: BindOuterReviewSession :execrows
+UPDATE outer_callers SET generation=sqlc.arg(next_generation)
+WHERE session_id=sqlc.arg(session_id) AND outer_scope=0
+AND json_extract(CASE WHEN substr(generation,1,15)='review-session:' THEN substr(generation,16) ELSE '{}' END,'$.reviewId')=sqlc.arg(review_id)
+AND json_extract(CASE WHEN substr(generation,1,15)='review-session:' THEN substr(generation,16) ELSE '{}' END,'$.generation')=sqlc.arg(generation);
+-- name: ClearOuterReviewResultBinding :exec
+UPDATE outer_callers SET generation='review-session:' || json_set(substr(generation,16),'$.runId','','$.headSha','')
+WHERE outer_scope=0 AND substr(generation,1,15)='review-session:'
+AND json_extract(substr(generation,16),'$.runId')=sqlc.arg(run_id);
 -- name: OuterCallerGenerationExists :one
 SELECT EXISTS(SELECT 1 FROM outer_callers WHERE session_id=sqlc.arg(session_id) AND generation=sqlc.arg(generation));
+
+-- name: ClearCancelledOuterReviewBindings :exec
+UPDATE outer_callers SET generation='review-session:' || json_set(substr(generation,16),'$.runId','','$.headSha','')
+WHERE outer_scope=0 AND substr(generation,1,15)='review-session:'
+AND json_extract(substr(generation,16),'$.runId') IN (SELECT id FROM review_run WHERE review_run.session_id=sqlc.arg(session_id) AND status='cancelled');
+
+-- name: CountOuterReviewSessions :one
+SELECT count(*) FROM outer_callers WHERE session_id=sqlc.arg(session_id) AND outer_scope=0
+AND json_extract(CASE WHEN substr(generation,1,15)='review-session:' THEN substr(generation,16) ELSE '{}' END,'$.reviewId')=sqlc.arg(review_id)
+AND json_extract(CASE WHEN substr(generation,1,15)='review-session:' THEN substr(generation,16) ELSE '{}' END,'$.generation')=sqlc.arg(generation);

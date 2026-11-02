@@ -295,8 +295,14 @@ func (s *Store) UpdateReviewRunResult(ctx context.Context, id string, status dom
 	err := s.inTx(ctx, "record review result", func(q *gen.Queries) error {
 		var err error
 		n, err = q.UpdateReviewRunResult(ctx, params)
-		if err != nil || n == 0 || caller.ReviewResult == nil {
+		if err != nil || n == 0 {
 			return err
+		}
+		if status == domain.ReviewRunCancelled {
+			return q.ClearOuterReviewResultBinding(ctx, id)
+		}
+		if caller.ReviewResult == nil {
+			return nil
 		}
 		return appendOuterAudit(ctx, q, domain.OuterAudit{Operation: "review.result", State: "recorded", ProjectID: string(caller.ProjectID), SessionID: caller.SessionID, ReceiptID: id, Digest: domain.OuterDigest([]any{caller.ReviewResult, verdict, body, githubReviewID}), Reason: "authenticated exact reviewer verdict only; no feedback or continuation"})
 	})
@@ -324,10 +330,16 @@ func (s *Store) SupersedeStaleRunningReviewRuns(ctx context.Context, sessionID d
 func (s *Store) CancelRunningReviewRunsBySession(ctx context.Context, sessionID domain.SessionID, body string) (int64, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return s.qw.CancelRunningReviewRunsBySession(ctx, gen.CancelRunningReviewRunsBySessionParams{
-		Body:      body,
-		SessionID: sessionID,
+	var count int64
+	err := s.inTx(ctx, "cancel reviews and revoke result bindings", func(q *gen.Queries) error {
+		var err error
+		count, err = q.CancelRunningReviewRunsBySession(ctx, gen.CancelRunningReviewRunsBySessionParams{Body: body, SessionID: sessionID})
+		if err != nil {
+			return err
+		}
+		return q.ClearCancelledOuterReviewBindings(ctx, sessionID)
 	})
+	return count, err
 }
 
 // CancelRunningReviewRunsBySessionAndHarness marks currently running review
@@ -335,11 +347,16 @@ func (s *Store) CancelRunningReviewRunsBySession(ctx context.Context, sessionID 
 func (s *Store) CancelRunningReviewRunsBySessionAndHarness(ctx context.Context, sessionID domain.SessionID, harness domain.ReviewerHarness, body string) (int64, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return s.qw.CancelRunningReviewRunsBySessionAndHarness(ctx, gen.CancelRunningReviewRunsBySessionAndHarnessParams{
-		Body:      body,
-		SessionID: sessionID,
-		Harness:   harness,
+	var count int64
+	err := s.inTx(ctx, "cancel reviewer and revoke result binding", func(q *gen.Queries) error {
+		var err error
+		count, err = q.CancelRunningReviewRunsBySessionAndHarness(ctx, gen.CancelRunningReviewRunsBySessionAndHarnessParams{Body: body, SessionID: sessionID, Harness: harness})
+		if err != nil {
+			return err
+		}
+		return q.ClearCancelledOuterReviewBindings(ctx, sessionID)
 	})
+	return count, err
 }
 
 // GetReviewRun returns one review pass by id.
