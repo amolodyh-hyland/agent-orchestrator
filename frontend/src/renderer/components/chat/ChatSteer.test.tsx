@@ -1,13 +1,13 @@
+import type { ReactElement } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatComposer } from "./ChatComposer";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { QueuedMessageDock } from "./QueuedMessageDock";
 import { chatFixture } from "../../lib/chat-fixture";
-import { typeInLexicalEditor } from "../../test/lexical";
+import { lexicalEditorText, placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { TooltipProvider } from "../ui/tooltip";
 
 const routeMocks = vi.hoisted(() => ({ navigate: vi.fn(), params: { projectId: undefined, sessionId: undefined } }));
@@ -194,28 +194,36 @@ describe("ChatComposer steering", () => {
 		}
 	});
 
-	it("stages attachment-only drafts and includes them in steer", async () => {
+	it("shows an image-only inline reference and steers one reference block and native image", async () => {
+		const path = ".ao/attachments/attachment-shot.png";
 		const onSteer = vi.fn().mockResolvedValue(undefined);
 		const onSend = vi.fn();
-		const stage = vi.fn().mockResolvedValue([".ao/attachments/shot.png"]);
+		const stage = vi.fn().mockResolvedValue([path]);
 		composer({ onSteer, onSend, onStageAttachments: stage, nativeImages: true });
 
 		const field = screen.getByRole("combobox");
 		await userEvent.click(field);
 		fireEvent.paste(field, { clipboardData: { files: [png()], items: [] } });
-		await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(1));
+		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).toHaveAttribute("data-value", path));
+		expect(lexicalEditorText(field).trim()).toBe(path);
+		expect(screen.getAllByRole("listitem")).toHaveLength(1);
 
 		await userEvent.keyboard("{Control>}{Enter}{/Control}");
 		await waitFor(() => expect(stage).toHaveBeenCalledOnce());
 		expect(onSteer).toHaveBeenCalledWith(
-			"Attached files (read these files in the workspace):\n- .ao/attachments/shot.png",
+			`Attached files (read these files in the workspace):\n- ${path}`,
 			[{ mimeType: "image/png", data: expect.any(String) }],
 		);
+		// Image-only sends elide redundant path prose, while keeping one native payload.
+		expect(onSteer.mock.calls[0][0].split(path)).toHaveLength(2);
+		expect(onSteer.mock.calls[0][1]).toHaveLength(1);
+		expect(onSteer).toHaveBeenCalledOnce();
 		expect(onSend).not.toHaveBeenCalled();
 		await waitFor(() => expect(screen.queryAllByRole("listitem")).toHaveLength(0));
 	});
 
-	it("waits for a pasted image read and ignores repeated Enter while steering", async () => {
+	it("waits for a pasted image, steers its inline path beside prose, and ignores repeated Enter", async () => {
+		const path = ".ao/attachments/attachment-slow.png";
 		let finishRead!: () => void;
 		class SlowFileReader {
 			error: Error | null = null;
@@ -236,8 +244,8 @@ describe("ChatComposer steering", () => {
 		const steerPromise = new Promise<void>((resolve) => {
 			finishSteer = resolve;
 		});
-		const onSteer = vi.fn(() => steerPromise);
-		const stage = vi.fn().mockResolvedValue([".ao/attachments/slow.png"]);
+		const onSteer = vi.fn<NonNullable<Parameters<typeof ChatComposer>[0]["onSteer"]>>(() => steerPromise);
+		const stage = vi.fn().mockResolvedValue([path]);
 		composer({ onSteer, onStageAttachments: stage, nativeImages: true });
 
 		const field = screen.getByRole("combobox");
@@ -259,12 +267,56 @@ describe("ChatComposer steering", () => {
 		await waitFor(() => expect(stage).toHaveBeenCalledOnce());
 		await waitFor(() =>
 			expect(onSteer).toHaveBeenCalledWith(
-				"inspect this\n\nAttached files (read these files in the workspace):\n- .ao/attachments/slow.png",
+				`inspect this ${path}\n\nAttached files (read these files in the workspace):\n- ${path}`,
 				[{ mimeType: "image/png", data: "iVBORw==" }],
 			),
 		);
+		expect(field.querySelector('[data-composer-token="image"]')).toHaveAttribute("data-value", path);
+		expect(lexicalEditorText(field).trim()).toBe(`inspect this ${path}`);
+		expect(onSteer.mock.calls[0][0].split("\n\n")[0]).toBe(`inspect this ${path}`);
+		expect(onSteer.mock.calls[0][1]).toHaveLength(1);
 		expect(onSteer).toHaveBeenCalledOnce();
 		await act(async () => finishSteer());
+	});
+
+	it.each(["send", "steer"] as const)("serializes the visible mid-prose attachment identically for %s", async (delivery) => {
+		const path = ".ao/attachments/attachment-parity.png";
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const onSteer = vi.fn().mockResolvedValue(undefined);
+		composer({ onSend, onSteer, onStageAttachments: vi.fn().mockResolvedValue([path]), nativeImages: true });
+		const field = screen.getByRole("combobox");
+		await typeInLexicalEditor(field, "Inspect please");
+		await placeLexicalCaret(field, 8);
+		fireEvent.paste(field, { clipboardData: { files: [png("parity.png")], items: [] } });
+		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).toHaveAttribute("title", path));
+		expect(lexicalEditorText(field)).toBe(`Inspect ${path} please`);
+
+		await userEvent.keyboard(delivery === "steer" ? "{Control>}{Enter}{/Control}" : "{Enter}");
+		const submit = delivery === "steer" ? onSteer : onSend;
+		await waitFor(() => expect(submit).toHaveBeenCalledWith(
+			`Inspect ${path} please\n\nAttached files (read these files in the workspace):\n- ${path}`,
+			[{ mimeType: "image/png", data: expect.any(String) }],
+		));
+		expect(submit.mock.calls[0][0].split("\n\n")[0]).toBe(`Inspect ${path} please`);
+		expect(submit.mock.calls[0][1]).toHaveLength(1);
+		expect(submit).toHaveBeenCalledOnce();
+		expect(delivery === "steer" ? onSend : onSteer).not.toHaveBeenCalled();
+	});
+
+	it("does not retain an inline path or native payload after removing its attachment before steer", async () => {
+		const path = ".ao/attachments/attachment-removed.png";
+		const onSteer = vi.fn().mockResolvedValue(undefined);
+		composer({ onSteer, onStageAttachments: vi.fn().mockResolvedValue([path]), nativeImages: true });
+		const field = screen.getByRole("combobox");
+		await typeInLexicalEditor(field, "Inspect this");
+		fireEvent.paste(field, { clipboardData: { files: [png("removed.png")], items: [] } });
+		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).toHaveAttribute("data-value", path));
+		await userEvent.click(screen.getByLabelText("Remove removed.png"));
+		expect(field.querySelector('[data-composer-token="image"]')).toBeNull();
+		expect(lexicalEditorText(field)).toBe("Inspect this ");
+		await userEvent.click(field);
+		await userEvent.keyboard("{Control>}{Enter}{/Control}");
+		await waitFor(() => expect(onSteer).toHaveBeenCalledWith("Inspect this"));
 	});
 
 	it("reports the daemon's refusal without a second message of its own", () => {
@@ -515,6 +567,161 @@ describe("ChatWorkspace steering", () => {
 		expect(within(screen.getByTestId("queued-message-dock")).getByText("second queued")).toBeVisible();
 	});
 
+	it("lets the user steer or delete a queued browser annotation, but not edit it", async () => {
+		const annotationText = [
+			"<browser_annotations>",
+			"Browser feedback",
+			"Page: Download page",
+			"URL: https://example.test/download",
+			"Annotations: 1",
+			"",
+			"Annotation 1 (comment):",
+			"Comment: Rename this file",
+			"</browser_annotations>",
+		].join("\n");
+		const snapshot = {
+			...chatFixture,
+			turns: [
+				...chatFixture.turns,
+				{ id: "queued-annotation", state: "queued" as const, requestedAt: "2026-08-11T10:01:00Z" },
+				{ id: "queued-automation", state: "queued" as const, requestedAt: "2026-08-11T10:02:00Z" },
+			],
+			items: [
+				...chatFixture.items,
+				{
+					kind: "message" as const,
+					id: "queued-annotation-message",
+					turnId: "queued-annotation",
+					sequence: 100,
+					revision: 0,
+					role: "user" as const,
+					origin: "automation" as const,
+					authoredByUser: true,
+					text: annotationText,
+					streaming: false,
+					createdAt: "2026-08-11T10:01:00Z",
+				},
+				{
+					kind: "message" as const,
+					id: "queued-automation-message",
+					turnId: "queued-automation",
+					sequence: 101,
+					revision: 0,
+					role: "user" as const,
+					origin: "automation" as const,
+					text: "automation follow-up",
+					streaming: false,
+					createdAt: "2026-08-11T10:02:00Z",
+				},
+			],
+		};
+		const onPromoteQueuedTurn = vi.fn().mockResolvedValue(undefined);
+		const onCancelQueuedTurn = vi.fn().mockResolvedValue(undefined);
+		render(
+			<ChatWorkspace
+				snapshot={snapshot}
+				onSteer={vi.fn()}
+				onPromoteQueuedTurn={onPromoteQueuedTurn}
+				onEditQueuedTurn={vi.fn()}
+				onCancelQueuedTurn={onCancelQueuedTurn}
+			/>,
+		);
+
+		const row = screen.getByTestId("queued-message-queued-annotation");
+		expect(within(row).getByText("Rename this file · 1 annotation")).toBeVisible();
+		expect(within(row).queryByRole("button", { name: "Edit queued message" })).not.toBeInTheDocument();
+		// The dock owns the queued annotation, as it does a typed message.
+		expect(screen.queryByText("Queued · sends when the agent finishes")).not.toBeInTheDocument();
+		// Ordinary automation turns stay out of the user's queue controls.
+		expect(screen.queryByTestId("queued-message-queued-automation")).not.toBeInTheDocument();
+
+		expect(within(row).getByRole("button", { name: "Delete queued message" })).toBeVisible();
+		await userEvent.click(within(row).getAllByRole("button", {
+			name: "Steer this queued message into the running turn",
+		})[0]!);
+		await waitFor(() => expect(onPromoteQueuedTurn).toHaveBeenCalledWith("queued-annotation"));
+	});
+
+	it("tells queued annotation batches from the same page apart and steers the one clicked", async () => {
+		const batch = (comment: string) => [
+			"<browser_annotations>",
+			"Browser feedback",
+			"Page: Untitled page",
+			"Annotations: 1",
+			"",
+			"Annotation 1 (comment):",
+			`Comment: ${comment}`,
+			"</browser_annotations>",
+		].join("\n");
+		const queued = (turnId: string, sequence: number, comment: string) => ({
+			turnId,
+			message: {
+				kind: "message" as const,
+				id: `${turnId}-message`,
+				turnId,
+				sequence,
+				revision: 0,
+				role: "user" as const,
+				origin: "automation" as const,
+				authoredByUser: true,
+				text: batch(comment),
+				streaming: false,
+				createdAt: `2026-08-11T10:0${sequence - 99}:00Z`,
+			},
+		});
+		const onPromoteQueuedTurn = vi.fn().mockResolvedValue(undefined);
+		render(
+			<QueuedMessageDock
+				messages={[queued("queued-older", 100, "Connect mobile from settings"), queued("queued-newer", 101, "Rename the download")]}
+				canSteer
+				canSteerNext
+				onPromoteQueuedTurn={onPromoteQueuedTurn}
+			/>,
+		);
+
+		const older = screen.getByText("Connect mobile from settings · 1 annotation").closest<HTMLElement>("[data-testid^='queued-message-']")!;
+		const newer = screen.getByText("Rename the download · 1 annotation").closest<HTMLElement>("[data-testid^='queued-message-']")!;
+		expect(older).toHaveAttribute("data-testid", "queued-message-queued-older");
+		expect(newer).toHaveAttribute("data-testid", "queued-message-queued-newer");
+
+		await userEvent.click(within(newer).getAllByRole("button", { name: "Steer this queued message into the running turn" })[0]!);
+		expect(onPromoteQueuedTurn).toHaveBeenLastCalledWith("queued-newer");
+		await userEvent.click(within(older).getAllByRole("button", { name: "Steer this queued message into the running turn" })[0]!);
+		expect(onPromoteQueuedTurn).toHaveBeenLastCalledWith("queued-older");
+	});
+
+	it("deletes a queued browser annotation from the dock", async () => {
+		const onCancelQueuedTurn = vi.fn().mockResolvedValue(undefined);
+		render(
+			<QueuedMessageDock
+				messages={[{
+					turnId: "queued-annotation",
+					message: {
+						kind: "message",
+						id: "queued-annotation-message",
+						turnId: "queued-annotation",
+						sequence: 100,
+						revision: 0,
+						role: "user",
+						origin: "automation",
+						authoredByUser: true,
+						text: "<browser_annotations>\nPage: Download page\nAnnotations: 1\n\nAnnotation 1 (comment):\nComment: Rename this file\n</browser_annotations>",
+						streaming: false,
+						createdAt: "2026-08-11T10:01:00Z",
+					},
+				}]}
+				canSteer
+				onBeginQueuedEdit={vi.fn()}
+				onCancelQueuedTurn={onCancelQueuedTurn}
+			/>,
+		);
+
+		const row = screen.getByTestId("queued-message-queued-annotation");
+		expect(within(row).queryByRole("button", { name: "Edit queued message" })).not.toBeInTheDocument();
+		await userEvent.click(within(row).getByRole("button", { name: "Delete queued message" }));
+		expect(onCancelQueuedTurn).toHaveBeenCalledWith("queued-annotation");
+	});
+
 	it("clears a queued edit when that message is deleted from the dock", async () => {
 		const onCancelQueuedTurn = vi.fn().mockResolvedValue(undefined);
 		render(
@@ -624,7 +831,38 @@ describe("ChatWorkspace steering", () => {
 
 	it("renders a landed steer as the user's own words", () => {
 		render(<ChatWorkspace snapshot={chatFixture} />);
-		expect(screen.getByText(/Steered into the running turn/)).toBeInTheDocument();
+		expect(screen.getByText(/Steered/)).toBeInTheDocument();
+	});
+
+	it("renders a steered browser annotation batch as its annotation card", () => {
+		const transport = [
+			"<browser_annotations>",
+			"Browser feedback",
+			"Page: Download page",
+			"URL: https://example.test/download",
+			"Annotations: 1",
+			"Task: Address the feedback below according to its wording.",
+			"",
+			"Annotation 1 (comment):",
+			"Comment: Rename this file",
+			"</browser_annotations>",
+		].join("\n");
+		const snapshot = {
+			...chatFixture,
+			items: chatFixture.items.map((item) =>
+				item.kind === "activity" && item.id === "a-steer-1"
+					? { ...item, summary: transport, detail: { ...item.detail, text: transport, origin: "automation" } }
+					: item,
+			),
+		};
+		render(<ChatWorkspace snapshot={snapshot} />);
+
+		const card = screen.getByTestId("steered-browser-feedback");
+		expect(within(card).getByText("Download page")).toBeVisible();
+		expect(within(card).getByText("Rename this file")).toBeVisible();
+		expect(within(card).getByText("Steered")).toBeVisible();
+		expect(screen.queryByText(/<browser_annotations>/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/Address the feedback below/)).not.toBeInTheDocument();
 	});
 
 	it("renders a staged image reference on a landed steer in chat history", () => {

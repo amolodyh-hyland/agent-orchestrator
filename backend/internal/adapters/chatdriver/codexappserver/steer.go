@@ -123,6 +123,9 @@ func (c *conversation) Steer(
 // sent. Codex turn/steer accepts the same image URL input shape as turn/start;
 // other structured blocks have no honest app-server representation here.
 func steerInput(msg ports.ChatUserMessage) ([]codexproto.UserInput, error) {
+	if len(msg.NativeSkills) > 0 {
+		return nil, fmt.Errorf("%w: native skill", ports.ErrChatSteerContentUnsupported)
+	}
 	input := make([]codexproto.UserInput, 0, 1+len(msg.Content))
 	if strings.TrimSpace(msg.Text) != "" {
 		text := msg.Text

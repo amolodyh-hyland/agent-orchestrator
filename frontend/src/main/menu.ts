@@ -1,5 +1,29 @@
 import type { MenuItemConstructorOptions } from "electron";
 
+type AppMenuOptions = {
+	onToggleMultica?: () => void;
+	allowShellDebugging?: boolean;
+	onReload?: (ignoreCache: boolean) => void;
+};
+
+function reloadItems(options: AppMenuOptions, isMac: boolean): MenuItemConstructorOptions[] {
+	if (options.allowShellDebugging) return [{ role: "reload" }, { role: "forceReload" }];
+	const onReload = options.onReload;
+	if (!onReload) return [];
+	return [
+		{
+			label: "Reload Browser",
+			accelerator: isMac ? "Command+R" : "Ctrl+R",
+			click: () => onReload(false),
+		},
+		{
+			label: "Force Reload Browser",
+			accelerator: isMac ? "Shift+Command+R" : "Ctrl+Shift+R",
+			click: () => onReload(true),
+		},
+	];
+}
+
 // Electron's built-in toggleDevTools role assumes the focused surface belongs
 // to a BrowserWindow. AO uses BaseWindow with WebContentsView children, so the
 // role can receive no focused window and crash the main process. Keep Electron's
@@ -8,17 +32,37 @@ import type { MenuItemConstructorOptions } from "electron";
 // fileMenu role binds Cmd+W to "Close Window", which kills the entire application
 // window whenever a tab or terminal close races the native menu. Multi-tab
 // macOS applications (Safari, Chrome, VS Code) bind Shift+Command+W to "Close Window"
-// so Command+W remains scoped to tabs and terminals.
-// No accelerator on purpose: the chord is a customizable app shortcut handled
-// in the main process (`toggle-multica`), and a fixed menu accelerator would
-// drift from the user's binding.
 function multicaMenuItems(onToggleMultica?: () => void): MenuItemConstructorOptions[] {
 	return onToggleMultica ? [{ label: "Switch AO / Multica", click: onToggleMultica }] : [];
 }
 
-export function buildMacAppMenuTemplate(onToggleDevTools: () => void, onToggleMultica?: () => void): MenuItemConstructorOptions[] {
+// so Command+W remains scoped to tabs and terminals. Quit is a plain item, not
+// the quit role (which maps straight to NSApp terminate:), so a ⌘Q press can ask
+// for confirmation while choosing Quit from the menu still quits at once.
+export function buildMacAppMenuTemplate(
+	onToggleDevTools: () => void,
+	quit: { appName: string; onQuit: (fromShortcut: boolean) => void },
+	options: AppMenuOptions = {},
+): MenuItemConstructorOptions[] {
 	return [
-		{ role: "appMenu" },
+		{
+			role: "appMenu",
+			submenu: [
+				{ role: "about" },
+				{ type: "separator" },
+				{ role: "services" },
+				{ type: "separator" },
+				{ role: "hide" },
+				{ role: "hideOthers" },
+				{ role: "unhide" },
+				{ type: "separator" },
+				{
+					label: `Quit ${quit.appName}`,
+					accelerator: "Command+Q",
+					click: (_item, _window, event) => quit.onQuit(event.triggeredByAccelerator === true),
+				},
+			],
+		},
 		{
 			role: "fileMenu",
 			submenu: [
@@ -32,14 +76,13 @@ export function buildMacAppMenuTemplate(onToggleDevTools: () => void, onToggleMu
 		{
 			label: "View",
 			submenu: [
-				{ role: "reload" },
-				{ role: "forceReload" },
+				...reloadItems(options, true),
 				{
-					label: "Toggle Developer Tools",
+					label: options.allowShellDebugging ? "Toggle Developer Tools" : "Toggle Browser Developer Tools",
 					accelerator: "Alt+Command+I",
 					click: onToggleDevTools,
 				},
-				...multicaMenuItems(onToggleMultica),
+				...multicaMenuItems(options.onToggleMultica),
 				{ type: "separator" },
 				{ role: "resetZoom" },
 				{ role: "zoomIn" },
@@ -52,14 +95,14 @@ export function buildMacAppMenuTemplate(onToggleDevTools: () => void, onToggleMu
 	];
 }
 
-export function buildWindowsAppMenuTemplate(onToggleDevTools?: () => void, onToggleMultica?: () => void): MenuItemConstructorOptions[] {
-	const devtoolsItem: MenuItemConstructorOptions = onToggleDevTools
-		? {
-			label: "Toggle DevTools",
+export function buildWindowsAppMenuTemplate(onToggleDevTools?: () => void, options: AppMenuOptions = {}): MenuItemConstructorOptions[] {
+	const devtoolsItems: MenuItemConstructorOptions[] = onToggleDevTools
+		? [{
+			label: options.allowShellDebugging ? "Toggle DevTools" : "Toggle Browser Developer Tools",
 			accelerator: "Ctrl+Shift+I",
 			click: onToggleDevTools,
-		}
-		: { role: "toggleDevTools" };
+		}]
+		: [];
 	return [
 		{
 			label: "Edit",
@@ -76,9 +119,9 @@ export function buildWindowsAppMenuTemplate(onToggleDevTools?: () => void, onTog
 		{
 			label: "View",
 			submenu: [
-				{ role: "reload" },
-				devtoolsItem,
-				...multicaMenuItems(onToggleMultica),
+				...reloadItems(options, false),
+				...devtoolsItems,
+				...multicaMenuItems(options.onToggleMultica),
 				{ type: "separator" },
 				{ role: "resetZoom" },
 				{ accelerator: "Ctrl+=", role: "zoomIn" },
@@ -95,6 +138,6 @@ export function buildWindowsAppMenuTemplate(onToggleDevTools?: () => void, onTog
 	];
 }
 
-export function buildLinuxAppMenuTemplate(onToggleDevTools?: () => void, onToggleMultica?: () => void): MenuItemConstructorOptions[] {
-	return buildWindowsAppMenuTemplate(onToggleDevTools, onToggleMultica);
+export function buildLinuxAppMenuTemplate(onToggleDevTools?: () => void, options: AppMenuOptions = {}): MenuItemConstructorOptions[] {
+	return buildWindowsAppMenuTemplate(onToggleDevTools, options);
 }
