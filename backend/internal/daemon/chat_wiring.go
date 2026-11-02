@@ -156,6 +156,7 @@ func newChatServiceOptions(ctx context.Context, deps chatServiceDeps) (chatsvc.O
 				agentSvc.InvalidateCodexAccountAuthentication()
 			}
 		},
+		RecheckAccount: deps.OnAccountChanged,
 		OnCodexCapacityChanged: func(sessionID domain.SessionID, generation string, observation ports.CodexCapacityObservation) {
 			agentSvc := currentAgents()
 			if agentSvc == nil || agentSvc.CodexAccountSwitchInProgress() {

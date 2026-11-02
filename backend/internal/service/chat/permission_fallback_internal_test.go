@@ -66,7 +66,7 @@ func TestReplacementControllerKeepsThePermissionFallbackSettings(t *testing.T) {
 		now:   func() time.Time { return time.Unix(0, 0) },
 	}
 	source := newController("s", domain.SessionConversationOwner("s"), domain.ConversationRecord{}, "gen-1",
-		domain.HarnessCodex, &fakeSender{}, nil, nil, slog.New(slog.DiscardHandler), service.newID, service.now, nil, nil, nil)
+		domain.HarnessCodex, &fakeSender{}, nil, nil, slog.New(slog.DiscardHandler), service.newID, service.now, nil, nil, nil, nil)
 
 	t.Run("disabled stays disabled", func(t *testing.T) {
 		source.permissionFallbackOff = true
@@ -123,7 +123,7 @@ func TestReviewControllerTurnNeverStepsDown(t *testing.T) {
 	var reported []ports.PermissionMode
 	controller := newController("s", domain.ReviewConversationOwner("review-1"), domain.ConversationRecord{}, "gen-1",
 		domain.HarnessCodex, provider, nil, nil, slog.New(slog.DiscardHandler),
-		func() string { return "id" }, func() time.Time { return time.Unix(0, 0) }, nil, nil, nil)
+		func() string { return "id" }, func() time.Time { return time.Unix(0, 0) }, nil, nil, nil, nil)
 	controller.onPermissionsChanged = func(_ domain.SessionID, mode domain.PermissionMode) { reported = append(reported, mode) }
 
 	_, err := controller.sendTurn(context.Background(), ports.ChatUserMessage{
@@ -246,7 +246,7 @@ func TestControllerReportsFirstAcceptedModeIndependentlyOfPreference(t *testing.
 	controller := newController("s", domain.SessionConversationOwner("s"), domain.ConversationRecord{
 		Settings: domain.ConversationSettings{ApprovalMode: mode},
 	}, "gen", domain.HarnessClaudeCode, &fakeSender{}, nil, nil,
-		slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil)
+		slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil, nil)
 	var reported []ports.PermissionMode
 	controller.onPermissionsChanged = func(_ domain.SessionID, effective domain.PermissionMode) {
 		reported = append(reported, effective)

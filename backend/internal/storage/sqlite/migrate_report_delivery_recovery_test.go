@@ -43,6 +43,16 @@ func createPreReceiptUpgradeConversation(ctx context.Context, db *sql.DB, id str
 	return domain.ConversationRecord{ID: id}, nil
 }
 
+func createPreReceiptUpgradeSession(ctx context.Context, db *sql.DB, rec domain.SessionRecord) (domain.SessionRecord, error) {
+	var num int64
+	if err := db.QueryRowContext(ctx, `SELECT COALESCE(MAX(num), 0) + 1 FROM sessions WHERE project_id = ?`, rec.ProjectID).Scan(&num); err != nil {
+		return domain.SessionRecord{}, err
+	}
+	rec.ID = domain.SessionID(fmt.Sprintf("%s-%d", rec.ProjectID, num))
+	_, err := db.ExecContext(ctx, `INSERT INTO sessions (id,project_id,num,kind,harness,session_mode,activity_last_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`, rec.ID, rec.ProjectID, num, rec.Kind, rec.Harness, rec.Mode, rec.CreatedAt, rec.CreatedAt, rec.UpdatedAt)
+	return rec, err
+}
+
 func (d *noUpgradeResend) Submit(context.Context, domain.SessionID, string, reportsvc.PreparedBatch) (domain.ReportDeliveryReceipt, error) {
 	d.calls++
 	return domain.ReportDeliveryReceipt{}, fmt.Errorf("unexpected resend")
@@ -62,11 +72,11 @@ func TestReportUpgradeRecoversPreMigrationChatDelivery(t *testing.T) {
 			if err := st.UpsertProject(ctx, domain.ProjectRecord{ID: "upgrade", Path: dir, RegisteredAt: now}); err != nil {
 				t.Fatal(err)
 			}
-			worker, err := st.CreateSession(ctx, domain.SessionRecord{ProjectID: "upgrade", Kind: domain.KindWorker, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, CreatedAt: now, UpdatedAt: now})
+			worker, err := createPreReceiptUpgradeSession(ctx, db, domain.SessionRecord{ProjectID: "upgrade", Kind: domain.KindWorker, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, CreatedAt: now, UpdatedAt: now})
 			if err != nil {
 				t.Fatal(err)
 			}
-			orch, err := st.CreateSession(ctx, domain.SessionRecord{ProjectID: "upgrade", Kind: domain.KindOrchestrator, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, CreatedAt: now, UpdatedAt: now})
+			orch, err := createPreReceiptUpgradeSession(ctx, db, domain.SessionRecord{ProjectID: "upgrade", Kind: domain.KindOrchestrator, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, CreatedAt: now, UpdatedAt: now})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -167,11 +177,11 @@ func TestReportUpgradeHoldsReleasedPendingPiggyback(t *testing.T) {
 			if err := st.UpsertProject(ctx, domain.ProjectRecord{ID: "upgrade", Path: dir, RegisteredAt: now}); err != nil {
 				t.Fatal(err)
 			}
-			worker, err := st.CreateSession(ctx, domain.SessionRecord{ProjectID: "upgrade", Kind: domain.KindWorker, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, CreatedAt: now, UpdatedAt: now})
+			worker, err := createPreReceiptUpgradeSession(ctx, db, domain.SessionRecord{ProjectID: "upgrade", Kind: domain.KindWorker, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, CreatedAt: now, UpdatedAt: now})
 			if err != nil {
 				t.Fatal(err)
 			}
-			orch, err := st.CreateSession(ctx, domain.SessionRecord{ProjectID: "upgrade", Kind: domain.KindOrchestrator, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, CreatedAt: now, UpdatedAt: now})
+			orch, err := createPreReceiptUpgradeSession(ctx, db, domain.SessionRecord{ProjectID: "upgrade", Kind: domain.KindOrchestrator, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, CreatedAt: now, UpdatedAt: now})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -298,7 +308,7 @@ func TestReportUpgradeKeepsTUIAttemptEligibleWithOtherChatHistory(t *testing.T) 
 			if err := st.UpsertProject(ctx, domain.ProjectRecord{ID: "upgrade", Path: dir, RegisteredAt: now}); err != nil {
 				t.Fatal(err)
 			}
-			orch, err := st.CreateSession(ctx, domain.SessionRecord{ProjectID: "upgrade", Kind: domain.KindOrchestrator, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, CreatedAt: now, UpdatedAt: now})
+			orch, err := createPreReceiptUpgradeSession(ctx, db, domain.SessionRecord{ProjectID: "upgrade", Kind: domain.KindOrchestrator, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, CreatedAt: now, UpdatedAt: now})
 			if err != nil {
 				t.Fatal(err)
 			}

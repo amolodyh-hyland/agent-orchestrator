@@ -17,6 +17,7 @@ func TestProjectSetConfig_PermissionFallbackFlag(t *testing.T) {
 		want string // the raw permissionFallback member, or "" when it must be absent
 	}{
 		{"omitted keeps the daemon default", []string{"--permission", "auto"}, ""},
+		{"fallback flag alone", []string{"--permission-fallback=false"}, "false"},
 		{"explicitly off", []string{"--permission", "bypass-permissions", "--permission-fallback=false"}, "false"},
 		{"explicitly on", []string{"--permission", "bypass-permissions", "--permission-fallback=true"}, "true"},
 	} {
@@ -88,5 +89,19 @@ func TestWriteSessionDetails_ShowsEffectivePermissions(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "permissions:") {
 		t.Fatalf("details show a permissions line for a session that reports none:\n%s", out.String())
+	}
+}
+
+func TestProjectSetConfig_FieldEditKeepsPermissionFallbackAndEffort(t *testing.T) {
+	disabled := false
+	current := func() (projectConfig, error) {
+		return projectConfig{AgentConfig: agentConfig{Model: "before", Effort: "high", PermissionFallback: &disabled}}, nil
+	}
+	cfg, err := buildProjectConfig(projectSetConfigOptions{model: "after"}, func(name string) bool { return name == "model" }, current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AgentConfig.Model != "after" || cfg.AgentConfig.Effort != "high" || cfg.AgentConfig.PermissionFallback == nil || *cfg.AgentConfig.PermissionFallback {
+		t.Fatalf("field edit discarded saved agent configuration: %+v", cfg.AgentConfig)
 	}
 }

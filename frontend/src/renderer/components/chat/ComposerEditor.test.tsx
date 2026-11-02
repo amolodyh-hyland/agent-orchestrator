@@ -28,6 +28,7 @@ function setup(text: string, props: Partial<ComponentProps<typeof ComposerEditor
 	const onComplete = vi.fn(() => undefined);
 	render(
 		<ComposerEditor
+				enterSends={true}
 			ref={ref}
 			label="Composer"
 			placeholder="Message"

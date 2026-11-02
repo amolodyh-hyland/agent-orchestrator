@@ -37,7 +37,7 @@ func TestFactoryFeedbackDispatchAndReplacementAreGuarded(t *testing.T) {
 	svc := &Service{log: slog.New(slog.DiscardHandler), newID: func() string { return "id" }, now: time.Now}
 	svc.SetFeedbackAdmission(a)
 	provider := &fakeSender{}
-	c := newController("session", domain.SessionConversationOwner("session"), domain.ConversationRecord{}, "generation", domain.HarnessCodex, provider, noopSettingsStore{}, nil, svc.log, svc.newID, svc.now, nil, nil, nil)
+	c := newController("session", domain.SessionConversationOwner("session"), domain.ConversationRecord{}, "generation", domain.HarnessCodex, provider, noopSettingsStore{}, nil, svc.log, svc.newID, svc.now, nil, nil, nil, nil)
 	c.feedbackInput = svc.acquireFeedbackInput
 	if _, err := c.sendTurn(ctx, ports.ChatUserMessage{Text: "findings", Origin: domain.MessageOriginAutomation}); err != nil {
 		t.Fatal(err)
@@ -69,7 +69,7 @@ func TestFactoryFeedbackDeferredTransportChecksAfterPreparation(t *testing.T) {
 	st := &libraryDispatchStore{}
 	svc := &Service{log: slog.New(slog.DiscardHandler)}
 	svc.SetFeedbackAdmission(admission)
-	c := newController("session", domain.SessionConversationOwner("session"), domain.ConversationRecord{}, "generation", domain.HarnessCodex, provider, st, nil, svc.log, func() string { return "id" }, time.Now, nil, nil, nil)
+	c := newController("session", domain.SessionConversationOwner("session"), domain.ConversationRecord{}, "generation", domain.HarnessCodex, provider, st, nil, svc.log, func() string { return "id" }, time.Now, nil, nil, nil, nil)
 	c.feedbackInput = svc.acquireFeedbackInput
 	if _, err := c.dispatch(ctx, "turn", ports.ChatUserMessage{Text: "approved findings", Origin: domain.MessageOriginAutomation}, time.Now(), false, nil, false); err != nil {
 		t.Fatal(err)

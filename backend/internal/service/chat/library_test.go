@@ -30,7 +30,7 @@ func TestLibraryControlledChatChecksEveryDispatchAndReplacement(t *testing.T) {
 	svc := &Service{log: slog.New(slog.DiscardHandler), newID: func() string { return "id" }, now: func() time.Time { return time.Unix(0, 0) }}
 	svc.SetLibraryAdmission(admission)
 	provider := &fakeSender{}
-	controller := newController("session", domain.SessionConversationOwner("session"), domain.ConversationRecord{}, "generation", domain.HarnessCodex, provider, noopSettingsStore{}, nil, svc.log, svc.newID, svc.now, nil, nil, nil)
+	controller := newController("session", domain.SessionConversationOwner("session"), domain.ConversationRecord{}, "generation", domain.HarnessCodex, provider, noopSettingsStore{}, nil, svc.log, svc.newID, svc.now, nil, nil, nil, nil)
 	controller.libraryInput = svc.acquireLibraryInput
 	if _, err := controller.sendTurn(context.Background(), ports.ChatUserMessage{Text: "ordinary message"}); err != nil {
 		t.Fatal(err)
@@ -115,7 +115,7 @@ func TestLibraryDeferredMainDispatchRejectsCompletedRevocation(t *testing.T) {
 	store := &libraryDispatchStore{}
 	svc := &Service{log: slog.New(slog.DiscardHandler)}
 	svc.SetLibraryAdmission(admission)
-	controller := newController("session", domain.SessionConversationOwner("session"), domain.ConversationRecord{}, "generation", domain.HarnessCodex, provider, store, nil, svc.log, func() string { return "id" }, time.Now, nil, nil, nil)
+	controller := newController("session", domain.SessionConversationOwner("session"), domain.ConversationRecord{}, "generation", domain.HarnessCodex, provider, store, nil, svc.log, func() string { return "id" }, time.Now, nil, nil, nil, nil)
 	controller.libraryInput = svc.acquireLibraryInput
 	done := make(chan error, 1)
 	go func() {

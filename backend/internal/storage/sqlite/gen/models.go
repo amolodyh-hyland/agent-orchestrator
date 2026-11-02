@@ -165,14 +165,15 @@ type AgentSwitchFailureReceipt struct {
 }
 
 type AppSetting struct {
-	ID                 int64
-	DefaultSessionMode domain.SessionMode
-	UpdatedAt          time.Time
-	CloudOffering      bool
-	HarnessDefaults    string
-	VersionRefresh     bool
-	ComputerUse        bool
-	AgentAssetSources  string
+	ID                   int64
+	DefaultSessionMode   domain.SessionMode
+	UpdatedAt            time.Time
+	CloudOffering        bool
+	HarnessDefaults      string
+	VersionRefresh       bool
+	ComputerUse          bool
+	SessionRetentionDays int64
+	AgentAssetSources    string
 }
 
 type Automation struct {
@@ -433,6 +434,16 @@ type Cue struct {
 	Prompt    string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+type DeletedSessionAccountUsage struct {
+	AccountID          string
+	Day                string
+	ModelID            string
+	InputTokens        int64
+	CachedInputTokens  int64
+	OutputTokens       int64
+	EstimatedCostNanos int64
 }
 
 type FactoryFeedbackControl struct {
@@ -860,6 +871,12 @@ type ReportWorkerInterrupt struct {
 	LastInterruptedAt time.Time
 }
 
+type RepositoryRename struct {
+	Host    string
+	OldName string
+	Name    string
+}
+
 type Review struct {
 	ID                     string
 	SessionID              domain.SessionID
@@ -978,6 +995,7 @@ type Session struct {
 	LaunchOptions                    string
 	BranchNaming                     bool
 	TemporaryBranch                  string
+	TerminatedAt                     sql.NullTime
 }
 
 type SessionAgentAccount struct {
@@ -1010,6 +1028,7 @@ type SessionCleanupFact struct {
 	LastAttemptAt        sql.NullTime
 	NextAttemptAt        sql.NullTime
 	FailureCode          string
+	ReportOnly           bool
 }
 
 type SessionHarnessRelease struct {
@@ -1047,6 +1066,11 @@ type SessionInterfaceTransitionMessage struct {
 	ClientMessageID string
 	SenderSessionID string
 	AuthoredByUser  bool
+}
+
+type SessionNumFloor struct {
+	IDPrefix string
+	MaxNum   int64
 }
 
 type SessionTelemetry struct {
@@ -1101,6 +1125,11 @@ type TelemetryEvent struct {
 	SessionID   sql.NullString
 	RequestID   string
 	PayloadJson string
+}
+
+type TelemetryLifetimeSession struct {
+	Singleton int64
+	Count     int64
 }
 
 type UsageBinding struct {

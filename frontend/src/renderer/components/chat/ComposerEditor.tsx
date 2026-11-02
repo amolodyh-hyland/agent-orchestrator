@@ -1075,6 +1075,7 @@ const EditorBridge = forwardRef<
 	{
 		disabled?: boolean;
 		menuOpen: boolean;
+		enterSends: boolean;
 		promptSuggestion?: ComposerPromptSuggestion;
 		onDismissSuggestion: () => void;
 		onEmptyChange: (empty: boolean) => void;
@@ -1086,7 +1087,7 @@ const EditorBridge = forwardRef<
 		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
 	}
->(function EditorBridge({ disabled, menuOpen, promptSuggestion, onEmptyChange, onDismissSuggestion, attachedImages, compositionState, compositionEndScheduler, onChange, onComplete, onEnter }, ref) {
+>(function EditorBridge({ disabled, menuOpen, enterSends, promptSuggestion, onEmptyChange, onDismissSuggestion, attachedImages, compositionState, compositionEndScheduler, onChange, onComplete, onEnter }, ref) {
 	const [editor] = useLexicalComposerContext();
 	const lastSelection = useRef<RangeSelection | null>(null);
 	// A range stays intact while the picker/stager is pending. Only acceptance
@@ -1416,7 +1417,8 @@ const EditorBridge = forwardRef<
 			// bubble listener. A prevented event was already handled there and must not
 			// also insert a newline or a second completion token.
 			if (event?.defaultPrevented) return true;
-			if (event?.isComposing || event?.shiftKey || editor.isComposing()) return false;
+			if (event?.isComposing || event?.keyCode === 229 || event?.shiftKey || editor.isComposing()) return false;
+			if (key === "Enter" && !enterSends && !event?.metaKey && !event?.ctrlKey) return false;
 			if (key === "Enter" && $selectionIsInsideOpenComposerCodeFence()) return false;
 			const snapshot = editorSnapshot();
 			if (
@@ -1455,7 +1457,8 @@ const EditorBridge = forwardRef<
 		const removeEnter = editor.registerCommand(
 			KEY_ENTER_COMMAND,
 			(event) => {
-				if (event?.isComposing || editor.isComposing() || compositionState.current) return false;
+				if (event?.isComposing || event?.keyCode === 229) return true;
+				if (editor.isComposing() || compositionState.current) return false;
 				if (!event?.defaultPrevented && $insertComposerCodeNewline(event?.shiftKey)) {
 					event?.preventDefault();
 					return true;
@@ -1488,7 +1491,7 @@ const EditorBridge = forwardRef<
 			removeTab();
 			removeEscape();
 		};
-	}, [compositionState, editor, menuOpen, onComplete, onDismissSuggestion, onEnter, promptSuggestion]);
+	}, [compositionState, editor, enterSends, menuOpen, onComplete, onDismissSuggestion, onEnter, promptSuggestion]);
 
 	return null;
 });
@@ -1521,6 +1524,7 @@ export const ComposerEditor = forwardRef<
 	ComposerEditorHandle,
 	{
 		disabled?: boolean;
+		enterSends: boolean;
 		/** Hides the text while a send is in flight; the draft is still held for recovery. */
 		concealed?: boolean;
 		label: string;
@@ -1541,6 +1545,7 @@ export const ComposerEditor = forwardRef<
 >(function ComposerEditor(
 	{
 		disabled,
+		enterSends,
 		concealed,
 		label,
 		placeholder,
@@ -1666,6 +1671,7 @@ export const ComposerEditor = forwardRef<
 					ref={ref}
 					disabled={disabled}
 					menuOpen={menuOpen}
+					enterSends={enterSends}
 					promptSuggestion={suggestion}
 					onDismissSuggestion={dismissSuggestion}
 					onEmptyChange={setEmpty}

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -127,5 +128,21 @@ func TestOuterDesktopNativeRouteCoverageAndAnchorHold(t *testing.T) {
 	}
 	if err := svc.AuthorizeOperation(domain.WithOuterCaller(context.Background(), domain.OuterCaller{SessionID: anchor, Outer: true}), "native_only", "selected", ""); err == nil {
 		t.Fatal("outer-origin adapter enabled")
+	}
+}
+
+func TestNewUpstreamMutationsStayHeldWithoutNativeCapability(t *testing.T) {
+	for _, key := range []string{"DELETE /api/v1/sessions/{sessionId}", "PATCH /api/v1/settings/session-retention"} {
+		route := outerDesktopRoutes[key]
+		if route.Mode != "held" || route.Operation != "native_only" || outerMutationManifest[key] != "native_only" {
+			t.Fatalf("new mutation is not held: %s: %+v", key, route)
+		}
+		payload, err := json.Marshal(outerDesktopRequest{Route: key, Parameters: []string{"session"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := resolveOuterDesktop(nativeOuterControl{Body: payload}); !errors.Is(err, domain.ErrOuterHeld) {
+			t.Fatalf("native desktop relay accepted held route %s: %v", key, err)
+		}
 	}
 }

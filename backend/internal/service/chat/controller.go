@@ -231,6 +231,7 @@ type Controller struct {
 	newID                  IDFactory
 	now                    Clock
 	onAccountChanged       func(domain.SessionID, string, domain.AgentHarness)
+	recheckAccount         func(domain.SessionID, domain.AgentHarness)
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
 	// permissionFallbackOff turns the permission step-down off for this
 	// controller. The zero value leaves it on, so callers that never mention it
@@ -407,6 +408,7 @@ func newController(
 	newID IDFactory,
 	now Clock,
 	onAccountChanged func(domain.SessionID, string, domain.AgentHarness),
+	recheckAccount func(domain.SessionID, domain.AgentHarness),
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation),
 	reader SnapshotReader,
 ) *Controller {
@@ -424,6 +426,7 @@ func newController(
 		newID:                  newID,
 		now:                    now,
 		onAccountChanged:       onAccountChanged,
+		recheckAccount:         recheckAccount,
 		onCodexCapacityChanged: onCodexCapacityChanged,
 		state:                  ports.ChatControllerReady,
 		settings:               conversation.Settings,
@@ -3898,6 +3901,14 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 	case ports.ChatEventTurnStarted:
 		if primaryTurn {
 			c.reportActivity(ctx, domain.ActivityActive, "chat.turn.started", now)
+			// A turn after a refused login hints the login is back. Reading the
+			// account again confirms it and clears the sign-in notice now, not
+			// when this turn ends.
+			if c.recheckAccount != nil {
+				if account, err := c.store.ConversationAccount(ctx, c.conversation.ID); err == nil && account != nil && account.ReauthRequiredAt != nil {
+					c.recheckAccount(c.sessionID, c.harness)
+				}
+			}
 		}
 	case ports.ChatEventTurnCompleted:
 		reauthRequired := errors.Is(event.Err, ports.ErrChatAuthRequired)

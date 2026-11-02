@@ -64,8 +64,8 @@ ao settings agent-asset-sources --source /path/to/live-workspace/.claude --sourc
 ao settings agent-asset-sources --clear
 ```
 
-The existing `project set-config` command replaces the **entire** project config;
-preserve other fields when using these examples:
+`project set-config` field flags preserve unnamed saved fields. `--config-json`
+replaces the **entire** project config; preserve other fields when using these examples:
 
 ```sh
 ao project set-config my-project --config-json '{"agentAssetSources":["/path/to/live-workspace"]}'

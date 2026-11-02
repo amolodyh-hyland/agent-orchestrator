@@ -11,7 +11,6 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as ShellRouteImport } from './routes/_shell'
 import { Route as ShellIndexRouteImport } from './routes/_shell.index'
-import { Route as ShellTerminalsRouteImport } from './routes/_shell.terminals'
 import { Route as ShellSettingsRouteImport } from './routes/_shell.settings'
 import { Route as ShellSessionsRouteImport } from './routes/_shell.sessions'
 import { Route as ShellOuterRouteImport } from './routes/_shell.outer'
@@ -35,11 +34,6 @@ const ShellRoute = ShellRouteImport.update({
 const ShellIndexRoute = ShellIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => ShellRoute,
-} as any)
-const ShellTerminalsRoute = ShellTerminalsRouteImport.update({
-  id: '/terminals',
-  path: '/terminals',
   getParentRoute: () => ShellRoute,
 } as any)
 const ShellSettingsRoute = ShellSettingsRouteImport.update({
@@ -132,7 +126,6 @@ export interface FileRoutesByFullPath {
   '/outer': typeof ShellOuterRoute
   '/sessions': typeof ShellSessionsRouteWithChildren
   '/settings': typeof ShellSettingsRoute
-  '/terminals': typeof ShellTerminalsRoute
   '/projects/$projectId': typeof ShellProjectsProjectIdRoute
   '/sessions/$sessionId': typeof ShellSessionsSessionIdRoute
   '/sessions/': typeof ShellSessionsIndexRoute
@@ -149,7 +142,6 @@ export interface FileRoutesByTo {
   '/new': typeof ShellNewRoute
   '/outer': typeof ShellOuterRoute
   '/settings': typeof ShellSettingsRoute
-  '/terminals': typeof ShellTerminalsRoute
   '/': typeof ShellIndexRoute
   '/projects/$projectId': typeof ShellProjectsProjectIdRoute
   '/sessions/$sessionId': typeof ShellSessionsSessionIdRoute
@@ -170,7 +162,6 @@ export interface FileRoutesById {
   '/_shell/outer': typeof ShellOuterRoute
   '/_shell/sessions': typeof ShellSessionsRouteWithChildren
   '/_shell/settings': typeof ShellSettingsRoute
-  '/_shell/terminals': typeof ShellTerminalsRoute
   '/_shell/': typeof ShellIndexRoute
   '/_shell/projects/$projectId': typeof ShellProjectsProjectIdRoute
   '/_shell/sessions/$sessionId': typeof ShellSessionsSessionIdRoute
@@ -192,7 +183,6 @@ export interface FileRouteTypes {
     | '/outer'
     | '/sessions'
     | '/settings'
-    | '/terminals'
     | '/projects/$projectId'
     | '/sessions/$sessionId'
     | '/sessions/'
@@ -209,7 +199,6 @@ export interface FileRouteTypes {
     | '/new'
     | '/outer'
     | '/settings'
-    | '/terminals'
     | '/'
     | '/projects/$projectId'
     | '/sessions/$sessionId'
@@ -229,7 +218,6 @@ export interface FileRouteTypes {
     | '/_shell/outer'
     | '/_shell/sessions'
     | '/_shell/settings'
-    | '/_shell/terminals'
     | '/_shell/'
     | '/_shell/projects/$projectId'
     | '/_shell/sessions/$sessionId'
@@ -259,13 +247,6 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof ShellIndexRouteImport
-      parentRoute: typeof ShellRoute
-    }
-    '/_shell/terminals': {
-      id: '/_shell/terminals'
-      path: '/terminals'
-      fullPath: '/terminals'
-      preLoaderRoute: typeof ShellTerminalsRouteImport
       parentRoute: typeof ShellRoute
     }
     '/_shell/settings': {
@@ -398,7 +379,6 @@ interface ShellRouteChildren {
   ShellOuterRoute: typeof ShellOuterRoute
   ShellSessionsRoute: typeof ShellSessionsRouteWithChildren
   ShellSettingsRoute: typeof ShellSettingsRoute
-  ShellTerminalsRoute: typeof ShellTerminalsRoute
   ShellIndexRoute: typeof ShellIndexRoute
   ShellProjectsProjectIdRoute: typeof ShellProjectsProjectIdRoute
   ShellProjectsProjectIdSettingsRoute: typeof ShellProjectsProjectIdSettingsRoute
@@ -416,7 +396,6 @@ const ShellRouteChildren: ShellRouteChildren = {
   ShellOuterRoute: ShellOuterRoute,
   ShellSessionsRoute: ShellSessionsRouteWithChildren,
   ShellSettingsRoute: ShellSettingsRoute,
-  ShellTerminalsRoute: ShellTerminalsRoute,
   ShellIndexRoute: ShellIndexRoute,
   ShellProjectsProjectIdRoute: ShellProjectsProjectIdRoute,
   ShellProjectsProjectIdSettingsRoute: ShellProjectsProjectIdSettingsRoute,
