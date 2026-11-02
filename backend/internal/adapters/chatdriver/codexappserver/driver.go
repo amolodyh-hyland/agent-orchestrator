@@ -676,7 +676,7 @@ func (d *Driver) connectSession(
 }
 
 func configureAssetSkills(ctx context.Context, conv *conversation, env map[string]string) error {
-	roots, err := agentassets.CodexSkillRoots(ctx, env)
+	roots, err := agentassets.CodexSkillRoots(ctx, env, func(message string) { conv.log.Warn(message) })
 	if err != nil {
 		return err
 	}

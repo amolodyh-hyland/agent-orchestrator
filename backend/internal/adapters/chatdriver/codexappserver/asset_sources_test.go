@@ -13,9 +13,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-func TestNativeAssetSkillsOnStartAndResume(t *testing.T) {
-	for _, resume := range []bool{false, true} {
-		t.Run(map[bool]string{false: "start", true: "resume"}[resume], func(t *testing.T) {
+func TestNativeAssetSkillsOnStartResumeAndFork(t *testing.T) {
+	for _, operation := range []string{"start", "resume", "fork"} {
+		t.Run(operation, func(t *testing.T) {
 			root := t.TempDir()
 			skills := filepath.Join(root, ".agents", "skills")
 			if err := os.MkdirAll(skills, 0o750); err != nil {
@@ -27,9 +27,13 @@ func TestNativeAssetSkillsOnStartAndResume(t *testing.T) {
 			srv.respondTo("skills/extraRoots/set", `{}`)
 			var conv ports.ChatConversation
 			var err error
-			if resume {
+			switch operation {
+			case "resume":
 				conv, err = d.Resume(context.Background(), ports.ChatResumeConfig{WorkspacePath: t.TempDir(), Env: env, ProviderConversationID: "thread-1"})
-			} else {
+			case "fork":
+				srv.reply("thread/fork", `{"thread":{"id":"forked-thread"}}`)
+				conv, err = d.ForkIntoHost(context.Background(), "parent-thread", "parent-turn", ports.ChatStartConfig{WorkspacePath: t.TempDir(), Env: env})
+			default:
 				conv, err = d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir(), Env: env})
 			}
 			if err != nil {

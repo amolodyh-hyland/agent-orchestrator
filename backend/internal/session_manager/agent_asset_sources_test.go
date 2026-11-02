@@ -81,3 +81,44 @@ func TestAgentAssetEnvResolvesGlobalAndProjectSources(t *testing.T) {
 		})
 	}
 }
+
+func TestAgentAssetSourcesReachSpawnAndRestore(t *testing.T) {
+	global, replacement := t.TempDir(), t.TempDir()
+	for _, operation := range []string{"spawn", "restore"} {
+		for _, tc := range []struct {
+			name     string
+			override *[]string
+			want     []string
+		}{
+			{"inherited", nil, []string{global}},
+			{"replaced", new([]string{replacement}), []string{replacement}},
+			{"disabled", new([]string{}), nil},
+		} {
+			t.Run(operation+"/"+tc.name, func(t *testing.T) {
+				store := newFakeStore()
+				config := testRoleAgents()
+				config.AgentAssetSources = tc.override
+				store.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: t.TempDir(), Config: config}
+				runtime := &fakeRuntime{}
+				m := New(Deps{Runtime: runtime, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{}, Store: store,
+					Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: store}, Defaults: assetDefaults{[]string{global}},
+					Executable: func() (string, error) { return "/opt/ao", nil },
+					LookPath:   func(string) (string, error) { return "/bin/true", nil }})
+				if operation == "spawn" {
+					if _, _, _, err := m.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					seedTerminal(store, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "branch", AgentSessionID: "native-1"})
+					if _, err := m.RestoreWithMode(context.Background(), "mer-1"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				got := agentassets.FromEnv(runtime.lastCfg.Env)
+				if len(got) != len(tc.want) || len(got) > 0 && !reflect.DeepEqual(got, tc.want) {
+					t.Fatalf("provider launch sources=%v want=%v", got, tc.want)
+				}
+			})
+		}
+	}
+}

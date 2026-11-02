@@ -4,7 +4,9 @@ package agentassets
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -39,9 +41,8 @@ func Resolve(ctx context.Context, projectPath string, sources []string, warn fun
 		if err != nil {
 			return nil, err
 		}
-		info, err := os.Stat(absolute)
-		if err != nil || !info.IsDir() {
-			warn(fmt.Sprintf("agent asset source %q is missing, unreadable, or not a directory; skipped", absolute))
+		if err := readableDirectory(absolute); err != nil {
+			warn(fmt.Sprintf("agent asset source %q is missing, unreadable, or not a directory; skipped: %v", absolute, err))
 			continue
 		}
 		if !seen[absolute] {
@@ -86,7 +87,7 @@ func ClaudeRoots(env map[string]string) []string {
 }
 
 // CodexSkillRoots returns native skill directories for a session-owned app-server.
-func CodexSkillRoots(ctx context.Context, env map[string]string) ([]string, error) {
+func CodexSkillRoots(ctx context.Context, env map[string]string, warn func(string)) ([]string, error) {
 	roots := make([]string, 0, len(FromEnv(env)))
 	seen := map[string]bool{}
 	for _, source := range FromEnv(env) {
@@ -102,12 +103,38 @@ func CodexSkillRoots(ctx context.Context, env map[string]string) ([]string, erro
 		default:
 			root = filepath.Join(source, ".agents", "skills")
 		}
-		if info, err := os.Stat(root); err == nil && info.IsDir() && !seen[root] {
+		if err := readableDirectory(root); err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				warn(fmt.Sprintf("agent skill source %q is unreadable or not a directory; skipped: %v", root, err))
+			}
+			continue
+		}
+		if !seen[root] {
 			seen[root] = true
 			roots = append(roots, root)
 		}
 	}
 	return roots, nil
+}
+
+func readableDirectory(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return errors.New("not a directory")
+	}
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	_, readErr := directory.ReadDir(1)
+	closeErr := directory.Close()
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		return readErr
+	}
+	return closeErr
 }
 
 // ClaudeCommand adds native directory flags without replacing workspace assets.
