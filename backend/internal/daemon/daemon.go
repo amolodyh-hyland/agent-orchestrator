@@ -623,6 +623,8 @@ func Run(buildVersion string) error {
 	outerSvc := outersvc.New(store, projectSvc, sessionSvc, outersvc.WithActionsEnabled(os.Getenv("AO_OUTER_M2_ACTIONS") == "1"))
 	outerSvc.SetTransport(chatSvc)
 	chatSvc.SetOuterAdmission(outerSvc)
+	outerSvc.SetReviews(reviewSvc)
+	outerSvc.SetRuns(factoryRunSvc)
 	reportSessions, ok := sessMgr.(reportSemanticSession)
 	if !ok {
 		return errors.New("wire report delivery: session manager lacks semantic send support")

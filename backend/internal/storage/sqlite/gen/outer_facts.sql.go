@@ -13,10 +13,11 @@ import (
 )
 
 const outerObservedReviewActivity = `-- name: OuterObservedReviewActivity :many
-SELECT session_id, reviewer_activity_state, is_archived, reviewer_handle_id, provider_conversation_id FROM review
+SELECT id, session_id, reviewer_activity_state, is_archived, reviewer_handle_id, provider_conversation_id FROM review
 `
 
 type OuterObservedReviewActivityRow struct {
+	ID                     string
 	SessionID              domain.SessionID
 	ReviewerActivityState  string
 	IsArchived             bool
@@ -34,6 +35,7 @@ func (q *Queries) OuterObservedReviewActivity(ctx context.Context) ([]OuterObser
 	for rows.Next() {
 		var i OuterObservedReviewActivityRow
 		if err := rows.Scan(
+			&i.ID,
 			&i.SessionID,
 			&i.ReviewerActivityState,
 			&i.IsArchived,

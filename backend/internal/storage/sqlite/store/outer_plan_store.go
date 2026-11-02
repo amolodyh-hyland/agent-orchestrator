@@ -124,6 +124,15 @@ func validateOuterPlannedTarget(ctx context.Context, q *gen.Queries, a domain.Ou
 	if err != nil || domain.OuterSettingsDigest(r, conversationToDomain(c), projectRowFromGen(p)) != a.TargetDigest {
 		return domain.ErrOuterHeld
 	}
+	if a.Spec.Mailbox != nil {
+		return validateOuterMailbox(ctx, q, a)
+	}
+	if a.Spec.Run != nil {
+		return validateOuterRun(ctx, q, a)
+	}
+	if a.Spec.Operation == "review.trigger" || a.Spec.Operation == "review.cancel" {
+		return validateOuterReview(ctx, q, a)
+	}
 	if a.Spec.Operation == "send" {
 		held, err := q.FactoryFeedbackHeld(ctx, r.ID)
 		if err != nil {
@@ -412,8 +421,14 @@ func validateOuterActionRequest(ctx context.Context, q *gen.Queries, r domain.Ou
 	}
 	a := p.Plan.Actions[index]
 	receipt, err := q.GetOuterPlanAction(ctx, r.ID)
-	if err != nil || !receipt.AttemptedAt.Valid || receipt.SessionID != string(r.SessionID) || a.Spec.Text != r.Payload || domain.OuterDigest(r.Sources) != domain.OuterDigest(p.Plan.Sources) {
+	if err != nil || !receipt.AttemptedAt.Valid || receipt.SessionID != string(r.SessionID) || (r.ReviewID == "" && a.Spec.Text != r.Payload) || domain.OuterDigest(r.Sources) != domain.OuterDigest(p.Plan.Sources) {
 		return domain.ErrOuterHeld
+	}
+	if r.ReviewID != "" {
+		if a.Spec.Operation != "review.trigger" || a.Spec.SessionID != r.SessionID {
+			return domain.ErrOuterHeld
+		}
+		return validateOuterPlannedTarget(ctx, q, a)
 	}
 	if a.Spec.Operation == "spawn" {
 		row, err := q.GetSession(ctx, r.SessionID)
@@ -461,5 +476,11 @@ func (s *Store) CheckOuterExecution(ctx context.Context, operation string, proje
 	if a.Spec.Operation != operation || a.Spec.ProjectID != string(project) || (session != "" && a.Spec.SessionID != session && r.SessionID != session) || r.AttemptedAt.IsZero() || !r.CompletedAt.IsZero() {
 		return domain.ErrOuterHeld
 	}
-	return validateOuterPlannedTarget(ctx, s.conversationReader(ctx), a)
+	if err := validateOuterPlannedTarget(ctx, s.conversationReader(ctx), a); err != nil {
+		return err
+	}
+	if ctx.Err() != nil || !time.Now().Before(p.ExpiresAt) {
+		return domain.ErrOuterHeld
+	}
+	return nil
 }

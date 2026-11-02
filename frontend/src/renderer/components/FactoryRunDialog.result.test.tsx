@@ -24,3 +24,17 @@ describe("specialist result preview",()=>{
   expect(screen.getByRole("button",{name:"Review native import approval"})).toHaveAttribute("data-result-preview-id","import");
  });
 });
+
+describe("outer run decision requests",()=>{
+ it("pins the requested run and exposes only the existing native evidence and stage decisions",async()=>{
+  vi.mocked(window.ao!.factoryRun.preview).mockResolvedValue({id:"exact-run-preview",digest:"d".repeat(64),action:"evidence",expiresAt:Date.now()+120000,detail:{run:{id:"outer-run",projectId:"p",sessionId:"s",version:3,stage:"design"},evidence:[],observed:[],blockers:[],nextAction:"advance"}});
+  render(<FactoryRunDialog projectId="p" sessionId="s" initialRunId="outer-run" decisionsOnly/>);
+  fireEvent.click(screen.getByRole("button",{name:"Run evidence"}));
+  expect(screen.getByRole("textbox",{name:"Run ID"})).toHaveValue("outer-run");
+  expect(screen.getByRole("textbox",{name:"Run ID"})).toHaveAttribute("readonly");
+  for(const name of ["Preview findings delivery","Pause findings delivery","Allow new findings approvals","Preview specialist result scope"]){expect(screen.queryByRole("button",{name})).toBeNull();}
+  fireEvent.click(screen.getByRole("button",{name:"Preview pending claim"}));
+  expect(await screen.findByRole("button",{name:"Review native confirmation"})).toHaveAttribute("data-run-preview-id","exact-run-preview");
+  expect(window.ao!.factoryRun.preview).toHaveBeenCalledWith("outer-run","evidence");
+ });
+});

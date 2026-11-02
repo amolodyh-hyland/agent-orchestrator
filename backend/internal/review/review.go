@@ -283,6 +283,18 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	if err := domain.CheckOuterOperation(ctx, e.store, "review.trigger", "", workerID); err != nil {
 		return TriggerResult{}, err
 	}
+	if _, executing := domain.OuterExecutionFrom(ctx); executing {
+		st, ok := e.store.(interface {
+			OuterReviewSpec(stdctx.Context, string, domain.SessionID) (domain.OuterActionSpec, error)
+		})
+		if !ok {
+			return TriggerResult{}, domain.ErrOuterHeld
+		}
+		spec, err := st.OuterReviewSpec(ctx, "review.trigger", workerID)
+		if err != nil || spec.Review == nil || opts.Harness != domain.ReviewerCodex || opts.Config != spec.Config || opts.Source != domain.ReviewTriggerManual || opts.InterfaceMode != domain.ReviewerInterfaceChat || opts.PRURL != spec.Review.PRURL || !opts.RejectReviewedHead || opts.Rerun {
+			return TriggerResult{}, domain.ErrOuterHeld
+		}
+	}
 	override, overrideConfig, source, mode := opts.Harness, opts.Config, opts.Source, opts.InterfaceMode
 	if source == "" {
 		source = domain.ReviewTriggerManual
@@ -416,6 +428,22 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		}
 		selectedMode = domain.ReviewerInterfaceTUI
 	}
+	if _, executing := domain.OuterExecutionFrom(ctx); executing {
+		if harness != domain.ReviewerCodex || config != opts.Config || selectedMode != domain.ReviewerInterfaceChat || (hasReview && (reviewRow.InterfaceMode != selectedMode || hasConfigOverride)) {
+			return TriggerResult{}, errors.Join(domain.ErrOuterHeld, domain.ErrOuterReviewNotStarted)
+		}
+		if hasReview {
+			gate, ok := e.store.(interface {
+				CheckOuterReviewSession(stdctx.Context, string) error
+			})
+			if !ok {
+				return TriggerResult{}, errors.Join(domain.ErrOuterHeld, domain.ErrOuterReviewNotStarted)
+			}
+			if err := gate.CheckOuterReviewSession(ctx, reviewRow.ID); err != nil {
+				return TriggerResult{}, err
+			}
+		}
+	}
 	// Another reviewer that is still working keeps running: a worker may ask
 	// several reviewers for opinions on the same commit at once. Only idle
 	// panes of other reviewers are released.
@@ -474,6 +502,9 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	var pendingSupersedes []staleSupersede
 	var restarted []domain.ReviewRun
 	batchID := ""
+	if a, ok := domain.OuterExecutionFrom(ctx); ok {
+		batchID = a.ActionID
+	}
 	for _, reviewState := range reviews {
 		// A PR that is already up to date has nothing due — unless the caller asked
 		// for a different reviewer than the one that produced that verdict. Picking
@@ -638,6 +669,9 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		}
 	}
 	if handleID == "" {
+		if _, executing := domain.OuterExecutionFrom(ctx); executing && hasReview {
+			return TriggerResult{}, failRuns(0, errors.Join(domain.ErrOuterHeld, domain.ErrOuterReviewNotStarted))
+		}
 		// Each pass gets a fresh reviewer process on the same stable terminal
 		// handle when there is no resumable live agent session to notify.
 		releaseHarness, err := e.beginHarnessUse(harness)
@@ -646,6 +680,9 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		}
 		defer releaseHarness()
 		if err := e.launcher.Preflight(ctx, harness, worker.Metadata.WorkspacePath, selectedMode); err != nil {
+			if _, executing := domain.OuterExecutionFrom(ctx); executing {
+				err = errors.Join(err, domain.ErrOuterReviewNotStarted)
+			}
 			return TriggerResult{}, failRuns(0, fmt.Errorf("reviewer preflight: %w", err))
 		}
 		// A review owns one Chat controller. Stop it while its durable fence
@@ -686,7 +723,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		}
 		// Enrollment can change while recovery, the worker lock, or preflight
 		// is waiting. Check at the execution boundary for every interface.
-		if err := domain.CheckFactoryFeedback(ctx, e.store, workerID); err != nil {
+		if err := domain.CheckOuterReviewAdmission(ctx, e.store, workerID); err != nil {
 			return TriggerResult{}, rollbackReplacement(err)
 		}
 		launch, err := e.launcher.Spawn(ctx, launchSpec)
@@ -701,9 +738,12 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			persistedAgentSessionID = launch.AgentSessionID
 		}
 	} else {
+		// Notify keeps the live native session. Clearing it as for a fresh Chat
+		// launch would make the next idle pass look non-reusable.
+		persistedAgentSessionID = reviewRow.AgentSessionID
 		launchSpec := reviewLaunchSpec(worker, harness, config, launchRun, queue, 0, reviewRow.AgentSessionID, reviewRow.ReviewerLaunchID)
 		launchSpec.InterfaceMode = selectedMode
-		if err := domain.CheckFactoryFeedback(ctx, e.store, workerID); err != nil {
+		if err := domain.CheckOuterReviewAdmission(ctx, e.store, workerID); err != nil {
 			return TriggerResult{}, failRuns(0, err)
 		}
 		if err := e.launcher.Notify(ctx, handleID, launchSpec); err != nil {
@@ -761,7 +801,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		if deferInitialMessage {
 			launchSpec := reviewLaunchSpec(worker, harness, config, launchRun, queue, 0, persistedAgentSessionID, reviewRow.ReviewerLaunchID)
 			launchSpec.InterfaceMode = selectedMode
-			if err := domain.CheckFactoryFeedback(ctx, e.store, workerID); err != nil {
+			if err := domain.CheckOuterReviewAdmission(ctx, e.store, workerID); err != nil {
 				return TriggerResult{}, rollbackReplacement(err)
 			}
 			if err := e.launcher.Notify(ctx, handleID, launchSpec); err != nil {
@@ -1688,10 +1728,18 @@ func legacyReviewerHandle(review domain.Review) string {
 // Cancel interrupts the live reviewer pane for a worker and marks running
 // review runs as cancelled so they no longer block a fresh trigger.
 func (e *Engine) Cancel(ctx stdctx.Context, workerID domain.SessionID) (CancelResult, error) {
+	if err := domain.CheckOuterOperation(ctx, e.store, "review.cancel", "", workerID); err != nil {
+		return CancelResult{}, err
+	}
 	if workerID == "" {
 		return CancelResult{}, fmt.Errorf("%w: worker session id is required", ErrInvalid)
 	}
 	if err := e.waitForChatRecovery(ctx); err != nil {
+		return CancelResult{}, err
+	}
+	unlock := e.lockWorker(workerID)
+	defer unlock()
+	if err := domain.CheckOuterOperation(ctx, e.store, "review.cancel", "", workerID); err != nil {
 		return CancelResult{}, err
 	}
 	worker, ok, err := e.sessions.GetSession(ctx, workerID)
@@ -1740,6 +1788,9 @@ func (e *Engine) Cancel(ctx stdctx.Context, workerID domain.SessionID) (CancelRe
 	}
 	cancelledHarness := make(map[domain.ReviewerHarness]bool, len(reviewers))
 	for _, review := range reviewers {
+		if err := domain.CheckOuterOperation(ctx, e.store, "review.cancel", "", workerID); err != nil {
+			return CancelResult{}, err
+		}
 		if err := e.launcher.Cancel(ctx, review.ReviewerHandleID, review.Harness); err != nil {
 			alive, aliveErr := e.launcher.Alive(ctx, review.ReviewerHandleID, review.ReviewerLaunchID)
 			if aliveErr != nil {

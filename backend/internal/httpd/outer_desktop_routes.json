@@ -503,6 +503,14 @@
     "operation": "session.scoped",
     "mode": "held"
   },
+  "POST /api/v1/sessions/{sessionId}/mailbox": {
+    "operation": "mailbox.scoped",
+    "mode": "held"
+  },
+  "POST /api/v1/sessions/{sessionId}/mailbox/{messageId}/receipt": {
+    "operation": "mailbox.scoped",
+    "mode": "held"
+  },
   "POST /api/v1/sessions/{sessionId}/activity": {
     "operation": "session.scoped",
     "mode": "confirm"

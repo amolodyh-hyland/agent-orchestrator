@@ -98,6 +98,9 @@ func (s *Store) SaveFactoryRun(ctx context.Context, record domain.FactoryRun, ev
 		return err
 	}
 	defer s.writeMu.Unlock()
+	if err := s.checkOuterRunWrite(ctx, record, evidence, create); err != nil {
+		return err
+	}
 	return s.inTx(ctx, "save factory run", func(q *gen.Queries) error {
 		document, err := json.Marshal(record)
 		if err != nil {

@@ -1973,6 +1973,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/outer/mailbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a bounded inert coordinator mailbox page */
+        get: operations["readOuterMailbox"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/outer/plans": {
         parameters: {
             query?: never;
@@ -3668,6 +3685,41 @@ export interface paths {
         put?: never;
         /** Mark a session terminated and tear down runtime/workspace resources */
         post: operations["killSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/mailbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the owned coordinator mailbox without waking it */
+        get: operations["readCoordinatorMailbox"];
+        put?: never;
+        /** Append an inert coordinator message under owned scope */
+        post: operations["appendCoordinatorMailbox"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/mailbox/{messageId}/receipt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Acknowledge an inert record without delivery or execution */
+        post: operations["receiptCoordinatorMailbox"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5854,6 +5906,12 @@ export interface components {
         ControllersKillSessionRequest: {
             deleteArtifacts?: boolean;
         };
+        ControllersMailboxMessagePath: {
+            messageId: string;
+        };
+        ControllersOuterMailboxResponse: {
+            messages: components["schemas"]["DomainOuterMailboxMessage"][];
+        };
         ControllersRemoteHostAccountTokenResponse: {
             hostId: string;
             hostKey: string;
@@ -6514,6 +6572,42 @@ export interface components {
             reserved: number;
             stations: number;
             unknown: number;
+        };
+        DomainOuterMailboxMessage: {
+            /** Format: date-time */
+            acknowledgedAt: string;
+            acknowledgedBy?: string;
+            actionId?: string;
+            coordinatorId: string;
+            direction: string;
+            id: string;
+            planId?: string;
+            projectId: string;
+            receiptActionId?: string;
+            recipientId: string;
+            /** Format: date-time */
+            recordedAt: string;
+            requestId?: string;
+            senderId: string;
+            /** Format: int64 */
+            sequence: number;
+            sources: components["schemas"]["OuterSource"][];
+            text: string;
+        };
+        DomainOuterMailboxSpec: {
+            id: string;
+            text?: string;
+        };
+        DomainOuterReviewSpec: {
+            headSha: string;
+            prUrl: string;
+            runId?: string;
+        };
+        DomainOuterRunSpec: {
+            /** Format: int64 */
+            expectedVersion: number;
+            id: string;
+            payload?: unknown;
         };
         DomainReviewerConfig: {
             agentConfig?: components["schemas"]["AgentConfig"];
@@ -7329,8 +7423,11 @@ export interface components {
             branch?: string;
             config: components["schemas"]["AgentConfig"];
             dependsOn: number[];
+            mailbox?: components["schemas"]["DomainOuterMailboxSpec"];
             operation: string;
             projectId: string;
+            review?: components["schemas"]["DomainOuterReviewSpec"];
+            run?: components["schemas"]["DomainOuterRunSpec"];
             sessionId?: string;
             text?: string;
         };
@@ -7420,12 +7517,15 @@ export interface components {
             conversationId: string;
             harness: string;
             id: string;
+            mailboxDigest?: string;
             mode: string;
             permissionCeiling: string;
             projectLabel: string;
             /** Format: int64 */
             projectRevision: number;
             providerConversationId: string;
+            reviewDigest?: string;
+            runDigest?: string;
             settings: components["schemas"]["DomainConversationSettings"];
             spec: components["schemas"]["OuterActionSpec"];
             targetDigest: string;
@@ -7447,6 +7547,7 @@ export interface components {
             payloadDigest: string;
             planId?: string;
             providerConversationId: string;
+            reviewId?: string;
             /** Format: int64 */
             scopeRevision: number;
             sessionId: string;
@@ -15770,6 +15871,57 @@ export interface operations {
             };
         };
     };
+    readOuterMailbox: {
+        parameters: {
+            query?: {
+                projectId?: string;
+                after?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersOuterMailboxResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     proposeOuterPlan: {
         parameters: {
             query?: never;
@@ -22513,6 +22665,169 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    readCoordinatorMailbox: {
+        parameters: {
+            query?: {
+                projectId?: string;
+                after?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersOuterMailboxResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    appendCoordinatorMailbox: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DomainOuterMailboxSpec"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DomainOuterMailboxMessage"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    receiptCoordinatorMailbox: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                messageId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ControllersMailboxMessagePath"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DomainOuterMailboxMessage"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };

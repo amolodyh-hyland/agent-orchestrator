@@ -4359,5 +4359,12 @@
 	"files.moreFiles": "+{{count}} more files",
 	"newTask.modelNotice.cloud": "此电脑未登录 {{agent}}，因此显示其默认模型。云端任务使用你的云连接，仍可正常启动。",
 	"artifacts.generating": "Still generating",
-	"settings.agentAccounts.cliLogin": "CLI 登录"
+	"settings.agentAccounts.cliLogin": "CLI 登录",
+	"outer.mailbox": "Coordinator mailbox",
+	"outer.mailboxInert": "Messages and record acknowledgements are inert. Executing delivery requires a separate exact send confirmation.",
+	"outer.mailboxSources": "Source labels",
+	"outer.recordAcknowledged": "Record acknowledged",
+	"outer.recordUnacknowledged": "Record unacknowledged",
+	"outer.firstMailboxPage": "First page",
+	"outer.nextMailboxPage": "Next page"
 }

@@ -4447,5 +4447,12 @@
 	"files.moreFiles": "+{{count}} more files",
 	"newTask.modelNotice.cloud": "Mostrando os modelos padrão do {{agent}} porque este computador não está conectado a ele. Tarefas na nuvem usam sua conexão com a nuvem e ainda podem ser iniciadas.",
 	"artifacts.generating": "Still generating",
-	"settings.agentAccounts.cliLogin": "Login da CLI"
+	"settings.agentAccounts.cliLogin": "Login da CLI",
+	"outer.mailbox": "Coordinator mailbox",
+	"outer.mailboxInert": "Messages and record acknowledgements are inert. Executing delivery requires a separate exact send confirmation.",
+	"outer.mailboxSources": "Source labels",
+	"outer.recordAcknowledged": "Record acknowledged",
+	"outer.recordUnacknowledged": "Record unacknowledged",
+	"outer.firstMailboxPage": "First page",
+	"outer.nextMailboxPage": "Next page"
 }

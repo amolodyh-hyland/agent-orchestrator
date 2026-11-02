@@ -263,7 +263,7 @@ func TestOuterNativeRelayAndLocalCredentialsResolveTheSameStoredOwners(t *testin
 				owned = owned || pattern == owner.Prefix || strings.HasPrefix(pattern, owner.Prefix+"/")
 			}
 			creation := key == "POST /api/v1/sessions" || key == "POST /api/v1/runs" || key == "POST /api/v1/reports" || key == "POST /api/v1/awake/sessions" || key == "POST /api/v1/orchestrators" || key == "POST /api/v1/orchestrators/delegate"
-			allowed := (owned || creation) && operation != "native_only"
+			allowed := (owned || creation) && operation != "native_only" && operation != "mailbox.scoped"
 			body := outerOwnerBody(ids, !creation)
 			req := httptest.NewRequest(method, path, strings.NewReader(body))
 			req.Header.Set("X-AO-Scope-Credential", token)

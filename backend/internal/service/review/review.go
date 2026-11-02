@@ -485,8 +485,20 @@ func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionI
 	if err := domain.CheckOuterOperation(ctx, s.store, "review.trigger", "", workerID); err != nil {
 		return TriggerOutcome{}, err
 	}
+	if _, executing := domain.OuterExecutionFrom(ctx); executing {
+		st, ok := s.store.(interface {
+			OuterReviewSpec(context.Context, string, domain.SessionID) (domain.OuterActionSpec, error)
+		})
+		if !ok {
+			return TriggerOutcome{}, domain.ErrOuterHeld
+		}
+		spec, err := st.OuterReviewSpec(ctx, "review.trigger", workerID)
+		if err != nil || spec.Review == nil || req.Harness != domain.ReviewerCodex || req.Config != spec.Config || req.Source != domain.ReviewTriggerManual || req.InterfaceMode != domain.ReviewerInterfaceChat || req.PRURL != spec.Review.PRURL || !req.RejectReviewedHead || req.Rerun || req.EnableAutoInject {
+			return TriggerOutcome{}, domain.ErrOuterHeld
+		}
+	}
 	// Reject before refreshing/attaching a PR, as well as at engine admission.
-	if err := domain.CheckFactoryFeedback(ctx, s.store, workerID); err != nil {
+	if err := domain.CheckOuterReviewAdmission(ctx, s.store, workerID); err != nil {
 		return TriggerOutcome{}, err
 	}
 	source := req.Source
@@ -504,6 +516,9 @@ func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionI
 	}
 	branchLookupFoundNone, err := s.refreshPRs(ctx, workerID, strings.TrimSpace(req.PRURL))
 	if err != nil {
+		if _, executing := domain.OuterExecutionFrom(ctx); executing {
+			err = errors.Join(err, domain.ErrOuterReviewNotStarted)
+		}
 		return TriggerOutcome{}, err
 	}
 	result, err := s.triggerWithOptions(ctx, workerID, reviewcore.TriggerOptions{
@@ -663,7 +678,7 @@ func (s *Service) TriggerAuto(ctx context.Context, workerID domain.SessionID, ha
 	if err := domain.CheckOuterOperation(ctx, s.store, "review.trigger", "", workerID); err != nil {
 		return reviewcore.TriggerResult{}, err
 	}
-	if err := domain.CheckFactoryFeedback(ctx, s.store, workerID); err != nil {
+	if err := domain.CheckOuterReviewAdmission(ctx, s.store, workerID); err != nil {
 		return reviewcore.TriggerResult{}, err
 	}
 	return s.triggerWithOptions(ctx, workerID, reviewcore.TriggerOptions{Harness: harness, Source: domain.ReviewTriggerAuto})
@@ -699,7 +714,7 @@ func (s *Service) triggerWithOptions(
 		}
 		defer release()
 	}
-	if err := domain.CheckFactoryFeedback(ctx, s.store, workerID); err != nil {
+	if err := domain.CheckOuterReviewAdmission(ctx, s.store, workerID); err != nil {
 		return reviewcore.TriggerResult{}, err
 	}
 	result, err := s.engineTrigger(ctx, workerID, opts)
@@ -869,6 +884,17 @@ func (s *Service) SubmitMany(ctx context.Context, workerID domain.SessionID, rev
 	if s.store == nil {
 		return nil, fmt.Errorf("review service store is not configured")
 	}
+	if guard, ok := s.store.(interface {
+		CheckOuterReviewSubmission(context.Context, domain.SessionID, []string) error
+	}); ok {
+		ids := make([]string, 0, len(reviews))
+		for _, review := range reviews {
+			ids = append(ids, review.RunID)
+		}
+		if err := guard.CheckOuterReviewSubmission(ctx, workerID, ids); err != nil {
+			return nil, err
+		}
+	}
 	runs := make([]domain.ReviewRun, 0, len(reviews))
 	var supersededRunIDs []string
 	for _, review := range reviews {
@@ -932,7 +958,11 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 		if !found {
 			return domain.ReviewRun{}, fmt.Errorf("%w: worker session %q", ErrNotFound, workerID)
 		}
-		updated, err := s.store.UpdateReviewRunResult(ctx, run.ID, domain.ReviewRunComplete, verdict, body, githubReviewID, session.AutoInjectReview)
+		autoInject := session.AutoInjectReview
+		if caller, ok := domain.OuterCallerFrom(ctx); ok && caller.ReviewResult != nil {
+			autoInject = false
+		}
+		updated, err := s.store.UpdateReviewRunResult(ctx, run.ID, domain.ReviewRunComplete, verdict, body, githubReviewID, autoInject)
 		if err != nil {
 			return domain.ReviewRun{}, err
 		}
@@ -943,7 +973,7 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 		run.Verdict = verdict
 		run.Body = body
 		run.GithubReviewID = githubReviewID
-		run.AutoInjectReview = session.AutoInjectReview
+		run.AutoInjectReview = autoInject
 		if githubReviewID != "" && s.reviewRefresher != nil {
 			s.reviewRefresher.RequestReviewRefresh(run.PRURL)
 		}
@@ -965,7 +995,7 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 			"body_bytes": len(body),
 			// Whether the session policy will let this result reach the worker at
 			// all, recorded at the moment it is snapshotted onto the run.
-			"auto_inject": session.AutoInjectReview,
+			"auto_inject": autoInject,
 		})
 	case domain.ReviewRunComplete:
 		if run.Verdict != verdict {

@@ -4377,5 +4377,12 @@
 	"files.moreFiles": "+{{count}} more files",
 	"newTask.modelNotice.cloud": "이 컴퓨터가 {{agent}}에 로그인되어 있지 않아 기본 모델을 표시합니다. 클라우드 작업은 클라우드 연결을 사용하므로 그대로 시작할 수 있습니다.",
 	"artifacts.generating": "Still generating",
-	"settings.agentAccounts.cliLogin": "CLI 로그인"
+	"settings.agentAccounts.cliLogin": "CLI 로그인",
+	"outer.mailbox": "Coordinator mailbox",
+	"outer.mailboxInert": "Messages and record acknowledgements are inert. Executing delivery requires a separate exact send confirmation.",
+	"outer.mailboxSources": "Source labels",
+	"outer.recordAcknowledged": "Record acknowledged",
+	"outer.recordUnacknowledged": "Record unacknowledged",
+	"outer.firstMailboxPage": "First page",
+	"outer.nextMailboxPage": "Next page"
 }

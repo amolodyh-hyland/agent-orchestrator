@@ -431,6 +431,8 @@ func (c *ReviewsController) submit(w http.ResponseWriter, r *http.Request) {
 
 func writeReviewError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, domain.ErrOuterHeld):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "OUTER_HELD", "Review result is outside the launched reviewer scope", nil)
 	case errors.Is(err, reviewsvc.ErrInvalid):
 		envelope.WriteAPIError(w, r, http.StatusUnprocessableEntity, "unprocessable", "REVIEW_INVALID", err.Error(), nil)
 	case errors.Is(err, reviewsvc.ErrNotFound):

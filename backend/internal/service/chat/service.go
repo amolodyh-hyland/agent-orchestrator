@@ -456,7 +456,14 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		if _, ok := domain.OuterExecutionFrom(ctx); !ok {
 			return nil, domain.ErrOuterHeld
 		}
-		if err := domain.CheckOuterOperation(ctx, s.store, "spawn", cfg.ProjectID, ""); err != nil {
+		op, target := "spawn", domain.SessionID("")
+		if conversationOwner(cfg).Kind == domain.ConversationOwnerReview {
+			op, target = "review.trigger", cfg.SessionID
+			if cfg.Harness != domain.HarnessCodex || cfg.Permissions != ports.PermissionModeAuto {
+				return nil, domain.ErrOuterHeld
+			}
+		}
+		if err := domain.CheckOuterOperation(ctx, s.store, op, cfg.ProjectID, target); err != nil {
 			return nil, err
 		}
 	}
@@ -863,7 +870,28 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if generation == "" {
 		generation = s.newID()
 	}
+	var reviewCredential string
 	issueEnv := func(ctx context.Context, env map[string]string) (map[string]string, error) {
+		if owner.Kind == domain.ConversationOwnerReview {
+			env = maps.Clone(env)
+			if env == nil {
+				env = map[string]string{}
+			}
+			env["AO_SCOPE_CREDENTIAL"] = ""
+			_, executing := domain.OuterExecutionFrom(ctx)
+			if issuer, ok := s.store.(interface {
+				IssueOuterReviewSessionGeneration(context.Context, string, string) (string, error)
+			}); ok && executing && cfg.Harness == domain.HarnessCodex {
+				if reviewCredential == "" {
+					var err error
+					reviewCredential, err = issuer.IssueOuterReviewSessionGeneration(ctx, owner.ID, generation)
+					if err != nil {
+						return nil, err
+					}
+				}
+				env["AO_SCOPE_CREDENTIAL"] = reviewCredential
+			}
+		}
 		if owner.Kind == domain.ConversationOwnerSession {
 			if issuer, ok := s.store.(interface {
 				IssueOuterCallerGeneration(context.Context, domain.SessionID, string, string) (string, error)
@@ -1611,6 +1639,28 @@ func (s *Service) SendForOwner(ctx context.Context, owner domain.ConversationOwn
 	controller, err := s.ControllerForOwner(owner)
 	if err != nil {
 		return domain.ConversationTurn{}, err
+	}
+	if owner.Kind == domain.ConversationOwnerReview {
+		if _, executing := domain.OuterExecutionFrom(ctx); executing {
+			st, ok := s.store.(interface {
+				BindOuterReviewRequest(context.Context, string, string, string) (domain.OuterRequest, error)
+				BindOuterReviewResult(context.Context, string, string) error
+			})
+			if !ok {
+				return domain.ConversationTurn{}, domain.ErrOuterHeld
+			}
+			// Rotate the daemon-side result binding on the existing process
+			// credential. No credential is ever added to provider input/history.
+			if err := st.BindOuterReviewResult(ctx, owner.ID, controller.Generation()); err != nil {
+				return domain.ConversationTurn{}, err
+			}
+			r, err := st.BindOuterReviewRequest(ctx, owner.ID, msg.Text, msg.ClientMessageID)
+			if err != nil {
+				return domain.ConversationTurn{}, err
+			}
+			msg.ClientMessageID = r.ID
+			ctx = domain.WithOuterNativeAction(ctx, domain.OuterNativeAction{Operation: "outer.send", SessionID: r.SessionID, RequestID: r.ID})
+		}
 	}
 	// A crash-safe retry may arrive after its source message changed. Once this
 	// client id is already durable, the controller's existing idempotency path is

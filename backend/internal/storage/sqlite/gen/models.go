@@ -609,6 +609,21 @@ type OuterEvidence struct {
 	RecordedAt time.Time
 }
 
+type OuterMailbox struct {
+	Sequence      int64
+	ID            string
+	ProjectID     string
+	CoordinatorID string
+	Document      string
+}
+
+type OuterMailboxReceipt struct {
+	MessageID   string
+	RecipientID string
+	ActionID    string
+	RecordedAt  time.Time
+}
+
 type OuterNativeAction struct {
 	ID         string
 	Document   string

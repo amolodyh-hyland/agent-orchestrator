@@ -42,6 +42,6 @@ func newOuterCommand(c *commandContext) *cobra.Command {
 		return writeJSON(cmd.OutOrStdout(), result)
 	}}
 	plan.Flags().StringVar(&file, "file", "", "Exact request ID, source Projects and concrete action manifest")
-	cmd.AddCommand(plan)
+	cmd.AddCommand(plan, newOuterMailboxCommand(c))
 	return cmd
 }

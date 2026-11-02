@@ -9,12 +9,12 @@ import { Input } from "./ui/input";
 
 // A human reviews a bounded snapshot, then the isolated preload handles the real
 // click. The renderer has no confirm API or confirmation capability.
-export function FactoryRunDialog({ projectId, sessionId }: { projectId: string; sessionId: string }) {
+export function FactoryRunDialog({ projectId, sessionId, initialRunId = "", decisionsOnly = false }: { projectId: string; sessionId: string; initialRunId?: string; decisionsOnly?: boolean }) {
 	const { t } = useTranslation();
 	const copy = (key: string, fallback: string) => t(`factoryRun.${key}`, { defaultValue: fallback });
 	const bridge = window.ao?.factoryRun;
 	const [open, setOpen] = useState(false);
-	const [runId, setRunId] = useState("");
+	const [runId, setRunId] = useState(initialRunId);
 	const [preview, setPreview] = useState<RunPreview | null>(null);
 	const resultBridge=window.ao?.specialistResult;
 	const [resultPreview,setResultPreview]=useState<ResultPreview|null>(null);
@@ -50,6 +50,7 @@ export function FactoryRunDialog({ projectId, sessionId }: { projectId: string; 
 		const timer = setTimeout(clear, Math.max(0, preview.expiresAt - Date.now())); return () => clearTimeout(timer);
 	}, [preview]);
 	async function load(action: RunAction) {
+ if (decisionsOnly && action !== "evidence" && action !== "advance") return;
 		clear(); const version = generation.current; setMessage("");
 		try {
 			const result = await bridge?.preview(runId, action);
@@ -66,14 +67,15 @@ export function FactoryRunDialog({ projectId, sessionId }: { projectId: string; 
 		<Button variant="ghost" size="sm" onClick={() => setOpen(true)}>{copy("open", "Run evidence")}</Button>
 		<Dialog open={open} onOpenChange={(value) => { clear(); setOpen(value); }}>
 			<DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>{copy("title", "Review run evidence")}</DialogTitle></DialogHeader>
-				<RunMonitoring projectId={projectId} sessionId={sessionId} />
+				{!decisionsOnly ? <RunMonitoring projectId={projectId} sessionId={sessionId} /> : null}
 				<p>{copy("help", "Submissions are unconfirmed claims. Each receipt and stage decision requires a separate native confirmation. Findings delivery requires its own confirmation for one continuation of the existing implementer.")}</p>
-				<Input aria-label={copy("id", "Run ID")} value={runId} onChange={(event) => { clear(); setRunId(event.target.value); }} />
+				<Input aria-label={copy("id", "Run ID")} value={runId} readOnly={decisionsOnly} onChange={(event) => { clear(); setRunId(event.target.value); }} />
 				<Button onClick={() => void load("evidence")}>{copy("receipt", "Preview pending claim")}</Button>
-				<Button onClick={() => void load("pause_feedback")}>{copy("pause", "Pause findings delivery")}</Button>
+				{!decisionsOnly ? <><Button onClick={() => void load("pause_feedback")}>{copy("pause", "Pause findings delivery")}</Button>
 				<Button onClick={() => void load("resume_feedback")}>{copy("resume", "Allow new findings approvals")}</Button>
 				<Button onClick={() => void load("feedback")}>{copy("feedback", "Preview findings delivery")}</Button>
 				<Button onClick={()=>void loadResult()}>{copy("resultPreview","Preview specialist result scope")}</Button>
+				</> : null}
 				<Button onClick={() => void load("advance")}>{copy("stage", "Preview stage decision")}</Button>
 				{preview ? <>
 					<pre className="max-h-80 overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify({ ...preview.detail, feedback: preview.feedback }, null, 2)}</pre>

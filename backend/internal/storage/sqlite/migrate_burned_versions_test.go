@@ -20,6 +20,7 @@ import (
 // session list). Renaming, renumbering, or deleting a shipped migration
 // produces exactly that class of failure, so this list is append-only.
 var shippedMigrations = map[int64]string{
+	234: "0234_outer_mailbox.sql",
 	233: "0233_outer_action_plans.sql",
 	232: "0232_outer_session_generations.sql",
 	231: "0231_outer_native_actions.sql",
@@ -255,12 +256,9 @@ var shippedMigrations = map[int64]string{
 	20261101055144579: "20261101055144579_conversation_message_authored_by_user.sql",
 }
 
-// reservedLegacyMigrations allows the approved M3 migration to land after this
-// sync without changing its preassigned ID. It is optional until M3 lands; no
-// other sequential migration may follow it. Move it into shippedMigrations in M3.
-var reservedLegacyMigrations = map[int64]string{
-	234: "0234_outer_mailbox.sql",
-}
+// reservedLegacyMigrations is empty now that M3's final sequential exception
+// has moved into shippedMigrations. Subsequent migrations use timestamp IDs.
+var reservedLegacyMigrations = map[int64]string{}
 
 // burnedVersion reports version numbers that must never be (re)used: they
 // shipped in a release and were then deleted, so real installs have them
