@@ -40,6 +40,9 @@ type AgentConfig struct {
 	// requirement that forbids full access). Unset means enabled; false turns it
 	// off so the provider's refusal is reported as is.
 	PermissionFallback *bool `json:"permissionFallback,omitempty"`
+	// Launch carries one session's own launch choices to its adapter. It is
+	// never part of a saved or served project config.
+	Launch AgentLaunchOptions `json:"-"`
 }
 
 // PermissionFallbackEnabled reports whether a refused permission mode may step
@@ -47,6 +50,27 @@ type AgentConfig struct {
 func (c AgentConfig) PermissionFallbackEnabled() bool {
 	return c.PermissionFallback == nil || *c.PermissionFallback
 }
+
+// AgentLaunchOptions are choices a terminal agent only reads when it starts.
+// AO stores them with the session so a later restart launches it the same way.
+type AgentLaunchOptions struct {
+	// FastMode starts the agent on its faster tier (Codex).
+	FastMode bool `json:"fastMode,omitempty"`
+	// FastModeOff starts Codex on its standard tier even where its config or the
+	// model would pick the faster one, as a switch whose picker showed it off asks.
+	FastModeOff bool `json:"fastModeOff,omitempty"`
+	// Ultracode starts Claude Code with Ultracode on.
+	Ultracode bool `json:"ultracode,omitempty"`
+	// AutoCompactWindow is where Claude Code compacts on its own: "200k" or "1m".
+	AutoCompactWindow string `json:"autoCompactWindow,omitempty"`
+	// HandoffNote is a terminal switch target's note, kept until the target has
+	// started. A relaunch that finds it follows a switch cut short by a daemon
+	// stop or crash, and delivers the note in place of the session's task.
+	HandoffNote string `json:"handoffNote,omitempty"`
+}
+
+// AutoCompactTokens is each compaction window choice as a token count.
+var AutoCompactTokens = map[string]int{"200k": 200_000, "1m": 1_000_000}
 
 // IsZero reports whether the config carries no settings, so storage can persist
 // SQL NULL and resolution can skip an empty config.

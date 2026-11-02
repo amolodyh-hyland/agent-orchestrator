@@ -45,7 +45,7 @@ vi.mock("./NotificationCenter", () => ({
 	NotificationCenter: () => <button aria-label="Notifications" type="button" />,
 }));
 
-const { ShellTopbar } = await import("./ShellTopbar");
+const { SessionTopbarActions } = await import("./SessionTopbarActions");
 
 describe("ShellTopbar on macOS", () => {
 	beforeEach(() => {
@@ -59,7 +59,7 @@ describe("ShellTopbar on macOS", () => {
 		render(
 			<QueryClientProvider client={new QueryClient()}>
 				<TooltipProvider>
-					<ShellTopbar />
+					<SessionTopbarActions />
 				</TooltipProvider>
 			</QueryClientProvider>,
 		);

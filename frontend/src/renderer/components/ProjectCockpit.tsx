@@ -9,7 +9,6 @@ import { hidesShellTopbar } from "../lib/platform";
 import { getSessionStatusView } from "../lib/session-presentation";
 import { apiClient } from "../lib/api-client";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
-import { topbarProjectLabelClass } from "./TopbarButton";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
 
@@ -64,7 +63,7 @@ export function ProjectCockpit() {
 	return (
 		<div className="flex min-h-0 flex-1 flex-col bg-background">
 			<header className="workspace-topbar-container center-panel-titlebar flex h-toolbar shrink-0 items-center justify-between gap-3 pr-4">
-				<h1 className={hidesShellTopbar() ? topbarProjectLabelClass : "sr-only"}>{t("cockpit.title")}</h1>
+				<h1 className={hidesShellTopbar() ? "text-brand font-semibold tracking-tight leading-none text-foreground whitespace-nowrap" : "sr-only"}>{t("cockpit.title")}</h1>
 				<Button variant="ghost" size="sm" className="ml-auto" disabled={workspaceQuery.isFetching || reports.some((query) => query.isFetching)} onClick={() => {
 					void workspaceQuery.refetch();
 					for (const [index, query] of reports.entries()) if (visible[index].project) void query.refetch();

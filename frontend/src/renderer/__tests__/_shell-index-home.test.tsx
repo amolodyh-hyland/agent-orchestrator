@@ -9,6 +9,8 @@ import {
 	type WorkspaceSummary,
 } from "../types/workspace";
 
+vi.mock("../components/NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
+
 const routeMocks = vi.hoisted(() => ({
 	createProjectFlowProps: null as null | {
 		existingProjectPaths?: readonly string[];
@@ -308,7 +310,7 @@ describe("shell index route", () => {
 
 describe("shell center route tabs", () => {
 	it("renders the flat tab row above shell chrome on board routes", () => {
-		render(<ShellCenter hideShellTopbar={false} isSessionRoute={false} selfFramedCenterPanel={false} startingOrchestrator={false} startingCloudOrchestrator={false} />);
+		render(<ShellCenter isHomeRoute={false} isSessionRoute={false} selfFramedCenterPanel={false} startingOrchestrator={false} startingCloudOrchestrator={false} />);
 
 		const row = screen.getByTestId("topbar-tabs-row");
 		const shellTopbar = screen.getByTestId("shell-topbar");
@@ -316,14 +318,14 @@ describe("shell center route tabs", () => {
 	});
 
 	it("omits the shell tab row on session routes", () => {
-		render(<ShellCenter hideShellTopbar={false} isSessionRoute={true} selfFramedCenterPanel={false} startingOrchestrator={false} startingCloudOrchestrator={false} />);
+		render(<ShellCenter isHomeRoute={false} isSessionRoute={true} selfFramedCenterPanel={false} startingOrchestrator={false} startingCloudOrchestrator={false} />);
 
 		expect(screen.queryByTestId("topbar-tabs-row")).not.toBeInTheDocument();
 		expect(screen.getByTestId("route-outlet")).toBeInTheDocument();
 	});
 
 	it("omits the shell tab row while a project orchestrator is starting", async () => {
-		render(<ShellCenter hideShellTopbar={false} isSessionRoute={false} selfFramedCenterPanel={false} startingOrchestrator={true} startingCloudOrchestrator={false} />);
+		render(<ShellCenter isHomeRoute={false} isSessionRoute={false} selfFramedCenterPanel={false} startingOrchestrator={true} startingCloudOrchestrator={false} />);
 
 		expect(screen.queryByTestId("topbar-tabs-row")).not.toBeInTheDocument();
 		expect(await screen.findByTestId("orchestrator-starting-chat")).toBeInTheDocument();

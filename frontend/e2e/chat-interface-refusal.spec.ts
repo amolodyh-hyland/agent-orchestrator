@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { agentReadiness } from "../src/renderer/test/agent-readiness-fixtures";
 import { installFakeAgent } from "./support/fake-bridge";
 
-const projectId = "chat-agent-switch";
+const projectId = "chat-interface-refusal";
 const sessionId = "chat-switch-worker";
 
 test("untouched Chat reports interface refusal and can dismiss and retry @T0", async ({ page }) => {

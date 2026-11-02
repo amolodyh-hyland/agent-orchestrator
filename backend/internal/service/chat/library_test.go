@@ -117,7 +117,7 @@ func TestLibraryDeferredMainDispatchRejectsCompletedRevocation(t *testing.T) {
 	controller.libraryInput = svc.acquireLibraryInput
 	done := make(chan error, 1)
 	go func() {
-		_, err := controller.dispatch(context.Background(), "turn", ports.ChatUserMessage{Text: "continue"}, time.Now())
+		_, err := controller.dispatch(context.Background(), "turn", ports.ChatUserMessage{Text: "continue"}, time.Now(), false, nil)
 		done <- err
 	}()
 	select {

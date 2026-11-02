@@ -85,7 +85,7 @@ func TestModelCatalogClassifiesAuthFailuresForClients(t *testing.T) {
 				Models:        []ports.AgentModelInfo{{ID: "opus", Label: "Opus"}},
 				Source:        "catalog",
 			}}
-			svc := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, cache, nil, discoverer)
+			svc := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, cache, discoverer)
 			catalog, err := svc.Models(context.Background(), "claude-code", "", true)
 			if err != nil {
 				t.Fatal(err)
@@ -102,7 +102,7 @@ func TestModelCatalogClassifiesAuthFailuresForClients(t *testing.T) {
 
 func TestSignInRequiredCatalogCarriesAuthCode(t *testing.T) {
 	discoverer := &fakeModelDiscoverer{version: "v1", err: fmt.Errorf("kiro model discovery: %w", ports.ErrAgentModelDiscoverySignInRequired)}
-	svc := newService([]agentregistry.HarnessAgent{harnessAgent("kiro", "Kiro", nil)}, &fakeModelCache{}, nil, discoverer)
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("kiro", "Kiro", nil)}, &fakeModelCache{}, discoverer)
 	catalog, err := svc.Models(context.Background(), "kiro", "", true)
 	if err != nil {
 		t.Fatal(err)
@@ -120,7 +120,7 @@ func TestInvalidateModelCatalogsClearsAuthWarningAndRediscovers(t *testing.T) {
 		SelectionMode: ports.ModelSelectionCatalog,
 		Models:        []ports.AgentModelInfo{{ID: "opus", Label: "Opus"}},
 	}}
-	svc := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, cache, nil, discoverer)
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, cache, discoverer)
 	if catalog, err := svc.Models(context.Background(), "claude-code", "", true); err != nil || catalog.WarningCode == "" {
 		t.Fatalf("setup catalog = %+v, err = %v", catalog, err)
 	}
@@ -163,7 +163,7 @@ func TestClaudeDiscoveryFailureUsesCachedModelsWithoutStaticFallback(t *testing.
 		return []ports.AgentModelInfo{{ID: "claude-opus-5-5", Label: "Claude Opus 5.5"}}, nil
 	}}
 	cache := &fakeModelCache{}
-	svc := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, cache, nil, discoverer)
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, cache, discoverer)
 	fresh, err := svc.Models(context.Background(), "claude-code", "", true)
 	if err != nil || len(fresh.Models) != 1 || fresh.Source != "provider" {
 		t.Fatalf("initial discovery = %#v, %v", fresh, err)
@@ -176,7 +176,7 @@ func TestClaudeDiscoveryFailureUsesCachedModelsWithoutStaticFallback(t *testing.
 		}
 	}
 	// A scope with no cache offers labelled, unverified aliases and manual entry.
-	emptyService := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, &fakeModelCache{}, nil, discoverer)
+	emptyService := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, &fakeModelCache{}, discoverer)
 	got, err := emptyService.Models(context.Background(), "claude-code", "", true)
 	if err != nil || len(got.Models) != len(modelcatalog.ClaudeFallbackModelIDs()) || got.Source != "built-in" || !got.Stale || !got.AllowCustom || got.WarningCode != ports.ModelCatalogWarningAuthExpired || !strings.Contains(got.Warning, "account availability unverified") {
 		t.Fatalf("uncached catalog = %#v, %v; want unverified aliases with the auth warning", got, err)

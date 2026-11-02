@@ -5,14 +5,16 @@ import (
 	"sort"
 	"strconv"
 	"testing"
+	"time"
 )
 
 var sequentialMigrationName = regexp.MustCompile(`^(\d{4})_[a-z0-9_]+\.sql$`)
+var timestampMigrationName = regexp.MustCompile(`^(\d{17})_[a-z0-9_]+\.sql$`)
 
 // skippedMigrationVersions are the numbers inside the sequence that no file
 // uses. They were burned or never claimed in a release, so they stay empty.
-// New migrations take the next number after the highest file; never add to
-// this set to make a gap pass.
+// New migrations use UTC timestamps; legacy IDs end at 0234, reserved for
+// the approved outer mailbox migration landing immediately after this sync.
 var skippedMigrationVersions = map[int64]bool{
 	22: true, 45: true, 46: true, 50: true, 51: true,
 	55: true, 56: true, 57: true, 58: true, 59: true, 60: true,
@@ -22,12 +24,7 @@ var skippedMigrationVersions = map[int64]bool{
 	207: true, 208: true, 209: true,
 }
 
-// TestMigrationVersionsAreSequential keeps every migration on the NNNN_ scheme
-// with no jump in the sequence. A timestamp-style version (for example
-// 20261020213549770) becomes the highest version a database records, so every
-// later sequential migration would sort below it and goose would skip or
-// reject it as out of order.
-func TestMigrationVersionsAreSequential(t *testing.T) {
+func TestMigrationVersionsPreserveLegacyAndUseTimestamps(t *testing.T) {
 	entries, err := migrationsFS.ReadDir("migrations")
 	if err != nil {
 		t.Fatalf("read migrations dir: %v", err)
@@ -39,15 +36,24 @@ func TestMigrationVersionsAreSequential(t *testing.T) {
 		if e.IsDir() {
 			continue
 		}
+		if match := timestampMigrationName.FindStringSubmatch(e.Name()); match != nil {
+			if _, err := time.Parse("20060102150405.000", match[1][:14]+"."+match[1][14:]); err != nil {
+				t.Errorf("migration %q has an invalid UTC timestamp: %v", e.Name(), err)
+			}
+			continue
+		}
 		match := sequentialMigrationName.FindStringSubmatch(e.Name())
 		if match == nil {
-			t.Errorf("migration %q does not match the sequential NNNN_name.sql pattern; timestamp-style versions break ordering of later migrations", e.Name())
+			t.Errorf("migration %q must use a UTC YYYYMMDDHHMMSSsss_name.sql timestamp or an existing legacy ID", e.Name())
 			continue
 		}
 		version, err := strconv.ParseInt(match[1], 10, 64)
 		if err != nil {
 			t.Errorf("migration %q: parse version: %v", e.Name(), err)
 			continue
+		}
+		if version > 234 {
+			t.Errorf("new migration %q uses a sequential version after the frozen legacy range; use npm run migration:create", e.Name())
 		}
 		if other, dup := seen[version]; dup {
 			t.Errorf("duplicate migration version %d: %s vs %s", version, other, e.Name())

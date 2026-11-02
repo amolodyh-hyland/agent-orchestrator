@@ -34,7 +34,7 @@ func TestClaudePolicyChangeCannotReuseCachedChoices(t *testing.T) {
 			return []ports.AgentModelInfo{{ID: "sonnet"}, {ID: "opus"}}, nil
 		},
 	}
-	svc := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, &fakeModelCache{}, nil, discoverer)
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, &fakeModelCache{}, discoverer)
 	first, err := svc.Models(context.Background(), "claude-code", "", true)
 	if err != nil || len(first.Models) != 1 || first.Models[0].ID != "sonnet" {
 		t.Fatalf("first=%+v err=%v", first, err)

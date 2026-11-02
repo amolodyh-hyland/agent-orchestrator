@@ -22,6 +22,7 @@ import type { TopbarTabView } from "./topbar-tabs-view";
 
 export type SessionTabActions = {
 	menuItems: ReactNode;
+	renderMenu?: (entries: ReactNode) => ReactNode;
 	inlineStatus?: ReactNode;
 } | null;
 
@@ -252,6 +253,8 @@ export const TopbarTab = memo(function TopbarTab({
 			) : null}
 			{switchingInterface ? (
 				<span className="inline-flex shrink-0 items-center">{sessionActions?.inlineStatus}</span>
+			) : sessionActions?.renderMenu && renderMenu ? (
+				sessionActions.renderMenu(renderMenu({ kind: "dropdown", view, startRename }))
 			) : renderMenu ? (
 				<DropdownMenu onOpenChange={setIsMenuOpen}>
 					<DropdownMenuTrigger asChild>
