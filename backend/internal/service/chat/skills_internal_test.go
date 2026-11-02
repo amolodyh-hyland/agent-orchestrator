@@ -49,7 +49,7 @@ func (p *catalogConversation) ReloadSkills(context.Context) ([]ports.ChatSkill, 
 }
 
 func catalogController(p ports.ChatConversation, generation string) *Controller {
-	return newController("session", domain.SessionConversationOwner("session"), domain.ConversationRecord{}, generation, domain.HarnessCodex, p, noopSettingsStore{}, nil, slog.New(slog.DiscardHandler), func() string { return "id" }, time.Now, nil, nil, nil)
+	return newController("session", domain.SessionConversationOwner("session"), domain.ConversationRecord{}, generation, domain.HarnessCodex, p, noopSettingsStore{}, nil, slog.New(slog.DiscardHandler), func() string { return "id" }, time.Now, nil, nil, nil, nil)
 }
 func nativeSkill(path string) ports.ChatSkill {
 	return ports.ChatSkill{Name: "review", DisplayName: "Review", Transport: "native_skill", Token: "$review", CanInvoke: true, NativePath: path, ObservationID: skillDigest(path)}

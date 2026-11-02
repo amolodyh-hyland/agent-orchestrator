@@ -315,13 +315,15 @@ export function FileContentPane({
 		setSaveError("");
 		try {
 			if (source.kind === "artifact") {
-				const saved = await updateSessionArtifactFile({
-					content: draft,
-					expectedFileFingerprint,
-					path,
-					sessionId,
-					hostId,
-				});
+				const saved = source.save
+					? await source.save({ content: draft, expectedFileFingerprint, path })
+					: await updateSessionArtifactFile({
+						content: draft,
+						expectedFileFingerprint,
+						path,
+						sessionId,
+						hostId,
+					});
 				queryClient.setQueryData(sessionArtifactFileQueryOptions(sessionId, path, source.rawUrl).queryKey, {
 					...detail,
 					content: draft,

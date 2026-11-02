@@ -267,7 +267,7 @@ beforeEach(async () => {
 		saving: false,
 		saveError: false,
 	});
-	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false, sideChats: false, windowTranslucency: false, navigationGestures: true });
+	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false, sideChats: false, windowTranslucency: false, chatSendKeyMode: "enter", navigationGestures: true });
 	useTopbarTabsStore.setState({ overflow: "scroll", density: "comfortable", colorCoding: false });
 	for (const key of [TOPBAR_TABS_STORAGE_KEYS.overflow, TOPBAR_TABS_STORAGE_KEYS.density, TOPBAR_TABS_STORAGE_KEYS.colorCoding]) {
 		window.localStorage.removeItem(key);
@@ -524,6 +524,24 @@ describe("GlobalSettingsForm", () => {
 		await user.click(toggle);
 		expect(await screen.findByRole("alert")).toHaveTextContent("Could not save the software factory controls preference.");
 		expect(toggle).not.toBeChecked();
+	});
+
+	it("selects and persists both chat send key modes in General settings", async () => {
+		const user = userEvent.setup();
+		renderForm("general");
+		const preference = await screen.findByLabelText("Chat send key");
+		expect(preference).toHaveTextContent("Enter sends; Shift+Enter inserts newline");
+
+		await user.click(preference);
+		await user.click(await screen.findByRole("menuitem", { name: "Enter inserts newline; Cmd/Ctrl+Enter sends" }));
+		expect(useUiStore.getState().chatSendKeyMode).toBe("mod-enter");
+		expect(window.localStorage.getItem("ao.chatSendKeyMode")).toBe("mod-enter");
+		expect(preference).toHaveTextContent("Enter inserts newline; Cmd/Ctrl+Enter sends");
+
+		await user.click(preference);
+		await user.click(await screen.findByRole("menuitem", { name: "Enter sends; Shift+Enter inserts newline" }));
+		expect(useUiStore.getState().chatSendKeyMode).toBe("enter");
+		expect(window.localStorage.getItem("ao.chatSendKeyMode")).toBe("enter");
 	});
 
 	it("toggles sound notifications on and persists the change", async () => {

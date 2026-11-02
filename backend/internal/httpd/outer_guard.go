@@ -106,6 +106,8 @@ func outerGuard(router chi.Router, svc *outer.Service) func(http.Handler) http.H
 }
 
 var outerMutationManifest = map[string]string{
+	"DELETE /api/v1/sessions/{sessionId}":                                                              "native_only",
+	"PATCH /api/v1/settings/session-retention":                                                         "native_only",
 	"POST /api/v1/sessions/{sessionId}/mailbox":                                                        "mailbox.scoped",
 	"POST /api/v1/sessions/{sessionId}/mailbox/{messageId}/receipt":                                    "mailbox.scoped",
 	"DELETE /api/v1/projects/{id}/permissions":                                                         "project.permissions",

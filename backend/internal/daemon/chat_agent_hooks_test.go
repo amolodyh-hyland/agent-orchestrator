@@ -143,3 +143,20 @@ func TestChatAgentServiceBindingIsPerInstance(t *testing.T) {
 		t.Fatalf("bound instance invalidated %d times, want 1", agents.invalidations)
 	}
 }
+
+func TestChatAccountRecheckUsesTheSessionAccountHook(t *testing.T) {
+	var gotID domain.SessionID
+	var gotHarness domain.AgentHarness
+	opts, _ := newChatServiceOptions(context.Background(), chatServiceDeps{
+		OnAccountChanged: func(id domain.SessionID, harness domain.AgentHarness) {
+			gotID, gotHarness = id, harness
+		},
+	})
+	if opts.RecheckAccount == nil {
+		t.Fatal("account recheck hook missing")
+	}
+	opts.RecheckAccount("p1-1", domain.HarnessCodex)
+	if gotID != "p1-1" || gotHarness != domain.HarnessCodex {
+		t.Fatal("account recheck lost session owner")
+	}
+}

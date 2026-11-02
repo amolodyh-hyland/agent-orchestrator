@@ -93,6 +93,10 @@ const usageReconcileTick = 3 * time.Minute
 
 const chatHibernateSweepTick = 30 * time.Second
 
+// workspaceCleanupSweepTick paces the terminated-session cleanup reconcile.
+// Its work is retry and bookkeeping, not anything a user waits on.
+const workspaceCleanupSweepTick = 10 * time.Minute
+
 // sentryEnvironment maps the daemon's app version to a Sentry environment so a
 // nightly/edge build's issues do not mix with stable release health.
 func sentryEnvironment(version string) string {
@@ -563,6 +567,27 @@ func Run(buildVersion string) error {
 		agentAccountSvc.SetAgentStopper(stopper.ExitAgentsOnAccount)
 	}
 	sessionSvc.SetComputerLoginCheck(agentAccountSvc.RunsOnComputerLogin)
+	// A chat refused its credentials keeps asking for a sign-in until a reading
+	// of its own account finds the login working again, however it came back.
+	agentAccountSvc.SetLoginConfirmed(func(account domain.AgentAccount, at time.Time) {
+		go func() {
+			defer sentryobs.RecoverBackground()
+			waiting, err := store.ConversationsAwaitingLogin(ctx)
+			if err != nil {
+				log.Warn("list chats awaiting sign-in", "error", err)
+				return
+			}
+			for _, conversation := range waiting {
+				id, err := agentAccountSvc.SessionAccountID(ctx, conversation.SessionID, conversation.Harness)
+				if err != nil || id != account.ID {
+					continue
+				}
+				if _, err := store.ConfirmConversationLogin(ctx, conversation.ConversationID, at, time.Now().UTC()); err != nil {
+					log.Warn("clear chat sign-in demand", "conversation", conversation.ConversationID, "error", err)
+				}
+			}
+		}()
+	})
 	if agentSvc != nil {
 		agentSvc.SetSavedDefaultSignIn(agentAccountSvc.DefaultSignIn)
 		agentAccountSvc.SetDefaultChanged(func(p domain.AgentAccountProvider) {
@@ -1081,6 +1106,7 @@ func Run(buildVersion string) error {
 		SessionSteps:       lcStack.LCM,
 		Telemetry:          telemetrySink,
 		TelemetryIdentity:  telemetryIdentity,
+		LifetimeSessions:   store.LifetimeSessions,
 		UsageFlush: func(ctx context.Context) {
 			if usage != nil {
 				usage.flush(ctx, false)
@@ -1162,9 +1188,10 @@ func Run(buildVersion string) error {
 	// (via bs.RestoreOnBoot) re-apply the secure-pairing proxy against the
 	// port Start actually bound. Routed through bs, not lan directly, so the
 	// proxy never gets pinned to a dead port after an ephemeral fallback.
+	// Saved wake ownership is restored even when Connect Mobile is off.
 	// Best-effort: never blocks boot.
 	if err := restoreMobileOnBoot(mobilebridge.Path(cfg.DataDir), bs); err != nil {
-		log.Warn("restore mobile bridge on boot failed", "err", err)
+		log.Warn("restore mobile and awake settings on boot failed", "err", err)
 	}
 	go func() {
 		defer sentryobs.RecoverBackground()
@@ -1251,6 +1278,33 @@ func Run(buildVersion string) error {
 				}
 			}
 		}()
+		go func() {
+			defer sentryobs.RecoverBackground()
+			// Boot restore and reconciliation settle which terminated sessions
+			// are coming back before this pass looks at any of them.
+			select {
+			case <-done:
+			case <-ctx.Done():
+				return
+			}
+			ticker := time.NewTicker(workspaceCleanupSweepTick)
+			defer ticker.Stop()
+			for {
+				if err := sessMgr.ReconcileWorkspaceCleanup(ctx); err != nil && ctx.Err() == nil {
+					log.Warn("workspace cleanup reconcile failed", "err", err)
+				}
+				if settings, err := settingsSvc.Get(ctx); err != nil {
+					log.Warn("read session retention", "err", err)
+				} else if err := sessionSvc.DeleteExpired(ctx, settings.SessionRetentionDays); err != nil && ctx.Err() == nil {
+					log.Warn("delete expired sessions failed", "err", err)
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		}()
 		resumeDone := make(chan struct{})
 		usageLimitResumeDone = resumeDone
 		go func() {
@@ -1288,7 +1342,7 @@ func Run(buildVersion string) error {
 		}()
 		go func() {
 			defer sentryobs.RecoverBackground()
-			runVersionRefreshSweep(ctx, cfg, settingsSvc, sessMgr, systemInstall, telemetrySink, log)
+			runVersionRefreshSweep(ctx, cfg, settingsSvc, sessMgr, systemInstall, log)
 		}()
 	})
 

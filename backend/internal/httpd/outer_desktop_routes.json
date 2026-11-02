@@ -55,6 +55,10 @@
     "operation": "native_only",
     "mode": "confirm"
   },
+  "DELETE /api/v1/sessions/{sessionId}": {
+    "operation": "native_only",
+    "mode": "held"
+  },
   "DELETE /api/v1/sessions/{sessionId}/artifact-files": {
     "operation": "session.scoped",
     "mode": "confirm"
@@ -178,6 +182,10 @@
   "PATCH /api/v1/settings/session-interface": {
     "operation": "native_only",
     "mode": "confirm"
+  },
+  "PATCH /api/v1/settings/session-retention": {
+    "operation": "native_only",
+    "mode": "held"
   },
   "PATCH /api/v1/settings/version-refresh": {
     "operation": "native_only",
@@ -503,14 +511,6 @@
     "operation": "session.scoped",
     "mode": "held"
   },
-  "POST /api/v1/sessions/{sessionId}/mailbox": {
-    "operation": "mailbox.scoped",
-    "mode": "held"
-  },
-  "POST /api/v1/sessions/{sessionId}/mailbox/{messageId}/receipt": {
-    "operation": "mailbox.scoped",
-    "mode": "held"
-  },
   "POST /api/v1/sessions/{sessionId}/activity": {
     "operation": "session.scoped",
     "mode": "confirm"
@@ -670,6 +670,14 @@
   "POST /api/v1/sessions/{sessionId}/kill": {
     "operation": "kill",
     "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/mailbox": {
+    "operation": "mailbox.scoped",
+    "mode": "held"
+  },
+  "POST /api/v1/sessions/{sessionId}/mailbox/{messageId}/receipt": {
+    "operation": "mailbox.scoped",
+    "mode": "held"
   },
   "POST /api/v1/sessions/{sessionId}/pin": {
     "operation": "session.scoped",

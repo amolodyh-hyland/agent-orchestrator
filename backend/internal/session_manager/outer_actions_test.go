@@ -3,6 +3,7 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -133,7 +134,7 @@ func TestOuterM2ManagerStopPreservesWorktreeAndArtifacts(t *testing.T) {
 			if !rec.IsTerminated || rec.Metadata.WorkspacePath != "/owned/worktree" || rec.Metadata.ArtifactDir != "/owned/artifacts" {
 				t.Fatal("preservation lost", rec)
 			}
-			if _, reason := m.cleanupOne(context.Background(), rec, ports.WorkspaceInfo{Path: rec.Metadata.WorkspacePath}); reason == "" {
+			if _, reason := m.cleanupOne(context.Background(), rec, ports.WorkspaceInfo{Path: rec.Metadata.WorkspacePath}); !reason.refused() {
 				t.Fatal("later cleanup discarded participant artifacts")
 			}
 			if m.workspace.(*fakeWorkspace).destroyed != 0 {
@@ -150,4 +151,21 @@ func (l *recordingLauncher) StopChatWithAdmission(ctx context.Context, id domain
 	}
 	defer release()
 	return l.StopChat(ctx, id)
+}
+
+func TestOuterParticipantCannotBeDeletedByRetentionOrCleanup(t *testing.T) {
+	for _, cleanup := range []bool{false, true} {
+		t.Run(fmt.Sprint(cleanup), func(t *testing.T) {
+			m, st, runtime, ws := newManager()
+			id := domain.SessionID("mer-1")
+			seedTerminal(st, id, domain.SessionMetadata{WorkspacePath: "/owned/worktree", ArtifactDir: "/owned/artifacts"})
+			m.store = &m2ManagerStore{fakeStore: st, participants: map[domain.SessionID]bool{id: true}}
+			if err := m.DeleteSession(context.Background(), id, cleanup); !errors.Is(err, domain.ErrOuterHeld) {
+				t.Fatalf("participant delete error = %v, want held", err)
+			}
+			if _, found := st.sessions[id]; !found || ws.destroyed != 0 || runtime.destroyed != 0 {
+				t.Fatal("participant record or workspace removed")
+			}
+		})
+	}
 }
