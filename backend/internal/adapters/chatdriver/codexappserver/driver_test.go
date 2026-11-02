@@ -296,6 +296,10 @@ func TestReconnectAdoptsInitializedHostWithoutNativeResume(t *testing.T) {
 	d, srv := newTestDriver(t)
 	srv.replyError("initialize", -32600, "Already initialized")
 	prepareCalls := 0
+	assetRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(assetRoot, ".agents", "skills"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	proc, err := d.spawn(context.Background(), "codex", "/tmp/ws", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -313,6 +317,7 @@ func TestReconnectAdoptsInitializedHostWithoutNativeResume(t *testing.T) {
 	conv, err := d.Reconnect(context.Background(), ports.ChatResumeConfig{
 		SessionID: "ao-reconnect", ProviderConversationID: "thread-survived",
 		DataDir: t.TempDir(), WorkspacePath: "/tmp/ws",
+		Env: map[string]string{"AO_AGENT_ASSET_SOURCES": `[` + strconv.Quote(assetRoot) + `]`},
 		PrepareEnv: func(context.Context) (map[string]string, error) {
 			prepareCalls++
 			return map[string]string{"AO_BROWSER_CAPABILITY": "rotated"}, nil
@@ -328,7 +333,7 @@ func TestReconnectAdoptsInitializedHostWithoutNativeResume(t *testing.T) {
 	if prepareCalls != 0 {
 		t.Fatalf("live Codex reconnect prepared launch-only environment %d times", prepareCalls)
 	}
-	if srv.sentMethod("thread/resume") || srv.sentMethod("initialized") {
+	if srv.sentMethod("thread/resume") || srv.sentMethod("initialized") || srv.sentMethod("skills/extraRoots/set") {
 		t.Fatal("reconnect to an initialized app-server repeated its handshake")
 	}
 	if !conv.(*conversation).ReconnectedLive() {

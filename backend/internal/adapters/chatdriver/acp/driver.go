@@ -19,6 +19,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentassets"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -293,6 +294,9 @@ func (d *Driver) SupportsPermissionMode(mode ports.PermissionMode) bool {
 
 // Start creates a new ACP session in the AO worktree.
 func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+	if d.cfg.Harness == domain.HarnessClaudeCode {
+		cfg.AdditionalDirectories = append(append([]string{}, cfg.AdditionalDirectories...), agentassets.ClaudeRoots(cfg.Env)...)
+	}
 	totalStarted := time.Now()
 	if !filepath.IsAbs(cfg.WorkspacePath) {
 		return nil, fmt.Errorf("workspace path must be absolute, got %q", cfg.WorkspacePath)
@@ -448,6 +452,9 @@ func (d *Driver) Reconnect(ctx context.Context, cfg ports.ChatResumeConfig) (por
 // transcript; resume-only agents recover context but explicitly report that no
 // typed history replay is available.
 func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
+	if d.cfg.Harness == domain.HarnessClaudeCode {
+		cfg.AdditionalDirectories = append(append([]string{}, cfg.AdditionalDirectories...), agentassets.ClaudeRoots(cfg.Env)...)
+	}
 	if cfg.ProviderConversationID == "" {
 		return nil, fmt.Errorf("%w: no stored ACP session id", ports.ErrChatResumeFailed)
 	}

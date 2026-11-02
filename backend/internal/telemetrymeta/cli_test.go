@@ -2,6 +2,17 @@ package telemetrymeta
 
 import "testing"
 
+func TestAssetSettingsCLIAttributionPreservesAgentActor(t *testing.T) {
+	for _, command := range []string{"ao settings", "ao settings get", "ao settings agent-asset-sources"} {
+		if got := CLIActorType("agent", command); got != "agent" {
+			t.Fatalf("%s changed explicit agent actor to %s", command, got)
+		}
+		if got := CLIActorType("", command); got != "user" {
+			t.Fatalf("%s legacy actor=%s", command, got)
+		}
+	}
+}
+
 func TestNormalizeCommandPath(t *testing.T) {
 	if got := NormalizeCommandPath("  AO   Hooks  claude-code  post-tool-use "); got != "ao hooks claude-code post-tool-use" {
 		t.Fatalf("NormalizeCommandPath = %q, want normalized lowercase fields", got)

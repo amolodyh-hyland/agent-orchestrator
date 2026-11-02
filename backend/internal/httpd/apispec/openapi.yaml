@@ -13733,6 +13733,43 @@ paths:
       summary: Read the daemon-owned user preferences
       tags:
       - settings
+  /api/v1/settings/agent-asset-sources:
+    patch:
+      operationId: updateAgentAssetSources
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAgentAssetSourcesRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Set native agent asset source directories for new launches
+      tags:
+      - settings
   /api/v1/settings/chat-hibernation:
     patch:
       operationId: updateChatHibernation
@@ -21926,6 +21963,12 @@ components:
       type: object
     ProjectConfig:
       properties:
+        agentAssetSources:
+          items:
+            type: string
+          type:
+          - "null"
+          - array
         agentConfig:
           $ref: '#/components/schemas/AgentConfig'
         agentRules:
@@ -24612,6 +24655,10 @@ components:
       type: object
     SettingsResponse:
       properties:
+        agentAssetSources:
+          items:
+            type: string
+          type: array
         chatHarnesses:
           items:
             type: string
@@ -24652,6 +24699,7 @@ components:
             release instead of running the old one until they happen to restart.
           type: boolean
       required:
+      - agentAssetSources
       - defaultSessionMode
       - chatHarnesses
       - client
@@ -25851,6 +25899,17 @@ components:
       required:
       - token
       - deleted
+      type: object
+    UpdateAgentAssetSourcesRequest:
+      properties:
+        agentAssetSources:
+          items:
+            type: string
+          type:
+          - "null"
+          - array
+      required:
+      - agentAssetSources
       type: object
     UpdateArtifactFileRequest:
       properties:

@@ -1,4 +1,10 @@
 {
+	"settings.agentAssetSources.title": "Extra agent asset sources",
+	"settings.agentAssetSources.inherit": "Use global defaults",
+	"settings.agentAssetSources.directories": "Source directories (one per line)",
+	"settings.agentAssetSources.description": "Use absolute paths or paths relative to the project, including workspace roots or their .claude / .agents folders. A project list replaces global defaults; an empty override disables extra sources. Changes apply on the next launch.",
+	"settings.agentAssetSources.support": "Claude Code loads extra instructions, rules, skills, commands and agents; extra settings only supply plugin keys. Codex Chat loads extra .agents/skills only. Codex Terminal and other harnesses do not load extra sources through this setting. Managed policy still applies.",
+	"settings.agentAssetSources.liveEdits": "Sources stay live. Claude adds the parent of a .claude source, granting native access to that whole directory. Native permissions can allow edits to live source files. Workspace asset folders stay in place.",
 	"sideChat.closingTab": "닫는 중",
 	"sideChat.closing": "사이드 채팅을 닫는 중입니다. 종료가 확인되면 사라집니다.",
 	"sideChat.retryClose": "닫기 재시도",

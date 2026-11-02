@@ -1,4 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
+import { AgentAssetSourcesEditor } from "./settings/AgentAssetSourcesEditor";
 import { MAX_PROJECT_DISPLAY_NAME_LEN, ProjectSettingsFormView, ProjectSettingsInputRow, ProjectSettingsRow, ProjectSettingsSection, ProjectSettingsValueRow } from "@aoagents/product-ui";
 import { Info, Pencil } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -13,6 +14,7 @@ import { Switch } from "./ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 export type ProjectSettingsDraft = {
+	agentAssetSources?: string[] | null;
 	displayName: string;
 	defaultBranch: string;
 	sessionPrefix: string;
@@ -53,6 +55,7 @@ export type ProjectAgentPickerProps = {
 	onChange: (agent: string) => void;
 };
 type Capabilities = {
+	agentAssetSources?: boolean;
 	workflow: boolean;
 	sessionPrefix: boolean;
 	intake: boolean;
@@ -207,6 +210,9 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 						{capabilities.workersRequestReview && <ProjectWorkersRequestReviewToggle checked={draft.workersRequestReview ?? false} onCheckedChange={(workersRequestReview) => patch({ workersRequestReview })} />}
 					</ProjectSettingsSection>
 				</>}
+				{capabilities.agentAssetSources && <ProjectSettingsSection title={t("settings.agentAssetSources.title")}>
+					<AgentAssetSourcesEditor project value={draft.agentAssetSources ?? null} onChange={(agentAssetSources) => patch({ agentAssetSources })} />
+				</ProjectSettingsSection>}
 				{generalExtra}
 			</> : <>
 				{visibleRoles.map((role) => {

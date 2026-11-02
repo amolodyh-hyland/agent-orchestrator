@@ -13,6 +13,10 @@ import (
 
 type hibernationSettingsStore struct{ err error }
 
+func (*hibernationSettingsStore) SetAgentAssetSources(context.Context, []string, time.Time) error {
+	return nil
+}
+
 func (s *hibernationSettingsStore) GetAppSettings(context.Context) (Snapshot, error) {
 	return Snapshot{DefaultSessionMode: domain.SessionModeChat}, s.err
 }

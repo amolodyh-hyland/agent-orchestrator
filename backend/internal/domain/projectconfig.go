@@ -32,6 +32,8 @@ type ProjectConfig struct {
 	Env map[string]string `json:"env,omitempty"`
 	// Symlinks are repo-relative paths symlinked into each session workspace.
 	Symlinks []string `json:"symlinks,omitempty"`
+	// AgentAssetSources inherits global defaults when nil; an empty list disables extras.
+	AgentAssetSources *[]string `json:"agentAssetSources,omitempty"`
 	// PostCreate are shell commands run in the workspace after it is created,
 	// each for at most its own time limit (ParseTimedScriptCommand) or
 	// DefaultScriptStepTimeoutMinutes.
@@ -253,6 +255,11 @@ func (c ProjectConfig) Validate() error {
 	for _, s := range c.Symlinks {
 		if err := validateRepoRelative(s); err != nil {
 			return fmt.Errorf("symlink %q: %w", s, err)
+		}
+	}
+	if c.AgentAssetSources != nil {
+		if err := ValidateAgentAssetSources(*c.AgentAssetSources); err != nil {
+			return err
 		}
 	}
 	if err := validateScriptSteps("postCreate", c.PostCreate); err != nil {

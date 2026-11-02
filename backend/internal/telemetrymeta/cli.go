@@ -77,6 +77,10 @@ var legacyActorlessSystemCLICommands = map[string]struct{}{
 }
 
 var legacyActorlessUserCLICommands = map[string]struct{}{
+	"ao settings":                     {},
+	"ao settings get":                 {},
+	"ao settings agent-asset-sources": {},
+
 	"ao outer":                    {},
 	"ao outer view":               {},
 	"ao outer mailbox":            {},

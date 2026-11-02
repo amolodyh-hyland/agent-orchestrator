@@ -1,12 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings } from "../../hooks/useSettings";
 
-const { settingsMock, updateRetentionMock } = vi.hoisted(() => ({
+const { settingsMock, updateRetentionMock, updateAssetsMock } = vi.hoisted(() => ({
 	settingsMock: vi.fn(),
 	updateRetentionMock: vi.fn(),
+	updateAssetsMock: vi.fn(),
 }));
 
 const idle = { update: vi.fn(), saving: false, error: undefined };
@@ -15,6 +16,7 @@ vi.mock("../../hooks/useSettings", () => ({
 	useUpdateCloudOffering: () => idle,
 	useUpdateSessionInterface: () => idle,
 	useUpdateVersionRefresh: () => idle,
+	useUpdateAgentAssetSources: () => ({ mutate: updateAssetsMock, isPending: false, error: undefined }),
 	useUpdateSessionRetention: () => ({ update: updateRetentionMock, saving: false, error: undefined }),
 }));
 
@@ -58,6 +60,7 @@ function settings(overrides: Partial<Settings>): Settings {
 beforeEach(() => {
 	settingsMock.mockReset();
 	updateRetentionMock.mockReset();
+	updateAssetsMock.mockReset();
 });
 
 describe("archived session retention", () => {
@@ -86,4 +89,16 @@ describe("archived session retention", () => {
 
 		expect(screen.queryByRole("button", { name: "Delete archived sessions" })).not.toBeInTheDocument();
 	});
+});
+
+it("edits agent sources beside retention without changing the retention preference", async () => {
+	settingsMock.mockReturnValue(settings({ sessionRetentionDays: 14, agentAssetSources: ["/original/.agents"] }));
+	renderSection();
+	const input = screen.getByRole("textbox", { name: "Source directories (one per line)" });
+	expect(input).toHaveValue("/original/.agents");
+	fireEvent.change(input, { target: { value: "/live/.claude\n/live/.agents" } });
+	await userEvent.click(within(input.closest("section")!).getByRole("button", { name: "Save" }));
+	expect(updateAssetsMock).toHaveBeenCalledWith(["/live/.claude", "/live/.agents"], expect.any(Object));
+	expect(screen.getByRole("button", { name: "Delete archived sessions" })).toHaveTextContent("After 14 days");
+	expect(updateRetentionMock).not.toHaveBeenCalled();
 });
