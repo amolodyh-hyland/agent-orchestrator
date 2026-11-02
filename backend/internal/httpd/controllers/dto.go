@@ -3666,6 +3666,7 @@ type SetConversationTitleResponse struct {
 
 // SettingsResponse is the daemon-owned preference set.
 type SettingsResponse struct {
+	AgentAssetSources []string `json:"agentAssetSources"`
 	// HarnessDefaults are per-harness picker preferences, keyed by harness id.
 	HarnessDefaults map[string]domain.HarnessDefault `json:"harnessDefaults,omitempty"`
 	// DefaultSessionMode applies to sessions created from now on. Changing it
@@ -3696,6 +3697,11 @@ type SettingsResponse struct {
 	// TrackerIntakeEnabled reports the AO_TRACKER_INTAKE gate, so a client can
 	// avoid offering a per-project intake control the daemon will ignore.
 	TrackerIntakeEnabled bool `json:"trackerIntakeEnabled"`
+}
+
+// UpdateAgentAssetSourcesRequest replaces the daemon's native source defaults.
+type UpdateAgentAssetSourcesRequest struct {
+	AgentAssetSources *[]string `json:"agentAssetSources"`
 }
 
 // AgentInstallerCatalogResponse is the body of GET /api/v1/agents/installers.

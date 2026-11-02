@@ -15,6 +15,7 @@ import (
 
 // SettingsService is the controller-facing preferences contract.
 type SettingsService interface {
+	SetAgentAssetSources(ctx context.Context, sources []string) (settingssvc.Snapshot, error)
 	Get(ctx context.Context) (settingssvc.Snapshot, error)
 	SetDefaultSessionMode(ctx context.Context, mode domain.SessionMode) (settingssvc.Snapshot, error)
 	SetCloudOffering(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
@@ -38,12 +39,38 @@ type SettingsController struct {
 // Register mounts the settings routes.
 func (c *SettingsController) Register(r chi.Router) {
 	r.Get("/settings", c.get)
+	r.Patch("/settings/agent-asset-sources", c.setAgentAssetSources)
 	r.Patch("/settings/session-interface", c.setSessionInterface)
 	r.Patch("/settings/cloud-offering", c.setCloudOffering)
 	r.Patch("/settings/chat-hibernation", c.setChatHibernation)
 	r.Patch("/settings/version-refresh", c.setVersionRefresh)
 	r.Patch("/settings/computer-use", c.setComputerUse)
 	r.Patch("/settings/harness-defaults/{agent}", c.setHarnessDefault)
+}
+
+func (c *SettingsController) setAgentAssetSources(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "PATCH", "/api/v1/settings/agent-asset-sources")
+		return
+	}
+	var req UpdateAgentAssetSourcesRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	if req.AgentAssetSources == nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "AGENT_ASSET_SOURCES_INVALID", "agentAssetSources is required; use [] to clear", nil)
+		return
+	}
+	if err := domain.ValidateAgentAssetSources(*req.AgentAssetSources); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "AGENT_ASSET_SOURCES_INVALID", err.Error(), nil)
+		return
+	}
+	snapshot, err := c.Svc.SetAgentAssetSources(r.Context(), *req.AgentAssetSources)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, c.response(snapshot))
 }
 
 func (c *SettingsController) get(w http.ResponseWriter, r *http.Request) {
@@ -184,6 +211,7 @@ func (c *SettingsController) response(snapshot settingssvc.Snapshot) SettingsRes
 	}
 	offering := c.Svc.Offering()
 	return SettingsResponse{
+		AgentAssetSources:      append([]string{}, snapshot.AgentAssetSources...),
 		DefaultSessionMode:     string(snapshot.DefaultSessionMode),
 		HarnessDefaults:        snapshot.HarnessDefaults,
 		ChatHarnesses:          names,

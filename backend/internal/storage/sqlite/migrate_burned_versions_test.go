@@ -254,6 +254,7 @@ var shippedMigrations = map[int64]string{
 	20261030044053264: "20261030044053264_usage_telemetry_details.sql",
 	20261030141527623: "20261030141527623_session_end_telemetry_claim.sql",
 	20261101055144579: "20261101055144579_conversation_message_authored_by_user.sql",
+	20261102160814608: "20261102160814608_agent_asset_sources.sql",
 }
 
 // reservedLegacyMigrations is empty now that M3's final sequential exception

@@ -23,6 +23,7 @@ import (
 
 // Store is the durable preference surface.
 type Store interface {
+	SetAgentAssetSources(ctx context.Context, sources []string, now time.Time) error
 	GetAppSettings(ctx context.Context) (Snapshot, error)
 	SetDefaultSessionMode(ctx context.Context, mode domain.SessionMode, now time.Time) error
 	SetCloudOffering(ctx context.Context, enabled bool, now time.Time) error
@@ -33,6 +34,7 @@ type Store interface {
 
 // Snapshot is the current preference set.
 type Snapshot struct {
+	AgentAssetSources  []string
 	HarnessDefaults    map[string]domain.HarnessDefault
 	DefaultSessionMode domain.SessionMode
 	// CloudOffering is the user's cloud toggle (Settings, Developer Mode).
@@ -137,6 +139,23 @@ func (s *Service) Get(ctx context.Context) (Snapshot, error) {
 		s.cacheVersionRefresh(snapshot.VersionRefresh)
 	}
 	return snapshot, err
+}
+
+// AgentAssetSources reads global launch defaults from the durable preference row.
+func (s *Service) AgentAssetSources(ctx context.Context) ([]string, error) {
+	snapshot, err := s.store.GetAppSettings(ctx)
+	return snapshot.AgentAssetSources, err
+}
+
+// SetAgentAssetSources replaces global source defaults for subsequent launches.
+func (s *Service) SetAgentAssetSources(ctx context.Context, sources []string) (Snapshot, error) {
+	if err := domain.ValidateAgentAssetSources(sources); err != nil {
+		return Snapshot{}, err
+	}
+	if err := s.store.SetAgentAssetSources(ctx, sources, s.now()); err != nil {
+		return Snapshot{}, err
+	}
+	return s.Get(ctx)
 }
 
 func (s *Service) cacheVersionRefresh(enabled bool) {

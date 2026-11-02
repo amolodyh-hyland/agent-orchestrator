@@ -4,6 +4,9 @@
 -- name: GetAppSettings :one
 SELECT * FROM app_settings WHERE id = 1;
 
+-- name: SetAgentAssetSources :exec
+UPDATE app_settings SET agent_asset_sources = ?, updated_at = ? WHERE id = 1;
+
 -- name: SetDefaultSessionMode :exec
 UPDATE app_settings SET default_session_mode = ?, updated_at = ? WHERE id = 1;
 

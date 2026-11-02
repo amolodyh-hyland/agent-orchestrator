@@ -172,6 +172,7 @@ type AppSetting struct {
 	HarnessDefaults    string
 	VersionRefresh     bool
 	ComputerUse        bool
+	AgentAssetSources  string
 }
 
 type Automation struct {

@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { AgentAssetSourcesEditor } from "./AgentAssetSourcesEditor";
+import { apiErrorMessage } from "../../lib/api-client";
 import { useTranslation } from "react-i18next";
 import { previewDocumentThemeStyle, type ThemePreference, type ThemeStyle } from "../../lib/theme";
 import { THEMES, getThemeDefinition } from "../../lib/theme-palettes";
@@ -25,7 +27,7 @@ import { SettingsSection } from "./SettingsSection";
 import { ThemePaletteSwatch } from "./ThemePaletteSwatch";
 import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
-import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface, useUpdateVersionRefresh } from "../../hooks/useSettings";
+import { useSettings, useUpdateAgentAssetSources, useUpdateCloudOffering, useUpdateSessionInterface, useUpdateVersionRefresh } from "../../hooks/useSettings";
 import { useEditorPreference, useSetPreferredEditor } from "../../hooks/useEditorHandoff";
 import { TargetIcon } from "../TopbarOpenEditorButton";
 import type { EditorId } from "../../../shared/editor-handoff";
@@ -385,6 +387,7 @@ export function GeneralSettingsSection({
 			</SettingsSection>
 
 			<MulticaSettingsSection />
+			<AgentAssetSourcesSection />
 			<MulticaAwarenessSettings />
 			<DefaultCloudSandboxSection />
 
@@ -423,6 +426,18 @@ export function GeneralSettingsSection({
 			</SettingsSection>
 		</>
 	);
+}
+
+function AgentAssetSourcesSection() {
+	const { t } = useTranslation();
+	const { settings, error } = useSettings();
+	const mutation = useUpdateAgentAssetSources();
+	const [draft, setDraft] = useState<string[] | null>(null);
+	return <SettingsSection title={t("settings.agentAssetSources.title")}>
+		<AgentAssetSourcesEditor value={draft ?? settings?.agentAssetSources ?? []} disabled={!settings || mutation.isPending} onChange={(value) => setDraft(value ?? [])} />
+		{(error || mutation.error) && <p role="alert" className="text-sm text-error">{error ?? apiErrorMessage(mutation.error)}</p>}
+		<div className="flex justify-end"><Button type="button" disabled={!settings || draft === null || mutation.isPending} onClick={() => mutation.mutate((draft ?? []).map((source) => source.trim()).filter(Boolean), { onSuccess: () => setDraft(null) })}>{t("files.saveFile")}</Button></div>
+	</SettingsSection>;
 }
 
 /**

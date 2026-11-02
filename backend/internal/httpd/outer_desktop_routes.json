@@ -159,6 +159,10 @@
     "operation": "session.scoped",
     "mode": "held"
   },
+  "PATCH /api/v1/settings/agent-asset-sources": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
   "PATCH /api/v1/settings/chat-hibernation": {
     "operation": "native_only",
     "mode": "confirm"
