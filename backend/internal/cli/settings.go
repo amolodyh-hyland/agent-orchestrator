@@ -20,14 +20,14 @@ func newSettingsCommand(ctx *commandContext) *cobra.Command {
 		},
 	})
 	var sources []string
-	var clear bool
+	var clearSources bool
 	set := &cobra.Command{
 		Use: "agent-asset-sources", Short: "Replace global native asset source defaults", Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if clear == (len(sources) > 0) {
+			if clearSources == (len(sources) > 0) {
 				return usageError{errors.New("provide --source directories or --clear")}
 			}
-			if clear {
+			if clearSources {
 				sources = []string{}
 			}
 			var result json.RawMessage
@@ -40,7 +40,7 @@ func newSettingsCommand(ctx *commandContext) *cobra.Command {
 		},
 	}
 	set.Flags().StringArrayVar(&sources, "source", nil, "Absolute or project-relative source directory (repeatable)")
-	set.Flags().BoolVar(&clear, "clear", false, "Clear all global asset source defaults")
+	set.Flags().BoolVar(&clearSources, "clear", false, "Clear all global asset source defaults")
 	cmd.AddCommand(set)
 	return cmd
 }

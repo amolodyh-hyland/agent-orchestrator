@@ -39,11 +39,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentruntime"
 )
 
-// ApplyAssetSources adds native directory flags to fresh and resumed launches.
-func (p *Plugin) ApplyAssetSources(argv []string, env map[string]string) []string {
-	return agentassets.ClaudeCommand(argv, env)
-}
-
 const (
 	// adapterID is the registry id and the value users pass to
 	// `ao spawn --agent`.
@@ -61,6 +56,11 @@ type Plugin struct {
 // New returns a ready-to-register Claude Code adapter.
 func New() *Plugin {
 	return &Plugin{}
+}
+
+// ApplyAssetSources adds native directory flags to fresh and resumed launches.
+func (p *Plugin) ApplyAssetSources(argv []string, env map[string]string) []string {
+	return agentassets.ClaudeCommand(argv, env)
 }
 
 // EmitsSubmitActivity signals that Claude Code fires a user-prompt-submit hook
