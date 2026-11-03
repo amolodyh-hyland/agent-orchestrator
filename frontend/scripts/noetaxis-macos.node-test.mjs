@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { copyAgentBrowserLicenses } from "./agent-browser-license.mjs";
 import { buildDiskImage, buildPackages, writeArtifactChecksums, writeManifest } from "./noetaxis-macos/package-artifacts.mjs";
 import { latestBuild, runApp } from "./noetaxis-macos/app.mjs";
-import { checkMulticaConfiguration, prepareRegistry, progetAuth, registryBuildEnv, parseArgs, parseMulticaPin, stampVersion, validateRegistry } from "./noetaxis-macos/build.mjs";
+import { checkMulticaConfiguration, packagingSteps, prepareRegistry, progetAuth, registryBuildEnv, parseArgs, parseMulticaPin, stampVersion, validateRegistry, verifyBrowserResources } from "./noetaxis-macos/build.mjs";
 import { makeBuildFixture } from "./noetaxis-macos-build-fixture.mjs";
 import { copyFakeScripts } from "./noetaxis-macos-update-world.mjs";
 
@@ -324,16 +324,18 @@ test("build help describes the two modes without running the build", () => {
 });
 
 test("both build modes use owned configuration and preserve build metadata", async (t) => {
-	setBuildEnv(t, { NOETAXIS_NPM_REGISTRY: undefined, "npm_config_@foreign:registry": "https://user:fixture-secret@foreign.example/", COREPACK_NPM_TOKEN: "foreign-secret", PNPM_CONFIG_REGISTRY: "https://foreign.example/", npm_config_workspace_dir: "/foreign-workspace", NPM_CONFIG_WORKSPACE_DIR: "/foreign-workspace", pnpm_config_workspace_dir: "/foreign-workspace", npm_config_global_pnpmfile: "/foreign-hook.cjs", NPM_CONFIG_GLOBAL_PNPMFILE: "/foreign-hook.cjs" });
+	setBuildEnv(t, { NOETAXIS_NPM_REGISTRY: undefined, "npm_config_@foreign:registry": "https://user:fixture-secret@foreign.example/", COREPACK_NPM_TOKEN: "foreign-secret", PNPM_CONFIG_REGISTRY: "https://foreign.example/", npm_config_workspace_dir: "/foreign-workspace", NPM_CONFIG_WORKSPACE_DIR: "/foreign-workspace", pnpm_config_workspace_dir: "/foreign-workspace", npm_config_global_pnpmfile: "/foreign-hook.cjs", NPM_CONFIG_GLOBAL_PNPMFILE: "/foreign-hook.cjs", npm_config_ignore_scripts: "false", NPM_CONFIG_IGNORE_SCRIPTS: "false" });
 	for (const publicMode of [false, true]) {
 		const selected = publicMode ? "https://registry.npmjs.org/" : registry;
 		const f = await makeBuildFixture(t, { userNpmrc: '@foreign:registry=https://user:fixture-secret@foreign.example/\n//foreign.example/:_authToken=foreign-secret\n//proget.onbase.net/npm/npm/:_authToken=proget-secret\n' });
 		await f.run(publicMode ? ["--public-registry"] : []);
 		const steps = f.calls.filter(({ command }) => ["npm", "corepack"].includes(command) || command.endsWith("/electron-forge"));
-		assert.equal(steps.length, 11);
+		assert.equal(steps.length, 13);
 		for (const { command, args, options, configs, configModes, snapshot } of steps) {
 			assert.equal(options.env.npm_config_registry, selected);
 			assert.equal(options.env.NPM_CONFIG_REGISTRY, selected);
+			assert.equal(options.env.npm_config_ignore_scripts, "true");
+			assert.equal(options.env.NPM_CONFIG_IGNORE_SCRIPTS, "true");
 			assert.equal(options.env.COREPACK_NPM_REGISTRY, selected.replace(/\/$/, ""));
 			assert.equal(options.env.COREPACK_ENABLE_ENV_FILE, "0");
 			assert.equal(options.env.npm_config_ignore_pnpmfile, "true");
@@ -354,10 +356,110 @@ test("both build modes use owned configuration and preserve build metadata", asy
 		assert.ok(pack.args.includes("agent-browser@0.38.1"));
 		assert.equal(pack.options.env.npm_config_userconfig, steps[0].options.env.npm_config_userconfig);
 		assert.equal(pack.options.env.npm_config_globalconfig, steps[0].options.env.npm_config_globalconfig);
-		assert.deepEqual(steps.filter(({ args }) => args[0] === "run").map(({ args }) => args), [["run", "build:daemon"], ["run", "build:tmux"], ["run", "browser-runtime:prepare"], ["run", "build:acp-runtime"]]);
+		const prerequisites = packagingSteps(JSON.parse(await readFile(path.join(repoRoot, "frontend/package.json"), "utf8")));
+		const runs = steps.filter(({ args }) => args.includes("run"));
+		assert.deepEqual(runs.map(({ args }) => args), prerequisites.map((step) => ["--ignore-scripts", "run", step]));
+		assert.equal(steps.at(-1).command.endsWith("/electron-forge"), true);
+		for (const step of runs) {
+			const manifest = Object.entries(step.snapshot).find(([file]) => file.endsWith("/frontend/package.json"));
+			assert.equal(JSON.parse(manifest[1]).version, `0.13.4-noetaxis.ab2b4da`);
+		}
+		await verifyBrowserResources(path.join(f.root, "output/Applications/Agent Orchestrator.app/Contents/Resources"));
 		assert.equal(f.calls.some(({ args }) => args.includes("config")), false);
 		assert.match(await readFile(path.join(f.root, "output/BUILD-INFO.txt"), "utf8"), new RegExp(`^Registry: ${new URL(selected).host.replaceAll(".", "\\.")}$`, "m"));
 		await assert.rejects(readFile(steps[0].options.env.npm_config_userconfig), { code: "ENOENT" });
+	}
+});
+
+test("packaging prerequisites derive new steps in source order and reject unsupported shell syntax", async (t) => {
+	const pkg = JSON.parse(await readFile(path.join(repoRoot, "frontend/package.json"), "utf8"));
+	assert.equal(pkg.scripts.prepackage, pkg.scripts.premake);
+	assert.deepEqual(packagingSteps(pkg), ["build:daemon", "build:browser-extension", "build:tmux", "browser-runtime:prepare", "cloudflared:prepare", "build:acp-runtime"]);
+	const scripts = { ...pkg.scripts, "build:future-resource": "node future.mjs", prepackage: `${pkg.scripts.prepackage} && npm run build:future-resource` };
+	for (const publicMode of [false, true]) {
+		const f = await makeBuildFixture(t, { frontendScripts: scripts });
+		await f.run(publicMode ? ["--public-registry"] : []);
+		assert.deepEqual(f.calls.filter(({ command, args }) => command === "npm" && args.includes("run")).map(({ args }) => args.at(-1)), packagingSteps({ scripts }));
+	}
+	for (const prepackage of [undefined, "", "npm run absent", "npm run build:daemon; echo unsafe", "npm run build:daemon || true", "npm run build:daemon --registry=foreign", "npm run build:daemon &&", "node ./scripts/new-helper.mjs"]) {
+		assert.throws(() => packagingSteps({ scripts: { ...pkg.scripts, prepackage } }), /prerequisite/);
+	}
+});
+
+test("packaging stops on failed prerequisites and missing source or packaged resources", async (t) => {
+	for (const publicMode of [false, true]) {
+		for (const options of [{ failStep: "build:browser-extension" }, { failStep: "cloudflared:prepare" }, { missingResource: "browser-extension/manifest.json" }, { missingResource: "cloudflared/cloudflared" }]) {
+			const f = await makeBuildFixture(t, options);
+			await assert.rejects(f.run(publicMode ? ["--public-registry"] : []), /npm failed|packaging resource/);
+			assert.equal(f.calls.some(({ command }) => command.endsWith("/electron-forge")), false);
+		}
+		for (const omitPackagedResource of ["browser-extension", "cloudflared"]) {
+			const f = await makeBuildFixture(t, { omitPackagedResource });
+			await assert.rejects(f.run(publicMode ? ["--public-registry"] : []), /packaging resource/);
+			assert.equal(f.calls.some(({ command }) => command === "/usr/bin/codesign"), false);
+		}
+	}
+});
+
+test("packaging resource inventory stays covered by prerequisites and Forge native hooks", async () => {
+	const forge = await readFile(path.join(repoRoot, "frontend/forge.config.ts"), "utf8");
+	const inventory = forge.match(/export function extraResourcesForPlatform\([\s\S]*?return \[([\s\S]*?)\n\t\];/)[1];
+	assert.deepEqual([...inventory.matchAll(/"([^"]+)"/g)].map((match) => match[1]), [
+		"daemon", "browser-extension", "agent-browser", "resources/acp-runtime",
+		"darwin", "update-helper", "wake-helper", "cloudflared", "assets/mac/en.lproj",
+		"darwin", "win32", "dictation-helper", "darwin", "linux", "tmux",
+		"assets/icon.png", "assets/icon.ico", "assets/trayIconTemplate.png", "assets/trayIconTemplate@2x.png",
+		"assets/trayAwakeIconTemplate.png", "assets/trayAwakeIconTemplate@2x.png", "assets/trayAwakeIcon.LICENSE", "app-update.yml",
+	], "Review any new Forge resource and its producer in the custom build");
+	const prePackage = forge.slice(forge.indexOf("prePackage: async"), forge.indexOf("packageAfterPrune: async"));
+	for (const helper of ["dictation", "update", "wake"]) {
+		assert.match(prePackage, new RegExp(`scripts/build-${helper}-helper\\.mjs`));
+	}
+	for (const resource of ["assets/mac/en.lproj", "assets/icon.png", "assets/icon.ico", "assets/trayIconTemplate.png", "assets/trayIconTemplate@2x.png", "assets/trayAwakeIconTemplate.png", "assets/trayAwakeIconTemplate@2x.png", "assets/trayAwakeIcon.LICENSE"]) {
+		assert.ok(existsSync(path.join(repoRoot, "frontend", resource)), `Static packaging resource missing: ${resource}`);
+	}
+	assert.match(prePackage, /stageMulticaDesktop\(/);
+	assert.match(prePackage, /writeFileSync\("app-update.yml"/);
+});
+
+test("real npm prerequisites suppress lifecycle hooks and retain owned registry configuration", async (t) => {
+	for (const selected of [registry, "https://registry.npmjs.org/"]) {
+		const root = await testRoot(t, "noetaxis-prerequisite-npm");
+		const env = await registryBuildEnv(root, selected, { ...process.env, npm_config_ignore_scripts: "false", NPM_CONFIG_IGNORE_SCRIPTS: "false", npm_config_userconfig: path.join(root, "absent-user"), npm_config_globalconfig: path.join(root, "absent-global") });
+		const check = `import assert from "node:assert/strict"; import { writeFileSync } from "node:fs";
+assert.equal(process.env.npm_config_registry, ${JSON.stringify(selected)});
+assert.equal(process.env.npm_config_userconfig, ${JSON.stringify(env.npm_config_userconfig)});
+assert.equal(process.env.npm_config_ignore_scripts, "true");
+writeFileSync("resource", "built");`;
+		await writeFile(path.join(root, "check.mjs"), check);
+		await writeFile(path.join(root, "hook.mjs"), 'import {writeFileSync} from "node:fs"; writeFileSync("hook-ran", "bad");');
+		await writeFile(path.join(root, "package.json"), JSON.stringify({ scripts: { prepackage: "npm run resource", resource: "node check.mjs", preresource: "node hook.mjs", postresource: "node hook.mjs" } }));
+		const result = execute("npm", ["--ignore-scripts", "run", "resource"], { cwd: root, env });
+		assert.equal(result.status, 0, result.stderr);
+		assert.equal(await readFile(path.join(root, "resource"), "utf8"), "built");
+		assert.equal(existsSync(path.join(root, "hook-ran")), false);
+	}
+});
+
+test("cloudflared uses its pinned GitHub source without registry credentials and rejects a bad archive", { skip: process.platform !== "darwin" }, async (t) => {
+	for (const selected of [registry, "https://registry.npmjs.org/"]) {
+		const root = await testRoot(t, "noetaxis-cloudflared-source");
+		const env = await registryBuildEnv(root, selected, { ...process.env, npm_config_userconfig: path.join(root, "user"), npm_config_globalconfig: path.join(root, "global") });
+		const requests = path.join(root, "requests.json");
+		const guard = path.join(root, "offline.mjs");
+		await writeFile(guard, `import {writeFileSync} from "node:fs";
+globalThis.fetch = async (url, options) => {
+writeFileSync(${JSON.stringify(requests)}, JSON.stringify({url, options}));
+return {ok: true, arrayBuffer: async () => new TextEncoder().encode("invalid archive").buffer};
+};`);
+		const result = execute(process.execPath, ["--import", guard, path.join(scriptDir, "prepare-cloudflared.mjs")], { cwd: root, env });
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /cloudflared archive checksum mismatch/);
+		assert.deepEqual(JSON.parse(await readFile(requests, "utf8")), {
+			url: `https://github.com/cloudflare/cloudflared/releases/download/2026.10.2/cloudflared-darwin-${process.arch === "arm64" ? "arm64" : "amd64"}.tgz`,
+			options: { redirect: "follow" },
+		});
+		assert.equal(existsSync(path.join(root, "cloudflared/cloudflared")), false);
 	}
 });
 

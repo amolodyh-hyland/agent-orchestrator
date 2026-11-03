@@ -240,6 +240,7 @@ export async function registryBuildEnv(configDir, registry, inherited = process.
 		npm_config_replace_registry_host: "npmjs",
 		NPM_CONFIG_REPLACE_REGISTRY_HOST: "npmjs",
 		npm_config_loglevel: "error", NPM_CONFIG_LOGLEVEL: "error",
+		npm_config_ignore_scripts: "true", NPM_CONFIG_IGNORE_SCRIPTS: "true",
 		npm_config_manage_package_manager_versions: "false", npm_config_ignore_pnpmfile: "true",
 		XDG_CONFIG_HOME: xdg, PNPM_HOME: path.join(configDir, "pnpm"),
 		COREPACK_NPM_REGISTRY: registry.replace(/\/$/, ""), COREPACK_HOME: path.join(configDir, "corepack"),
@@ -418,6 +419,27 @@ async function findAppBundle(directory) {
 	return "";
 }
 
+export function packagingSteps(packageJson) {
+	const prepackage = packageJson.scripts?.prepackage;
+	if (typeof prepackage !== "string" || !prepackage.trim()) throw new Error("Missing frontend prepackage prerequisites");
+	return prepackage.split("&&").map((step) => {
+		const match = /^npm run ([A-Za-z0-9][A-Za-z0-9:_-]*)$/.exec(step.trim());
+		if (!match || typeof packageJson.scripts[match[1]] !== "string") {
+			throw new Error("Unsupported frontend prepackage prerequisite; expected npm run <script> with no shell options");
+		}
+		return match[1];
+	});
+}
+
+export async function verifyBrowserResources(directory) {
+	for (const file of ["browser-extension/manifest.json", "browser-extension/background.js", "browser-extension/content.js", "cloudflared/cloudflared", "cloudflared/LICENSE-cloudflared"]) {
+		const stat = await lstat(path.join(directory, file)).catch((error) => {
+			if (error.code !== "ENOENT") throw error;
+		});
+		if (!stat?.isFile() || stat.size === 0) throw new Error(`Missing or empty packaging resource: ${file}`);
+	}
+}
+
 export async function buildNoetaxis(options) {
 	const registry = validateRegistry(options.registry, options.publicRegistry);
 	const goEnv = daemonBuildEnv({ cwd: path.join(repoRoot, "backend") });
@@ -461,6 +483,7 @@ async function buildWithRegistry(options, registry, npmEnv, goEnv, cleanup) {
 		const goMod = await readFile(path.join(sourceWorktree, "backend/go.mod"), "utf8");
 		const multicaPin = parseMulticaPin(goMod);
 		const frontendDir = path.join(sourceWorktree, "frontend");
+		const prerequisites = packagingSteps(JSON.parse(await readFile(path.join(frontendDir, "package.json"), "utf8")));
 		const productUiDir = path.join(sourceWorktree, "packages/product-ui");
 		const multicaDir = path.join(workDir, "multica");
 		for (const directory of [sourceWorktree, frontendDir, productUiDir, path.join(frontendDir, "acp-runtime")]) await prepareRegistry(directory, registry);
@@ -492,11 +515,11 @@ async function buildWithRegistry(options, registry, npmEnv, goEnv, cleanup) {
 			AO_SCRATCH_SWIFT_CACHE: path.join(workDir, "swift-cache"),
 			AO_AGENT_BROWSER_LICENSE_DIR: licenseDir,
 		};
-		await run("npm", ["run", "build:daemon"], { cwd: frontendDir, env: buildEnv });
 		await updateFrontendVersion(frontendDir, version);
-		await run("npm", ["run", "build:tmux"], { cwd: frontendDir, env: buildEnv });
-		await run("npm", ["run", "browser-runtime:prepare"], { cwd: frontendDir, env: buildEnv });
-		await run("npm", ["run", "build:acp-runtime"], { cwd: frontendDir, env: buildEnv });
+		for (const step of prerequisites) {
+			await run("npm", ["--ignore-scripts", "run", step], { cwd: frontendDir, env: buildEnv });
+		}
+		await verifyBrowserResources(frontendDir);
 		const forgeOut = path.join(frontendDir, "out");
 		const forgeBin = path.join(frontendDir, "node_modules/.bin/electron-forge");
 		await run(forgeBin, ["package", "--platform=darwin", "--arch=arm64"], { cwd: frontendDir, env: buildEnv });
@@ -504,6 +527,7 @@ async function buildWithRegistry(options, registry, npmEnv, goEnv, cleanup) {
 		const packagedApp = await findAppBundle(forgeOut);
 		if (!packagedApp) throw new Error(`electron-forge did not create ${appName} in ${forgeOut}`);
 		const resources = path.join(packagedApp, "Contents/Resources");
+		await verifyBrowserResources(resources);
 		if (!(await readFile(path.join(resources, "ao-updates-disabled")).catch(() => undefined))) {
 			throw new Error("Packaged app is missing the updates-disabled marker");
 		}
