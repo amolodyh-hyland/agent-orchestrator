@@ -21,7 +21,7 @@ export function fakeSpawnSync(command, args, options = {}) {
 	const env = options.env ?? process.env;
 	const snapshot = {};
 	for (const directory of [options.cwd, options.cwd && path.join(options.cwd, "acp-runtime")].filter(Boolean)) {
-		for (const name of ["package-lock.json", "pnpm-lock.yaml", ".npmrc"]) {
+		for (const name of ["package.json", "package-lock.json", "pnpm-lock.yaml", ".npmrc"]) {
 			const file = path.join(directory, name);
 			if (existsSync(file)) snapshot[file] = readFileSync(file, "utf8");
 		}
@@ -40,11 +40,22 @@ export function fakeSpawnSync(command, args, options = {}) {
 	else if (command === "/usr/bin/tar") stdout = "license bytes\n";
 	else if (command === "npm" || command === "corepack") {
 		if (state.failInstall && args.includes("install")) return { status: 1, stdout: "", stderr: "registry unavailable" };
+		const step = args[args.indexOf("run") + 1];
+		if (state.failStep && step === state.failStep) return { status: 1, stdout: "", stderr: "prerequisite failed" };
+		const files = step === "build:browser-extension" ? ["browser-extension/manifest.json", "browser-extension/background.js", "browser-extension/content.js"]
+			: step === "cloudflared:prepare" ? ["cloudflared/cloudflared", "cloudflared/LICENSE-cloudflared"] : [];
+		for (const file of files.filter((file) => file !== state.missingResource)) {
+			mkdirSync(path.dirname(path.join(options.cwd, file)), { recursive: true });
+			writeFileSync(path.join(options.cwd, file), "fixture resource");
+		}
 	}
 	else if (command.endsWith("/electron-forge")) {
 		const resources = path.join(options.cwd, "out/Agent Orchestrator.app/Contents/Resources");
 		mkdirSync(resources, { recursive: true });
 		writeFileSync(path.join(resources, "ao-updates-disabled"), "disabled");
+		for (const resource of ["browser-extension", "cloudflared"].filter((name) => name !== state.omitPackagedResource)) {
+			cpSync(path.join(options.cwd, resource), path.join(resources, resource), { recursive: true });
+		}
 	}
 	else if (command === "/usr/libexec/PlistBuddy") {
 		if (args[1].startsWith("Print :CFBundle")) stdout = `0.13.4-noetaxis.${fixtureRevision.slice(0, 7)}`;
@@ -81,6 +92,8 @@ export async function makeBuildFixture(t, options = {}) {
 		await writeFile(path.join(dir, "package-lock.json"), JSON.stringify({ packages: { "node_modules/example": { resolved: `${registry}example/-/example-1.0.0.tgz` } } }));
 		await writeFile(path.join(dir, ".npmrc"), "@company:registry=https://proget.onbase.net/npm/npm\n//proget.onbase.net/npm/npm/:_authToken=${MISSING_COMPANY_TOKEN}\n");
 	}
+	const frontendPackage = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+	await writeFile(path.join(source, "frontend/package.json"), JSON.stringify({ version: "0.13.4", scripts: options.frontendScripts ?? frontendPackage.scripts }));
 	await mkdir(path.join(source, "backend/internal/storage/sqlite/migrations"), { recursive: true });
 	await writeFile(path.join(source, "backend/internal/storage/sqlite/migrations/190_fixture.sql"), "");
 	await writeFile(path.join(source, "backend/go.mod"), `replace github.com/multica-ai/multica/server => github.com/amolodyh-hyland/multica/server v0.0.0-20261020093039-${fixtureMulticaRevision.slice(0, 12)}\n`);
@@ -109,7 +122,7 @@ export async function makeBuildFixture(t, options = {}) {
 	const file = path.join(root, "build.mjs");
 	await writeFile(file, contents);
 	const build = await import(pathToFileURL(file));
-	const state = { root, source, multica, calls: [], failInstall: options.failInstall };
+	const state = { root, source, multica, calls: [], failInstall: options.failInstall, failStep: options.failStep, missingResource: options.missingResource, omitPackagedResource: options.omitPackagedResource };
 	states.set(root, state);
 	t.after(() => states.delete(root));
 	return {
