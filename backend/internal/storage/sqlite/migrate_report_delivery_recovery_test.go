@@ -225,18 +225,16 @@ func TestReportUpgradeHoldsReleasedPendingPiggyback(t *testing.T) {
 				if _, err := db.ExecContext(ctx, `UPDATE conversation_turns SET state='failed',error_message='ambiguous provider response',completed_at=? WHERE provider_turn_id='possibly-started-native-turn'`, now); err != nil {
 					t.Fatal(err)
 				}
-				transition, created, err := st.CreateSessionInterfaceTransition(ctx, domain.SessionInterfaceTransition{
-					ID: "chat-to-tui", SessionID: orch.ID, SourceMode: domain.SessionModeChat, TargetMode: domain.SessionModeTUI,
-					Policy: domain.SessionInterfaceTransitionDrain, HistoryPolicy: domain.SessionInterfaceTransitionHistoryStrict,
-					Phase: domain.SessionInterfaceTransitionActivating, NativeConversationID: "native-conversation", CreatedAt: now, UpdatedAt: now,
-				})
-				if err != nil || !created {
-					t.Fatalf("transition=%+v created=%v err=%v", transition, created, err)
+				transitionID := "chat-to-tui"
+				if _, err := db.ExecContext(ctx, `INSERT INTO session_interface_transitions
+					(id,session_id,source_mode,target_mode,policy,history_policy,phase,native_conversation_id,created_at,updated_at)
+					VALUES (?,?,'chat','tui','drain','strict','activating','native-conversation',?,?)`, transitionID, orch.ID, now, now); err != nil {
+					t.Fatal(err)
 				}
 				if changed, err := st.CommitSessionControllerEpoch(ctx, orch.ID, domain.SessionModeChat, domain.SessionModeTUI, "native-conversation", now); err != nil || !changed {
 					t.Fatalf("commit Chat-to-TUI switch=%v err=%v", changed, err)
 				}
-				if changed, err := st.AdvanceSessionInterfaceTransition(ctx, transition.ID, domain.SessionInterfaceTransitionActivating, domain.SessionInterfaceTransitionCompleted, "native-conversation", "", "", now); err != nil || !changed {
+				if changed, err := st.AdvanceSessionInterfaceTransition(ctx, transitionID, domain.SessionInterfaceTransitionActivating, domain.SessionInterfaceTransitionCompleted, "native-conversation", "", "", now); err != nil || !changed {
 					t.Fatalf("complete Chat-to-TUI switch=%v err=%v", changed, err)
 				}
 			}

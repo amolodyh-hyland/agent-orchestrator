@@ -55,6 +55,7 @@ export type AppShortcutId =
 	| "open-in-editor"
 	| "copy-session-path"
 	| "model-picker"
+	| "dictate"
 	| "open-orchestrator"
 	| "format-inline-code"
 	| "format-code-block"
@@ -108,6 +109,7 @@ export const APP_SHORTCUTS: readonly ShortcutDefinition[] = [
 	{ id: "open-in-editor", label: "Open in editor", category: "Session" },
 	{ id: "copy-session-path", label: "Copy session path", category: "Session" },
 	{ id: "model-picker", label: "Choose model", category: "Session" },
+	{ id: "dictate", label: "Dictate", category: "Session" },
 	{ id: "open-orchestrator", label: "Open orchestrator", category: "Session" },
 	{ id: "format-inline-code", label: "Format as inline code", category: "Session" },
 	{ id: "format-code-block", label: "Format as code block", category: "Session" },
@@ -205,6 +207,9 @@ export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): read
 			return [isMac ? binding("c", { meta: true, shift: true }) : binding("l", { ctrl: true, shift: true })];
 		case "model-picker":
 			return [binding("m", { ...primary, shift: true })];
+		// Plain Ctrl+D is end-of-input in a terminal, so other platforms add Alt.
+		case "dictate":
+			return [isMac ? binding("d", { meta: true }) : binding("d", { ctrl: true, alt: true })];
 		// Ctrl+Shift+O is Open in editor on Windows/Linux (plain Ctrl+O is
 		// readline), so that platform takes G for "go to orchestrator".
 		case "open-orchestrator":

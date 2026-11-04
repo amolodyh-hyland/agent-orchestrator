@@ -307,7 +307,6 @@ var outerMutationManifest = map[string]string{
 	"POST /api/v1/sessions/{sessionId}/workspace/diffs":                                                "session.scoped",
 	"PUT /api/v1/sessions/{sessionId}/workspace/file":                                                  "session.scoped",
 	"PATCH /api/v1/settings/chat-hibernation":                                                          "native_only",
-	"PATCH /api/v1/settings/cloud-offering":                                                            "native_only",
 	"PATCH /api/v1/settings/harness-defaults/{agent}":                                                  "native_only",
 	"PATCH /api/v1/settings/session-interface":                                                         "native_only",
 	"PATCH /api/v1/settings/version-refresh":                                                           "native_only",

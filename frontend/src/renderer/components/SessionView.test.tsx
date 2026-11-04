@@ -130,6 +130,19 @@ vi.mock("../hooks/useWindowFullScreen", () => ({
 vi.mock("../hooks/useCloudGate", () => ({
 	useCloudGate: () => ({ cloudEnabled: cloudGateState.cloudEnabled, localEnabled: true, client: "" }),
 }));
+// A test that names the session organization's features gets them; the rest
+// read the offering as the real hook does.
+const sessionOfferingFeatures = vi.hoisted(() => ({ current: undefined as string[] | undefined }));
+vi.mock("../hooks/useCloudOffering", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../hooks/useCloudOffering")>();
+	return {
+		...actual,
+		useCloudOffering: (...args: Parameters<typeof actual.useCloudOffering>) => {
+			const offering = actual.useCloudOffering(...args);
+			return sessionOfferingFeatures.current ? { ...offering, features: sessionOfferingFeatures.current } : offering;
+		},
+	};
+});
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
 		baseUrl: "https://cloud.example.test",
@@ -467,6 +480,7 @@ vi.mock("./chat/CloudSessionChatSurface", async (importOriginal) => {
 		</DropdownMenu>
 	);
 	return { ...await importOriginal<typeof import("./chat/CloudSessionChatSurface")>(), CloudSessionChatSurface: ({
+		headerActions,
 		sessionTabAction,
 		controllerTransitioning,
 		newWorkDisabled,
@@ -479,6 +493,7 @@ vi.mock("./chat/CloudSessionChatSurface", async (importOriginal) => {
 		shellTarget,
 		onOpenReviewerTerminal,
 	}: {
+		headerActions?: ReactNode;
 		sessionTabAction?: SessionTabActions;
 		controllerTransitioning?: boolean;
 		newWorkDisabled?: boolean;
@@ -492,6 +507,7 @@ vi.mock("./chat/CloudSessionChatSurface", async (importOriginal) => {
 		onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
 	}) => (
 		<div data-testid="cloud-chat-surface" data-transitioning={controllerTransitioning ? "true" : "false"} data-new-work-disabled={newWorkDisabled ? "true" : "false"}>
+			<div data-testid="cloud-chat-header-actions">{headerActions}</div>
 			<SessionTabMenu actions={sessionTabAction} />
 			<div data-active-workspace-tab={workspaceActiveTabKey ?? ""} role="tablist">
 				{workspaceTabs?.map((tab) => <div key={tab.key}>{tab.content}</div>)}
@@ -1303,6 +1319,44 @@ describe("SessionView", () => {
 		expect(screen.getByTestId("terminal-center")).toBeInTheDocument();
 		expect(screen.queryByTestId("cloud-chat-surface")).not.toBeInTheDocument();
 		expect(cloudSessionLookup).toHaveBeenLastCalledWith("cloud-org", "sess-1", false);
+	});
+
+	it("offers Share only where the session's organization may share", async () => {
+		const cloudSession: WorkspaceSession = {
+			...workerSession("sess-1"),
+			workspaceId: "cloud-project",
+			workspaceName: "Cloud project",
+			mode: "chat",
+			cloud: { orgId: "cloud-org" },
+		};
+		workspaceQueryState.data = [
+			...workspaces,
+			{ id: "cloud-project", name: "Cloud project", kind: "cloud", path: "", sessions: [cloudSession] },
+		];
+		try {
+			sessionOfferingFeatures.current = ["share"];
+			const shared = render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
+			expect(within(await screen.findByTestId("cloud-chat-header-actions")).getByRole("button", { name: "Share" })).toBeInTheDocument();
+			shared.unmount();
+
+			// WorkOS has not enabled sharing for the organization.
+			sessionOfferingFeatures.current = ["attachments"];
+			const notShared = render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
+			expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: "Share" })).not.toBeInTheDocument();
+			notShared.unmount();
+
+			// A deleted session is not shared, whatever the organization may do.
+			sessionOfferingFeatures.current = ["share"];
+			workspaceQueryState.data = [
+				...workspaces,
+				{ id: "cloud-project", name: "Cloud project", kind: "cloud", path: "", sessions: [{ ...cloudSession, isTerminated: true }] },
+			];
+			render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
+			expect(screen.queryByRole("button", { name: "Share" })).not.toBeInTheDocument();
+		} finally {
+			sessionOfferingFeatures.current = undefined;
+		}
 	});
 
 	it("keeps a Cloud Chat session's shell on the Cloud surface", () => {

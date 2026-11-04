@@ -7,6 +7,7 @@ import { ChatComposer } from "./ChatComposer";
 import { TooltipProvider } from "../ui/tooltip";
 import { typeInLexicalEditor, placeLexicalCaret } from "../../test/lexical";
 import { activateChatDraftScope, readChatSessionDraft } from "../../lib/chat-drafts";
+import { toggleComposerDictation } from "../../lib/composer-shortcuts";
 
 let emit: (event: DictationUpdate) => void;
 beforeEach(() => {
@@ -35,6 +36,24 @@ function setup(extra: Partial<Parameters<typeof ChatComposer>[0]> = {}) {
 }
 
 describe("chat dictation controls", () => {
+	it("uses the composer shortcut to start and stop native dictation", async () => {
+		const s = setup();
+		const hidden = document.createElement("button");
+		hidden.dataset.shortcutTarget = "dictate";
+		hidden.hidden = true;
+		const hiddenClick = vi.fn();
+		hidden.addEventListener("click", hiddenClick);
+		s.container.prepend(hidden);
+		await waitFor(() => expect(screen.getByRole("button", { name: "Dictate on this device" })).toBeEnabled());
+		act(() => toggleComposerDictation());
+		await waitFor(() => expect(aoBridge.dictation.start).toHaveBeenCalled());
+		const id = vi.mocked(aoBridge.dictation.start).mock.calls.at(-1)![0];
+		act(() => emit({ id, type: "recording" }));
+		act(() => toggleComposerDictation());
+		expect(aoBridge.dictation.stop).toHaveBeenCalledWith(id);
+		expect(hiddenClick).not.toHaveBeenCalled();
+	});
+
 	it("inserts at the cursor, persists the draft, and waits for an explicit send", async () => {
 		const scope = { sessionId: "dictation-chat", incarnation: "dictation-chat-instance" };
 		activateChatDraftScope(scope);
