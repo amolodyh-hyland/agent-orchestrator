@@ -10,11 +10,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pressly/goose/v3"
 
@@ -116,6 +119,8 @@ func checkLegacyDatabasePath(dataDir string) error {
 	return nil
 }
 
+type MigrationObserver func(id string, completed bool, duration time.Duration, err error)
+
 // Open opens (creating if absent) the SQLite database under dataDir and returns
 // a Store. It uses TWO pools against the same file:
 //
@@ -128,6 +133,10 @@ func checkLegacyDatabasePath(dataDir string) error {
 //   - a READER pool (readDB, MaxOpenConns=maxReaders): all reads scale across
 //     it; WAL readers see the latest committed snapshot.
 func Open(dataDir string) (*Store, error) {
+	return OpenWithMigrationObserver(dataDir, nil)
+}
+
+func OpenWithMigrationObserver(dataDir string, observer MigrationObserver) (*Store, error) {
 	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
@@ -142,7 +151,7 @@ func Open(dataDir string) (*Store, error) {
 	}
 	writeDB.SetMaxOpenConns(1)
 	writeDB.SetMaxIdleConns(1)
-	if err := migrate(writeDB); err != nil {
+	if err := migrateWithObserver(writeDB, observer); err != nil {
 		_ = writeDB.Close()
 		return nil, err
 	}
@@ -293,7 +302,9 @@ func OpenPreMigrated(dataDir string) (*Store, error) {
 	return sqlitestore.NewStore(writeDB, readDB), nil
 }
 
-func migrate(db *sql.DB) error {
+func migrate(db *sql.DB) error { return migrateWithObserver(db, nil) }
+
+func migrateWithObserver(db *sql.DB, observer MigrationObserver) error {
 	gooseMu.Lock()
 	defer gooseMu.Unlock()
 	goose.SetBaseFS(migrationsFS)
@@ -368,7 +379,7 @@ func migrate(db *sql.DB) error {
 	// renumbered later (notably across fast-moving Nightly releases). Apply
 	// those embedded migrations instead of permanently wedging daemon startup
 	// on goose's out-of-order-history guard.
-	if err := goose.Up(db, "migrations", goose.WithAllowMissing()); err != nil {
+	if err := applyObservedMigrations(db, observer); err != nil {
 		return fmt.Errorf("run migrations: %w", err)
 	}
 	return reconcileSchema(db)
@@ -2349,6 +2360,55 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'hermes'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing hermes")
+	}
+	return nil
+}
+
+func applyObservedMigrations(db *sql.DB, observer MigrationObserver) error {
+	if _, err := goose.EnsureDBVersion(db); err != nil {
+		return err
+	}
+	migrations, err := goose.CollectMigrations("migrations", 0, goose.MaxVersion)
+	if err != nil {
+		return err
+	}
+	rows, err := db.Query(`SELECT version_id FROM goose_db_version WHERE is_applied = 1`)
+	if err != nil {
+		return err
+	}
+	applied := make(map[int64]bool)
+	for rows.Next() {
+		var version int64
+		if err := rows.Scan(&version); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		applied[version] = true
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, migration := range migrations {
+		if applied[migration.Version] {
+			continue
+		}
+		id := strconv.FormatInt(migration.Version, 10)
+		if observer != nil {
+			observer(id, false, 0, nil)
+		}
+		started := time.Now()
+		slog.Info("migration started", "migration", id)
+		err := migration.Up(db)
+		duration := time.Since(started)
+		slog.Info("migration completed", "migration", id, "duration", duration, "err", err)
+		if observer != nil {
+			observer(id, true, duration, err)
+		}
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -212,6 +212,10 @@ These descendants are never included in the PID signal inventory, even with `--f
 
 The tray and window are created and daemon startup begins before stale-copy cleanup. Cleanup waits for readiness and runs independently of startup. A seven-day snooze is persisted before the dialog opens, including when it is left unanswered. The regression test simulates an unanswered ten-minute dialog and a subsequent launch during the snooze.
 
+### Daemon startup records
+
+The daemon publishes atomic records under `~/.ao/startup/<launch-id>.json` before taking the data-directory lock or opening SQLite. Each record includes PID, process start identity, executable, phase (`starting`, `waiting-for-lock`, `migrating`, `ready`, `failed`), startup stage, exact decimal migration ID, stage start, elapsed time and a five-second heartbeat. `running.json` remains the readiness handshake. Startup-stage and migration durations are retained in `startup/stages.log`, rotated at 4 MiB on launch, with one previous file. These logs contain stage/migration identifiers and timings, not session contents, credentials or daemon output.
+
 ### Automatic rollback
 
 If the new app does not start, or the daemon is not `ready` and healthy within `--health-timeout`, the run quits the new app the same way, restores the backed-up app with `rollback.sh`, reopens it, and waits for it to be healthy: exit 60 and a report. The database is only restored with `--rollback-restore-db`, and only when the new app migrated the schema (the version is higher than the one captured) and the old app is still unhealthy; the migrated database is saved first as `rollback-current-data-*`. If the run fails after AO was stopped but before the new app replaced the old one (an interruption, a refusal at the survivors check), the previous app is restored on disk and reopened (bounded 30 s health wait). If the new app cannot be quit, or `rollback.sh` fails, it stops with exit 61 and prints the exact `rollback.sh --backup-dir ...` command.
