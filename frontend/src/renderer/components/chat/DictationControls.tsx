@@ -60,6 +60,7 @@ export const DictationControls = forwardRef<DictationControlHandle, {
 			<TooltipTrigger asChild>
 				<span ref={control} className="inline-flex" tabIndex={unavailable ? 0 : undefined} aria-label={unavailable}>
 					<Button type="button" variant="ghost" size="icon-sm"
+						data-shortcut-target="dictate"
 						aria-label={label} aria-pressed={active}
 						disabled={disabled || !availability.available || phase === "starting" || phase === "stopping" || phase === "finishing"}
 						onMouseDown={(event) => event.preventDefault()}

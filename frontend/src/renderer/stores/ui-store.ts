@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { useCallback, useSyncExternalStore } from "react";
 import { aoBridge } from "../lib/bridge";
-import { developerModeStorageKey, windowTranslucencyStorageKey } from "../lib/window-translucency";
+import { developerModeStorageKey, readStoredWindowTranslucency, windowTranslucencyStorageKey } from "../lib/window-translucency";
 import { sessionUiKey } from "../lib/hosts";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
@@ -213,6 +213,9 @@ export type UiState = {
 	// Bumps to ask the sidebar's create-project flow to open (the ⌘N fallback
 	// when no project is in scope).
 	createProjectNonce: number;
+	/** True while the first-run project prompt is pending, so shell notices wait for it. */
+	firstRunPromptActive: boolean;
+	setFirstRunPromptActive: (active: boolean) => void;
 	// Transient "a folder was dropped onto the app window — open the
 	// create-project flow for this path" signal, mirroring newTaskRequest: the
 	// nonce always bumps so dropping the same folder twice in a row still
@@ -344,10 +347,6 @@ function initialSideChats() {
 	return getLocalStorage()?.getItem(sideChatsStorageKey) === "true";
 }
 
-function initialWindowTranslucency() {
-	return getLocalStorage()?.getItem(windowTranslucencyStorageKey) === "true";
-}
-
 function initialTerminalCopyOnSelect() {
 	return getLocalStorage()?.getItem(terminalCopyOnSelectStorageKey) !== "false";
 }
@@ -412,7 +411,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	remoteHosts: initialRemoteHosts(),
 	diagnostics: initialDiagnostics(),
 	sideChats: initialSideChats(),
-	windowTranslucency: initialWindowTranslucency(),
+	windowTranslucency: readStoredWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
 	chatSendKeyMode: initialChatSendKeyMode(),
 	navigationGestures: getLocalStorage()?.getItem(navigationGesturesStorageKey) !== "false",
@@ -427,6 +426,8 @@ export const useUiStore = create<UiState>((set, get) => ({
 	globalToast: null,
 	globalToastSequence: 0,
 	newTaskRequest: null,
+	firstRunPromptActive: false,
+	setFirstRunPromptActive: (active) => set({ firstRunPromptActive: active }),
 	workspaceFileOpenRequest: null,
 	chatMessageFocusRequest: null,
 	createProjectNonce: 0,

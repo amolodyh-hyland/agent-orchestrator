@@ -8,7 +8,7 @@ import type { components } from "../../../api/schema";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import type { ChatSkill } from "../../types/conversation";
 import type { ChatModel } from "../../types/conversation";
-import { apiClient, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
+import { apiClient, apiErrorMessage, eventStreamBaseUrl, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { ApprovalCard } from "./ChatTimelineItems";
 import { Timeline } from "./ChatWorkspace";
@@ -541,7 +541,7 @@ export function useIndependentSideChats(
 		let stream: EventSource | undefined;
 		if (baseUrl && typeof EventSource !== "undefined") {
 			stream = new EventSource(
-				`${baseUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/conversation/side-chats/${encodeURIComponent(activeId)}/events`,
+				`${eventStreamBaseUrl(baseUrl)}/api/v1/sessions/${encodeURIComponent(sessionId)}/conversation/side-chats/${encodeURIComponent(activeId)}/events`,
 			);
 			stream.addEventListener("changed", refreshSafely);
 			stream.addEventListener("snapshot", refreshSafely);
@@ -1316,7 +1316,7 @@ export function useIndependentSideChats(
 	};
 
 	const tabBar = enabled ? (
-		<header className="browser-panel__tab-row">
+		<header className="browser-panel__tab-row side-chat__tab-row">
 			<div className="browser-panel__tab-region">
 				<div
 					ref={tabStripRef}
@@ -1536,7 +1536,7 @@ export function useIndependentSideChats(
 									// The Timeline draws nothing for an empty transcript.
 									<div className="mx-auto flex max-w-sm flex-1 flex-col items-center justify-center gap-2 px-4 py-8 text-center text-sm">
 										<h3 className="font-medium">{t("sideChat.askASideQuestion")}</h3>
-										<p className="text-xs leading-relaxed text-muted-foreground">{t("sideChat.isolationPolicy")}</p>
+										<p className="text-xs leading-relaxed text-muted-foreground">{t("sideChat.emptyDescription")}</p>
 									</div>
 								) : null}
 								<Timeline
@@ -1774,7 +1774,6 @@ export function useIndependentSideChats(
 					<p>
 						{enabled ? t("sideChat.noneOpen") : t("sideChat.sideChatsAreAvailableOnlyForLocalDesktopChatSessions")}
 					</p>
-					{enabled ? <p className="max-w-sm leading-relaxed">{t("sideChat.isolationPolicy")}</p> : null}
 					{error ? <p role="alert">{error}</p> : null}
 				</div>
 			</div>

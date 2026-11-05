@@ -1065,8 +1065,15 @@ function editorSnapshot(): ComposerEditorSnapshot {
 }
 
 function focusEditor(editor: LexicalEditor): void {
-	editor.focus();
 	const root = editor.getRootElement();
+	const native = getDOMSelectionFromTarget(root);
+	if (root && native?.anchorNode && native.focusNode && root.contains(native.anchorNode) && root.contains(native.focusNode)) {
+		editor.update(() => {
+			const selection = $createRangeSelectionFromDom(native, editor);
+			if (selection) $setSelection(selection);
+		}, { discrete: true });
+	}
+	editor.focus();
 	if (root && document.activeElement !== root) root.focus({ preventScroll: true });
 }
 

@@ -171,10 +171,6 @@
     "operation": "native_only",
     "mode": "confirm"
   },
-  "PATCH /api/v1/settings/cloud-offering": {
-    "operation": "native_only",
-    "mode": "confirm"
-  },
   "PATCH /api/v1/settings/computer-use": {
     "operation": "native_only",
     "mode": "confirm"

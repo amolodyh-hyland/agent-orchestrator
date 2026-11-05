@@ -27,6 +27,7 @@ const {
 
 vi.mock("./api-client", () => ({
 	apiClient: { POST: apiPostMock, DELETE: apiDeleteMock, GET: apiGetMock },
+	eventStreamBaseUrl: (baseUrl: string) => baseUrl.replace(/\/+$/, ""),
 	apiErrorMessage: () => "Request failed",
 	getApiBaseUrl: getApiBaseUrlMock,
 	subscribeApiBaseUrl: subscribeApiBaseUrlMock,

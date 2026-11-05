@@ -193,6 +193,8 @@ type Automation struct {
 	Model       string
 	Mode        string
 	Effort      string
+	TemplateID  string
+	UseCase     string
 }
 
 type AutomationRun struct {
@@ -1055,6 +1057,7 @@ type SessionInterfaceTransition struct {
 	HistoryPolicy        domain.SessionInterfaceTransitionHistoryPolicy
 	SourceAccountID      string
 	TargetAccountID      string
+	DegradedKind         string
 }
 
 type SessionInterfaceTransitionMessage struct {
