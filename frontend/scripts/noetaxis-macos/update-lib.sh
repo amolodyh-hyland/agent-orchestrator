@@ -1364,7 +1364,7 @@ noetaxis_update_daemon_healthy_quiet() {
 }
 
 noetaxis_update_startup_state() {
- local app_path="$1" record pid start executable actual phase heartbeat now launch_id found=0 uncertain=0
+ local app_path="$1" record pid start actual_start executable actual phase heartbeat now launch_id found=0 uncertain=0
  update_startup_state=absent
  update_startup_veto=0
  update_startup_detail="no verified startup record"
@@ -1377,7 +1377,9 @@ noetaxis_update_startup_state() {
   [[ "$pid" =~ ^[0-9]+$ ]] || { uncertain=1; continue; }
   noetaxis_pid_may_be_alive "$pid" || continue
   start="$(noetaxis_json_get "$record" processStart || true)"
-  [[ -n "$start" && "$(LC_ALL=C noetaxis_process_start "$pid")" == "$(printf '%s' "$start" | /usr/bin/tr -s ' ')" ]] || { uncertain=1; continue; }
+  actual_start="$(LC_ALL=C noetaxis_process_start "$pid")"
+  [[ -n "$start" && -n "$actual_start" ]] || { uncertain=1; continue; }
+  [[ "$actual_start" == "$(printf '%s' "$start" | /usr/bin/tr -s ' ')" ]] || continue
   executable="$(noetaxis_json_get "$record" executable || true)"
   [[ -n "$executable" && "$executable" -ef "$app_path/Contents/Resources/daemon/ao" ]] || { uncertain=1; continue; }
   actual="$(noetaxis_process_executable_path "$pid" || true)"

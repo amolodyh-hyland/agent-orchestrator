@@ -60,7 +60,7 @@ test("fresh migration heartbeats cross the health deadline without rollback", (t
 for (const [label, values, expected] of [
  ["fresh exact migration", { heartbeatAt: 990 }, "active"],
  ["stale heartbeat", { heartbeatAt: 800 }, "stale"],
- ["PID reuse", { processStart: "Mon Oct 11 00:00:00 2026", heartbeatAt: 990 }, "ambiguous"],
+ ["PID reuse", { processStart: "Mon Oct 11 00:00:00 2026", heartbeatAt: 990 }, "absent"],
  ["future heartbeat", { heartbeatAt: 1100 }, "stale"],
 ]) test(label + " is classified safely", (t) => {
  const root = fixture(t);
@@ -213,7 +213,8 @@ for (const phases of [["migrating", "waiting-for-lock"], ["waiting-for-lock", "m
 for (const [values, alive, expected] of [
  [{ heartbeatAt: 990, phase: "ready" }, true, "quiescent"],
  [{ heartbeatAt: 990, phase: "unknown" }, true, "ambiguous"],
- [{ heartbeatAt: 990, processStart: "previous-owner" }, true, "ambiguous"],
+ [{ heartbeatAt: 990, processStart: "previous-owner" }, true, "absent"],
+ [{ heartbeatAt: 990, processStart: "" }, true, "ambiguous"],
  [{ heartbeatAt: 990 }, false, "absent"],
 ]) test(`shutdown distinguishes ${expected} telemetry (${JSON.stringify(values)})`, (t) => {
  const root = fixture(t);
@@ -227,6 +228,44 @@ for (const [values, alive, expected] of [
  assert.equal(result.status, 0, result.stderr);
  assert.match(result.stdout, new RegExp(`state=${expected} result=${expected === "ambiguous" ? 1 : 0}`));
 });
+
+for (const fast of [0, 1]) for (const running of [false, true]) for (const historical of ["reused", "unreadable", "migrating", "stale-migration"]) {
+ test(`${fast ? "fast" : "cautious"} shutdown with ${running ? "running" : "stopped"} current app and ${historical} historical PID`, (t) => {
+  const root = fixture(t);
+  record(root, { launchId: "historical", pid: 123, processStart: historical === "reused" ? "previous-owner" : "Mon Oct 12 00:00:00 2026", heartbeatAt: historical === "stale-migration" ? 800 : 990 });
+  record(root, { launchId: "current", pid: 456, phase: "ready", heartbeatAt: 990 });
+  writeFileSync(path.join(root, "clock"), "1000");
+  const history = ["historical", "current"].map((id) => readFileSync(path.join(root, `startup/${id}.json`), "utf8"));
+  const result = shell(root, `
+   update_fast=${fast}
+   noetaxis_pid_may_be_alive() { [[ "$1" == 123 || ${running ? 1 : 0} -eq 1 ]]; }
+   noetaxis_process_start() {
+    ${historical === "unreadable" ? '[[ "$1" != 123 ]] || return 1' : ""}
+    printf 'Mon Oct 12 00:00:00 2026'
+   }
+   noetaxis_own_main_pid() { ${running ? "echo 456" : ":"}; }
+   noetaxis_own_pids_of_kind() { :; }
+   noetaxis_none_running_of_kind() { return ${running ? 1 : 0}; }
+   noetaxis_fast_main_gone() { return ${running ? 1 : 0}; }
+   noetaxis_request_supervisor_shutdown() { echo mocked-shutdown; return 0; }
+   noetaxis_wait_until() { echo mocked-wait; return 0; }
+   noetaxis_tray_quit() { echo forbidden-tray; return 99; }
+   noetaxis_bounded() { echo forbidden-stop; return 99; }
+   noetaxis_signal_own_pid() { echo forbidden-signal; return 99; }
+   noetaxis_fast_signal() { echo forbidden-signal; return 99; }
+   noetaxis_update_quit_app "$ROOT/app"
+  `);
+  assert.equal(result.status, historical === "reused" ? 0 : 54, result.stderr);
+  if (historical === "reused" && running) {
+   assert.match(result.stdout, /mocked-shutdown/);
+   assert.match(result.stdout, /mocked-wait/);
+  } else {
+   assert.doesNotMatch(result.stdout, /mocked-shutdown|mocked-wait/);
+  }
+  assert.doesNotMatch(result.stdout, /forbidden/);
+  assert.deepEqual(["historical", "current"].map((id) => readFileSync(path.join(root, `startup/${id}.json`), "utf8")), history);
+ });
+}
 
 test("a migration appearing during the exit wait vetoes ao stop", (t) => {
  const root = fixture(t);
