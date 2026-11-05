@@ -200,6 +200,8 @@ class Restore:
                 for name in ("ao.db", "ao.db-wal", "ao.db-shm"):
                     if (self.data / name).exists():
                         self.copy_verified(self.data / name, self.current / name)
+                    else:
+                        (self.current / name).unlink(missing_ok=True)
                 self.atomic_json(self.current / "VERIFIED", {"complete": True})
             self.phase("promoting-database")
             for name in ("ao.db", "ao.db-wal", "ao.db-shm"):

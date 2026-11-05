@@ -36,11 +36,15 @@ class RestoreTests(unittest.TestCase):
             plistlib.dump({"CFBundleIdentifier": "dev.agent-orchestrator.desktop", "CFBundleShortVersionString": version, "NoetaxisDatabaseSchema": "20261102160814608"}, output)
 
     def database(self, directory, version):
-        with sqlite3.connect(str(directory / "ao.db")) as db:
-            db.execute("CREATE TABLE goose_db_version(version_id INTEGER, is_applied INTEGER)")
-            db.execute("INSERT INTO goose_db_version VALUES (?, 1)", (version,))
-            db.execute("CREATE TABLE content(value TEXT)")
-            db.execute("INSERT INTO content VALUES (?)", (str(version),))
+        db = sqlite3.connect(str(directory / "ao.db"))
+        try:
+            with db:
+                db.execute("CREATE TABLE goose_db_version(version_id INTEGER, is_applied INTEGER)")
+                db.execute("INSERT INTO goose_db_version VALUES (?, 1)", (version,))
+                db.execute("CREATE TABLE content(value TEXT)")
+                db.execute("INSERT INTO content VALUES (?)", (str(version),))
+        finally:
+            db.close()
 
     def restore(self, restore_db=True, seconds=30):
         return module.Restore(self.backup, self.target, self.data, restore_db, seconds)
@@ -141,6 +145,34 @@ class RestoreTests(unittest.TestCase):
         snapshot.write_bytes(contents)
         self.restore().run()
         self.assertEqual(self.version(), "old")
+
+    def test_pre_promotion_retry_recaptures_current_wal_file_set(self):
+        connection = sqlite3.connect(str(self.data / "ao.db"))
+        self.addCleanup(connection.close)
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("INSERT INTO content VALUES ('before interrupted restore')")
+        connection.commit()
+        restore = self.restore()
+        original_copy = restore.copy_verified
+        def interrupt(source, target):
+            original_copy(source, target)
+            if target == restore.current / "ao.db-wal":
+                raise TimeoutError("interrupted while retaining current WAL")
+        restore.copy_verified = interrupt
+        with self.assertRaises(TimeoutError):
+            restore.run()
+        self.assertFalse(restore.fence.exists())
+        connection.execute("INSERT INTO content VALUES ('written after pre-promotion failure')")
+        connection.commit()
+        self.assertEqual(connection.execute("PRAGMA journal_mode=DELETE").fetchone()[0], "delete")
+        connection.close()
+        self.assertFalse((self.data / "ao.db-wal").exists())
+        file_set = {name: (self.data / name).exists() for name in ("ao.db-wal", "ao.db-shm")}
+        self.restore().run()
+        for name, present in file_set.items():
+            self.assertEqual((restore.current / name).exists(), present, name)
+        with sqlite3.connect(str(restore.current / "ao.db")) as saved:
+            self.assertEqual(saved.execute("SELECT COUNT(*) FROM content").fetchone()[0], 3)
 
     def test_held_daemon_lock_blocks_all_restore(self):
         with (self.data / "daemon.lock").open("a+") as lock:
