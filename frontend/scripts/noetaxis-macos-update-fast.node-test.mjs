@@ -121,11 +121,11 @@ test("fast leaves unverified, deleted, argv-spoofed, foreign and other-app proce
 	assert.deepEqual(signals(await assertFastCalls(world)), []);
 });
 
-test("fast rolls back an unhealthy new app without session calls or an ancestry scan", darwin, async (t) => {
+test("fast retains an unready new app without session calls or an ancestry scan", darwin, async (t) => {
 	const world = await makeWorld(t, "fast-rollback", { cfg: { chat_hosts_die_with_daemon: true, unhealthy_versions: newVersion } });
 	const result = world.update(["--fast", "--yes"]);
-	assert.equal(result.status, 60, output(result));
-	assert.equal(world.installedVersion(), oldVersion);
+	assert.equal(result.status, 64, output(result));
+	assert.equal(world.installedVersion(), newVersion);
 	await assertFastCalls(world);
 });
 
@@ -176,7 +176,7 @@ test("fast refuses a foreign daemon before quitting anything", darwin, async (t)
 	assert.equal(world.installedVersion(), oldVersion);
 });
 
-test("fast retains opt-in database rollback without an ancestry scan", darwin, async (t) => {
+test("fast never restores the database on a health deadline, even with rollback opt-in", darwin, async (t) => {
 	const world = await makeWorld(t, "fast-schema-rollback", { cfg: {
 		chat_hosts_die_with_daemon: true,
 		unhealthy_versions: newVersion,
@@ -184,9 +184,9 @@ test("fast retains opt-in database rollback without an ancestry scan", darwin, a
 		[`max_schema_${oldVersion}`]: "190",
 	} });
 	const result = world.update(["--fast", "--yes", "--rollback-restore-db"]);
-	assert.equal(result.status, 60, output(result));
-	assert.equal(world.installedVersion(), oldVersion);
-	assert.equal(world.schema(), "190");
+	assert.equal(result.status, 64, output(result));
+	assert.equal(world.installedVersion(), newVersion);
+	assert.equal(world.schema(), "191");
 	await assertFastCalls(world);
 });
 

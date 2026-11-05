@@ -50,13 +50,13 @@ async function makeAppWithFakeCli(appPath, appVersion, sourceRevision = "") {
 	const revisionProperty = sourceRevision ? `<key>NoetaxisSourceRevision</key><string>${sourceRevision}</string>` : "";
 	await writeFile(
 		path.join(contents, "Info.plist"),
-		`<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.agent-orchestrator.desktop</string><key>CFBundleShortVersionString</key><string>${appVersion}</string><key>CFBundleVersion</key><string>${appVersion}</string><key>CFBundlePackageType</key><string>APPL</string>${revisionProperty}</dict></plist>`,
+		`<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.agent-orchestrator.desktop</string><key>CFBundleShortVersionString</key><string>${appVersion}</string><key>CFBundleVersion</key><string>${appVersion}</string><key>CFBundlePackageType</key><string>APPL</string><key>NoetaxisDatabaseSchema</key><string>190</string>${revisionProperty}</dict></plist>`,
 	);
 	await writeFile(path.join(resources, "ao-updates-disabled"), "");
 	const cliPath = path.join(resources, "daemon/ao");
 	await cp(path.join(fakesDir, "ao"), cliPath);
 	await chmod(cliPath, 0o755);
-	if (sourceRevision) {
+	{
 		const signed = execute("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", "--timestamp=none", appPath]);
 		assert.equal(signed.status, 0, signed.stderr);
 	}
@@ -67,7 +67,7 @@ const defaultSessions = [];
 export async function copyFakeScripts(sourceDir, destination) {
 	await mkdir(destination, { recursive: true });
 	for (const name of await readdir(sourceDir)) {
-		if (name.endsWith(".sh")) await cp(path.join(sourceDir, name), path.join(destination, name));
+		if (name.endsWith(".sh") || name === "rollback-restore.py") await cp(path.join(sourceDir, name), path.join(destination, name));
 	}
 	const commonFile = path.join(destination, "common.sh");
 	const original = await readFile(commonFile, "utf8");

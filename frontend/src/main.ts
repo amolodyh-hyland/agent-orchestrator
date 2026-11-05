@@ -1,3 +1,4 @@
+import { startUpdateControl } from "./main/update-control";
 import { deferStaleCopyCleanup } from "./main/stale-app-copies";
 import { NativeDictationEngine, dictationHelperPath } from "./main/dictation-engine";
 import { registerDictationIpc } from "./main/dictation-ipc";
@@ -797,6 +798,7 @@ app.once("will-quit", () => {
 	sideStateTimer = undefined;
 });
 
+let updateShutdownRequested = false;
 let cleanupReady: (() => void) | undefined;
 const cleanupReadiness = new Promise<void>((resolve) => { cleanupReady = resolve; });
 
@@ -2311,6 +2313,7 @@ async function refreshDaemonStatus(): Promise<DaemonStatus> {
 }
 
 async function startDaemon(options: { forceReplaceAdopted?: boolean; autoRestartIntent?: DaemonAutoRestartIntent } = {}): Promise<DaemonStatus> {
+	if (updateShutdownRequested) return daemonStatus;
 	if (!options.autoRestartIntent && daemonStartAutoRestartIntent) {
 		daemonStartEpoch += 1;
 		daemonStartPromise = null;
@@ -4299,6 +4302,20 @@ app.whenReady().then(async () => {
 	// until the daemon answers. createWindow links the browser runtime itself
 	// when the daemon is already ready by the time the window exists. Windows
 	// keeps the old order until this path has been tried there.
+	if (process.platform === "darwin") {
+		try {
+			const disposeUpdateControl = await startUpdateControl({
+				directory: editorStateDir(),
+				canShutdown: () => daemonStatus.state === "ready" || (!daemonProcess && daemonStatus.state !== "starting"),
+				quit: () => {
+					updateShutdownRequested = true;
+					cancelDaemonAutoRestart();
+					desktopQuit.quitCompletely();
+				},
+			});
+			app.once("will-quit", disposeUpdateControl);
+		} catch (error) { console.warn("update control unavailable:", error); }
+	}
 
 	const daemonStartsWithWindow = process.platform !== "win32";
 	if (daemonStartsWithWindow) void startDaemon();
@@ -4397,6 +4414,7 @@ app.on("before-quit", (event) => {
 			app.quit();
 		} else {
 			desktopQuit.cancelQuit();
+			updateShutdownRequested = false;
 		}
 		return;
 	}

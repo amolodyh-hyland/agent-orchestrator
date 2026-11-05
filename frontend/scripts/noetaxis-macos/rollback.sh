@@ -9,6 +9,7 @@ allow_background=0
 restore_db=0
 fast=0
 backup_dir=""
+original_args=("$@")
 
 usage() {
 	cat <<'EOF'
@@ -88,6 +89,26 @@ if [[ -z "$backup_dir" || ! -f "$backup_dir/BACKUP_COMPLETE" ]]; then
 	exit 40
 fi
 
+noetaxis_update_log_file="$backup_dir/update-actions.log"
+rollback_finish() {
+ local status=$?
+ printf '%s ROLLBACK final_exit=%s installed_version=%s journal=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$status" "$(noetaxis_plist_value "$target_app/Contents/Info.plist" CFBundleShortVersionString || true)" "$backup_dir/rollback-journal.json" >> "$noetaxis_update_log_file"
+ noetaxis_release_lock
+}
+trap rollback_finish EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
+if [[ "${NOETAXIS_ROLLBACK_BOUNDED:-0}" != 1 ]]; then
+ rollback_status=0
+ rollback_output="$(NOETAXIS_ROLLBACK_BOUNDED=1 NOETAXIS_LOCK_HELD_BY="${NOETAXIS_LOCK_HELD_BY:-$$}" noetaxis_bounded "${NOETAXIS_ROLLBACK_TIMEOUT:-300}" "$0" "${original_args[@]}" 2>&1)" || rollback_status=$?
+ printf '%s\n' "$rollback_output"
+ printf '%s\n' "$rollback_output" >> "$noetaxis_update_log_file"
+ if [[ "$rollback_status" -ne 0 ]]; then noetaxis_error "rollback-blocked: exit $rollback_status; inspect rollback-journal.json before retrying; no older app launched"; fi
+ exit "$rollback_status"
+fi
+
 noetaxis_check_safe_origin "$allow_ao_session"
 if [[ "$fast" -eq 1 ]]; then
 	noetaxis_assert_fast_idle "$target_app"
@@ -119,72 +140,20 @@ if [[ "$app_backup_name" == NONE ]]; then
 	exit 41
 fi
 
+
 if [[ -d "$app_backup" ]]; then
-	backup_bundle_id="$(noetaxis_plist_value "$app_backup/Contents/Info.plist" CFBundleIdentifier)"
-	backup_version="$(noetaxis_plist_value "$app_backup/Contents/Info.plist" CFBundleShortVersionString)"
-	if [[ "$backup_bundle_id" != "$NOETAXIS_BUNDLE_ID" || "$backup_version" != "$expected_version" ]]; then
-		noetaxis_error "Backup app metadata does not match its record: bundle=$backup_bundle_id version=$backup_version expected=$expected_version."
-		exit 42
-	fi
-	current_backup_name="$(noetaxis_old_app_backup_name "$target_app")"
-	if [[ -d "$target_app" ]]; then
-		noetaxis_run_privileged /bin/mv "$target_app" "$backup_dir/$current_backup_name"
-	fi
-	if ! noetaxis_run_privileged /bin/mv "$app_backup" "$target_app"; then
-		if [[ -d "$backup_dir/$current_backup_name" && ! -e "$target_app" ]]; then
-			noetaxis_run_privileged /bin/mv "$backup_dir/$current_backup_name" "$target_app" || true
-		fi
-		noetaxis_error "Could not restore the app. Backups remain in $backup_dir"
-		exit 43
-	fi
-else
-	current_version=""
-	if [[ -f "$target_app/Contents/Info.plist" ]]; then
-		current_version="$(noetaxis_plist_value "$target_app/Contents/Info.plist" CFBundleShortVersionString)"
-	fi
-	if [[ "$current_version" != "$expected_version" ]]; then
-		noetaxis_error "Backup app is missing and the installed version is not already restored."
-		exit 44
-	fi
-	printf 'App already restored: %s\n' "$current_version"
+ noetaxis_verify_signature "$app_backup" || { noetaxis_error "Backup app signature verification failed"; exit 42; }
 fi
-
-if [[ "$restore_db" -eq 1 ]]; then
-	database_backup="$backup_dir/data"
-	database_dir="$ao_home/data"
-	current_database_backup="$backup_dir/rollback-current-data-$(date '+%Y%m%d-%H%M%S')-$$"
-	[[ -f "$database_backup/ao.db" ]] || { noetaxis_error "Database backup is missing: $database_backup/ao.db"; exit 45; }
-	/bin/mkdir -p "$current_database_backup" "$database_dir"
-	for name in ao.db ao.db-wal ao.db-shm; do
-		if [[ -f "$database_dir/$name" ]]; then
-			/bin/cp -c -p "$database_dir/$name" "$current_database_backup/$name"
-			/usr/bin/cmp -s "$database_dir/$name" "$current_database_backup/$name" || { noetaxis_error "Could not verify current database backup for $name."; exit 46; }
-		fi
-	done
-	: > "$current_database_backup/BACKUP_COMPLETE"
-	staging="$database_dir/.ao-rollback-$$"
-	/bin/mkdir -p "$staging"
-	for name in ao.db ao.db-wal ao.db-shm; do
-		if [[ -f "$database_backup/$name" ]]; then
-			/bin/cp -c -p "$database_backup/$name" "$staging/$name"
-		fi
-	done
-	for name in ao.db ao.db-wal ao.db-shm; do
-		if [[ -f "$staging/$name" ]]; then
-			/bin/mv "$staging/$name" "$database_dir/$name"
-		else
-			/bin/rm -f "$database_dir/$name"
-		fi
-	done
-	/bin/rm -rf "$staging"
-	printf 'Database files restored from %s/data; current database backup: %s\n' "$backup_dir" "$current_database_backup"
+restore_status=0
+restore_command=(/usr/bin/python3 -I -S)
+if [[ "$(id -u)" -ne 0 && ! -w "$apps_dir" ]]; then
+ restore_command=(sudo /usr/bin/python3 -I -S)
 fi
-
-noetaxis_verify_restored="$(noetaxis_plist_value "$target_app/Contents/Info.plist" CFBundleShortVersionString)"
-if [[ "$noetaxis_verify_restored" != "$expected_version" ]]; then
-	noetaxis_error "Restored app version mismatch: expected $expected_version, found $noetaxis_verify_restored."
-	exit 47
+restore_output="$(noetaxis_bounded "${NOETAXIS_ROLLBACK_TIMEOUT:-300}" "${restore_command[@]}" "$script_dir/rollback-restore.py" "$backup_dir" "$target_app" "$ao_home/data" "$restore_db" "${NOETAXIS_ROLLBACK_WORK_SECONDS:-280}" 2>&1)" || restore_status=$?
+printf '%s\n' "$restore_output"
+printf '%s\n' "$restore_output" >> "$noetaxis_update_log_file"
+if [[ "$restore_status" -ne 0 ]]; then
+ noetaxis_error "rollback-blocked: restore did not complete (exit $restore_status). Do not launch an older app. Inspect $backup_dir/rollback-journal.json; retry this same backup and --restore-db choice after resolving the error."
+ exit 61
 fi
-printf 'Restored app version: %s\n' "$noetaxis_verify_restored"
-noetaxis_report_handler "$target_app"
-printf 'Rollback backup: %s\n' "$backup_dir"
+printf 'Restored app version: %s\nRollback backup: %s\n' "$expected_version" "$backup_dir"

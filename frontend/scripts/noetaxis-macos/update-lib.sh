@@ -60,6 +60,7 @@ update_schema_after=""
 update_post_warnings=0
 update_restore_failed=0
 update_rolled_back=0
+update_rollback_attempted=0
 update_report_done=0
 update_app_started=0
 update_sessions_ended=0
@@ -293,6 +294,7 @@ noetaxis_update_print_unapproved() {
 }
 
 noetaxis_signal_own_pid() {
+ noetaxis_update_startup_interlock "$1" || return 1
 	local app_path="$1" pid="$2" reason="$3" command_line
 	command_line="$(ps -ww -o command= -p "$pid" 2>/dev/null || true)"
 	if ! noetaxis_command_matches_bundle_pattern "$app_path" "$command_line"; then
@@ -608,6 +610,7 @@ noetaxis_fast_main_gone() {
 }
 
 noetaxis_fast_quit() {
+ noetaxis_update_startup_interlock "$1" || return 54
 	local app_path="$1" pid output
 	pid="$(noetaxis_own_main_pid "$app_path" || true)"
 	if [[ -z "$pid" ]]; then
@@ -616,7 +619,12 @@ noetaxis_fast_quit() {
 		return 54
 	fi
 	noetaxis_update_step 'Quitting AO Completely (--fast)'
-	if [[ "$update_manual_quit" -eq 1 ]] || ! output="$(noetaxis_tray_quit "$pid" 2>&1)"; then
+	if noetaxis_request_supervisor_shutdown "$app_path"; then
+  noetaxis_update_say "authenticated supervisor shutdown accepted"
+ elif [[ -f "$ao_home/update-control.json" ]]; then
+  noetaxis_error "Supervisor shutdown blocked; app retained. No tray or signal fallback is used."
+  return 54
+ elif [[ "$update_manual_quit" -eq 1 ]] || ! output="$(noetaxis_tray_quit "$pid" 2>&1)"; then
 		noetaxis_update_say "Could not script the tray (${output:-manual quit requested}). Automation > <terminal> > System Events and Accessibility > <terminal> may be required. Click \"Quit AO Completely\" in the menu bar now; waiting up to ${update_quit_timeout}s."
 	fi
 	if ! noetaxis_wait_until 'Quit AO Completely' "$update_quit_timeout" noetaxis_fast_main_gone "$app_path"; then
@@ -656,6 +664,7 @@ noetaxis_fast_signal() {
 	current_executable="$(noetaxis_process_executable_path "$pid")" || return 0
 	[[ "$current_executable" == "$executable" ]] || return 0
 	noetaxis_executable_path_is_in_bundle "$app_path" "$current_executable" || return 0
+ noetaxis_update_startup_interlock "$app_path" || return 1
 	[[ "$(noetaxis_process_info "$pid")" == "$info" ]] || return 0
 	NOETAXIS_CONFIRMED_BUNDLE=1 "${NOETAXIS_KILL:-/bin/kill}" "-$signal" "$pid" || return 1
 	noetaxis_update_say "SIG$signal sent to verified bundle pid $pid (--fast; identity rechecked)"
@@ -1084,6 +1093,7 @@ noetaxis_tray_quit() {
 }
 
 noetaxis_update_quit_app() {
+ noetaxis_update_startup_interlock "$1" || return 54
 	if [[ "${update_fast:-0}" -eq 1 ]]; then noetaxis_fast_quit "$1"; return $?; fi
 	local app_path="$1" main_pid pid command_line output status_code=0
 	if noetaxis_none_running_of_kind "$app_path" desktop; then
@@ -1092,6 +1102,16 @@ noetaxis_update_quit_app() {
 	fi
 	noetaxis_update_step "Quitting the desktop app completely"
 	noetaxis_own_pids_of_kind "$app_path" desktop | noetaxis_describe_processes
+ if [[ -f "$ao_home/update-control.json" ]]; then
+  if ! noetaxis_request_supervisor_shutdown "$app_path"; then
+   noetaxis_update_warn "Supervisor shutdown blocked; app retained."
+   return 54
+  fi
+  if noetaxis_wait_until "the desktop app to exit" "$update_quit_timeout" noetaxis_none_running_of_kind "$app_path" desktop; then return 0; fi
+  noetaxis_update_warn "Supervisor quit did not complete; app retained."
+  return 54
+ fi
+
 	if [[ "$update_manual_quit" -ne 1 ]]; then
 		if main_pid="$(noetaxis_own_main_pid "$app_path")"; then
 			output="$(noetaxis_tray_quit "$main_pid" 2>&1)" || status_code=$?
@@ -1126,6 +1146,7 @@ noetaxis_update_quit_app() {
 }
 
 noetaxis_update_stop_daemon() {
+ noetaxis_update_startup_interlock "$1" || return 55
 	local app_path="$1" cli pid command_line output status_code=0 skip_ao_stop
 	cli="$app_path/Contents/Resources/daemon/ao"
 	if noetaxis_none_running_of_kind "$app_path" daemon; then
@@ -1368,6 +1389,14 @@ noetaxis_update_startup_state() {
  if [[ "$found" -ne 1 ]]; then update_startup_state=ambiguous; fi
 }
 
+noetaxis_update_startup_interlock() {
+ noetaxis_update_startup_state "$1"
+ if [[ "$update_startup_state" == active || "$update_startup_state" == stale ]]; then
+  noetaxis_update_warn "Startup/migration shutdown interlock: $update_startup_detail; new app retained."
+  return 1
+ fi
+}
+
 noetaxis_update_needs_attention() {
  update_app_started=1
  noetaxis_update_warn "needs-attention / new app retained: $*"
@@ -1596,68 +1625,58 @@ EOF
 # Quit whatever runs from <app> (best effort with the same bounded steps), then restore the
 # previous app with rollback.sh. Returns 0 when the old app is back in place.
 noetaxis_update_rollback_swap() {
-	local failed_app="$1" restore_db="$2" status_code=0 rollback_args
-	rollback_args=(--backup-dir "$backup_dir")
-	if [[ "${update_fast:-0}" -eq 1 ]]; then rollback_args+=(--fast); fi
-	if [[ "$restore_db" -eq 1 ]]; then
-		rollback_args+=(--restore-db)
-	fi
-	# The approved set of a rollback is what the new app, started by this run, runs right now.
-	if [[ "${update_fast:-0}" -eq 0 ]]; then
-		noetaxis_update_snapshot_processes "$failed_app" > "$cap_dir/approved-rollback.tsv" || true
-		update_approved_file="$cap_dir/approved-rollback.tsv"
-	fi
-	noetaxis_update_quit_app "$failed_app" || return 61
-	if ! noetaxis_update_stop_daemon "$failed_app"; then
-		[[ "${update_fast:-0}" -eq 1 ]] && noetaxis_update_verify_daemon "$failed_app" || return 61
-	fi
-	noetaxis_update_stop_helpers "$failed_app" || return 61
-	noetaxis_update_step "Restoring the backed-up app$([[ "$restore_db" -eq 1 ]] && printf ' and database')"
-	"$script_dir/rollback.sh" "${rollback_args[@]}" || status_code=$?
-	if [[ "$status_code" -ne 0 ]]; then
-		noetaxis_update_say "rollback.sh failed with status $status_code"
-		return 61
-	fi
-	return 0
+ local failed_app="$1" restore_db="$2" status_code=0 output rollback_args
+ rollback_args=(--backup-dir "$backup_dir" --fast)
+ [[ "$restore_db" -eq 0 ]] || rollback_args+=(--restore-db)
+ update_rollback_attempted=1
+ noetaxis_update_log "ROLLBACK attempted app=$failed_app restore_db=$restore_db"
+ noetaxis_update_startup_state "$failed_app"
+ if ! noetaxis_none_running_of_kind "$failed_app" daemon; then
+  if [[ "$update_startup_state" == active || "$update_startup_state" == stale ]]; then
+   noetaxis_update_warn "rollback-blocked / new app retained: $update_startup_detail"
+   noetaxis_update_log "FINAL state=rollback-blocked app=new-retained restore_completed=0"
+   return 61
+  fi
+ fi
+ if ! noetaxis_none_running_of_kind "$failed_app" desktop; then
+  if ! output="$(noetaxis_request_supervisor_shutdown "$failed_app" 2>&1)"; then
+   noetaxis_update_warn "rollback-blocked / new app retained: authenticated quit failed (${output:-control unavailable}); no tray or signal fallback"
+   noetaxis_update_log "FINAL state=rollback-blocked app=new-retained restore_completed=0"
+   return 61
+  fi
+ fi
+ if ! noetaxis_wait_until "supervisor and daemon to stop" "$update_quit_timeout" noetaxis_fast_bundle_gone "$failed_app"; then
+  noetaxis_update_warn "rollback-blocked / new app retained: graceful shutdown did not finish; restore not attempted"
+  noetaxis_update_log "FINAL state=rollback-blocked app=new-retained restore_completed=0"
+  return 61
+ fi
+ noetaxis_update_step "Restoring the backed-up app"
+ output="$(noetaxis_bounded "${NOETAXIS_ROLLBACK_TIMEOUT:-300}" "$script_dir/rollback.sh" "${rollback_args[@]}" 2>&1)" || status_code=$?
+ noetaxis_update_say "$output"
+ if [[ "$status_code" -ne 0 ]]; then
+  noetaxis_update_warn "rollback-blocked: rollback.sh exit=$status_code; inspect $backup_dir/rollback-journal.json before retrying. No older app will be launched."
+  noetaxis_update_log "FINAL state=rollback-blocked restore_completed=0 exit=$status_code installed_version=$(noetaxis_plist_value "$failed_app/Contents/Info.plist" CFBundleShortVersionString || true)"
+  return 61
+ fi
+ update_rolled_back=1
+ noetaxis_update_log "ROLLBACK completed restore_completed=1"
+ return 0
 }
 
 noetaxis_update_auto_rollback() {
-	local reason="$1" app_path="$2" schema_now="" fast_args=()
-	if [[ "${update_fast:-0}" -eq 1 ]]; then fast_args+=(--fast); fi
-	update_rolled_back=1
-	noetaxis_update_step "The new app is not healthy ($reason): rolling back automatically"
-	if ! noetaxis_update_rollback_swap "$app_path" 0; then
-		noetaxis_update_append noetaxis_update_summary_extra "AUTOMATIC ROLLBACK FAILED"
-		noetaxis_update_note_user "Automatic rollback did not finish. The new app may still be running or in place. Quit it completely, then run: \"$script_dir/rollback.sh\" --backup-dir \"$backup_dir\"   (add --restore-db to restore the database files too)."
-		return 61
-	fi
-	noetaxis_update_append noetaxis_update_summary_extra "previous app restored from $backup_dir"
-	if noetaxis_update_start_and_wait "$app_path" "the restored previous app"; then
-		noetaxis_update_say "the previous app is healthy again ($update_health_detail)"
-		noetaxis_update_append noetaxis_update_summary_extra "previous app restarted and healthy"
-		noetaxis_update_restore_if_asked "$app_path"
-		return 60
-	fi
-	noetaxis_update_say "the previous app is not healthy either ($update_health_detail)"
-	if [[ -f "$ao_home/data/ao.db" ]]; then
-		schema_now="$(noetaxis_read_schema_version "$ao_home/data/ao.db" || true)"
-	fi
-	if [[ -n "$schema_now" && -n "$cap_schema_before" && "$schema_now" =~ ^[0-9]+$ && "$cap_schema_before" =~ ^[0-9]+$ && "$schema_now" -gt "$cap_schema_before" ]]; then
-		if [[ "$update_rollback_restore_db" -eq 1 ]]; then
-			noetaxis_update_say "the database was migrated from schema $cap_schema_before to $schema_now; restoring the backed-up database (--rollback-restore-db)"
-			if noetaxis_update_quit_app "$app_path" && noetaxis_update_stop_daemon "$app_path" && noetaxis_update_stop_helpers "$app_path" && "$script_dir/rollback.sh" --backup-dir "$backup_dir" --restore-db ${fast_args[@]+"${fast_args[@]}"} && noetaxis_update_start_and_wait "$app_path" "the previous app with the restored database"; then
-				noetaxis_update_append noetaxis_update_summary_extra "database restored from $backup_dir; previous app healthy"
-				noetaxis_update_restore_if_asked "$app_path"
-				return 60
-			fi
-			noetaxis_update_note_user "The database restore after the failed update did not finish cleanly. Quit AO completely and run: \"$script_dir/rollback.sh\" --backup-dir \"$backup_dir\" --restore-db"
-			return 61
-		fi
-		noetaxis_update_note_user "The new app migrated the database from schema $cap_schema_before to $schema_now and the previous app is not healthy with it. To restore the database too: quit AO completely, then run \"$script_dir/rollback.sh\" --backup-dir \"$backup_dir\" --restore-db (it saves the current database first), or rerun the update with --rollback-restore-db."
-	else
-		noetaxis_update_note_user "The previous app is back in place but did not become healthy within ${update_health_timeout}s (schema before: ${cap_schema_before:-unknown}, now: ${schema_now:-unknown}); the database was not changed by the failed update, so restoring it is not indicated. Check the app, then see $backup_dir."
-	fi
-	return 61
+ local reason="$1" app_path="$2" restore_db=0
+ noetaxis_update_step "The new app could not be launched ($reason): attempting safe rollback"
+ [[ "$update_rollback_restore_db" -eq 0 ]] || restore_db=1
+ if ! noetaxis_update_rollback_swap "$app_path" "$restore_db"; then
+  noetaxis_update_note_user "Rollback is blocked. The app/database state is recorded in $backup_dir/rollback-journal.json and update-actions.log. Do not force-quit a migration or launch an older app. After startup settles and AO has stopped, retry rollback.sh --backup-dir \"$backup_dir\" with the matching database snapshot only if required."
+  return 61
+ fi
+ if noetaxis_update_start_and_wait "$app_path" "the restored previous app"; then
+  noetaxis_update_restore_if_asked "$app_path"
+  return 60
+ fi
+ noetaxis_update_note_user "The previous app was restored but is not confirmed healthy. Inspect $backup_dir/update-actions.log and startup records; no further restore is attempted."
+ return 61
 }
 
 # ---------------------------------------------------------------------------

@@ -95,6 +95,37 @@ test("a live migration that exceeds the escalation window is retained", (t) => {
  assert.match(result.stderr, /startup remains live/);
 });
 
+for (const mode of ["absent-tray", "failed-quit", "migration"]) test(mode + " cannot start rollback restoration", (t) => {
+ const root = fixture(t);
+ const result = shell(root, `
+ noetaxis_update_startup_state() { update_startup_state=${mode === "migration" ? "active" : "ambiguous"}; update_startup_detail=migrating; }
+ noetaxis_none_running_of_kind() { return 1; }
+ noetaxis_request_supervisor_shutdown() { return 1; }
+ noetaxis_tray_quit() { echo forbidden-tray; return 99; }
+ noetaxis_bounded() { echo forbidden-restore; return 99; }
+ noetaxis_update_rollback_swap "$ROOT/app" 0
+ `);
+ assert.equal(result.status, 61, result.stderr);
+ assert.doesNotMatch(result.stdout, /forbidden/);
+ assert.match(result.stderr, /rollback-blocked/);
+});
+
+test("restore timeout never claims rollback completed or launches old app", (t) => {
+ const root = fixture(t);
+ const result = shell(root, `
+ noetaxis_update_startup_state() { update_startup_state=ambiguous; update_startup_detail=stopped; }
+ noetaxis_none_running_of_kind() { return 0; }
+ noetaxis_wait_until() { return 0; }
+ noetaxis_bounded() { echo 'restore timed out'; return 142; }
+ result=0
+ noetaxis_update_rollback_swap "$ROOT/app" 0 || result=$?
+ printf 'result=%s completed=%s\\n' "$result" "$update_rolled_back"
+ `);
+ assert.equal(result.status, 0, result.stderr);
+ assert.match(result.stdout, /result=61 completed=0/);
+ assert.match(readFileSync(path.join(root, "update-actions.log"), "utf8"), /restore_completed=0 exit=142/);
+});
+
 test("build schema metadata preserves 17-digit IDs exactly", (t) => {
  const root = fixture(t);
  const migrations = path.join(root, "backend/internal/storage/sqlite/migrations");
@@ -119,5 +150,22 @@ test("health needs-attention cannot trigger the installer cleanup rollback fallb
  `);
  assert.equal(result.status, 64, result.stderr);
  assert.match(result.stdout, /report:64/);
+ assert.doesNotMatch(result.stdout, /forbidden/);
+});
+
+test("authenticated quit can complete rollback without a tray", (t) => {
+ const root = fixture(t);
+ const result = shell(root, `
+ noetaxis_update_startup_state() { update_startup_state=ambiguous; update_startup_detail=ready; }
+ noetaxis_none_running_of_kind() { [[ "$2" == daemon ]]; }
+ noetaxis_request_supervisor_shutdown() { echo authenticated-quit; return 0; }
+ noetaxis_wait_until() { return 0; }
+ noetaxis_bounded() { echo restore-completed; return 0; }
+ noetaxis_tray_quit() { echo forbidden-tray; return 99; }
+ noetaxis_update_rollback_swap "$ROOT/app" 0
+ printf 'completed=%s\\n' "$update_rolled_back"
+ `);
+ assert.equal(result.status, 0, result.stderr);
+ assert.match(result.stdout, /completed=1/);
  assert.doesNotMatch(result.stdout, /forbidden/);
 });

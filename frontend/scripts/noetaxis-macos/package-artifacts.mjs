@@ -43,7 +43,7 @@ export async function writeManifest(appPath, manifestPath) {
 export async function writeInstallerArtifacts(outputDir) {
 	const installerDir = path.join(outputDir, "installer");
 	await mkdir(installerDir, { recursive: true });
-	for (const name of ["install.sh", "update.sh", "update-lib.sh", "survivors.sh", "common.sh", "rollback.sh", "README.md", "pkg-scripts"]) {
+	for (const name of ["install.sh", "update.sh", "update-lib.sh", "survivors.sh", "common.sh", "rollback.sh", "rollback-restore.py", "README.md", "pkg-scripts"]) {
 		await cp(path.join(scriptDir, name), path.join(installerDir, name), { recursive: true, preserveTimestamps: true });
 		if (name.endsWith(".sh")) await chmod(path.join(installerDir, name), 0o755);
 	}

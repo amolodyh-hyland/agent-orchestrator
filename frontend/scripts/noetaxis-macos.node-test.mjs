@@ -60,7 +60,7 @@ async function makeApp(appPath, appVersion, sourceRevision = "") {
 	await mkdir(path.join(resources, "daemon"), { recursive: true });
 	for (const directory of ["MacOS", "Frameworks", "Resources/acp-runtime/node/bin"]) await mkdir(path.join(contents, directory), { recursive: true });
 	const versionProperties = sourceRevision ? `<key>NoetaxisSourceRevision</key><string>${sourceRevision}</string>` : "";
-	const info = `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.agent-orchestrator.desktop</string><key>CFBundleShortVersionString</key><string>${appVersion}</string><key>CFBundleVersion</key><string>${appVersion}</string><key>CFBundlePackageType</key><string>APPL</string>${versionProperties}</dict></plist>`;
+	const info = `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.agent-orchestrator.desktop</string><key>CFBundleShortVersionString</key><string>${appVersion}</string><key>CFBundleVersion</key><string>${appVersion}</string><key>CFBundlePackageType</key><string>APPL</string><key>NoetaxisDatabaseSchema</key><string>190</string>${versionProperties}</dict></plist>`;
 	await writeFile(path.join(contents, "Info.plist"), info);
 	await writeFile(path.join(resources, "ao-updates-disabled"), "");
 	const cli = `#!/bin/sh
@@ -1021,21 +1021,12 @@ test("isolated install is dry-runnable, backed up, idempotent, and reversible", 
 	backups = (await readdir(backupRoot)).map((name) => path.join(backupRoot, name)).sort();
 	backupDir = backups.at(-1);
 	assert.equal(execute("/usr/bin/sqlite3", [database, "delete from goose_db_version; insert into goose_db_version values (888,1);"] ).status, 0);
-	const databaseRollback = execute("/bin/bash", [rollbackScript, "--allow-ao-session", "--restore-db", "--backup-dir", backupDir], { cwd: repoRoot, env });
-	assert.equal(databaseRollback.status, 0, databaseRollback.stderr);
-	assert.equal(execute("/usr/bin/sqlite3", [database, "select max(version_id) from goose_db_version where is_applied=1;"]).stdout.trim(), "999");
-	const savedDirs = async () => (await readdir(backupDir)).filter((name) => name.startsWith("rollback-current-data-")).sort();
-	const firstSaved = await savedDirs();
-	assert.equal(firstSaved.length, 1);
-	const savedVersion = (name) => execute("/usr/bin/sqlite3", [path.join(backupDir, name, "ao.db"), "select max(version_id) from goose_db_version where is_applied=1;"]).stdout.trim();
-	assert.equal(savedVersion(firstSaved[0]), "888");
-	assert.equal(execute("/usr/bin/sqlite3", [database, "delete from goose_db_version; insert into goose_db_version values (777,1);"]).status, 0);
-	const repeatedRollback = execute("/bin/bash", [rollbackScript, "--allow-ao-session", "--restore-db", "--backup-dir", backupDir], { cwd: repoRoot, env });
-	assert.equal(repeatedRollback.status, 0, repeatedRollback.stderr);
-	const allSaved = await savedDirs();
-	assert.equal(allSaved.length, 2);
-	assert.equal(savedVersion(firstSaved[0]), "888");
-	assert.deepEqual(allSaved.filter((name) => name !== firstSaved[0]).map(savedVersion), ["777"]);
+ const databaseRollback = execute("/bin/bash", [rollbackScript, "--allow-ao-session", "--restore-db", "--backup-dir", backupDir], { cwd: repoRoot, env });
+ assert.equal(databaseRollback.status, 61, databaseRollback.stderr);
+ assert.match(databaseRollback.stdout + databaseRollback.stderr, /snapshot is newer than the old app/);
+ assert.equal(execute("/usr/bin/sqlite3", [database, "select max(version_id) from goose_db_version where is_applied=1;"]).stdout.trim(), "888");
+ assert.equal(JSON.parse(await readFile(path.join(backupDir, "rollback-journal.json"), "utf8")).completed, false);
+
 });
 
 test("install explains which part of AO is still running and never stops a process", { skip: process.platform !== "darwin" }, async (t) => {
@@ -1235,8 +1226,8 @@ test("rollback and the PKG preinstall apply the same background-process prefligh
 	assert.equal(await readFile(database, "utf8"), "live");
 	assert.equal(await installedVersion(f.targetApp), "new");
 	const allowed = execute("/bin/bash", [rollbackScript, "--allow-ao-session", "--allow-background-processes"], { cwd: repoRoot, env });
-	assert.equal(allowed.status, 0, allowed.stderr);
-	assert.equal(await installedVersion(f.targetApp), "old");
+	assert.equal(allowed.status, 61, allowed.stderr);
+ assert.equal(await installedVersion(f.targetApp), "new");
 	// A daemon from an earlier flagged install is invisible to the process check; its port listener still blocks --restore-db.
 	const lsof = path.join(f.root, "fake-lsof");
 	await writeFile(lsof, "#!/bin/sh\nprintf 'p9876\\n'\n", { mode: 0o755 });
@@ -1248,7 +1239,7 @@ test("rollback and the PKG preinstall apply the same background-process prefligh
 	assert.match(portRefused.stderr, /--restore-db cannot run while something listens on port 3001 \(pid 9876\)/);
 	assert.equal(await readFile(database, "utf8"), "live");
 	const portAppOnly = execute("/bin/bash", [rollbackScript, "--allow-ao-session"], { cwd: repoRoot, env: listenerEnv });
-	assert.equal(portAppOnly.status, 0, portAppOnly.stderr);
+	assert.equal(portAppOnly.status, 61, portAppOnly.stderr);
 	const desktopBin = await makeFakeBin(f.root, "desktop");
 	const desktop = execute("/bin/bash", [rollbackScript, "--allow-ao-session", "--allow-background-processes"], { cwd: repoRoot, env: { ...f.env, PATH: `${desktopBin}:/usr/bin:/bin:/usr/sbin:/sbin` } });
 	assert.equal(desktop.status, 21, desktop.stderr);
