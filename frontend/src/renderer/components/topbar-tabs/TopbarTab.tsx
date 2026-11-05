@@ -106,7 +106,7 @@ export const TopbarTab = memo(function TopbarTab({
 		<span
 			ref={wrapperRef}
 			className={cn(
-				"group relative inline-flex h-full shrink-0 items-stretch",
+				"group relative inline-flex h-full shrink-0 items-center",
 				accent !== undefined && "isolate",
 				className,
 				view.isActive && "bg-overlay text-foreground",
