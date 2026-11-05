@@ -1,3 +1,4 @@
+import { deferStaleCopyCleanup } from "./main/stale-app-copies";
 import { NativeDictationEngine, dictationHelperPath } from "./main/dictation-engine";
 import { registerDictationIpc } from "./main/dictation-ipc";
 import { registerOuterNative } from "./main/outer-native";
@@ -796,6 +797,9 @@ app.once("will-quit", () => {
 	sideStateTimer = undefined;
 });
 
+let cleanupReady: (() => void) | undefined;
+const cleanupReadiness = new Promise<void>((resolve) => { cleanupReady = resolve; });
+
 function setDaemonStatus(nextStatus: DaemonStatus): void {
 	if (nextStatus.state !== "ready" || daemonStatus.state !== "ready" || nextStatus.port !== daemonStatus.port || nextStatus.pid !== daemonStatus.pid) daemonAttachmentGeneration++;
 	if (nextStatus.state !== "ready") disposeBrowserRuntimeLink();
@@ -805,7 +809,10 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 		disposeBrowserStreamLink();
 	}
 	daemonStatus = nextStatus;
-	if (nextStatus.state === "ready") void telemetryIdentity.flush();
+	if (nextStatus.state === "ready") {
+		cleanupReady?.();
+		void telemetryIdentity.flush();
+	}
 	else telemetryIdentity.invalidate();
 	getShellWebContents()?.send("daemon:status", daemonStatus);
 	if (nextStatus.state === "ready" && browserViewHost) {
@@ -4256,46 +4263,6 @@ app.whenReady().then(async () => {
 		console.error("failed to write app-state marker:", err);
 	}
 
-	// A pre-fix bundle cannot be patched retroactively. After the maintained
-	// /Applications build runs, offer to retire older AO copies that can still
-	// overwrite it if Finder, Spotlight, or an old Dock tile launches them.
-	try {
-		const { formatStaleAppCopies, retireStaleMacAppCopies } = await import("./main/stale-app-copies");
-		await retireStaleMacAppCopies({
-			platform: process.platform,
-			isPackaged: app.isPackaged,
-			runningPath: resolveBundlePath(),
-			runningVersion: app.getVersion(),
-			confirm: async (copies) => {
-				const result = await dialog.showMessageBox({
-					type: "warning",
-					buttons: ["Move old copies to Trash", "Not now"],
-					defaultId: 0,
-					cancelId: 1,
-					title: "Remove old AO copies",
-					message: `Old copies of ${APP_DISPLAY_NAME} can replace your updated app.`,
-					detail: `${formatStaleAppCopies(copies)}\n\nMove these copies to Trash to prevent another downgrade. Your AO projects and sessions will not be removed.`,
-					noLink: true,
-				});
-				return result.response === 0;
-			},
-			trashItem: (candidate) => shell.trashItem(candidate),
-			reportFailures: async (paths) => {
-				await dialog.showMessageBox({
-					type: "warning",
-					buttons: ["OK"],
-					defaultId: 0,
-					title: "Some old copies could not be removed",
-					message: "Move these copies to Trash manually before launching AO again.",
-					detail: paths.join("\n"),
-					noLink: true,
-				});
-			},
-		});
-	} catch (err) {
-		console.warn("stale AO copy cleanup failed:", err);
-	}
-
 	const keybindingRunFile = runFilePath();
 	if (keybindingRunFile) {
 		keybindingOverrides = await readKeybindingOverrides(path.dirname(keybindingRunFile));
@@ -4332,11 +4299,55 @@ app.whenReady().then(async () => {
 	// until the daemon answers. createWindow links the browser runtime itself
 	// when the daemon is already ready by the time the window exists. Windows
 	// keeps the old order until this path has been tried there.
+
 	const daemonStartsWithWindow = process.platform !== "win32";
 	if (daemonStartsWithWindow) void startDaemon();
 	await createWindow();
 	if (browserQuitRequested) return;
 	if (!daemonStartsWithWindow) void startDaemon();
+	void deferStaleCopyCleanup(
+		cleanupReadiness,
+		path.join(editorStateDir(), "stale-copy-snooze"),
+		async () => {
+			try {
+				const { formatStaleAppCopies, retireStaleMacAppCopies } = await import("./main/stale-app-copies");
+				await retireStaleMacAppCopies({
+					platform: process.platform,
+					isPackaged: app.isPackaged,
+					runningPath: resolveBundlePath(),
+					runningVersion: app.getVersion(),
+					confirm: async (copies) => {
+						const result = await dialog.showMessageBox({
+							type: "warning",
+							buttons: ["Move old copies to Trash", "Not now"],
+							defaultId: 0,
+							cancelId: 1,
+							title: "Remove old AO copies",
+							message: `Old copies of ${APP_DISPLAY_NAME} can replace your updated app.`,
+							detail: `${formatStaleAppCopies(copies)}\n\nMove these copies to Trash to prevent another downgrade. Your AO projects and sessions will not be removed.`,
+							noLink: true,
+						});
+						return result.response === 0;
+					},
+					trashItem: (candidate) => shell.trashItem(candidate),
+					reportFailures: async (paths) => {
+						await dialog.showMessageBox({
+							type: "warning",
+							buttons: ["OK"],
+							defaultId: 0,
+							title: "Some old copies could not be removed",
+							message: "Move these copies to Trash manually before launching AO again.",
+							detail: paths.join("\n"),
+							noLink: true,
+						});
+					},
+				});
+			} catch (err) {
+				console.warn("stale AO copy cleanup failed:", err);
+			}
+		},
+	).catch((err) => console.warn("stale AO copy cleanup deferred:", err));
+
 	initAutoUpdates();
 
 	// Windows/Linux: on first launch, the deep-link URL may arrive as a

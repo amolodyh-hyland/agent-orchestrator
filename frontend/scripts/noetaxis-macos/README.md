@@ -208,6 +208,10 @@ These descendants are never included in the PID signal inventory, even with `--f
 | `--detached` | Re-run in a new session with `nohup` and a log file (see below). |
 | `--quit-timeout N`, `--stop-timeout N`, `--health-timeout N` | Waits in seconds (defaults 60, 45, 120). |
 
+### Deferred stale-copy cleanup
+
+The tray and window are created and daemon startup begins before stale-copy cleanup. Cleanup waits for readiness and runs independently of startup. A seven-day snooze is persisted before the dialog opens, including when it is left unanswered. The regression test simulates an unanswered ten-minute dialog and a subsequent launch during the snooze.
+
 ### Automatic rollback
 
 If the new app does not start, or the daemon is not `ready` and healthy within `--health-timeout`, the run quits the new app the same way, restores the backed-up app with `rollback.sh`, reopens it, and waits for it to be healthy: exit 60 and a report. The database is only restored with `--rollback-restore-db`, and only when the new app migrated the schema (the version is higher than the one captured) and the old app is still unhealthy; the migrated database is saved first as `rollback-current-data-*`. If the run fails after AO was stopped but before the new app replaced the old one (an interruption, a refusal at the survivors check), the previous app is restored on disk and reopened (bounded 30 s health wait). If the new app cannot be quit, or `rollback.sh` fails, it stops with exit 61 and prints the exact `rollback.sh --backup-dir ...` command.
