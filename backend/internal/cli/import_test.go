@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
@@ -14,6 +16,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
 	"github.com/aoagents/agent-orchestrator/backend/internal/legacyimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
 func writeLegacyProject(t *testing.T) string {
@@ -124,5 +127,70 @@ func TestImportCommand_RefusesWhenDataDirLocked(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(cfg.dataDir, "ao.db")); !os.IsNotExist(statErr) {
 		t.Fatalf("import touched ao.db under a locked data dir: %v", statErr)
+	}
+}
+
+func TestImportCommand_RefusesInterruptedRestoreBeforeOpeningSQLite(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		t.Run(strconv.FormatBool(dryRun), func(t *testing.T) {
+			cfg := setConfigEnv(t)
+			root := writeLegacyProject(t)
+			held, err := datadirlock.Acquire(context.Background(), cfg.dataDir, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = held.Release() })
+			store, err := sqlite.Open(cfg.dataDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			db, err := sql.Open("sqlite", filepath.Join(cfg.dataDir, "ao.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = db.Close() })
+			db.SetMaxOpenConns(1)
+			if _, err := db.Exec(`PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;
+				CREATE TABLE restore_content (value TEXT);
+				INSERT INTO restore_content VALUES ('retained until recovery');`); err != nil {
+				t.Fatal(err)
+			}
+			journal := filepath.Join(t.TempDir(), "rollback-journal.json")
+			if err := os.WriteFile(journal, []byte(`{"completed":false,"phase":"promoting-database"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			fence, _ := json.Marshal(map[string]string{"journal": journal})
+			if err := os.WriteFile(filepath.Join(cfg.dataDir, "RESTORE_IN_PROGRESS"), fence, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := held.Release(); err != nil {
+				t.Fatal(err)
+			}
+			before := map[string][]byte{}
+			for _, name := range []string{"ao.db", "ao.db-wal", "ao.db-shm", "RESTORE_IN_PROGRESS"} {
+				contents, err := os.ReadFile(filepath.Join(cfg.dataDir, name))
+				if err != nil {
+					t.Fatal(err)
+				}
+				before[name] = contents
+			}
+			args := []string{"import", "--from", root, "--yes"}
+			if dryRun {
+				args = append(args, "--dry-run")
+			}
+			_, _, err = executeCLI(t, Deps{}, args...)
+			if err == nil || !strings.Contains(err.Error(), "RESTORE_IN_PROGRESS and retry the recorded rollback") {
+				t.Fatalf("err = %v, want restore recovery instruction", err)
+			}
+			for name, want := range before {
+				got, err := os.ReadFile(filepath.Join(cfg.dataDir, name))
+				if err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("import changed %s through restore fence: %v", name, err)
+				}
+			}
+		})
 	}
 }

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { authorizeUpdateShutdown, startUpdateControl } from "./update-control";
@@ -47,6 +47,21 @@ it("serves authenticated shutdown before readiness without a tray", async () => 
 		expect(quit).toHaveBeenCalledOnce();
 	} finally {
 		dispose();
+		await expect(readFile(path.join(directory, "update-control.json"))).rejects.toMatchObject({ code: "ENOENT" });
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+it("does not remove a successor's control descriptor on disposal", async () => {
+	const directory = await mkdtemp("/tmp/ao-control-");
+	const dispose = await startUpdateControl({ directory, canShutdown: () => true, quit: vi.fn() });
+	const recordPath = path.join(directory, "update-control.json");
+	try {
+		const successor = JSON.stringify({ launchId: "successor", token: "successor-token" });
+		await writeFile(recordPath, successor);
+		dispose();
+		expect(await readFile(recordPath, "utf8")).toBe(successor);
+	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}
 });

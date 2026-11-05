@@ -137,6 +137,9 @@ func Open(dataDir string) (*Store, error) {
 }
 
 func OpenWithMigrationObserver(dataDir string, observer MigrationObserver) (*Store, error) {
+	if err := checkRestoreFence(dataDir); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
@@ -165,6 +168,14 @@ func OpenWithMigrationObserver(dataDir string, observer MigrationObserver) (*Sto
 	readDB.SetMaxIdleConns(maxReaders)
 
 	return sqlitestore.NewStore(writeDB, readDB), nil
+}
+
+func checkRestoreFence(dataDir string) error {
+	fence := filepath.Join(dataDir, "RESTORE_IN_PROGRESS")
+	if _, err := os.Lstat(fence); !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("database restore requires recovery: inspect %s and retry the recorded rollback", fence)
+	}
+	return nil
 }
 
 // OpenReadOnly opens an existing SQLite database under dataDir without creating
@@ -261,6 +272,9 @@ func computeExpectedMigrationVersion() error {
 // Migration tests and any code that needs the production startup path must
 // continue to call Open, not this function.
 func OpenPreMigrated(dataDir string) (*Store, error) {
+	if err := checkRestoreFence(dataDir); err != nil {
+		return nil, err
+	}
 	want, err := expectedMigrationVersion()
 	if err != nil {
 		return nil, fmt.Errorf("determine expected migration version: %w", err)

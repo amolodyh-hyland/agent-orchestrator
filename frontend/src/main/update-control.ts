@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { readFileSync, rmSync } from "node:fs";
 import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
@@ -52,5 +53,12 @@ export async function startUpdateControl(options: {
 		await rm(socketPath, { force: true });
 		throw error;
 	}
-	return () => { server.close(); void rm(socketPath, { force: true }); };
+	return () => {
+		server.close();
+		rmSync(socketPath, { force: true });
+		try {
+			const record = JSON.parse(readFileSync(recordPath, "utf8"));
+			if (record.launchId === identity.launchId && record.token === identity.token) rmSync(recordPath);
+		} catch {}
+	};
 }

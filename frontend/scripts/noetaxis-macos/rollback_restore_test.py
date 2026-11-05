@@ -1,6 +1,7 @@
 import fcntl
 import importlib.util
 import json
+import os
 from pathlib import Path
 import plistlib
 import sqlite3
@@ -18,7 +19,7 @@ class RestoreTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="ao-restore-test-")
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         self.backup, self.target, self.data = [self.root / name for name in ("backup", "Applications/AO.app", "data")]
         self.backup.mkdir()
         self.data.mkdir()
@@ -96,6 +97,50 @@ class RestoreTests(unittest.TestCase):
         self.assertEqual(self.version(), "old")
         self.assertFalse(restore.fence.exists())
         self.assertEqual(restore.schema(self.data), 20261102160814608)
+
+    def test_relative_restore_and_equivalent_retries_use_one_journal(self):
+        previous_directory = Path.cwd()
+        os.chdir(self.root)
+        self.addCleanup(os.chdir, previous_directory)
+        restore = module.Restore("./backup", "./Applications/AO.app", "./data", True, 30)
+        original_copy = restore.copy_verified
+        def interrupt(source, target):
+            original_copy(source, target)
+            if target == self.data.resolve() / "ao.db":
+                raise TimeoutError("interrupted promotion via relative backup")
+        restore.copy_verified = interrupt
+        with self.assertRaisesRegex(TimeoutError, "interrupted promotion"):
+            restore.run()
+        self.assertTrue(restore.fence.exists())
+        self.assertEqual(json.loads(restore.fence.read_text())["journal"], str(restore.journal_path))
+        for backup in ("./backup", str(self.backup.resolve()), "./backup/../backup/."):
+            module.Restore(backup, self.target, self.data, True, 30).run()
+            self.assertEqual(self.version(), "old")
+            self.assertFalse(restore.fence.exists())
+            self.assertEqual(restore.schema(self.data.resolve()), 20261102160814608)
+
+    def test_normalizes_legacy_relative_fence_on_absolute_retry(self):
+        previous_directory = Path.cwd()
+        os.chdir(self.root)
+        self.addCleanup(os.chdir, previous_directory)
+        restore = self.restore()
+        restore.atomic_json(restore.fence, {"journal": "./backup/../backup/rollback-journal.json"})
+        restore.run()
+        self.assertEqual(self.version(), "old")
+        self.assertFalse(restore.fence.exists())
+
+    def test_pre_promotion_failure_releases_fence_and_can_retry(self):
+        snapshot = self.backup / "data/ao.db"
+        contents = snapshot.read_bytes()
+        snapshot.unlink()
+        script = Path(__file__).with_name("rollback-restore.py")
+        result = subprocess.run([sys.executable, "-B", str(script), "./backup", "./Applications/AO.app", "./data", "1", "30"], cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 61, result.stderr)
+        self.assertEqual(self.version(), "new")
+        self.assertFalse((self.data / "RESTORE_IN_PROGRESS").exists())
+        snapshot.write_bytes(contents)
+        self.restore().run()
+        self.assertEqual(self.version(), "old")
 
     def test_held_daemon_lock_blocks_all_restore(self):
         with (self.data / "daemon.lock").open("a+") as lock:

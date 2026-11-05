@@ -310,6 +310,7 @@ noetaxis_signal_own_pid() {
 		noetaxis_update_say "NOT signalling pid $pid ($reason): its current executable is not verified inside this bundle"
 		return 1
 	fi
+ noetaxis_update_startup_interlock "$app_path" || return 1
 	"${NOETAXIS_KILL:-/bin/kill}" -TERM "$pid" || return 1
 }
 
@@ -611,7 +612,7 @@ noetaxis_fast_main_gone() {
 
 noetaxis_fast_quit() {
  noetaxis_update_startup_interlock "$1" || return 54
-	local app_path="$1" pid output
+	local app_path="$1" pid output control_status=0
 	pid="$(noetaxis_own_main_pid "$app_path" || true)"
 	if [[ -z "$pid" ]]; then
 		if noetaxis_fast_main_gone "$app_path"; then return 0; fi
@@ -619,9 +620,10 @@ noetaxis_fast_quit() {
 		return 54
 	fi
 	noetaxis_update_step 'Quitting AO Completely (--fast)'
-	if noetaxis_request_supervisor_shutdown "$app_path"; then
+ noetaxis_request_supervisor_shutdown "$app_path" || control_status=$?
+	if [[ "$control_status" -eq 0 ]]; then
   noetaxis_update_say "authenticated supervisor shutdown accepted"
- elif [[ -f "$ao_home/update-control.json" ]]; then
+ elif [[ "$control_status" -ne 2 ]]; then
   noetaxis_error "Supervisor shutdown blocked; app retained. No tray or signal fallback is used."
   return 54
  elif [[ "$update_manual_quit" -eq 1 ]] || ! output="$(noetaxis_tray_quit "$pid" 2>&1)"; then
@@ -1095,15 +1097,16 @@ noetaxis_tray_quit() {
 noetaxis_update_quit_app() {
  noetaxis_update_startup_interlock "$1" || return 54
 	if [[ "${update_fast:-0}" -eq 1 ]]; then noetaxis_fast_quit "$1"; return $?; fi
-	local app_path="$1" main_pid pid command_line output status_code=0
+	local app_path="$1" main_pid pid command_line output status_code=0 control_status=0
 	if noetaxis_none_running_of_kind "$app_path" desktop; then
 		noetaxis_update_say "the desktop app is not running"
 		return 0
 	fi
 	noetaxis_update_step "Quitting the desktop app completely"
 	noetaxis_own_pids_of_kind "$app_path" desktop | noetaxis_describe_processes
- if [[ -f "$ao_home/update-control.json" ]]; then
-  if ! noetaxis_request_supervisor_shutdown "$app_path"; then
+ noetaxis_request_supervisor_shutdown "$app_path" || control_status=$?
+ if [[ "$control_status" -ne 2 ]]; then
+  if [[ "$control_status" -ne 0 ]]; then
    noetaxis_update_warn "Supervisor shutdown blocked; app retained."
    return 54
   fi
@@ -1170,6 +1173,7 @@ noetaxis_update_stop_daemon() {
 		skip_ao_stop=1
 	fi
 	if [[ "$skip_ao_stop" -eq 0 ]]; then
+  noetaxis_update_startup_interlock "$app_path" || return 55
 		noetaxis_update_say "the daemon is still running; asking it to stop with \"ao stop\""
 		output="$(noetaxis_bounded 40 "$cli" stop --timeout 20s 2>&1)" || status_code=$?
 		noetaxis_update_say "ao stop: ${output:-exit $status_code}"
@@ -1360,41 +1364,45 @@ noetaxis_update_daemon_healthy_quiet() {
 }
 
 noetaxis_update_startup_state() {
- local app_path="$1" record pid start executable actual phase heartbeat now launch_id found=0
- update_startup_state=ambiguous
+ local app_path="$1" record pid start executable actual phase heartbeat now launch_id found=0 uncertain=0
+ update_startup_state=absent
+ update_startup_veto=0
  update_startup_detail="no verified startup record"
  now="$(date '+%s')"
  for record in "$ao_home"/startup/*.json; do
   [[ -f "$record" ]] || continue
   launch_id="$(noetaxis_json_get "$record" launchId || true)"
-  [[ -n "$launch_id" && "$record" == "$ao_home/startup/$launch_id.json" ]] || continue
+  [[ -n "$launch_id" && "$record" == "$ao_home/startup/$launch_id.json" ]] || { uncertain=1; continue; }
   pid="$(noetaxis_json_get "$record" pid || true)"
-  [[ "$pid" =~ ^[0-9]+$ ]] || continue
+  [[ "$pid" =~ ^[0-9]+$ ]] || { uncertain=1; continue; }
+  noetaxis_pid_may_be_alive "$pid" || continue
   start="$(noetaxis_json_get "$record" processStart || true)"
-  [[ -n "$start" && "$(LC_ALL=C noetaxis_process_start "$pid")" == "$(printf '%s' "$start" | /usr/bin/tr -s ' ')" ]] || continue
+  [[ -n "$start" && "$(LC_ALL=C noetaxis_process_start "$pid")" == "$(printf '%s' "$start" | /usr/bin/tr -s ' ')" ]] || { uncertain=1; continue; }
   executable="$(noetaxis_json_get "$record" executable || true)"
-  [[ -n "$executable" && "$executable" -ef "$app_path/Contents/Resources/daemon/ao" ]] || continue
+  [[ -n "$executable" && "$executable" -ef "$app_path/Contents/Resources/daemon/ao" ]] || { uncertain=1; continue; }
   actual="$(noetaxis_process_executable_path "$pid" || true)"
-  [[ -n "$actual" && "$actual" -ef "$executable" ]] || continue
-  [[ "$(LC_ALL=C noetaxis_process_start "$pid")" == "$(printf '%s' "$start" | /usr/bin/tr -s ' ')" ]] || continue
+  [[ -n "$actual" && "$actual" -ef "$executable" ]] || { uncertain=1; continue; }
+  [[ "$(LC_ALL=C noetaxis_process_start "$pid")" == "$(printf '%s' "$start" | /usr/bin/tr -s ' ')" ]] || { uncertain=1; continue; }
   found=$((found + 1))
   phase="$(noetaxis_json_get "$record" phase || true)"
   heartbeat="$(noetaxis_json_get "$record" heartbeatAt || true)"
   update_startup_detail="pid $pid, phase $phase, stage $(noetaxis_json_get "$record" stage || true), migration $(noetaxis_json_get "$record" migrationId || true)"
   update_startup_state=stale
   if [[ "$heartbeat" =~ ^[0-9]+$ && "$heartbeat" -le "$now" && $((now - heartbeat)) -le "${NOETAXIS_STARTUP_STALL_SECONDS:-90}" ]]; then
-   case "$phase" in starting|waiting-for-lock|migrating) update_startup_state=active ;; *) update_startup_state=ambiguous ;; esac
+   case "$phase" in starting|waiting-for-lock|migrating) update_startup_state=active ;; ready|failed) update_startup_state=quiescent ;; *) update_startup_state=ambiguous ;; esac
   fi
+  if [[ "$update_startup_state" == active || "$update_startup_state" == stale ]]; then update_startup_veto=1; fi
  done
- if [[ "$found" -ne 1 ]]; then update_startup_state=ambiguous; fi
+ if [[ "$found" -gt 1 || "$uncertain" -eq 1 ]]; then update_startup_state=ambiguous; fi
 }
 
 noetaxis_update_startup_interlock() {
  noetaxis_update_startup_state "$1"
- if [[ "$update_startup_state" == active || "$update_startup_state" == stale ]]; then
+ if [[ "${update_startup_veto:-0}" -eq 1 || "$update_startup_state" == active || "$update_startup_state" == stale || "$update_startup_state" == ambiguous ]]; then
   noetaxis_update_warn "Startup/migration shutdown interlock: $update_startup_detail; new app retained."
   return 1
  fi
+ return 0
 }
 
 noetaxis_update_needs_attention() {

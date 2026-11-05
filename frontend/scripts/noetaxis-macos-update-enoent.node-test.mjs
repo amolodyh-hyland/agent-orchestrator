@@ -147,7 +147,7 @@ test("an approved bundled PID that becomes ENOENT is excluded from enumeration a
 	await writeFile(file, (await readFile(file, "utf8")).replace(/^8401\|.*$/m, "8401|!ENOENT"));
 	const own = execute("/bin/bash", ["-c", 'source "$1/common.sh"; source "$1/update-lib.sh"; noetaxis_own_bundle_processes "$2"', "own", world.scriptsDir, world.targetApp], { env: world.env });
 	assert.equal(own.stdout, "");
-	const signal = execute("/bin/bash", ["-c", 'source "$1/common.sh"; source "$1/update-lib.sh"; update_approved_file="$3"; noetaxis_signal_own_pid "$2" 8401 transition', "signal", world.scriptsDir, world.targetApp, approved], { env: world.env });
+	const signal = execute("/bin/bash", ["-c", 'source "$1/common.sh"; source "$1/update-lib.sh"; ao_home="$HOME/.ao"; update_approved_file="$3"; noetaxis_signal_own_pid "$2" 8401 transition', "signal", world.scriptsDir, world.targetApp, approved], { env: world.env });
 	assert.equal(signal.status, 1, signal.stdout + signal.stderr);
 	assert.deepEqual(signals(await world.calls()), []);
 });

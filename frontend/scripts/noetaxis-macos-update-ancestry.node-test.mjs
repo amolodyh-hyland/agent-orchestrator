@@ -246,7 +246,7 @@ async function signalTransition(t, scriptsDir, label) {
 	const snapshot = execute("/bin/bash", ["-c", 'source "$1/common.sh"; source "$1/update-lib.sh"; noetaxis_update_snapshot_processes "$2" > "$3"', "snapshot", scripts, world.targetApp, approved], { env: world.env });
 	assert.equal(snapshot.status, 0, snapshot.stderr);
 	await setExecutable(world, 6701, path.join(world.root, "foreign/node"));
-	const result = execute("/bin/bash", ["-c", 'source "$1/common.sh"; source "$1/update-lib.sh"; update_approved_file="$3"; noetaxis_signal_own_pid "$2" 6701 transition', "signal", scripts, world.targetApp, approved], { env: world.env });
+	const result = execute("/bin/bash", ["-c", 'source "$1/common.sh"; source "$1/update-lib.sh"; ao_home="$HOME/.ao"; update_approved_file="$3"; noetaxis_signal_own_pid "$2" 6701 transition', "signal", scripts, world.targetApp, approved], { env: world.env });
 	return { world, result };
 }
 

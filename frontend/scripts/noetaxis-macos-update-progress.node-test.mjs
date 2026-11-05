@@ -33,6 +33,7 @@ function shell(root, body) {
  noetaxis_update_daemon_healthy() { [[ "$(cat "$ROOT/clock")" -ge 600 ]]; }
  noetaxis_json_get() { /usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"; }
  noetaxis_process_start() { printf 'Mon Oct 12 00:00:00 2026'; }
+ noetaxis_pid_may_be_alive() { return 0; }
  noetaxis_process_executable_is_in_bundle() { return 0; }
  noetaxis_process_executable_path() { printf '%s' "$ROOT/app/Contents/Resources/daemon/ao"; }
  ${body}
@@ -41,7 +42,7 @@ function shell(root, body) {
  return result;
 }
 function record(root, values = {}) {
- writeFileSync(path.join(root, "startup/launch.json"), JSON.stringify({ launchId: "launch", pid: 123, processStart: "Mon Oct 12 00:00:00 2026", executable: path.join(root, "app/Contents/Resources/daemon/ao"), phase: "migrating", stage: "migration", migrationId: "20261102160814608", heartbeatAt: 0, ...values }));
+ writeFileSync(path.join(root, `startup/${values.launchId ?? "launch"}.json`), JSON.stringify({ launchId: "launch", pid: 123, processStart: "Mon Oct 12 00:00:00 2026", executable: path.join(root, "app/Contents/Resources/daemon/ao"), phase: "migrating", stage: "migration", migrationId: "20261102160814608", heartbeatAt: 0, ...values }));
 }
 
 test("fresh migration heartbeats cross the health deadline without rollback", (t) => {
@@ -113,7 +114,7 @@ for (const mode of ["absent-tray", "failed-quit", "migration"]) test(mode + " ca
 test("restore timeout never claims rollback completed or launches old app", (t) => {
  const root = fixture(t);
  const result = shell(root, `
- noetaxis_update_startup_state() { update_startup_state=ambiguous; update_startup_detail=stopped; }
+ noetaxis_update_startup_state() { update_startup_state=quiescent; update_startup_detail=stopped; }
  noetaxis_none_running_of_kind() { return 0; }
  noetaxis_wait_until() { return 0; }
  noetaxis_bounded() { echo 'restore timed out'; return 142; }
@@ -156,7 +157,7 @@ test("health needs-attention cannot trigger the installer cleanup rollback fallb
 test("authenticated quit can complete rollback without a tray", (t) => {
  const root = fixture(t);
  const result = shell(root, `
- noetaxis_update_startup_state() { update_startup_state=ambiguous; update_startup_detail=ready; }
+ noetaxis_update_startup_state() { update_startup_state=quiescent; update_startup_detail=ready; }
  noetaxis_none_running_of_kind() { [[ "$2" == daemon ]]; }
  noetaxis_request_supervisor_shutdown() { echo authenticated-quit; return 0; }
  noetaxis_wait_until() { return 0; }
@@ -169,3 +170,104 @@ test("authenticated quit can complete rollback without a tray", (t) => {
  assert.match(result.stdout, /completed=1/);
  assert.doesNotMatch(result.stdout, /forbidden/);
 });
+
+for (const phases of [["migrating", "waiting-for-lock"], ["waiting-for-lock", "migrating"], ["migrating", "ready"]]) {
+ test(`multiple verified launches (${phases.join(", ")}) veto every stop and signal path`, (t) => {
+  const root = fixture(t);
+  record(root, { launchId: "first", pid: 123, phase: phases[0], heartbeatAt: 990 });
+  record(root, { launchId: "second", pid: 456, phase: phases[1], heartbeatAt: 990 });
+  writeFileSync(path.join(root, "clock"), "1000");
+  writeFileSync(path.join(root, "signal-sink"), '#!/bin/sh\necho forbidden-signal >> "$ROOT/signals"\n', { mode: 0o755 });
+  const result = shell(root, `
+   update_fast=1; update_stop_timeout_given=1; update_stop_timeout=1; cap_dir="$ROOT"
+   NOETAXIS_KILL="$ROOT/signal-sink"
+   noetaxis_shipit_running() { return 1; }
+   noetaxis_process_info() { printf '%s\\t0\\tstart\\tfixture' "$1"; }
+   noetaxis_own_main_pid() { echo 123; }
+   noetaxis_none_running_of_kind() { return 1; }
+   noetaxis_tray_quit() { echo forbidden-tray; }
+   noetaxis_bounded() { echo forbidden-stop; }
+   noetaxis_wait_until() { return 1; }
+   noetaxis_fast_bundle_snapshot() { printf '%s\\t%s\\n' "$ROOT/app/Contents/Resources/daemon/ao" "$(noetaxis_process_info 123)"; }
+   noetaxis_update_startup_state "$ROOT/app"
+   printf 'state=%s veto=%s\\n' "$update_startup_state" "$update_startup_veto"
+   for action in noetaxis_fast_quit noetaxis_update_quit_app noetaxis_update_stop_daemon; do
+    result=0; "$action" "$ROOT/app" || result=$?; printf '%s=%s\\n' "$action" "$result"
+   done
+   noetaxis_signal_own_pid "$ROOT/app" 123 test && exit 98
+   for signal in TERM KILL; do
+    noetaxis_fast_signal "$ROOT/app" "$signal" "$ROOT/app/Contents/Resources/daemon/ao" "$(noetaxis_process_info 123)" && exit 98
+   done
+   result=0; noetaxis_fast_stop_bundle "$ROOT/app" || result=$?
+   [[ "$result" -eq 56 && ! -e "$ROOT/signals" ]]
+  `);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /state=ambiguous veto=1/);
+  for (const [action, status] of [["noetaxis_fast_quit", 54], ["noetaxis_update_quit_app", 54], ["noetaxis_update_stop_daemon", 55]]) {
+   assert.match(result.stdout, new RegExp(`${action}=${status}`));
+  }
+  assert.doesNotMatch(result.stdout, /forbidden/);
+ });
+}
+
+for (const [values, alive, expected] of [
+ [{ heartbeatAt: 990, phase: "ready" }, true, "quiescent"],
+ [{ heartbeatAt: 990, phase: "unknown" }, true, "ambiguous"],
+ [{ heartbeatAt: 990, processStart: "previous-owner" }, true, "ambiguous"],
+ [{ heartbeatAt: 990 }, false, "absent"],
+]) test(`shutdown distinguishes ${expected} telemetry (${JSON.stringify(values)})`, (t) => {
+ const root = fixture(t);
+ record(root, values);
+ writeFileSync(path.join(root, "clock"), "1000");
+ const result = shell(root, `
+  noetaxis_pid_may_be_alive() { return ${alive ? 0 : 1}; }
+  result=0; noetaxis_update_startup_interlock "$ROOT/app" || result=$?
+  printf 'state=%s result=%s\\n' "$update_startup_state" "$result"
+ `);
+ assert.equal(result.status, 0, result.stderr);
+ assert.match(result.stdout, new RegExp(`state=${expected} result=${expected === "ambiguous" ? 1 : 0}`));
+});
+
+test("a migration appearing during the exit wait vetoes ao stop", (t) => {
+ const root = fixture(t);
+ record(root, { heartbeatAt: 990 });
+ writeFileSync(path.join(root, "clock"), "1000");
+ const result = shell(root, `
+  update_stop_timeout=1
+  mv "$ROOT/startup/launch.json" "$ROOT/pending.json"
+  noetaxis_none_running_of_kind() { return 1; }
+  noetaxis_wait_until() { cp "$ROOT/pending.json" "$ROOT/startup/launch.json"; return 1; }
+  noetaxis_update_verify_daemon() { return 0; }
+  noetaxis_bounded() { echo forbidden-stop; return 99; }
+  noetaxis_update_stop_daemon "$ROOT/app"
+ `);
+ assert.equal(result.status, 55, result.stderr);
+ assert.doesNotMatch(result.stdout, /forbidden-stop/);
+});
+
+for (const fast of [0, 1]) for (const manual of [0, 1]) for (const owner of ["absent", "dead", "reused", "live", "unverifiable"]) {
+ test(`${fast ? "fast" : "cautious"} ${manual ? "manual" : "tray"} legacy quit handles ${owner} supervisor metadata`, (t) => {
+  const root = fixture(t);
+  if (owner !== "absent") writeFileSync(path.join(root, "update-control.json"), JSON.stringify({
+   pid: 123, processStart: owner === "reused" ? "previous-owner" : "Mon Oct 12 00:00:00 2026",
+   executable: path.join(root, "app/Contents/Resources/daemon/ao"), socketPath: path.join(root, "old.sock"),
+   token: "old-token", launchId: "old-launch",
+  }));
+  const blocked = ["live", "unverifiable"].includes(owner);
+  const result = shell(root, `
+   update_fast=${fast}; update_manual_quit=${manual}
+   noetaxis_pid_may_be_alive() { return ${owner === "dead" ? 1 : 0}; }
+   ${owner === "unverifiable" ? 'noetaxis_process_start() { :; }' : ""}
+   noetaxis_own_main_pid() { echo 123; }
+   noetaxis_own_pids_of_kind() { :; }
+   noetaxis_none_running_of_kind() { return 1; }
+   noetaxis_fast_main_gone() { return 1; }
+   noetaxis_tray_quit() { echo legacy-tray >> "$ROOT/legacy"; }
+   noetaxis_wait_until() { echo legacy-wait >> "$ROOT/legacy"; return 0; }
+   noetaxis_update_quit_app "$ROOT/app"
+  `);
+  assert.equal(result.status, blocked ? 54 : 0, result.stderr);
+  if (blocked) assert.equal(spawnSync("/bin/test", ["-e", path.join(root, "legacy")]).status, 1);
+  else assert.equal(readFileSync(path.join(root, "legacy"), "utf8"), manual ? "legacy-wait\n" : "legacy-tray\nlegacy-wait\n");
+ });
+}

@@ -2312,6 +2312,16 @@ async function refreshDaemonStatus(): Promise<DaemonStatus> {
 	return daemonStatus;
 }
 
+function acceptUpdateShutdown(): boolean {
+	if (daemonStatus.state !== "ready" && (daemonProcess !== null || daemonStatus.state === "starting")) return false;
+	updateShutdownRequested = true;
+	daemonStartEpoch += 1;
+	daemonStartPromise = null;
+	daemonStartAutoRestartIntent = undefined;
+	cancelDaemonAutoRestart();
+	return true;
+}
+
 async function startDaemon(options: { forceReplaceAdopted?: boolean; autoRestartIntent?: DaemonAutoRestartIntent } = {}): Promise<DaemonStatus> {
 	if (updateShutdownRequested) return daemonStatus;
 	if (!options.autoRestartIntent && daemonStartAutoRestartIntent) {
@@ -2406,8 +2416,8 @@ async function repairDevAcpRuntime(): Promise<void> {
 }
 
 async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAutoRestartIntent): Promise<DaemonStatus> {
-	const startCancelled = () => startEpoch !== daemonStartEpoch || (autoRestartIntent !== undefined &&
-		(autoRestartIntent.generation !== daemonAutoRestartGeneration || browserQuitRequested));
+	const startCancelled = () => updateShutdownRequested || browserQuitRequested || startEpoch !== daemonStartEpoch ||
+		(autoRestartIntent !== undefined && autoRestartIntent.generation !== daemonAutoRestartGeneration);
 	if (daemonProcess) {
 		return daemonStatus;
 	}
@@ -2455,6 +2465,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		if (shouldReplaceDaemonForStartup({ ownership, forceRequested: forceReplaceAdoptedRequested })) {
 			try {
 				await gracefullyReplaceDaemonForBrowser(existing.status);
+				if (startCancelled()) return daemonStatus;
 				replacementKeepAlive = keepAliveForReplacement({
 					ownership,
 					forceRequested: forceReplaceAdoptedRequested,
@@ -2520,9 +2531,11 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 			owner: portAttachOwner,
 			appRunId: portAttachAppRunId,
 		});
+		if (startCancelled()) return daemonStatus;
 		if (shouldReplaceDaemonForStartup({ ownership, forceRequested: forceReplaceAdoptedRequested })) {
 			try {
 				await gracefullyReplaceDaemonForBrowser(directDaemon);
+				if (startCancelled()) return daemonStatus;
 				replacementKeepAlive = keepAliveForReplacement({
 					ownership,
 					forceRequested: forceReplaceAdoptedRequested,
@@ -2587,6 +2600,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		runFile,
 		processStartMs: readProcessStartMs,
 	});
+	if (startCancelled()) return daemonStatus;
 	// Declining to signal is otherwise silent, so say why a live process named by
 	// running.json is left alone (a hung daemon that is not replaced shows up here).
 	if (holder.pid === null && runFile && processAlive(runFile.pid)) {
@@ -2609,6 +2623,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		const deadline = Date.now() + TAKEOVER_TIMEOUT_MS;
 		while (Date.now() < deadline) {
 			const still = await readDaemonProbe(resolvedDaemonPort(), "healthz");
+			if (startCancelled()) return daemonStatus;
 			if (!still) break;
 			await new Promise<void>((r) => setTimeout(r, TAKEOVER_POLL_MS));
 		}
@@ -2629,7 +2644,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 	try {
 		await ensureBundledTmuxStaged();
 	} catch (err) {
-		if (autoRestartIntent && startCancelled()) return daemonStatus;
+		if (startCancelled()) return daemonStatus;
 		setDaemonStatus({
 			state: "error",
 			message: `Could not stage AO's bundled tmux under the AO data directory: ${(err as Error).message}`,
@@ -2637,7 +2652,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		});
 		return daemonStatus;
 	}
-	if (autoRestartIntent && startCancelled()) return daemonStatus;
+	if (startCancelled()) return daemonStatus;
 
 	daemonOutput = "";
 	setDaemonStatus({ state: "starting" });
@@ -2645,7 +2660,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		try {
 			await mkdir(launch.cwd, { recursive: true, mode: 0o750 });
 		} catch (err) {
-			if (autoRestartIntent && startCancelled()) return daemonStatus;
+			if (startCancelled()) return daemonStatus;
 			// A failure here (home unwritable, launch.cwd exists as a file) would
 			// otherwise reject out of startDaemonInner; boot calls this via
 			// `void startDaemon()`, so it would surface as an unhandled rejection
@@ -4306,12 +4321,8 @@ app.whenReady().then(async () => {
 		try {
 			const disposeUpdateControl = await startUpdateControl({
 				directory: editorStateDir(),
-				canShutdown: () => daemonStatus.state === "ready" || (!daemonProcess && daemonStatus.state !== "starting"),
-				quit: () => {
-					updateShutdownRequested = true;
-					cancelDaemonAutoRestart();
-					desktopQuit.quitCompletely();
-				},
+				canShutdown: acceptUpdateShutdown,
+				quit: () => desktopQuit.quitCompletely(),
 			});
 			app.once("will-quit", disposeUpdateControl);
 		} catch (error) { console.warn("update control unavailable:", error); }

@@ -20,7 +20,7 @@ def sync_directory(path):
 
 class Restore:
     def __init__(self, backup, target, data, restore_db, seconds):
-        self.backup, self.target, self.data = Path(backup), Path(target), Path(data)
+        self.backup, self.target, self.data = [Path(value).resolve() for value in (backup, target, data)]
         self.restore_db = restore_db
         self.lock_acquired = False
         self.fence_created = False
@@ -33,6 +33,8 @@ class Restore:
         self.state = {"attempted": True, "completed": False, "phase": "preflight", "restoreDb": restore_db}
         if self.journal_path.exists():
             self.state = json.loads(self.journal_path.read_text())
+            if self.state["phase"] in ("promoting-database", "promoting-app", "completed"):
+                self.state["promotionStarted"] = True
             if self.state["restoreDb"] != restore_db:
                 if self.state["phase"] != "preflight":
                     raise RuntimeError("Retry with the same --restore-db choice as the journal")
@@ -62,6 +64,8 @@ class Restore:
 
     def phase(self, value):
         self.state["phase"] = value
+        if value in ("promoting-database", "promoting-app"):
+            self.state["promotionStarted"] = True
         self.atomic_json(self.journal_path, self.state)
         self.event(value)
         self.check_deadline()
@@ -116,7 +120,27 @@ class Restore:
         with (self.data / "daemon.lock").open("a+") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.lock_acquired = True
-            return self.restore_locked()
+            try:
+                return self.restore_locked()
+            except Exception as error:
+                self.record_failure(error)
+                raise
+
+    def record_failure(self, error):
+        self.state["error"] = str(error)
+        self.state["completed"] = False
+        self.atomic_json(self.journal_path, self.state)
+        self.log_failure(error)
+        if not self.state.get("promotionStarted") and self.fence_created:
+            (self.current / "VERIFIED").unlink(missing_ok=True)
+            if self.current.exists():
+                sync_directory(self.current)
+            self.fence.unlink(missing_ok=True)
+            sync_directory(self.data)
+
+    def log_failure(self, error):
+        self.event("ERROR " + str(error))
+        self.event("FINAL restore_completed=0 phase=" + self.state["phase"] + " app=" + ("present" if self.target.exists() else "retained-in-backup") + " database=recovery-journal")
 
     def restore_locked(self):
         record = dict(line.split("=", 1) for line in (self.backup / "BACKUP_COMPLETE").read_text().splitlines() if "=" in line)
@@ -134,8 +158,10 @@ class Restore:
             raise RuntimeError("Unknown old-app schema compatibility; new app retained")
         if record.get("schema_before", "").isdigit():
             maximum = min(int(maximum), int(record["schema_before"]))
-        if self.fence.exists() and json.loads(self.fence.read_text()).get("journal") != str(self.journal_path):
-            raise RuntimeError("Another backup has an incomplete restore; recover its recorded journal first")
+        if self.fence.exists():
+            recorded_journal = json.loads(self.fence.read_text()).get("journal")
+            if not recorded_journal or Path(recorded_journal).resolve() != self.journal_path:
+                raise RuntimeError("Another backup has an incomplete restore; recover its recorded journal first")
         if self.state.get("completed"):
             if self.metadata(self.target).get("CFBundleShortVersionString") != expected or self.schema(self.data) > int(maximum):
                 raise RuntimeError("Completed restore no longer matches on-disk state")
@@ -218,15 +244,8 @@ def main():
         restore.run()
         return 0
     except Exception as error:
-        if restore is not None:
-            if restore.lock_acquired:
-                restore.state["error"] = str(error)
-                restore.state["completed"] = False
-                restore.atomic_json(restore.journal_path, restore.state)
-            restore.event("ERROR " + str(error))
-            restore.event("FINAL restore_completed=0 phase=" + restore.state["phase"] + " app=" + ("present" if restore.target.exists() else "retained-in-backup") + " database=recovery-journal")
-            if restore.state["phase"] == "preflight" and restore.fence_created:
-                restore.fence.unlink(missing_ok=True)
+        if restore is not None and not restore.lock_acquired:
+            restore.log_failure(error)
         print("Rollback blocked: " + str(error), file=sys.stderr)
         return 61
 

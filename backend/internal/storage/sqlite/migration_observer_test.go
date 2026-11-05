@@ -2,10 +2,14 @@ package sqlite
 
 import (
 	"database/sql"
-	"github.com/pressly/goose/v3"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
+
+	"github.com/pressly/goose/v3"
 )
 
 func TestMigrationObserverAndCleanRestart(t *testing.T) {
@@ -69,5 +73,23 @@ func TestMigrationObserverReportsFailure(t *testing.T) {
 	})
 	if err == nil || events != 2 {
 		t.Fatalf("failure not reported: events=%d error=%v", events, err)
+	}
+}
+
+func TestWritableOpenRefusesRestoreFence(t *testing.T) {
+	for name, open := range map[string]func(string) (*Store, error){"open": Open, "premigrated": OpenPreMigrated} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "RESTORE_IN_PROGRESS"), []byte(`{"journal":"rollback-journal.json"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			store, err := open(dir)
+			if store != nil || err == nil || !strings.Contains(err.Error(), "restore requires recovery") {
+				t.Fatalf("open = %v, %v; want fence refusal", store, err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "ao.db")); !os.IsNotExist(err) {
+				t.Fatalf("writable open touched SQLite through fence: %v", err)
+			}
+		})
 	}
 }
