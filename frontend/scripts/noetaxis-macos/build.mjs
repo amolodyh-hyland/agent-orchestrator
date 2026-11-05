@@ -363,12 +363,12 @@ async function clearQuarantine(appPath) {
 	if (attributes.stdout.includes("com.apple.quarantine")) await run("/usr/bin/xattr", ["-dr", "com.apple.quarantine", appPath]);
 }
 
-function parseDatabaseSchema(root) {
+export function parseDatabaseSchema(root) {
 	const migrationDir = path.join(root, "backend/internal/storage/sqlite/migrations");
 	const names = readdirSync(migrationDir);
-	const versions = names.map((name) => /^(\d+)_.*\.sql$/.exec(name)?.[1]).filter(Boolean).map(Number);
+	const versions = names.map((name) => /^(\d+)_.*\.sql$/.exec(name)?.[1]).filter(Boolean).map(BigInt);
 	if (versions.length === 0) throw new Error(`No SQLite migrations found in ${migrationDir}`);
-	return Math.max(...versions);
+	return versions.reduce((highest, version) => version > highest ? version : highest, 0n).toString();
 }
 
 // The internal registry mirror serves no npm signature metadata, so corepack cannot

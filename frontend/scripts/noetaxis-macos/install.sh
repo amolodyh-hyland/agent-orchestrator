@@ -350,7 +350,7 @@ noetaxis_install_cleanup() {
 		fi
 	fi
 	if [[ "$update_mode" -eq 1 ]]; then
-		if [[ "$update_fast" -eq 1 && "$install_complete" -eq 1 && "$update_rolled_back" -eq 0 && "$exit_status" -ne 0 && "$exit_status" -ne 62 && "$exit_status" -ne 63 ]]; then
+		if [[ "$update_fast" -eq 1 && "$install_complete" -eq 1 && "$update_rolled_back" -eq 0 && "$exit_status" -ne 0 && "$exit_status" -ne 62 && "$exit_status" -ne 63 && "$exit_status" -ne 64 && "$exit_status" -ne 61 ]]; then
 			rollback_status=0
 			noetaxis_update_auto_rollback "update failed with exit $exit_status" "$target_app" || rollback_status=$?
 			exit_status="$rollback_status"

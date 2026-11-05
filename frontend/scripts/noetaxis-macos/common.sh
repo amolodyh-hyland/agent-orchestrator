@@ -368,6 +368,7 @@ noetaxis_bundle_descendant_processes() {
 
 noetaxis_error() {
 	printf 'Error: %s\n' "$1" >&2
+ if [[ -n "${noetaxis_update_log_file:-}" ]]; then printf '%s ERROR %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$1" >> "$noetaxis_update_log_file"; fi
 }
 
 noetaxis_user_name() {

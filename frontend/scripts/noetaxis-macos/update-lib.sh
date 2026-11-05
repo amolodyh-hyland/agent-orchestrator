@@ -87,6 +87,7 @@ noetaxis_update_warn() {
 }
 
 noetaxis_update_note_user() {
+ noetaxis_update_log "ACTION REQUIRED $1"
 	noetaxis_update_notes_user="${noetaxis_update_notes_user}${noetaxis_update_notes_user:+
 }$1"
 }
@@ -593,7 +594,7 @@ noetaxis_fast_print_plan() {
 	printf '\nPLAN (--fast): %s -> %s\n' "$cap_old_version" "$noetaxis_update_new_version"
 	printf 'Quit AO Completely; stop its verified daemon; wait up to 60s for bundle processes, then TERM/recheck/KILL only verified bundle survivors.\n'
 	printf 'Back up ao.db (+ WAL/SHM), app-state.json, update-settings.json, editor-settings.json and the old app under %s/ao-backups.\n' "$user_home"
-	printf 'Swap %s, relaunch, check health; automatically roll back on failure.\n' "$1"
+	printf 'Swap %s, relaunch, check health; observe startup progress and retain the new app on ambiguity.\n' "$1"
 	printf 'External agent CLIs are never signalled and wait at most 10s; sessions will be restored by AO on launch.\n'
 }
 
@@ -799,9 +800,9 @@ noetaxis_update_print_plan() {
 	else
 		printf '    local Multica server stack (Docker): no running containers found by the filter "%s", not touched\n' "${NOETAXIS_MULTICA_STACK_FILTER:-name=multica}"
 	fi
-	printf '\n  If the new app does not start or the daemon is not healthy within %ss: the new app is quit and the backed-up app is restored automatically.\n' "$update_health_timeout"
+	printf '\n  After %ss without readiness: warn and inspect startup heartbeats; ambiguous/stalled startup retains the new app (exit 64), without rollback.\n' "$update_health_timeout"
 	if [[ "$update_rollback_restore_db" -eq 1 ]]; then
-		printf '  The database is restored too only if the old app then stays unhealthy and the schema was migrated (--rollback-restore-db).\n'
+		printf '  A matched database snapshot is authorized for safe rollback before the old app is launched (--rollback-restore-db).\n'
 	else
 		printf '  The database is not restored automatically (add --rollback-restore-db).\n'
 	fi
@@ -1337,6 +1338,75 @@ noetaxis_update_daemon_healthy_quiet() {
 	noetaxis_update_daemon_healthy "$1"
 }
 
+noetaxis_update_startup_state() {
+ local app_path="$1" record pid start executable actual phase heartbeat now launch_id found=0
+ update_startup_state=ambiguous
+ update_startup_detail="no verified startup record"
+ now="$(date '+%s')"
+ for record in "$ao_home"/startup/*.json; do
+  [[ -f "$record" ]] || continue
+  launch_id="$(noetaxis_json_get "$record" launchId || true)"
+  [[ -n "$launch_id" && "$record" == "$ao_home/startup/$launch_id.json" ]] || continue
+  pid="$(noetaxis_json_get "$record" pid || true)"
+  [[ "$pid" =~ ^[0-9]+$ ]] || continue
+  start="$(noetaxis_json_get "$record" processStart || true)"
+  [[ -n "$start" && "$(LC_ALL=C noetaxis_process_start "$pid")" == "$(printf '%s' "$start" | /usr/bin/tr -s ' ')" ]] || continue
+  executable="$(noetaxis_json_get "$record" executable || true)"
+  [[ -n "$executable" && "$executable" -ef "$app_path/Contents/Resources/daemon/ao" ]] || continue
+  actual="$(noetaxis_process_executable_path "$pid" || true)"
+  [[ -n "$actual" && "$actual" -ef "$executable" ]] || continue
+  [[ "$(LC_ALL=C noetaxis_process_start "$pid")" == "$(printf '%s' "$start" | /usr/bin/tr -s ' ')" ]] || continue
+  found=$((found + 1))
+  phase="$(noetaxis_json_get "$record" phase || true)"
+  heartbeat="$(noetaxis_json_get "$record" heartbeatAt || true)"
+  update_startup_detail="pid $pid, phase $phase, stage $(noetaxis_json_get "$record" stage || true), migration $(noetaxis_json_get "$record" migrationId || true)"
+  update_startup_state=stale
+  if [[ "$heartbeat" =~ ^[0-9]+$ && "$heartbeat" -le "$now" && $((now - heartbeat)) -le "${NOETAXIS_STARTUP_STALL_SECONDS:-90}" ]]; then
+   case "$phase" in starting|waiting-for-lock|migrating) update_startup_state=active ;; *) update_startup_state=ambiguous ;; esac
+  fi
+ done
+ if [[ "$found" -ne 1 ]]; then update_startup_state=ambiguous; fi
+}
+
+noetaxis_update_needs_attention() {
+ update_app_started=1
+ noetaxis_update_warn "needs-attention / new app retained: $*"
+ noetaxis_update_note_user "The new app is retained. Do not interrupt a migration. Inspect $ao_home/startup/ and $backup_dir/update-actions.log, then run \"${target_app:-/Applications/$NOETAXIS_APP_NAME}/Contents/Resources/daemon/ao\" status --json. Retry health checks after startup; use rollback.sh only after AO has stopped and schema compatibility is checked."
+ noetaxis_update_log "FINAL state=needs-attention app=new-retained database=unchanged-by-updater"
+ return 64
+}
+
+noetaxis_update_wait_for_health() {
+ local app_path="$1" began now elapsed warned=0 iterations=0
+ began="$(date '+%s')"
+ while :; do
+  if noetaxis_update_daemon_healthy "$app_path"; then return 0; fi
+  now="$(date '+%s')"
+  elapsed=$((now - began))
+  iterations=$((iterations + 1))
+  if [[ "$elapsed" -ge "$update_health_timeout" ]]; then
+   noetaxis_update_startup_state "$app_path"
+   if [[ "$warned" -eq 0 ]]; then
+    noetaxis_update_warn "Health deadline reached; checking startup progress, without authorizing rollback. $update_startup_detail"
+    warned=1
+   fi
+   if [[ "$update_startup_state" != active ]]; then
+    noetaxis_update_needs_attention "$update_startup_state heartbeat/status; $update_startup_detail"
+    return 64
+   fi
+   if [[ "$elapsed" -ge "${NOETAXIS_STARTUP_ATTENTION_SECONDS:-1800}" ]]; then
+    noetaxis_update_needs_attention "startup remains live after ${elapsed}s; $update_startup_detail"
+    return 64
+   fi
+  fi
+  if [[ "$iterations" -ge 7200 || "$elapsed" -lt 0 ]]; then
+   noetaxis_update_needs_attention "startup observation limit or clock change"
+   return 64
+  fi
+  noetaxis_update_sleep
+ done
+}
+
 # Open the app and wait for its process and a healthy daemon. Sets update_health_detail.
 noetaxis_update_start_and_wait() {
 	local app_path="$1" label="$2" status_code=0
@@ -1351,11 +1421,10 @@ noetaxis_update_start_and_wait() {
 	fi
 	if ! noetaxis_wait_until "the app process to appear" "$update_health_timeout" noetaxis_update_desktop_started "$app_path"; then
 		update_health_detail="the app process did not appear within ${update_health_timeout}s"
-		return 1
+  noetaxis_update_needs_attention "$update_health_detail"
+  return 64
 	fi
-	if ! noetaxis_wait_until "the daemon to be healthy" "$update_health_timeout" noetaxis_update_daemon_healthy_quiet "$app_path"; then
-		return 1
-	fi
+	noetaxis_update_wait_for_health "$app_path" || return $?
 	update_app_started=1
 	return 0
 }
@@ -1599,6 +1668,7 @@ noetaxis_update_exit_report() {
 	local status="$1" now elapsed meaning
 	[[ "$update_report_done" -eq 0 ]] || return 0
 	update_report_done=1
+ noetaxis_update_log "FINAL exit=$status rollback_completed=$update_rolled_back app_started=$update_app_started schema=${update_schema_after:-unknown}"
 	now="$(date '+%s')"
 	elapsed=$((now - noetaxis_update_started_at))
 	case "$status" in
@@ -1615,6 +1685,7 @@ noetaxis_update_exit_report() {
 		55) meaning="the daemon did not stop" ;;
 		57) meaning="refused: the daemon on the shared run file is not this bundle's" ;;
 		56) meaning="chat hosts or helpers are still running" ;;
+		64) meaning="needs attention; new app retained, no automatic rollback" ;;
 		60) meaning="new app unhealthy; previous app restored and healthy" ;;
 		61) meaning="new app unhealthy; rollback needs your attention" ;;
 		62) meaning="updated and healthy, but some post-install checks warn" ;;
@@ -1629,7 +1700,7 @@ noetaxis_update_exit_report() {
 		printf '\n==== Update result (exit %s: %s). Nothing was stopped, backed up or installed. ====\n' "$status" "$meaning"
 		return 0
 	fi
-	if [[ "$status" -ne 0 && "$status" -ne 60 && "$update_app_started" -eq 0 && -n "$noetaxis_update_summary_stopped" ]]; then
+	if [[ "$status" -ne 0 && "$status" -ne 60 && "$status" -ne 61 && "$status" -ne 64 && "$update_app_started" -eq 0 && -n "$noetaxis_update_summary_stopped" ]]; then
 		noetaxis_update_note_user "AO was stopped by this run and is not running now. Reopen it with: open -a \"${target_app:-/Applications/$NOETAXIS_APP_NAME}\""
 	fi
 	printf '\n==== Update summary (exit %s: %s, %ss) ====\n' "$status" "$meaning" "$elapsed"
@@ -1672,7 +1743,7 @@ noetaxis_update_exit_report() {
 	if [[ -n "${backup_dir:-}" && -d "$backup_dir" && -n "${update_capture_dir:-}" && -d "$update_capture_dir" ]]; then
 		/bin/mkdir -p "$backup_dir/state-before"
 		/bin/cp -R "$update_capture_dir/." "$backup_dir/state-before/" 2>/dev/null || true
-		if [[ -f "$noetaxis_update_log_file" ]]; then
+		if [[ -f "$noetaxis_update_log_file" && "$noetaxis_update_log_file" != "$backup_dir/update-actions.log" ]]; then
 			/bin/cp "$noetaxis_update_log_file" "$backup_dir/update-actions.log" 2>/dev/null || true
 		fi
 	fi
@@ -1739,10 +1810,12 @@ noetaxis_update_prepare_privilege() {
 # Returns 0, 62 (checks warn), 63 (a session did not come back), 60 or 61 (rollback).
 noetaxis_update_finish() {
 	local app_path="$1" expected_version="$2" status_code=0
-	if ! noetaxis_update_start_and_wait "$app_path" "the new app"; then
-		noetaxis_update_auto_rollback "$update_health_detail" "$app_path" || status_code=$?
-		return "$status_code"
-	fi
+	noetaxis_update_start_and_wait "$app_path" "the new app" || status_code=$?
+ if [[ "$status_code" -eq 64 ]]; then return 64; fi
+ if [[ "$status_code" -ne 0 ]]; then
+  noetaxis_update_auto_rollback "$update_health_detail" "$app_path" || status_code=$?
+  return "$status_code"
+ fi
 	noetaxis_update_say "the new app is healthy: $update_health_detail"
 	noetaxis_update_append noetaxis_update_summary_extra "new app started; $update_health_detail"
 	noetaxis_update_post_checks "$app_path" "$expected_version"
