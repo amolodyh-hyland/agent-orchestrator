@@ -284,6 +284,7 @@ if [[ "$update_mode" -eq 1 ]]; then
 		update_capture_dir="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/noetaxis-update.XXXXXX")"
 	fi
 	noetaxis_update_log_file="$update_capture_dir/update-actions.log"
+	: > "$noetaxis_update_log_file" || exit 31
 	if [[ "$update_fast" -eq 1 ]]; then
 		noetaxis_fast_capture "$target_app" "$update_capture_dir"
 		noetaxis_fast_print_plan "$target_app"
