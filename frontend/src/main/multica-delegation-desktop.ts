@@ -12,6 +12,7 @@ import { createMulticaDelegationCoordinator } from "./multica-delegation-coordin
 import { createDelegationConfirmationFlow } from "./multica-delegation-confirmation";
 import { registerDelegationConfirmationIpc } from "./multica-delegation-confirmation-ipc";
 import { createMulticaPublicApi } from "./multica-public-api";
+import { createLocalMulticaRuntimeResolver, type RuntimeProvenanceOptions } from "./multica-runtime-provenance";
 import { DELEGATION_SETTINGS, DELEGATION_SETTINGS_CHANGED, DELEGATION_ENABLE_CLICK } from "../shared/multica-delegation-confirmation";
 
 export function registerDesktopDelegation(options: {
@@ -23,6 +24,7 @@ export function registerDesktopDelegation(options: {
 	confirmEnable: () => Promise<boolean>;
 	confirmResult?: (detail:string) => Promise<boolean>;
 	daemonFetch: typeof fetch;
+	runtimeProvenance?: Partial<RuntimeProvenanceOptions>;
 	fetch: typeof fetch; confirm: (preview: DelegationPreview, detail: string) => Promise<boolean>;
 }) {
 	let enabled = false;
@@ -36,6 +38,7 @@ export function registerDesktopDelegation(options: {
 	let server: ReturnType<typeof resolveMulticaServer> = null;
 	const clients = new Map<string, ReturnType<typeof createMulticaPublicApi>>();
 	const journal = createDaemonDelegationJournal(options.daemonOrigin, options.authority, options.daemonFetch);
+	const resolveRuntimeClass = createLocalMulticaRuntimeResolver(options.runtimeProvenance);
 	async function client(workspaceId: string) {
 		server = resolveMulticaServer(await options.readSettings());
 		if (!server) throw new Error("connection_changed");
@@ -48,7 +51,7 @@ export function registerDesktopDelegation(options: {
 		}
 		return connection;
 	}
-	const coordinator = createMulticaDelegationCoordinator({ journal, confirmations: options.authority, enabled: () => enabled && !disposed,
+	const coordinator = createMulticaDelegationCoordinator({ journal, resolveRuntimeClass, confirmations: options.authority, enabled: () => enabled && !disposed,
 		client: (binding) => {
 			const connection = clients.get(JSON.stringify([binding.serverKey, binding.origin, binding.workspaceId]));
 			if (!connection) throw new Error("connection_changed");
@@ -66,11 +69,11 @@ export function registerDesktopDelegation(options: {
 		await ready;
 		if (!enabled || disposed) throw new Error("delegations_disabled");
 		return client(workspaceId);
-	}, policy: journal.evaluatePolicy, confirm: options.confirm,
+	}, resolveRuntimeClass, policy: journal.evaluatePolicy, confirm: options.confirm,
 		onConfirmed: (record) => { void status.status(record.projectId, record.taskId); } });
 	const ipc = registerDelegationConfirmationIpc({ ipcMain: options.ipcMain, shellWebContents: options.shellWebContents, flow, status,
 		setCredential: async (workspaceId, token) => (await (await client(workspaceId)).setToken(token)).ok });
-	const resultImport=registerResultImport({ipcMain:options.ipcMain,shellWebContents:options.shellWebContents,authority:options.authority,origin:options.daemonOrigin,fetch:options.daemonFetch,policy:journal.evaluatePolicy,enabled:()=>enabled&&!disposed,confirm:options.confirmResult ?? (async()=>false),
+	const resultImport=registerResultImport({ipcMain:options.ipcMain,shellWebContents:options.shellWebContents,authority:options.authority,origin:options.daemonOrigin,fetch:options.daemonFetch,policy:journal.evaluatePolicy,resolveRuntimeClass,enabled:()=>enabled&&!disposed,confirm:options.confirmResult ?? (async()=>false),
         client:async(binding)=>{await ready;const connection=await client(binding.workspaceId);if(!isDeepStrictEqual(connection.binding,binding))throw new Error("connection_changed");return connection;}});
     const shell = options.shellWebContents;
 	const trusted = (event: IpcMainInvokeEvent) => !disposed && !shell.isDestroyed() && event.sender.id === shell.id && event.senderFrame === shell.mainFrame;

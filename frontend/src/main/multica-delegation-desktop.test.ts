@@ -25,6 +25,7 @@ function setup(overrides: Partial<Pick<Parameters<typeof registerDesktopDelegati
 		ipcMain: { handle: (channel: string, handler: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown) => handlers.set(channel, handler), removeHandler: vi.fn() } as unknown as IpcMain,
 		shellWebContents: shell as unknown as WebContents, authority: createMainProcessDelegationAuthority(Buffer.alloc(32, 7)),
 		credentials: {} as MulticaCredentials, daemonOrigin: () => null,
+		runtimeProvenance: { homeDirectory: stateDir },
 		daemonFetch: fetch,
 		readEnabled: () => readMulticaDelegationEnabled(stateDir), writeEnabled: (enabled) => writeMulticaDelegationEnabled(stateDir, enabled), ...overrides,
 		readSettings: async () => ({ mode: "local", customUrl: "http://contract.local", apiUrl: "http://contract.local", delegationEnabled: true }),

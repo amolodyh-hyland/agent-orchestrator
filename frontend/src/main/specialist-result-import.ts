@@ -4,7 +4,7 @@ import type { IpcMain, IpcMainInvokeEvent, WebContents } from "electron";
 import { RESULT_PREVIEW, RESULT_CANCEL, RESULT_CLICK, RESULT_UPDATE, type ResultPreview } from "../shared/specialist-result";
 import type { PublicDelegation } from "./multica-public-api-model";
 import type { PublicApiBinding, createMulticaPublicApi } from "./multica-public-api";
-import { policyBlock, type DelegationPolicyResolver } from "./multica-delegation-policy";
+import { policyBlock, resolveDelegationRuntime, type DelegationPolicyResolver, type DelegationRuntimeResolver } from "./multica-delegation-policy";
 import { resultHash, type PublicDelegationResult } from "./multica-result-model";
 import type { MainProcessDelegationAuthority } from "./multica-delegation-authority";
 
@@ -13,6 +13,7 @@ export function createResultImportFlow(options: {
  context: (runId:string)=>Promise<ResultContext>;
  client: (binding:PublicApiBinding)=>Promise<Pick<ReturnType<typeof createMulticaPublicApi>,"getDelegationResult">>;
  policy: DelegationPolicyResolver;
+ resolveRuntimeClass?: DelegationRuntimeResolver;
  save: (runId:string,input:unknown)=>Promise<void>;
  confirm: (detail:string)=>Promise<boolean>;
  enabled: ()=>boolean;
@@ -38,7 +39,8 @@ export function createResultImportFlow(options: {
   const binding:PublicApiBinding={serverKey:e.context.serverKey,origin:e.context.serverOrigin,workspaceId:e.context.workspaceId};
   const action=e.preview.phase==="read"?"result_read":"result_import";
   const policy=async()=>{
-   const request={serverOrigin:binding.origin,workspaceId:binding.workspaceId,profileId:e.context.remote.agent_id,runtimeId:e.context.remote.runtime_id,runtimeClass:"unknown" as const,dataScopes:["task_result"] as const};
+   const runtimeClass=await resolveDelegationRuntime(options.resolveRuntimeClass,binding,e.context.remote.runtime_id);
+   const request={serverOrigin:binding.origin,workspaceId:binding.workspaceId,profileId:e.context.remote.agent_id,runtimeId:e.context.remote.runtime_id,runtimeClass,dataScopes:["task_result"] as const};
    const read=await policyBlock(options.policy,{...request,action:"result_read"});
    if(read!==null || action==="result_read")return read;
    return policyBlock(options.policy,{...request,action:"result_import"});
@@ -71,6 +73,7 @@ export function registerResultImport(options:{
  ipcMain:Pick<IpcMain,"handle"|"removeHandler">;shellWebContents:Pick<WebContents,"id"|"mainFrame"|"isDestroyed"|"isFocused"|"send"|"on"|"removeListener">;
  authority:MainProcessDelegationAuthority;origin:()=>string|null;fetch:typeof fetch;
  client:Parameters<typeof createResultImportFlow>[0]["client"];policy:DelegationPolicyResolver;enabled:()=>boolean;confirm:(detail:string)=>Promise<boolean>;
+ resolveRuntimeClass?: DelegationRuntimeResolver;
 }){
  const shell=options.shellWebContents;let disposed=false;
  const trusted=(e:IpcMainInvokeEvent)=>!disposed && !shell.isDestroyed() && e.sender.id===shell.id && e.senderFrame===shell.mainFrame;
@@ -87,7 +90,7 @@ export function registerResultImport(options:{
   if(!options.authority.verifyResponseMAC(raw,mac,response.headers.get("X-AO-Delegation-Response-MAC")))throw new Error("unavailable");
   return (JSON.parse(raw) as {record:unknown}).record;
  }
- const flow=createResultImportFlow({context:async id=>await request("result_context",id) as ResultContext,save:async(id,input)=>{await request("result_import",id,input);},client:options.client,policy:options.policy,enabled:()=>!disposed && options.enabled(),confirm:options.confirm});
+ const flow=createResultImportFlow({context:async id=>await request("result_context",id) as ResultContext,save:async(id,input)=>{await request("result_import",id,input);},client:options.client,policy:options.policy,resolveRuntimeClass:options.resolveRuntimeClass,enabled:()=>!disposed && options.enabled(),confirm:options.confirm});
  const navigation=(_e:unknown,_url:string,_inPlace:boolean,main:boolean)=>{if(main)flow.invalidate();};shell.on("did-start-navigation",navigation);
  options.ipcMain.handle(RESULT_PREVIEW,async(e,id:unknown)=>{if(!trusted(e)||typeof id!=="string"||id.length>128)return null;try{return await flow.preview(id);}catch{return null;}});
  options.ipcMain.handle(RESULT_CANCEL,(e,id:unknown)=>{if(trusted(e)&&typeof id==="string")flow.cancel(id);});

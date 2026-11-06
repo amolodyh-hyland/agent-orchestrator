@@ -82,6 +82,22 @@ Without an `aoMulticaDelegation` rule, verified managed devices resolve `policy_
 Unmanaged machines with verified empty protected locations still resolve to
 `policy_absent`; a local setting or rollout flag cannot override a managed rule.
 
+`frontend/src/main/multica-runtime-provenance.ts` supplies the registered desktop's
+runtime resolver for preview validation, coordinator policy rechecks and result
+read/import. It reads only profile connection metadata, `daemon.port`,
+`daemon.pid` and daemon-ID files under `~/.multica`; no credential operation or
+token field is used. Files must be same-user, protected from group/other writes,
+bounded, contained under that directory and free of symlinks. Native `lsof` and
+`ps` verify that the health listener belongs to a stable same-user `multica`
+process. Its bounded `127.0.0.1` health response must match the profile, PID,
+daemon UUID, configured server origin and exact workspace/runtime IDs. Process
+identity and metadata are checked again afterward. Evidence is refreshed for
+each policy check, without caching a local classification. A server-provided
+class field or a loopback server URL supplies no locality evidence. Missing
+tools, unsupported OS ownership checks, forwarded/container-only listeners,
+ambiguous identities or failed checks return `unknown` and remain blocked by
+the managed no-rule default.
+
 Migration `0219_multica_confirmation_verification.sql` marks legacy records
 unverified by default. Only authenticated, proof-verified reservations set the
 provenance fact. Reads/updates never adopt pre-proof records. This durable fact

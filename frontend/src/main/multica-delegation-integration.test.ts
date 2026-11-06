@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { IpcMain, IpcMainInvokeEvent, WebContents } from "electron";
@@ -15,7 +15,7 @@ import { createMulticaDelegationCoordinator, type DelegationRecord } from "./mul
 import { createDaemonDelegationJournal } from "./multica-delegation-journal";
 import { readMulticaDelegationEnabled, writeMulticaDelegationEnabled } from "./multica-settings";
 import { registerDesktopDelegation } from "./multica-delegation-desktop";
-import { createMulticaCredentials } from "./multica-credentials";
+import { createMulticaCredentials, type MulticaCredentials } from "./multica-credentials";
 import { DELEGATION_SETTINGS, DELEGATION_ENABLE_CLICK, DELEGATION_STATUS, DELEGATION_CANCEL_CLICK, DELEGATION_CANCEL_PREVIEW, DELEGATION_CONFIRM_CLICK, DELEGATION_CREDENTIAL, DELEGATION_PREVIEW, DELEGATION_RESULT, type DelegationConfirmationResult } from "../shared/multica-delegation-confirmation";
 import type { DelegationSendGuard } from "./multica-delegation-policy";
 import type { PublicDelegation } from "./multica-public-api-model";
@@ -31,7 +31,7 @@ beforeAll(async () => {
 	dir = await mkdtemp(path.join(tmpdir(), "ao-delegation-real-journal-"));
 	const backend = path.resolve(process.cwd(), "../backend");
 	fixture = JSON.parse(await readFile(path.join(backend, "internal/delegationauth/testdata/record.json"), "utf8"));
-	const binary = path.join(dir, process.platform === "win32" ? "journal-fixture.exe" : "journal-fixture");
+	const binary = path.join(dir, process.platform === "win32" ? "multica.exe" : "multica");
 	await promisify(execFile)("go", ["build", "-o", binary, "./internal/httpd/testdata/delegation-journal"], {
 		cwd: backend, env: process.env, timeout: 240_000,
 	});
@@ -141,6 +141,7 @@ describe("coordinators against the real daemon SQLite journal", () => {
 		const register = () => registerDesktopDelegation({
 			ipcMain: { handle: (channel: string, handler: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown) => handlers.set(channel, handler), removeHandler: () => undefined } as unknown as IpcMain,
 			shellWebContents: shell as unknown as WebContents, authority, credentials, daemonOrigin: () => origin,
+			runtimeProvenance: { homeDirectory: settingsDir },
 			readEnabled: () => readMulticaDelegationEnabled(settingsDir), writeEnabled: (enabled) => writeMulticaDelegationEnabled(settingsDir, enabled),
 			readSettings: async () => ({ mode: "local", customUrl: providerOrigin, apiUrl: providerOrigin }), confirm, confirmCancellation, confirmEnable,
 			daemonFetch: async (input, init) => {
@@ -388,4 +389,75 @@ describe("coordinators against the real daemon SQLite journal", () => {
 		} finally { await rm(managed, { force: true }); }
 	});
 
+});
+
+describe.skipIf(process.platform !== "darwin" && process.platform !== "linux")("registered desktop runtime provenance", () => {
+ it.each(["local", "remote origin", "remote runtime", "unknown runtime", "server-spoofed locality", "revoked at reserve"])("enrolled/no-rule policy boundary handles %s", async mode => {
+  const home=path.join(dir,randomUUID()), profile=path.join(home,".multica/profiles/localproof");
+  await mkdir(profile,{recursive:true,mode:0o700});
+  const configuredOrigin=mode==="remote origin"?"https://remote.example":"http://localhost:8380";
+  const daemonId=randomUUID(), payload=fixture.intent.payload;
+  const health={status:"running",pid:child!.pid,profile:"localproof",daemon_id:daemonId,server_url:"http://localhost:8380",
+   workspaces:[{id:fixture.intent.binding.workspaceId,runtimes:mode==="unknown runtime"||mode==="remote runtime"||mode==="server-spoofed locality"?[randomUUID()]:[payload.expected_runtime_id]}]};
+  const healthFile=path.join(dir,"local-health.json");
+  await writeFile(healthFile,JSON.stringify(health));
+  for(const [name,value] of Object.entries({"config.json":JSON.stringify({server_url:"http://localhost:8380",token:"must-not-be-sent"}),
+   "daemon.port":JSON.stringify({port:Number(new URL(origin).port),pid:child!.pid}),"daemon.pid":String(child!.pid),"bundle-daemon.id":daemonId})){
+   await writeFile(path.join(profile,name),value,{mode:0o600});
+  }
+  const handlers=new Map<string,(event:IpcMainInvokeEvent,...args:unknown[])=>unknown>();
+  const results:DelegationConfirmationResult[]=[], policyClasses:unknown[]=[];
+  let submissions=0;
+  const frame={};
+  const shell={id:77,mainFrame:frame,isDestroyed:()=>false,isFocused:()=>true,on:()=>undefined,removeListener:()=>undefined,
+   send:(channel:string,value:{result:DelegationConfirmationResult})=>{if(channel===DELEGATION_RESULT)results.push(value.result);}};
+  const event={sender:{id:77},senderFrame:frame} as unknown as IpcMainInvokeEvent;
+  const remote={delegation_id:randomUUID(),task_id:randomUUID(),workspace_id:fixture.intent.binding.workspaceId,agent_id:payload.agent_id,
+   runtime_id:payload.expected_runtime_id,status:"queued",terminal:false,revision:"first",created_at:new Date().toISOString()};
+  const credentials={resolve:async()=>({ok:true,token:"mul_PROVENANCE00001"}),setPasted:async()=>true} as unknown as MulticaCredentials;
+  const desktop=registerDesktopDelegation({
+   ipcMain:{handle:(channel:string,callback:(event:IpcMainInvokeEvent,...args:unknown[])=>unknown)=>handlers.set(channel,callback),removeHandler:()=>undefined} as unknown as IpcMain,
+   shellWebContents:shell as unknown as WebContents,authority,credentials,daemonOrigin:()=>origin,runtimeProvenance:{homeDirectory:home},
+   readEnabled:async()=>true,writeEnabled:async()=>undefined,readSettings:async()=>({mode:"local",customUrl:configuredOrigin,apiUrl:configuredOrigin}),
+   confirm:async()=>true,confirmCancellation:async()=>false,confirmEnable:async()=>true,
+   daemonFetch:async(input,init)=>{
+    const request=init?.body?JSON.parse(String(init.body)):null;
+    if(request?.operation==="evaluatePolicy"){
+     policyClasses.push(request.policyRequest.runtimeClass);
+     const code=request.policyRequest.runtimeClass==="local"&&request.policyRequest.serverOrigin==="http://localhost:8380"?"policy_absent":"policy_unavailable";
+     const body=JSON.stringify({record:{code}}),mac=new Headers(init?.headers).get("X-AO-Delegation-MAC");
+     const proof=createHmac("sha256",key).update(`journal-response-v1:${mac}:${body}`).digest("hex");
+     return new Response(body,{headers:{"X-AO-Delegation-Response-MAC":proof}});
+    }
+    const response=await fetch(input,init);
+    if(request?.operation==="reserve"&&mode==="revoked at reserve"){health.workspaces=[];await writeFile(healthFile,JSON.stringify(health));}
+    return response;
+   },
+   fetch:async(input,init)=>{
+    const url=new URL(String(input));expect(url.origin).toBe(configuredOrigin);
+    if(init?.method==="POST")submissions++;
+    const value=url.pathname.startsWith("/api/v1/agents/")?{agent_id:payload.agent_id,workspace_id:fixture.intent.binding.workspaceId,name:"Reviewer",runtime_id:payload.expected_runtime_id,
+     runtime_bound:true,permission_mode:"private",can_invoke:true,invocation_targets:[],archived:false,availability:"online"}
+     :url.pathname.startsWith("/api/v1/runtimes/")?{runtime_id:payload.expected_runtime_id,workspace_id:fixture.intent.binding.workspaceId,availability:"online",
+      ...(mode==="server-spoofed locality"?{runtime_class:"local",class:"local"}:mode==="remote runtime"?{runtime_class:"remote"}:{})}:remote;
+    return Response.json(value,{status:init?.method==="POST"?202:200});
+   },
+  });
+  try{
+   expect(await handlers.get(DELEGATION_CREDENTIAL)!(event,fixture.intent.binding.workspaceId,"mul_PROVENANCE00001")).toBe(true);
+   const draft={orchestrator:"project",workspaceId:fixture.intent.binding.workspaceId,profileId:payload.agent_id,runtimeId:payload.expected_runtime_id,
+    projectId:payload.source.project_id,taskId:randomUUID(),title:payload.task.title,brief:payload.task.instructions};
+   const preview=await handlers.get(DELEGATION_PREVIEW)!(event,draft) as DelegationConfirmationResult;
+   if(mode!=="local"&&mode!=="revoked at reserve"){
+    expect(preview).toEqual({ok:false,code:"policy_unavailable"});expect(policyClasses).toEqual(["unknown"]);
+   }else{
+    if(!preview.ok||!("preview" in preview))throw new Error(JSON.stringify(preview));
+    await handlers.get(DELEGATION_CONFIRM_CLICK)!(event,{id:preview.preview.id,hash:preview.preview.hash});
+    expect(policyClasses.length).toBeGreaterThan(3);
+    if(mode==="local"){expect(policyClasses.every(value=>value==="local")).toBe(true);expect(results.at(-1)).toMatchObject({ok:true});}
+    else{expect(policyClasses.at(-1)).toBe("unknown");expect(submissions).toBe(0);}
+   }
+   expect(submissions).toBe(mode==="local"?1:0);
+  }finally{desktop.dispose();await rm(healthFile,{force:true});}
+ },30000);
 });
