@@ -7,7 +7,7 @@ const store = () => useSessionPanesStore.getState();
 
 beforeEach(() => {
 	sessionStorage.clear();
-	useSessionPanesStore.setState({ panes: [], selected: [], focusedId: null, sizes: {} });
+	useSessionPanesStore.setState({ panes: [], selected: [], focusedId: null, autoFocusId: null, sizes: {} });
 });
 
 describe("session panes", () => {
@@ -61,6 +61,29 @@ describe("session panes", () => {
 		expect(store().focusedId).toBe(right.id);
 		store().close(left.id);
 		expect(store().panes.find((pane) => pane.id === right.id)).toEqual(right);
+	});
+
+	it("separates passive pane ownership from explicit input activation", () => {
+		store().openRight(b, a);
+		const [left, right] = store().panes;
+		expect(store().autoFocusId).toBe(right.id);
+		store().focus(left.id, false);
+		expect(store().focusedId).toBe(left.id);
+		expect(store().autoFocusId).toBeNull();
+		// Following the native-focus navigation must not turn it into activation.
+		store().followRoute(a);
+		expect(store().autoFocusId).toBeNull();
+		store().focus(left.id);
+		expect(store().autoFocusId).toBe(left.id);
+		store().focus(left.id, false);
+		expect(store().autoFocusId).toBeNull();
+		store().openRight(a);
+		expect(store().autoFocusId).toBe(left.id);
+		store().followRoute(b);
+		expect(store().autoFocusId).toBe(right.id);
+		store().close(right.id);
+		expect(store().autoFocusId).toBeNull();
+		expect(JSON.parse(sessionStorage.getItem(SESSION_PANES_STORAGE_KEY)!)).not.toHaveProperty("autoFocusId");
 	});
 
 	it("normalizes legacy duplicate session layouts before mounting Browser owners", () => {

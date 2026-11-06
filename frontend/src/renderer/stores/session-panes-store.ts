@@ -41,23 +41,27 @@ function equalSizes(panes: SessionPane[]): Record<string, number> {
 
 type SessionPanesState = PaneLayout & {
 	selected: PaneSession[];
+	// Input autofocus is an activation request, separate from shortcut ownership.
+	autoFocusId: string | null;
 	select: (session: PaneSession, toggle: boolean, active?: PaneSession) => void;
 	clearSelection: () => void;
 	viewSelected: () => void;
 	openRight: (session: PaneSession, current?: PaneSession) => void;
-	focus: (id: string) => void;
+	focus: (id: string, requestAutoFocus?: boolean) => void;
 	close: (id: string) => void;
 	followRoute: (session: PaneSession) => void;
 	resize: (sizes: Record<string, number>) => void;
 };
 
 export const useSessionPanesStore = create<SessionPanesState>((set, get) => {
-	const update = (layout: PaneLayout) => {
+	const initialLayout = readSessionPanes();
+	const update = (layout: PaneLayout, autoFocusId = get().autoFocusId) => {
 		try { window.sessionStorage.setItem(SESSION_PANES_STORAGE_KEY, JSON.stringify(layout)); } catch { /* Storage may be unavailable. */ }
-		set(layout);
+		set({ ...layout, autoFocusId });
 	};
 	return {
-		...readSessionPanes(),
+		...initialLayout,
+		autoFocusId: initialLayout.focusedId,
 		selected: [],
 		select: (session, toggle, active) => set((state) => {
 			const selected = toggle ? (state.selected.length ? state.selected : active && !sameSession(active, session) ? [active] : []) : [];
@@ -71,7 +75,7 @@ export const useSessionPanesStore = create<SessionPanesState>((set, get) => {
 			const unique = selected.filter((session, index) => !selected.slice(0, index).some((previous) => sameSession(previous, session)));
 			if (unique.length < 2) return;
 			const panes = unique.map(newPane);
-			update({ panes, focusedId: panes[0].id, sizes: equalSizes(panes) });
+			update({ panes, focusedId: panes[0].id, sizes: equalSizes(panes) }, panes[0].id);
 		},
 		openRight: (session, current) => {
 			const state = get();
@@ -83,12 +87,13 @@ export const useSessionPanesStore = create<SessionPanesState>((set, get) => {
 			const index = Math.max(0, panes.findIndex((pane) => pane.id === state.focusedId));
 			const pane = newPane(session);
 			panes.splice(index + 1, 0, pane);
-			update({ panes, focusedId: pane.id, sizes: equalSizes(panes) });
+			update({ panes, focusedId: pane.id, sizes: equalSizes(panes) }, pane.id);
 		},
-		focus: (id) => {
+		focus: (id, requestAutoFocus = true) => {
 			const state = get();
-			if (state.focusedId === id || !state.panes.some((pane) => pane.id === id)) return;
-			update({ panes: state.panes, sizes: state.sizes, focusedId: id });
+			const autoFocusId = requestAutoFocus ? id : null;
+			if (!state.panes.some((pane) => pane.id === id) || (state.focusedId === id && state.autoFocusId === autoFocusId)) return;
+			update({ panes: state.panes, sizes: state.sizes, focusedId: id }, autoFocusId);
 		},
 		close: (id) => {
 			const state = get();
@@ -96,7 +101,7 @@ export const useSessionPanesStore = create<SessionPanesState>((set, get) => {
 			if (index < 0) return;
 			const panes = state.panes.filter((pane) => pane.id !== id);
 			const focusedId = state.focusedId === id ? panes[Math.min(index, panes.length - 1)]?.id ?? null : state.focusedId;
-			update({ panes, focusedId, sizes: equalSizes(panes) });
+			update({ panes, focusedId, sizes: equalSizes(panes) }, state.focusedId === id ? null : state.autoFocusId);
 		},
 		followRoute: (session) => {
 			const state = get();
@@ -106,7 +111,7 @@ export const useSessionPanesStore = create<SessionPanesState>((set, get) => {
 			if (focused && sameSession(focused, session)) return;
 			if (matching) { get().focus(matching.id); return; }
 			const panes = state.panes.map((pane) => pane.id === state.focusedId ? { ...pane, ...session, projectId: session.projectId } : pane);
-			update({ panes, focusedId: state.focusedId, sizes: state.sizes });
+			update({ panes, focusedId: state.focusedId, sizes: state.sizes }, state.focusedId);
 		},
 		resize: (sizes) => {
 			const state = get();

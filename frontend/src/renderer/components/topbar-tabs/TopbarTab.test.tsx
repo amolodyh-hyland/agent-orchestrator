@@ -1,6 +1,6 @@
 import { useSessionPanesStore } from "../../stores/session-panes-store";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceSession } from "../../types/workspace";
@@ -198,6 +198,20 @@ describe("TopbarTab", () => {
 		expect(tab).toHaveClass("font-semibold", "text-foreground");
 		expect(screen.getByTestId("topbar-tab")).toHaveClass("bg-overlay/55", "text-foreground");
 		expect(screen.getByRole("button", { name: "Close tab" })).toBeInTheDocument();
+	});
+
+	it("requests input focus on plain tab activation, including an already focused pane", () => {
+		const store = () => useSessionPanesStore.getState();
+		useSessionPanesStore.setState({ panes: [], sizes: {}, focusedId: null, autoFocusId: null, selected: [] });
+		store().openRight({ sessionId: "other", projectId: "project-1" }, { sessionId: "task-1", projectId: "project-1" });
+		const pane = store().panes[0];
+		store().focus(pane.id, false);
+		renderTab();
+		fireEvent.click(screen.getByRole("tab"));
+		expect(store().autoFocusId).toBe(pane.id);
+		act(() => store().focus(pane.id, false));
+		fireEvent.click(screen.getByRole("tab"), { metaKey: true, ctrlKey: true });
+		expect(store().autoFocusId).toBeNull();
 	});
 
 	it.each(["comfortable", "compact"] as const)("keeps task, head, and scratch tabs flat in %s density", (density) => {

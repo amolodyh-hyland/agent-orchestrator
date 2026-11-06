@@ -199,7 +199,12 @@ export const TopbarTab = memo(function TopbarTab({
 							state.select({ sessionId: view.sessionId, projectId: view.groupId === STANDALONE_WORKSPACE_ID ? undefined : view.groupId }, toggle,
 								activeId ? { sessionId: activeId, projectId: groupId === STANDALONE_WORKSPACE_ID ? undefined : groupId } : undefined);
 						} else if (!toggle) useSessionPanesStore.getState().clearSelection();
-						if (!toggle) onActivate(view);
+						if (!toggle) {
+							const state = useSessionPanesStore.getState();
+							const pane = state.panes.find((pane) => pane.sessionId === view.sessionId && pane.projectId === (view.groupId === STANDALONE_WORKSPACE_ID ? undefined : view.groupId));
+							if (pane) state.focus(pane.id);
+							onActivate(view);
+						}
 					}}
 					onDoubleClick={() => onPersist(view)}
 					onKeyDown={renameSession

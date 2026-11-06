@@ -1,7 +1,7 @@
 import { useSessionPanesStore } from "../stores/session-panes-store";
 import { createContext, useContext } from "react";
 
-export const SessionPaneContext = createContext<{ id: string; focused: boolean; sessionId?: string; projectId?: string; split?: boolean; focus?: () => void } | null>(null);
+export const SessionPaneContext = createContext<{ id: string; focused: boolean; autoFocus?: boolean; sessionId?: string; projectId?: string; split?: boolean; focus?: () => void } | null>(null);
 
 export function focusedSessionRoot(): ParentNode {
 	return document.querySelector('[data-session-pane][data-focused="true"]') ?? document;
@@ -9,6 +9,13 @@ export function focusedSessionRoot(): ParentNode {
 
 export function useSessionPaneFocused(): boolean {
 	return useContext(SessionPaneContext)?.focused ?? true;
+}
+
+// Browser/inspector focus selects a pane without asking its composer or terminal
+// to take the caret away from the user's chosen input target.
+export function useSessionPaneAutoFocus(): boolean {
+	const pane = useContext(SessionPaneContext);
+	return pane ? pane.focused && (pane.autoFocus ?? true) : true;
 }
 
 const closeGuards = new Map<string, () => Promise<boolean>>();

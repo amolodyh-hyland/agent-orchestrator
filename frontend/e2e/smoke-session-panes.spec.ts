@@ -41,6 +41,9 @@ test("renderer: selected sessions split, resize, persist and close @T0 @PANES", 
 	const sizes = await page.evaluate(() => JSON.parse(sessionStorage.getItem("ao.sessionPanes.v1")!).sizes);
 	await page.reload();
 	await expect(panes).toHaveCount(2);
+	// Pane chrome precedes the lazy session views and their toolbar controls.
+	await expect(panes.nth(0).getByTestId("session-detail")).toBeVisible();
+	await expect(panes.nth(1).getByTestId("session-detail")).toBeVisible();
 	await expect.poll(() => page.evaluate(() => JSON.parse(sessionStorage.getItem("ao.sessionPanes.v1")!).sizes)).toEqual(sizes);
 	await panes.nth(1).getByRole("button", { name: "Close pane", exact: true }).click();
 	await expect(page.getByTestId("session-panes")).toHaveCount(0);

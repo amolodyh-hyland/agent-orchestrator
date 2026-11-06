@@ -18,13 +18,15 @@ export function SessionPanes({ session, cloudOrgId, children }: { session: PaneS
 	const navigate = useNavigate();
 	const panes = useSessionPanesStore((state) => state.panes);
 	const focusedId = useSessionPanesStore((state) => state.focusedId);
+	const autoFocusId = useSessionPanesStore((state) => state.autoFocusId);
 	const sizes = useSessionPanesStore((state) => state.sizes);
 	useEffect(() => {
 		useSessionPanesStore.getState().followRoute(session);
 	}, [session.sessionId, session.projectId]);
 	const focus = (pane: SessionPane) => {
-		if (useSessionPanesStore.getState().focusedId === pane.id) return;
-		useSessionPanesStore.getState().focus(pane.id);
+		const alreadyFocused = useSessionPanesStore.getState().focusedId === pane.id;
+		useSessionPanesStore.getState().focus(pane.id, false);
+		if (alreadyFocused) return;
 		void navigate(sessionNavigateTarget(pane.projectId, pane.sessionId));
 	};
 	const close = async (id: string) => {
@@ -47,7 +49,7 @@ export function SessionPanes({ session, cloudOrgId, children }: { session: PaneS
 					<Fragment key={pane.id}>
 						{index > 0 ? <ResizableHandle aria-label={t("shell.panes.resize")} withHandle /> : null}
 						<ResizablePanel id={pane.id} minSize={`${MIN_SESSION_PANE_WIDTH}px`} defaultSize={`${100 / panes.length}%`}>
-							<SessionPaneContext.Provider value={{ id: pane.id, focused: pane.id === focusedId, sessionId: pane.sessionId, projectId: pane.projectId, split: panes.length > 1, focus: () => focus(pane) }}>
+							<SessionPaneContext.Provider value={{ id: pane.id, focused: pane.id === focusedId, autoFocus: pane.id === autoFocusId, sessionId: pane.sessionId, projectId: pane.projectId, split: panes.length > 1, focus: () => focus(pane) }}>
 								<section
 									aria-label={t("shell.panes.session", { session: pane.sessionId })}
 									className={cn("flex h-full min-h-0 flex-col border-t-2", panes.length > 1 && (pane.id === focusedId ? "border-primary" : "border-transparent"), panes.length === 1 && "border-t-0")}

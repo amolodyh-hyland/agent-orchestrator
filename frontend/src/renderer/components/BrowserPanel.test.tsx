@@ -1,6 +1,8 @@
-import { SessionPaneContext } from "./session-pane-context";
+import { SessionPanes } from "./SessionPanes";
+import { ChatComposer } from "./chat/ChatComposer";
+import { useSessionPanesStore } from "../stores/session-panes-store";
+import type { LexicalEditor } from "lexical";
 import { useSessionShortcut, runAppShortcut } from "../hooks/useAppShortcut";
-import { useState } from "react";
 import { act, fireEvent, render as rtlRender, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
@@ -125,6 +127,27 @@ vi.mock("../hooks/useBrowserView", () => ({
 		};
 	},
 }));
+
+// Keep the actual pane provider and editor focus effects in the native-focus
+// regression; replace only the session's data loading and native view hook.
+vi.mock("./TerminalPane", () => ({
+	TerminalCacheProvider: ({ children }: { children: ReactElement }) => children,
+}));
+vi.mock("../lib/session-view-chunk", () => ({
+	loadSessionView: async () => ({ SessionView: FocusTestSession }),
+}));
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+	...await importOriginal<typeof import("@tanstack/react-router")>(),
+	useNavigate: () => vi.fn(),
+}));
+const paneShortcutActions = { first: vi.fn(), second: vi.fn() };
+function FocusTestSession({ sessionId }: { sessionId: "first" | "second" }) {
+	useSessionShortcut("copy-session-path", paneShortcutActions[sessionId]);
+	return <>
+		<ChatComposer onSend={vi.fn()} autoFocusKey={sessionId} />
+		<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={{ ...session, id: sessionId }} />
+	</>;
+}
 
 const session: WorkspaceSession = {
 	id: "sess-1",
@@ -663,29 +686,52 @@ describe("BrowserPanel", () => {
 		);
 	});
 
-	it("routes native page focus and session shortcuts to the owning pane only", () => {
-		const actions = { first: vi.fn(), second: vi.fn() };
-		const focus = vi.fn();
-		function Pane({ id }: { id: "first" | "second" }) {
-			useSessionShortcut("copy-session-path", actions[id]);
-			return <BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={{ ...session, id }} />;
-		}
-		function Panes() {
-			const [focused, setFocused] = useState("first");
-			return <>{(["first", "second"] as const).map((id) => <SessionPaneContext.Provider key={id} value={{ id, focused: focused === id, focus: () => { focus(id); setFocused(id); } }}><Pane id={id} /></SessionPaneContext.Provider>)}</>;
-		}
-		const view = render(<Panes />);
-		act(() => { for (const listener of pageFocusListeners) listener("unrelated"); });
-		expect(focus).not.toHaveBeenCalled();
-		act(() => { for (const listener of [...pageFocusListeners]) listener("42:second"); });
-		expect(focus).toHaveBeenLastCalledWith("second");
+	it("routes native and DOM focus to their pane without focusing either composer", async () => {
+		const store = () => useSessionPanesStore.getState();
+		useSessionPanesStore.setState({ panes: [], sizes: {}, focusedId: null, autoFocusId: null, selected: [] });
+		paneShortcutActions.first.mockClear();
+		paneShortcutActions.second.mockClear();
+		store().openRight({ sessionId: "second" }, { sessionId: "first" });
+		const [first, second] = store().panes;
+		store().focus(first.id);
+		const view = render(<><button type="button">Native page focus placeholder</button><SessionPanes session={{ sessionId: "first" }}>Single pane</SessionPanes></>);
+		await waitFor(() => expect(screen.getAllByLabelText("Message the agent")).toHaveLength(2));
+		const fields = screen.getAllByLabelText("Message the agent") as (HTMLElement & { __lexicalEditor: LexicalEditor })[];
+		const focusCalls = fields.flatMap((field) => [vi.spyOn(field, "focus"), vi.spyOn(field.__lexicalEditor, "focus")]);
+		const nativeFocus = screen.getByRole("button", { name: "Native page focus placeholder" });
+		nativeFocus.focus();
+		window.getSelection()?.removeAllRanges();
+		const pageFocus = (viewId: string) => act(() => { for (const listener of [...pageFocusListeners]) listener(viewId); });
+		pageFocus("unrelated");
+		expect(store().focusedId).toBe(first.id);
+		pageFocus("42:second");
+		expect(store().focusedId).toBe(second.id);
+		expect(document.activeElement).toBe(nativeFocus);
+		act(() => window.dispatchEvent(new Event("focus")));
+		for (const focusCall of focusCalls) expect(focusCall).not.toHaveBeenCalled();
 		act(() => runAppShortcut({ id: "copy-session-path" }));
-		expect(actions.second).toHaveBeenCalledOnce();
-		expect(actions.first).not.toHaveBeenCalled();
-		act(() => { for (const listener of [...pageFocusListeners]) listener("42:first"); });
+		expect(paneShortcutActions.second).toHaveBeenCalledOnce();
+		expect(paneShortcutActions.first).not.toHaveBeenCalled();
+
+		// DOM inputs in another pane also retain their caret on activation.
+		const firstUrl = screen.getAllByRole("textbox", { name: /browser url/i })[0];
+		act(() => firstUrl.focus());
+		expect(store().focusedId).toBe(first.id);
+		expect(document.activeElement).toBe(firstUrl);
+		for (const focusCall of focusCalls) expect(focusCall).not.toHaveBeenCalled();
 		act(() => runAppShortcut({ id: "copy-session-path" }));
-		expect(actions.first).toHaveBeenCalledOnce();
-		expect(actions.second).toHaveBeenCalledOnce();
+		expect(paneShortcutActions.first).toHaveBeenCalledOnce();
+		expect(paneShortcutActions.second).toHaveBeenCalledOnce();
+
+		// Explicit activation still requests the composer's caret.
+		act(() => store().focus(second.id));
+		expect(fields[1]).toHaveFocus();
+		expect(focusCalls[3]).toHaveBeenCalled();
+		for (const focusCall of focusCalls) focusCall.mockClear();
+		nativeFocus.focus();
+		pageFocus("42:second");
+		expect(document.activeElement).toBe(nativeFocus);
+		for (const focusCall of focusCalls) expect(focusCall).not.toHaveBeenCalled();
 		view.unmount();
 		expect(pageFocusListeners.size).toBe(0);
 	});

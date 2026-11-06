@@ -1,4 +1,4 @@
-import { useSessionPaneFocused } from "./session-pane-context";
+import { useSessionPaneAutoFocus, useSessionPaneFocused } from "./session-pane-context";
 import { Pencil } from "lucide-react";
 import { isSettingsPageOpen } from "../hooks/useAppShortcut";
 import { motion, Reorder, useDragControls, useMotionValue } from "motion/react";
@@ -215,6 +215,7 @@ export function CenterPane({
 }: CenterPaneProps) {
 	const { t } = useTranslation();
 	const paneFocused = useSessionPaneFocused();
+	const paneAutoFocus = useSessionPaneAutoFocus();
 	const paneRef = useRef<HTMLDivElement | null>(null);
 	const tabListRef = useTabListTabStop<HTMLDivElement>();
 	const wheelZoomRemainderRef = useRef(0);
@@ -634,7 +635,7 @@ export function CenterPane({
 						// open or switch to the session, the same way the chat composer does.
 						// Worker input is off during an interface transition; every other target
 						// is interactive as soon as it is on screen.
-							focusRequested={paneFocused && (target.kind !== "worker" || !workerInputDisabled)}
+							focusRequested={paneAutoFocus && (target.kind !== "worker" || !workerInputDisabled)}
 							isFullscreen={isFullscreen}
 							inputDisabled={workerInputDisabled}
 							booting={terminalBooting && target.kind === "worker"}
