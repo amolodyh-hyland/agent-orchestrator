@@ -32,10 +32,10 @@ vi.mock("electron", () => ({
 	dialog: { showMessageBox: vi.fn() },
 	ipcMain: { handle: vi.fn() },
 	safeStorage: {
-		decryptString: (value: Buffer) => value.toString("utf8"),
-		encryptString: (value: string) => Buffer.from(value, "utf8"),
+		decryptStringAsync: async (value: Buffer) => ({ result: value.toString("utf8").replace(/^v11/, ""), shouldReEncrypt: false }),
+		encryptStringAsync: async (value: string) => Buffer.from(`v11${value}`, "utf8"),
 		getSelectedStorageBackend: () => mocks.selectedStorageBackend,
-		isEncryptionAvailable: () => mocks.encryptionAvailable,
+		isAsyncEncryptionAvailable: async () => mocks.encryptionAvailable,
 	},
 	shell: { openExternal: vi.fn() },
 }));

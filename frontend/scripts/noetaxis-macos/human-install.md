@@ -78,5 +78,7 @@ a newer database or remove an interrupted-restore fence.
 
 The original cautious updater remains available by omitting `--fast`; see
 `installer/README.md` for its session controls and manual install/rollback flow.
-Do not run the PKG as a substitute for a routine update. The ad-hoc signature is
-not notarized; the OS may ask about Gatekeeper or Keychain access after relaunch.
+Do not run the PKG as a substitute for a routine update. The default ad-hoc signature
+and optional consistent local signature are not notarized. The OS may ask about
+Gatekeeper or Keychain access after relaunch; see `BUILD-INFO.txt` for the signing
+identity and `installer/README.md` for the one-time local signing setup.

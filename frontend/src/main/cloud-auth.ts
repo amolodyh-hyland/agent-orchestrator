@@ -1,10 +1,11 @@
 import { createWorkOS, type User } from "@workos-inc/node";
 import { app, dialog, ipcMain, safeStorage, shell } from "electron";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   chmod,
   mkdir,
   readFile,
+  rename,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -17,6 +18,8 @@ import type { CloudAccount } from "../shared/cloud-account";
 // functions, so the static ES cycle is safe at module-init time.
 import { revokeLocalSession } from "./cloud-auth-local";
 import { providerAuthFlow } from "./provider-auth-flow";
+import { credentialAccess } from "./desktop-startup";
+import { protectedStorageBackend, requireProtectedCiphertext } from "./safe-storage-policy";
 
 // persistLocalClaudeOAuthToken writes a captured Claude setup-token under the AO
 // data dir so local claude sessions can authenticate with the SAME credential
@@ -176,32 +179,70 @@ function storePath(dataDir: string): string {
   return path.join(dataDir, AUTH_STORE_FILE);
 }
 
-function protectedStorageAvailable(): boolean {
-  if (!safeStorage.isEncryptionAvailable()) return false;
-  if (process.platform !== "linux") return true;
-  const backend = safeStorage.getSelectedStorageBackend();
-  return backend !== "basic_text" && backend !== "unknown";
+async function protectedStorageAvailable(): Promise<boolean> {
+  if (!(await safeStorage.isAsyncEncryptionAvailable())) return false;
+  return protectedStorageBackend(process.platform, process.platform === "linux" ? safeStorage.getSelectedStorageBackend() : undefined);
 }
 
-function encodeStore(store: AuthStore): Buffer {
-  return safeStorage.encryptString(JSON.stringify(store));
+const unavailableReads = new Set<string>();
+const pendingReads = new Map<string, Promise<AuthStore>>();
+const storeFiles = new Map<string, Promise<unknown>>();
+
+async function withStoreFile<T>(dataDir: string, action: () => Promise<T>): Promise<T> {
+  const pending = (storeFiles.get(dataDir) ?? Promise.resolve()).catch(() => undefined).then(action);
+  storeFiles.set(dataDir, pending);
+  try { return await pending; }
+  finally { if (storeFiles.get(dataDir) === pending) storeFiles.delete(dataDir); }
 }
 
-function decodeStore(value: Buffer): AuthStore {
-  return JSON.parse(safeStorage.decryptString(value)) as AuthStore;
+async function replaceCiphertext(dataDir: string, ciphertext: Buffer): Promise<void> {
+  await mkdir(dataDir, { recursive: true, mode: 0o700 });
+  const target = storePath(dataDir);
+  const temporary = `${target}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, ciphertext, { mode: 0o600, flag: "wx" });
+    await rename(temporary, target);
+  } finally { await rm(temporary, { force: true }); }
 }
 
 export async function readAuthStore(dataDir: string): Promise<AuthStore> {
   const memoryStore = memoryStores.get(dataDir);
   if (memoryStore) return memoryStore;
-  if (!protectedStorageAvailable()) {
-    await rm(storePath(dataDir), { force: true });
-    return emptyStore();
-  }
+  if (unavailableReads.has(dataDir)) return emptyStore();
+  const existing = pendingReads.get(dataDir);
+  if (existing) return existing;
+  const pending = readPersistedAuthStore(dataDir);
+  pendingReads.set(dataDir, pending);
+  try { return await pending; }
+  finally { if (pendingReads.get(dataDir) === pending) pendingReads.delete(dataDir); }
+}
+
+async function readPersistedAuthStore(dataDir: string): Promise<AuthStore> {
+  let ciphertext: Buffer;
+  try { ciphertext = await readFile(storePath(dataDir)); }
+  catch { return emptyStore(); }
+  const generation = authGeneration(dataDir);
   try {
-    return decodeStore(await readFile(storePath(dataDir)));
+    return await credentialAccess("cloud-read", async () => {
+      if (!(await protectedStorageAvailable())) throw new Error("protected storage unavailable");
+      const decoded = await safeStorage.decryptStringAsync(ciphertext);
+      const store = JSON.parse(decoded.result) as AuthStore;
+      if (!store || typeof store !== "object" || !("session" in store) || !("pkce" in store)) throw new Error("invalid auth store");
+      if (generation !== authGeneration(dataDir)) return emptyStore();
+      if (decoded.shouldReEncrypt) {
+        try {
+          const rotated = requireProtectedCiphertext(await safeStorage.encryptStringAsync(decoded.result), process.platform);
+          await withStoreFile(dataDir, async () => {
+            if (generation !== authGeneration(dataDir)) return;
+            const current = await readFile(storePath(dataDir));
+            if (current.equals(ciphertext)) await replaceCiphertext(dataDir, rotated);
+          });
+        } catch { /* Keep the usable original ciphertext when rotation is unavailable. */ }
+      }
+      return generation === authGeneration(dataDir) ? store : emptyStore();
+    });
   } catch {
-    await rm(storePath(dataDir), { force: true });
+    unavailableReads.add(dataDir);
     return emptyStore();
   }
 }
@@ -210,27 +251,28 @@ export async function writeAuthStore(
   dataDir: string,
   store: AuthStore,
 ): Promise<void> {
-  if (!protectedStorageAvailable()) {
-    // A rotating refresh token must never fall back to plaintext persistence.
-    // Linux's basic_text backend also reports encryption as available despite
-    // using an unprotected hardcoded password, so keep that process-local too.
-    memoryStores.set(dataDir, store);
-    await rm(storePath(dataDir), { force: true });
-    return;
-  }
-  memoryStores.delete(dataDir);
-  await mkdir(dataDir, { recursive: true });
-  const target = storePath(dataDir);
-  await writeFile(target, encodeStore(store), { mode: 0o600 });
-  await chmod(target, 0o600);
+  await credentialAccess("cloud-write", async () => {
+    if (!(await protectedStorageAvailable())) {
+      // A rotating refresh token must never fall back to plaintext persistence.
+      // Linux's basic_text backend also reports encryption as available despite
+      // using an unprotected hardcoded password, so keep that process-local too.
+      memoryStores.set(dataDir, store);
+      return;
+    }
+    const ciphertext = requireProtectedCiphertext(await safeStorage.encryptStringAsync(JSON.stringify(store)), process.platform);
+    await withStoreFile(dataDir, () => replaceCiphertext(dataDir, ciphertext));
+    memoryStores.delete(dataDir);
+    unavailableReads.delete(dataDir);
+  });
 }
 
 export async function removeAuthStore(dataDir: string): Promise<void> {
   memoryStores.delete(dataDir);
-  await Promise.all([
+  unavailableReads.delete(dataDir);
+  await withStoreFile(dataDir, () => Promise.all([
     rm(storePath(dataDir), { force: true }),
     rm(path.join(dataDir, LEGACY_SESSION_FILE), { force: true }),
-  ]);
+  ]));
 }
 
 function displayName(user: User): string {

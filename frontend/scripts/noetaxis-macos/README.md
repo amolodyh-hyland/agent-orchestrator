@@ -92,7 +92,38 @@ The output contains:
 - `installer/`, including the matching update, install, rollback, survivor helpers and PKG scripts
 - `SHA256SUMS`, covering the installer, packages, manifest and build information (the app itself is covered by `MANIFEST.sha256`)
 
-The app is signed with an ad-hoc signature (`codesign --sign -`). It has no Apple Developer ID, certificate chain, or notarization ticket. The PKG and DMG are unsigned. `MANIFEST.sha256` detects corruption and unlisted files; it sits next to the app, so it is not tamper protection. The PKG has not been run through Installer.app (Installer compares `CFBundleVersion` before the scripts run, so it may skip an upgrade between `-noetaxis` builds); the script install from the build output is the verified path. The app contains `Resources/ao-updates-disabled`; rebuild and reinstall from a reviewed source ref to update it.
+By default the app uses an ad-hoc signature (`codesign --sign -`). Set `NOETAXIS_SIGN_IDENTITY` to a certificate name or fingerprint to sign every build with the same local identity, including the dictation helper. An explicitly selected identity that cannot sign fails the build; it never silently reverts to ad-hoc. `BUILD-INFO.txt` records the chosen identity. Neither mode notarizes the app. The PKG and DMG are unsigned. `MANIFEST.sha256` detects corruption and unlisted files; it sits next to the app, so it is not tamper protection. The PKG has not been run through Installer.app (Installer compares `CFBundleVersion` before the scripts run, so it may skip an upgrade between `-noetaxis` builds); the script install from the build output is the verified path. The app contains `Resources/ao-updates-disabled`; rebuild and reinstall from a reviewed source ref to update it.
+
+### Consistent local signing (user setup)
+
+Changing an ad-hoc code hash can cause macOS to request Keychain access after each update. A persistent local code-signing certificate gives consecutive builds a stable designated identity. This is for builds on your own Mac; it does not provide Apple Developer ID distribution trust or notarization. Distributed releases should use one stable Developer ID identity and the documented signed/notarized release process in `frontend/docs/desktop-release.md`.
+
+From the repository root, print the exact one-time setup commands:
+
+```sh
+sh frontend/scripts/noetaxis-macos/local-signing-commands.sh
+```
+
+The helper only prints. Review its output and run the printed commands yourself. They create an encrypted private key and self-signed certificate under `~/.ao/local-signing`, export a password-protected PKCS#12 file, import it into your login Keychain, and trust it for code signing only. OpenSSL and Keychain will ask you for passwords. Keep the private key and export private; reuse the same certificate rather than generating one for each update. Do not use broad trust settings or disable Keychain protection.
+
+Use the identity for every subsequent build:
+
+```sh
+export NOETAXIS_SIGN_IDENTITY='Noetaxis Local Code Signing'
+node frontend/scripts/noetaxis-macos/build.mjs --ref HEAD --public-registry
+```
+
+The first transition from an ad-hoc build may still require attended Keychain authorization. Stable signing allows an approved Keychain grant to recognize later builds signed with that same certificate and bundle identity. Renewing/replacing the certificate, changing bundle identity, or resetting Keychain access may require approval again. Certificate creation, import, trust changes, signing, and real Keychain upgrade testing are user operations; the tests use mocks.
+
+### Desktop startup diagnostics
+
+`~/.ao/startup/desktop/<launchId>.json` is a versioned, private desktop record separate from the daemon's `startup/*.json`. It begins before app readiness and records process identity, phase, main-thread heartbeat, optional credential operations, sleep/clock discontinuities, and the daemon PID/launch link. `AO_RUN_FILE` or `AO_DATA_DIR` isolates records with the corresponding daemon. Records contain no tokens, credential contents, shutdown tokens, or native error text. Writes are atomic with mode 0600 in a 0700 directory.
+
+The daemon spawn and its verified startup-record handshake precede browser/session and credential feature initialization. Cloud and Multica use async safeStorage; state reads do not synchronously probe Keychain. Linux plaintext/unknown storage backends remain refused; writes also require a known protected ciphertext tag (`v11` or `v12`), rejecting the async `v10` fixed-key fallback. Existing ciphertext is passed unchanged to async decryption; successful key rotation replaces it atomically. Locked, denied, temporarily unavailable, and decode failures retain the file, and background denial retries are suppressed for the current run. Explicit sign-out/token removal can still delete credentials. A user-requested replacement may be memory-only if protected storage is unavailable; it is never written as plaintext.
+
+Updater progress includes desktop phase, credential wait, heartbeat age, and daemon stage. A pending `keychain-access` operation means access was requested; it is not proof a macOS dialog is visible. A stale JS heartbeat is reported as a main-thread stall or sleep, never as independent proof of progress. Desktop records do not authorize shutdown, rollback, or daemon readiness. Health still requires the verified daemon and `/healthz`; ambiguity retains the new app with exit 64.
+
+On isolated test data, manually verify an existing encrypted Cloud/Multica credential across two builds with the same signing identity: leave authorization unanswered, deny/cancel it, lock/sleep/resume, and confirm the daemon record and usable base startup appear while encrypted auth is retained. Also verify the initial ad-hoc-to-certificate transition and recovery after unlocking. These native behaviors cannot be established by mocked tests alone.
 
 ## Registry configuration tests
 

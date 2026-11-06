@@ -84,6 +84,12 @@ export function parseArgs(args) {
 	return options;
 }
 
+export function signingIdentity(env = process.env) {
+	const identity = env.NOETAXIS_SIGN_IDENTITY?.trim() || "-";
+	if (/[\r\n\u0000]/.test(identity)) throw new Error("NOETAXIS_SIGN_IDENTITY must be a certificate name or fingerprint");
+	return identity;
+}
+
 export function parseMulticaPin(goMod) {
 	const line = goMod.split(/\r?\n/).find((entry) => entry.trim().startsWith(`replace ${multicaModule} => `));
 	const match = line?.trim().match(/^replace\s+github\.com\/multica-ai\/multica\/server\s+=>\s+(github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/server\s+(v0\.0\.0-\d{14}-([0-9a-f]{12}))$/);
@@ -441,6 +447,7 @@ export async function verifyBrowserResources(directory) {
 }
 
 export async function buildNoetaxis(options) {
+	const identity = signingIdentity();
 	const registry = validateRegistry(options.registry, options.publicRegistry);
 	const goEnv = daemonBuildEnv({ cwd: path.join(repoRoot, "backend") });
 	const configDir = await mkdtemp(path.join(os.tmpdir(), "noetaxis-npm-"));
@@ -455,7 +462,7 @@ export async function buildNoetaxis(options) {
 	process.on("uncaughtExceptionMonitor", cleanup);
 	for (const [signal, handler] of signals) process.on(signal, handler);
 	try {
-		return await buildWithRegistry(options, registry, await registryBuildEnv(configDir, registry), goEnv, cleanup);
+		return await buildWithRegistry(options, registry, await registryBuildEnv(configDir, registry), goEnv, cleanup, identity);
 	} finally {
 		cleanup();
 		process.off("exit", onExit);
@@ -464,7 +471,7 @@ export async function buildNoetaxis(options) {
 	}
 }
 
-async function buildWithRegistry(options, registry, npmEnv, goEnv, cleanup) {
+async function buildWithRegistry(options, registry, npmEnv, goEnv, cleanup, identity) {
 	await supportedHost(npmEnv);
 	const commit = await capture("git", ["rev-parse", "--verify", `${options.ref}^{commit}`], { cwd: repoRoot });
 	const version = stampVersion(options.baseVersion, commit);
@@ -541,8 +548,8 @@ async function buildWithRegistry(options, registry, npmEnv, goEnv, cleanup) {
 			throw new Error("Packaged app does not contain the requested version stamp");
 		}
 		const dictationHelper = path.join(resources, "dictation-helper", "ao-dictation");
-		await run("/usr/bin/codesign", ["--force", "--sign", "-", "--timestamp=none", "--entitlements", path.join(frontendDir, "native/dictation/entitlements.plist"), dictationHelper]);
-		await run("/usr/bin/codesign", ["--force", "--deep", "--preserve-metadata=entitlements", "--sign", "-", "--timestamp=none", packagedApp]);
+		await run("/usr/bin/codesign", ["--force", "--sign", identity, "--timestamp=none", "--entitlements", path.join(frontendDir, "native/dictation/entitlements.plist"), dictationHelper]);
+		await run("/usr/bin/codesign", ["--force", "--deep", "--preserve-metadata=entitlements", "--sign", identity, "--timestamp=none", packagedApp]);
 		await run("/usr/bin/codesign", ["--verify", "--deep", "--strict", packagedApp]);
 		await clearQuarantine(packagedApp);
 		const outputApp = path.join(outputDir, "Applications", "Agent Orchestrator.app");
@@ -555,7 +562,7 @@ async function buildWithRegistry(options, registry, npmEnv, goEnv, cleanup) {
 			`Multica source revision: ${multicaRevision}`,
 			`Database schema: ${databaseSchema}`,
 			`Registry: ${new URL(registry).host}`,
-			`Signature: ad-hoc; not notarized`,
+			`Signature: ${identity === "-" ? "ad-hoc" : identity}; not notarized`,
 			`Built at: ${new Date().toISOString()}`,
 			`App: ${outputApp}`,
 			`Manifest: ${packaged.manifestPath} (${packaged.fileCount} regular files)`,

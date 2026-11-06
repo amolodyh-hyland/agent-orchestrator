@@ -24,9 +24,9 @@ const accepted = { delegation_id: D, task_id: T, workspace_id: W, agent_id: A, r
 const intent = { agent_id: A, expected_runtime_id: R, source: { system: "ao", project_id: "project-1", task_id: "task-1" }, task: { title: "Review", instructions: "Review the approved change" } };
 const problem = (status: number, code: string) => ({ type: `urn:multica:problem:${code}`, title: "Request failed", status, code, detail: TOKEN, request_id: TOKEN, error: TOKEN });
 const vault: SecretVault = {
-	isProtected: () => true,
-	encrypt: (plain) => Buffer.from(plain.split("").reverse().join("")),
-	decrypt: (blob) => blob.toString().split("").reverse().join(""),
+	isProtected: async () => true,
+	encrypt: async (plain) => Buffer.from(plain.split("").reverse().join("")),
+	decrypt: async (blob) => ({ result: blob.toString().split("").reverse().join(""), shouldReEncrypt: false }),
 };
 
 let dir: string;
@@ -117,15 +117,16 @@ describe("Public API connection binding", () => {
 		const stored = await readFile(path.join(dir, MULTICA_CREDENTIALS_FILE), "utf8");
 		expect(stored).not.toContain(TOKEN);
 		const restarted = createMulticaPublicApi({ ...options, credentials: createMulticaCredentials({ stateDir: dir, vault, readProfileConfig: async () => null }) });
-		expect(await restarted.getState()).toEqual({ ...client.binding, tokenConfigured: true, persistent: true });
+		expect(await restarted.getState()).toEqual({ ...client.binding, tokenConfigured: true, persistent: false });
 		expect((await restarted.listAgents()).ok).toBe(true);
+		expect((await restarted.getState()).persistent).toBe(true);
 		expect(await restarted.clearToken()).toEqual({ ok: true, data: null });
 		expect(await client.listAgents()).toEqual({ ok: false, code: "no_token" });
 		expect(JSON.stringify(client)).not.toContain(TOKEN);
 	});
 
 	it("holds the token only in memory when protected storage is unavailable", async () => {
-		const credentials = createMulticaCredentials({ stateDir: dir, vault: { ...vault, isProtected: () => false }, readProfileConfig: async () => null });
+		const credentials = createMulticaCredentials({ stateDir: dir, vault: { ...vault, isProtected: async () => false }, readProfileConfig: async () => null });
 		const client = await connected({ credentials });
 		expect((await client.getState()).persistent).toBe(false);
 		expect((await client.listAgents()).ok).toBe(true);
