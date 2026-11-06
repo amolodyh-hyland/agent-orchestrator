@@ -1,4 +1,5 @@
-import { registerPaneCloseGuard, sessionPaneStaysMounted, SessionPaneContext, useSessionPaneFocused } from "./session-pane-context";
+import { useSessionPaneCloseGuard } from "../hooks/useSessionPaneCloseGuard";
+import { sessionPaneStaysMounted, SessionPaneContext, useSessionPaneFocused } from "./session-pane-context";
 import { BrowserIcon } from "./icons";
 import { getApiBaseUrl } from "../lib/api-client";
 import { baseUrlForHost } from "../lib/host-clients";
@@ -534,12 +535,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// under someone who is watching the agent work.
 	useCloudSessionPresence(session?.cloud?.orgId, session?.cloud ? session.id : undefined, Boolean(session?.cloud));
 	const { draftBoundaries: chatDraftBoundaries, confirmUnsafeDraftLeave } = interfaceUi;
-	useEffect(() => registerPaneCloseGuard(sessionPane?.id ?? "single", async () => {
-		const decision = await confirmUnsafeDraftLeave();
-		if (decision.kind === "cancelled") return false;
-		if (decision.kind === "confirmed") discardCapturedPendingFileAttachments(decision.pendingAttachments);
-		return true;
-	}), [confirmUnsafeDraftLeave, sessionPane?.id]);
+
 	const remoteHostsEnabled = useUiStore((state) => state.remoteHosts);
 	const setRemoteHosts = useUiStore((state) => state.setRemoteHosts);
 	useBlocker({
@@ -650,6 +646,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const dirtyFiles = dirtyFilesBySession[uiSessionId] ?? {};
 	const activeFileDirty = Boolean(fileTabs.activePath && dirtyFiles[fileTabs.activePath]);
 	const draftSessionKey = session?.cloud ? cloudDraftSessionKey(session.cloud.orgId, sessionId) : uiSessionId;
+	useSessionPaneCloseGuard(sessionPane?.id ?? "single", draftSessionKey, async () => {
+		const decision = await confirmUnsafeDraftLeave();
+		if (decision.kind === "cancelled") return false;
+		if (decision.kind === "confirmed") discardCapturedPendingFileAttachments(decision.pendingAttachments);
+		return true;
+	});
 	const activeFilePath = fileTabs.activePath;
 	const activeDraftUnstored = useCallback(
 		() => unstoredFileDraftReasonFor(draftSessionKey, activeFilePath) !== null,
