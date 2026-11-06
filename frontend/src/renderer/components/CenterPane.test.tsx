@@ -285,7 +285,7 @@ describe("CenterPane toolbar session label", () => {
 		renderCenterPane({ session: worker });
 
 		const sessionTab = screen.getByRole("tab", { name: /^do the thing/ });
-		expect(sessionTab).toHaveAttribute("aria-selected", "true");
+		expect(sessionTab).toHaveAttribute("aria-current", "true");
 		const groupedTab = sessionTab.closest<HTMLElement>('[data-testid="topbar-tab"]');
 		expect(groupedTab).toHaveAttribute("data-role", "task");
 		for (const element of [groupedTab, sessionTab]) {
