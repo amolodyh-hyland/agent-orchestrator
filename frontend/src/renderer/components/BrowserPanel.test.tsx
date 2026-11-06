@@ -1,3 +1,6 @@
+import { SessionPaneContext } from "./session-pane-context";
+import { useSessionShortcut, runAppShortcut } from "../hooks/useAppShortcut";
+import { useState } from "react";
 import { act, fireEvent, render as rtlRender, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
@@ -85,10 +88,10 @@ vi.mock("../hooks/useBrowserRuntimeState", () => ({
 }));
 
 vi.mock("../hooks/useBrowserView", () => ({
-	useBrowserView: (options: { previewUrl?: string }) => {
+	useBrowserView: (options: { previewUrl?: string; sessionId?: string }) => {
 		hookState.previewUrl = options.previewUrl;
 		return {
-			viewId: "42:sess-1",
+			viewId: `42:${options.sessionId ?? "sess-1"}`,
 			navState: hookState.navState,
 			slotRef: vi.fn(),
 			navigate: hookState.navigate,
@@ -658,6 +661,33 @@ describe("BrowserPanel", () => {
 		expect(screen.getByRole("textbox", { name: /browser url/i })).toHaveValue(
 			"file:///tmp/preview/index.html",
 		);
+	});
+
+	it("routes native page focus and session shortcuts to the owning pane only", () => {
+		const actions = { first: vi.fn(), second: vi.fn() };
+		const focus = vi.fn();
+		function Pane({ id }: { id: "first" | "second" }) {
+			useSessionShortcut("copy-session-path", actions[id]);
+			return <BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={{ ...session, id }} />;
+		}
+		function Panes() {
+			const [focused, setFocused] = useState("first");
+			return <>{(["first", "second"] as const).map((id) => <SessionPaneContext.Provider key={id} value={{ id, focused: focused === id, focus: () => { focus(id); setFocused(id); } }}><Pane id={id} /></SessionPaneContext.Provider>)}</>;
+		}
+		const view = render(<Panes />);
+		act(() => { for (const listener of pageFocusListeners) listener("unrelated"); });
+		expect(focus).not.toHaveBeenCalled();
+		act(() => { for (const listener of [...pageFocusListeners]) listener("42:second"); });
+		expect(focus).toHaveBeenLastCalledWith("second");
+		act(() => runAppShortcut({ id: "copy-session-path" }));
+		expect(actions.second).toHaveBeenCalledOnce();
+		expect(actions.first).not.toHaveBeenCalled();
+		act(() => { for (const listener of [...pageFocusListeners]) listener("42:first"); });
+		act(() => runAppShortcut({ id: "copy-session-path" }));
+		expect(actions.first).toHaveBeenCalledOnce();
+		expect(actions.second).toHaveBeenCalledOnce();
+		view.unmount();
+		expect(pageFocusListeners.size).toBe(0);
 	});
 
 	it("reveals the full URL on focus, reverts to domain when the page takes focus", async () => {

@@ -47,7 +47,7 @@ export function SessionPanes({ session, cloudOrgId, children }: { session: PaneS
 					<Fragment key={pane.id}>
 						{index > 0 ? <ResizableHandle aria-label={t("shell.panes.resize")} withHandle /> : null}
 						<ResizablePanel id={pane.id} minSize={`${MIN_SESSION_PANE_WIDTH}px`} defaultSize={`${100 / panes.length}%`}>
-							<SessionPaneContext.Provider value={{ id: pane.id, focused: pane.id === focusedId, sessionId: pane.sessionId, projectId: pane.projectId, split: panes.length > 1 }}>
+							<SessionPaneContext.Provider value={{ id: pane.id, focused: pane.id === focusedId, sessionId: pane.sessionId, projectId: pane.projectId, split: panes.length > 1, focus: () => focus(pane) }}>
 								<section
 									aria-label={t("shell.panes.session", { session: pane.sessionId })}
 									className={cn("flex h-full min-h-0 flex-col border-t-2", panes.length > 1 && (pane.id === focusedId ? "border-primary" : "border-transparent"), panes.length === 1 && "border-t-0")}
