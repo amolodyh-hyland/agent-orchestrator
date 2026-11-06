@@ -341,15 +341,20 @@ function CachedTerminalPortal({
  * active pane slot and an off-screen parking lot, so React, xterm, and the
  * terminal attachment all keep the same lifetime.
  */
+const TerminalCacheSettingsContext = createContext<{ daemonReady: boolean; theme: Theme }>({ daemonReady: false, theme: "dark" });
+
 export function TerminalCacheProvider({
 	children,
 	daemonReady,
 	theme,
 }: {
 	children: ReactNode;
-	daemonReady: boolean;
-	theme: Theme;
+	daemonReady?: boolean;
+	theme?: Theme;
 }) {
+	const inherited = useContext(TerminalCacheSettingsContext);
+	daemonReady ??= inherited.daemonReady;
+	theme ??= inherited.theme;
 	const workspaceQuery = useWorkspaceQuery();
 	const shellTerminalsQuery = useShellTerminals();
 	const entriesRef = useRef(new Map<string, CachedTerminalEntry>());
@@ -720,27 +725,29 @@ export function TerminalCacheProvider({
 	);
 
 	return (
-		<TerminalCacheContext.Provider value={controller}>
-			<div
-				ref={parkingRef}
-				aria-hidden="true"
-				className="pointer-events-none invisible fixed top-0 -left-[100000px]"
-				data-testid="terminal-cache-parking"
-			/>
-			{/* The parking ref must commit before routed children run their layout
-			    effects; those effects synchronously move the active container into
-			    the pane slot before the browser can paint. */}
-			{children}
-			{[...entriesRef.current.values()].map((entry) => (
-				<CachedTerminalPortal
-					active={activeRef.current?.key === entry.cacheKey}
-					entry={entry}
-					key={entry.cacheKey}
-					onFatal={markFatal}
-					onTerminalReady={markTerminalReady}
+		<TerminalCacheSettingsContext.Provider value={{ daemonReady, theme }}>
+			<TerminalCacheContext.Provider value={controller}>
+				<div
+					ref={parkingRef}
+					aria-hidden="true"
+					className="pointer-events-none invisible fixed top-0 -left-[100000px]"
+					data-testid="terminal-cache-parking"
 				/>
-			))}
-		</TerminalCacheContext.Provider>
+				{/* The parking ref must commit before routed children run their layout
+				    effects; those effects synchronously move the active container into
+				    the pane slot before the browser can paint. */}
+				{children}
+				{[...entriesRef.current.values()].map((entry) => (
+					<CachedTerminalPortal
+						active={activeRef.current?.key === entry.cacheKey}
+						entry={entry}
+						key={entry.cacheKey}
+						onFatal={markFatal}
+						onTerminalReady={markTerminalReady}
+					/>
+				))}
+			</TerminalCacheContext.Provider>
+		</TerminalCacheSettingsContext.Provider>
 	);
 }
 

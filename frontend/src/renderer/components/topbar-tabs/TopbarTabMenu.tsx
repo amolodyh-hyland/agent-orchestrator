@@ -1,8 +1,11 @@
-import { useParams } from "@tanstack/react-router";
+import { confirmPaneRemoval } from "../session-pane-context";
+import { useNavigate, useParams } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useProjectOrchestratorAction } from "../../hooks/useProjectOrchestratorAction";
 import { useWorkspaceScope } from "../../hooks/useWorkspaceQuery";
+import { MAX_SESSION_PANES, useSessionPanesStore } from "../../stores/session-panes-store";
+import { sessionNavigateTarget } from "../../lib/navigate-to-session";
 import type { MessageKey } from "../../i18n/messages";
 import { PROJECT_COLOR_SLOTS, projectColorCss } from "../../lib/project-colors";
 import { cn } from "../../lib/utils";
@@ -84,10 +87,38 @@ export function useTopbarTabMenu(canRename = true): RenderMenu {
 						actions={actions}
 					/>
 				))}
+				<SessionPaneMenuItems kind={kind} view={view} />
 				{view.role === "head" ? <ProjectColorMenuRow groupId={view.groupId} kind={kind} /> : null}
 			</>
 		);
 	};
+}
+
+function SessionPaneMenuItems({ kind, view }: { kind: "dropdown" | "context"; view: Parameters<RenderMenu>[0]["view"] }) {
+	const { t } = useTranslation();
+	const navigate = useNavigate();
+	const params = useParams({ strict: false }) as { projectId?: string; sessionId?: string; hostId?: string };
+	const selected = useSessionPanesStore((state) => state.selected);
+	const paneCount = useSessionPanesStore((state) => state.panes.length);
+	const Item = kind === "dropdown" ? DropdownMenuItem : ContextMenuItem;
+	const Separator = kind === "dropdown" ? DropdownMenuSeparator : ContextMenuSeparator;
+	return <>
+		<Separator />
+		<Item disabled={selected.length < 2 || selected.length > MAX_SESSION_PANES} onSelect={async () => {
+			if (!await confirmPaneRemoval()) return;
+			useSessionPanesStore.getState().viewSelected();
+			const first = selected[0];
+			if (first) void navigate(sessionNavigateTarget(first.projectId, first.sessionId));
+		}}>{t("shell.tabs.menu.viewSplitPanes")}</Item>
+		<Item disabled={!view.sessionId || paneCount >= MAX_SESSION_PANES} onSelect={async () => {
+			if (!paneCount && !await confirmPaneRemoval()) return;
+			if (!view.sessionId) return;
+			const session = { sessionId: view.sessionId, projectId: view.groupId === STANDALONE_WORKSPACE_ID ? undefined : view.groupId };
+			const current = !params.hostId && params.sessionId ? { sessionId: params.sessionId, projectId: params.projectId } : session;
+			useSessionPanesStore.getState().openRight(session, current);
+			void navigate(sessionNavigateTarget(session.projectId, session.sessionId));
+		}}>{t("shell.tabs.menu.newPaneRight")}</Item>
+	</>;
 }
 
 function ProjectColorMenuRow({ groupId, kind }: { groupId: string; kind: "dropdown" | "context" }) {

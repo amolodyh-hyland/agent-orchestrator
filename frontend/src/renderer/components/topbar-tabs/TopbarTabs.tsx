@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { useOverflowScroll } from "../../hooks/useOverflowScroll";
 import { cloudSessionsQueryKey, useWorkspaceQuery, workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
 import { sessionNavigateTarget } from "../../lib/navigate-to-session";
+import { useSessionPanesStore } from "../../stores/session-panes-store";
 import { useTopbarTabsStore } from "../../stores/topbar-tabs-store";
 import { findProjectOrchestrator, STANDALONE_WORKSPACE_ID } from "../../types/workspace";
 import type { SessionTabActions, TopbarTabProps } from "./TopbarTab";
@@ -36,6 +37,13 @@ export function TopbarTabs({
 	tabAction,
 }: TopbarTabsProps): JSX.Element {
 	const { t } = useTranslation();
+	useEffect(() => {
+		const clear = (event: globalThis.KeyboardEvent) => {
+			if (event.key === "Escape") useSessionPanesStore.getState().clearSelection();
+		};
+		window.addEventListener("keydown", clear, true);
+		return () => window.removeEventListener("keydown", clear, true);
+	}, []);
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
 	const { data: workspaces } = useWorkspaceQuery();
@@ -169,7 +177,7 @@ export function TopbarTabs({
 		const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
 		if (typeof strip.scrollTo === "function") strip.scrollTo({ left: nextScrollLeft, behavior });
 		else strip.scrollLeft = nextScrollLeft;
-	}, [activeTabKey, actionsReserve, overflow, ref, watch]);
+	}, [activeTabKey, actionsReserve, overflow, ref, scrollViewportWidth, watch]);
 
 	const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
 		if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End") return;
@@ -196,6 +204,7 @@ export function TopbarTabs({
 		"data-testid": "topbar-tabs",
 		className: "topbar-tabs scrollbar-none",
 		role: "tablist" as const,
+		"aria-multiselectable": true,
 		style,
 		onKeyDown: handleKeyDown,
 	};

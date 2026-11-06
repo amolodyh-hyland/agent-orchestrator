@@ -1,3 +1,4 @@
+import { SessionPaneContext } from "./session-pane-context";
 import { useFactoryControlsStore } from "../stores/factory-controls-store";
 import { FactoryRunDialog } from "./FactoryRunDialog";
 import { MulticaIssueLinkChip } from "./MulticaIssueLinkChip";
@@ -6,7 +7,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { Archive, LayoutDashboard, Plus } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useContext, useState, type ReactNode } from "react";
 import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import {
 	isOrchestratorSession,
@@ -57,7 +58,9 @@ export function SessionTopbarActions({
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
-	const params = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
+	const routeParams = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
+	const pane = useContext(SessionPaneContext);
+	const params: typeof routeParams = pane?.sessionId ? { sessionId: pane.sessionId, projectId: pane.projectId } : routeParams;
 	const hostId = params.hostId;
 	const currentSessionId = startingOrchestrator ? undefined : params.sessionId;
 	const workspaceQuery = useWorkspaceScope(params.projectId, params.sessionId, hostId);

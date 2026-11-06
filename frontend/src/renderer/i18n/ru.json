@@ -3962,5 +3962,11 @@
 	"automations.template.daily_pr_review_v1.description": "Найдите запросы на слияние, которым нужно ваше внимание, с приоритетами ревью и рекомендуемыми действиями.",
 	"automations.template.daily_issue_triage_v1.description": "Составьте краткий список новых и недавно обновлённых задач с конкретными дальнейшими действиями.",
 	"automations.template.weekly_release_notes_v1.description": "Подготовьте заметки о выпуске из объединённых запросов на слияние, сгруппировав их по новым возможностям, исправлениям и другим изменениям.",
-	"automations.templates.setup": "Требуется доступ на чтение к GitHub для выбранного проекта."
+	"automations.templates.setup": "Требуется доступ на чтение к GitHub для выбранного проекта.",
+	"shell.tabs.menu.viewSplitPanes": "Открыть в разделённых панелях",
+	"shell.tabs.menu.newPaneRight": "Новая панель справа",
+	"shell.tabs.newSessionInGroup": "Новая сессия в {{project}}",
+	"shell.panes.close": "Закрыть панель",
+	"shell.panes.resize": "Изменить размер панелей",
+	"shell.panes.session": "Панель сессии: {{session}}"
 }

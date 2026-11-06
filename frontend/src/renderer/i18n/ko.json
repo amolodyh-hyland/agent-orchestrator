@@ -4476,5 +4476,11 @@
 	"automations.template.daily_pr_review_v1.description": "주의가 필요한 풀 리퀘스트를 찾아 검토 우선순위와 다음 단계를 정리합니다.",
 	"automations.template.daily_issue_triage_v1.description": "새로 등록되거나 업데이트된 이슈를 명확한 다음 조치가 포함된 분류 목록으로 정리합니다.",
 	"automations.template.weekly_release_notes_v1.description": "병합된 풀 리퀘스트에서 기능, 수정 및 기타 변경 사항별로 릴리스 노트 초안을 작성합니다.",
-	"automations.templates.setup": "선택한 프로젝트의 GitHub 읽기 권한이 필요합니다."
+	"automations.templates.setup": "선택한 프로젝트의 GitHub 읽기 권한이 필요합니다.",
+	"shell.tabs.menu.viewSplitPanes": "분할 창으로 보기",
+	"shell.tabs.menu.newPaneRight": "오른쪽에 새 창",
+	"shell.tabs.newSessionInGroup": "{{project}}에서 새 세션",
+	"shell.panes.close": "창 닫기",
+	"shell.panes.resize": "창 크기 조절",
+	"shell.panes.session": "세션 창: {{session}}"
 }

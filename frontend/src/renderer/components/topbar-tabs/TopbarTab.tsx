@@ -1,9 +1,13 @@
+import { SessionPaneContext } from "../session-pane-context";
 import { MoreVertical, X } from "lucide-react";
-import { memo, useLayoutEffect, useRef, useState, type CSSProperties, type JSX, type MouseEvent, type ReactNode } from "react";
+import { memo, useContext, useLayoutEffect, useRef, useState, type CSSProperties, type JSX, type MouseEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { MAX_SESSION_DISPLAY_NAME_LEN, useSessionRename } from "../../hooks/useSessionRename";
 import { useTruncatedText } from "../../hooks/useTruncatedText";
 import { getAgentActivityView, getSessionStatusDotView } from "../../lib/session-presentation";
+import { isMacPlatform } from "../../lib/platform";
+import { useSessionPanesStore } from "../../stores/session-panes-store";
+import { STANDALONE_WORKSPACE_ID } from "../../types/workspace";
 import { cn } from "../../lib/utils";
 import { agentLabel } from "../../lib/agent-options";
 import { AgentAvatar } from "../AgentAvatar";
@@ -61,6 +65,8 @@ export const TopbarTab = memo(function TopbarTab({
 	accent,
 }: TopbarTabProps): JSX.Element {
 	const { t } = useTranslation();
+	const pane = useContext(SessionPaneContext);
+	const selected = useSessionPanesStore((state) => state.selected.some((item) => item.sessionId === view.sessionId && item.projectId === (view.groupId === STANDALONE_WORKSPACE_ID ? undefined : view.groupId)));
 	const wrapperRef = useRef<HTMLSpanElement>(null);
 	const { ref, isTruncated } = useTruncatedText<HTMLButtonElement>(view.label);
 	// The cloud control-plane client does not expose a session rename operation.
@@ -91,6 +97,7 @@ export const TopbarTab = memo(function TopbarTab({
 		density === "comfortable" ? "px-3 text-control" : "px-2 text-xs",
 		isProminent && "font-semibold text-foreground",
 		!isProminent && "max-w-[200px]",
+		pane?.split && "max-w-24!",
 	);
 	const actionButtonClassName = cn(
 		"self-center inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-none text-passive opacity-0 pointer-events-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/50 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-data-[active=true]:pointer-events-auto group-data-[active=true]:opacity-100",
@@ -109,15 +116,18 @@ export const TopbarTab = memo(function TopbarTab({
 				"group relative inline-flex h-full shrink-0 items-center",
 				accent !== undefined && "isolate",
 				className,
+				selected && "ring-2 ring-inset ring-primary bg-primary/15",
 				view.isActive && "bg-overlay text-foreground",
 				!view.isActive && isProminent && "bg-overlay/55 text-foreground",
 				!view.isActive && !isProminent && "text-passive hover:bg-interactive-hover hover:text-foreground",
 			)}
+			data-selected={selected}
 			data-active={view.isActive}
 			data-accent={accent === undefined ? undefined : "true"}
 			data-group-id={view.groupId}
 			data-mode={view.mode}
 			data-role={view.role}
+			data-session-id={view.sessionId ?? undefined}
 			data-testid="topbar-tab"
 			style={accentStyle}
 			onAuxClick={handleAuxClick}
@@ -175,10 +185,21 @@ export const TopbarTab = memo(function TopbarTab({
 					aria-current={view.isActive}
 					aria-keyshortcuts={renameSession ? "F2" : undefined}
 					aria-label={ariaLabel}
-					aria-selected={view.isActive}
+					aria-selected={selected || view.isActive}
 					className={mainButtonClassName}
 					onClick={(event) => {
-						if (event.detail < 2) onActivate(view);
+						if (event.detail >= 2) return;
+						const toggle = isMacPlatform() ? event.metaKey : event.ctrlKey;
+						if (view.sessionId) {
+							const state = useSessionPanesStore.getState();
+							const tabs = event.currentTarget.closest('[role="tablist"]')?.querySelectorAll<HTMLButtonElement>('[data-testid="topbar-tab"] [role="tab"][aria-current="true"]');
+							const active = tabs?.[0]?.closest<HTMLElement>('[data-testid="topbar-tab"]');
+							const activeId = active?.dataset.sessionId;
+							const groupId = active?.dataset.groupId;
+							state.select({ sessionId: view.sessionId, projectId: view.groupId === STANDALONE_WORKSPACE_ID ? undefined : view.groupId }, toggle,
+								activeId ? { sessionId: activeId, projectId: groupId === STANDALONE_WORKSPACE_ID ? undefined : groupId } : undefined);
+						} else if (!toggle) useSessionPanesStore.getState().clearSelection();
+						if (!toggle) onActivate(view);
 					}}
 					onDoubleClick={() => onPersist(view)}
 					onKeyDown={renameSession

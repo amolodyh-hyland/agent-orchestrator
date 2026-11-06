@@ -1,3 +1,4 @@
+import { registerPaneCloseGuard, sessionPaneStaysMounted, SessionPaneContext, useSessionPaneFocused } from "./session-pane-context";
 import { BrowserIcon } from "./icons";
 import { getApiBaseUrl } from "../lib/api-client";
 import { baseUrlForHost } from "../lib/host-clients";
@@ -7,6 +8,8 @@ import { useBlocker, useRouter } from "@tanstack/react-router";
 import { motion } from "motion/react";
 import {
 	useCallback,
+	useContext,
+	useId,
 	useEffect,
 	useLayoutEffect,
 	useMemo,
@@ -104,6 +107,7 @@ import { filesProjectKind } from "../lib/files-review-selection";
 import { aoBridge } from "../lib/bridge";
 import {
 	chatDraftDialogCopy,
+	type ChatDraftBoundaryKind,
 } from "../lib/chat-draft-boundary";
 import {
 	activateSessionFile,
@@ -223,6 +227,14 @@ function reviewerChatFromReviews(data?: ReviewsResponse): ReviewerChatTarget | u
 	const surface = workingReviewerSurface(data) ?? data?.reviewerSurface;
 	if (surface?.mode !== "chat" || !surface.reviewId) return undefined;
 	return { reviewId: surface.reviewId, harness: surface.harness || "codex" };
+}
+
+const visibleDraftRisks = new Map<string, readonly ChatDraftBoundaryKind[]>();
+
+function publishVisibleDraftRisk(clearEmpty = false) {
+	const risks = [...new Set([...visibleDraftRisks.values()].flat())];
+	if (risks.length || !clearEmpty) aoBridge.app.setChatDraftRisk?.(risks, chatDraftDialogCopy(risks));
+	else aoBridge.app.setChatDraftRisk?.([]);
 }
 
 type SessionViewProps = {
@@ -449,6 +461,9 @@ function CloudPausedStatus({ stage }: { stage: "paused" | "paused_by_coder" }) {
 }
 
 export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: SessionViewProps) {
+	const paneFocused = useSessionPaneFocused();
+	const draftRiskOwner = useId();
+	const sessionPane = useContext(SessionPaneContext);
 	const { t } = useTranslation();
 	const router = useRouter();
 	const queryClient = useQueryClient();
@@ -519,12 +534,19 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// under someone who is watching the agent work.
 	useCloudSessionPresence(session?.cloud?.orgId, session?.cloud ? session.id : undefined, Boolean(session?.cloud));
 	const { draftBoundaries: chatDraftBoundaries, confirmUnsafeDraftLeave } = interfaceUi;
+	useEffect(() => registerPaneCloseGuard(sessionPane?.id ?? "single", async () => {
+		const decision = await confirmUnsafeDraftLeave();
+		if (decision.kind === "cancelled") return false;
+		if (decision.kind === "confirmed") discardCapturedPendingFileAttachments(decision.pendingAttachments);
+		return true;
+	}), [confirmUnsafeDraftLeave, sessionPane?.id]);
 	const remoteHostsEnabled = useUiStore((state) => state.remoteHosts);
 	const setRemoteHosts = useUiStore((state) => state.setRemoteHosts);
 	useBlocker({
 		disabled: chatDraftBoundaries.length === 0,
 		enableBeforeUnload: chatDraftBoundaries.length > 0,
-		shouldBlockFn: async () => {
+		shouldBlockFn: async (location) => {
+			if (sessionPane && location && sessionPaneStaysMounted(sessionPane.id, location.next.pathname)) return false;
 			const decision = await confirmUnsafeDraftLeave();
 			if (decision.kind === "cancelled") {
 				if (hostId && !remoteHostsEnabled) setRemoteHosts(true);
@@ -540,12 +562,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		},
 	});
 	useEffect(() => {
-		aoBridge.app.setChatDraftRisk?.(chatDraftBoundaries, chatDraftDialogCopy(chatDraftBoundaries));
-	}, [chatDraftBoundaries, t]);
-	useEffect(
-		() => () => aoBridge.app.setChatDraftRisk?.([]),
-		[sessionId],
-	);
+		visibleDraftRisks.set(draftRiskOwner, chatDraftBoundaries);
+		publishVisibleDraftRisk();
+	}, [chatDraftBoundaries, draftRiskOwner, t]);
+	useEffect(() => () => {
+		visibleDraftRisks.delete(draftRiskOwner);
+		publishVisibleDraftRisk(true);
+	}, [draftRiskOwner]);
 	const { client: cloudCpClient, ready: cloudCpReady, baseUrl: cloudCpBaseUrl } = useCloudCp();
 	// The session's own organization decides whether it can be shared (feature=share).
 	const sessionOffering = useCloudOffering(Boolean(session?.cloud), session?.cloud?.orgId);
@@ -649,7 +672,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	useBlocker({
 		disabled: chatDraftBoundaries.length === 0,
 		enableBeforeUnload: chatDraftBoundaries.length > 0,
-		shouldBlockFn: async () => {
+		shouldBlockFn: async (location) => {
+			if (sessionPane && location && sessionPaneStaysMounted(sessionPane.id, location.next.pathname)) return false;
 			const decision = await confirmUnsafeDraftLeave();
 			if (decision.kind === "cancelled") {
 				if (hostId && !remoteHostsEnabled) setRemoteHosts(true);
@@ -736,12 +760,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		inspectorOverride?: Partial<Pick<SessionNavigationLocation, "inspectorView" | "inspectorOpen">>,
 		mode: "push" | "replace" = "push",
 	) => {
+		if (!paneFocused) return;
 		writeAONavigationLocation(router.history as unknown as NavigationHistoryLike, {
 			settingsModal: useUiStore.getState().settingsModal,
 			multicaActive: useMulticaStore.getState().view.active,
 			sessionView: createSessionNavigationLocation(target, inspectorOverride),
 		}, mode);
-	}, [createSessionNavigationLocation, router]);
+	}, [createSessionNavigationLocation, paneFocused, router]);
 	const recordCenterFileMode = useCallback((mode: FileViewMode) => {
 		const path = fileTabs.activePath;
 		if (!path) return;
@@ -1487,14 +1512,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// shell becomes active while a session is on screen, switch the pane to it —
 	// that is what makes the shortcut feel like it opened a terminal *here*.
 	useEffect(() => {
-		if (!activeShellTerminalHandleId) return;
+		if (!paneFocused || !activeShellTerminalHandleId) return;
 		const shell = shellTerminals.find((s) => s.handleId === activeShellTerminalHandleId);
 		if (!shell) return;
 		if (terminalTarget.kind === "shell" && terminalTarget.handleId === shell.handleId &&
 			terminalTarget.generation === shell.createdAt && terminalTarget.title === shell.title &&
 			!fileTabs.activePath && !reviewerChatId) return;
 		selectShellTerminal(shell.handleId);
-	}, [activeShellTerminalHandleId, fileTabs.activePath, reviewerChatId, selectShellTerminal, shellTerminals, terminalTarget]);
+	}, [activeShellTerminalHandleId, fileTabs.activePath, paneFocused, reviewerChatId, selectShellTerminal, shellTerminals, terminalTarget]);
 	// A tab selected while it was pending follows it to the shell it became.
 	// Only what still points at the pending tab moves: the user may have
 	// selected another tab in the meantime.

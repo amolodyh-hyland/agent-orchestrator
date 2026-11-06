@@ -23,6 +23,7 @@ import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
 import { MulticaPane } from "../components/MulticaPane";
 import { TopbarTabsLifecycle } from "../components/topbar-tabs/TopbarTabsLifecycle";
 import { TopbarTabsRouteSync } from "../components/topbar-tabs/TopbarTabsRouteSync";
+import { SessionPanes } from "../components/SessionPanes";
 import { TopbarTabsRow } from "../components/topbar-tabs/TopbarTabsRow";
 import { QuitConfirmDialog } from "../components/QuitConfirmDialog";
 import { PageTopbar } from "../components/PageTopbar";
@@ -206,7 +207,9 @@ function LocalSessionHost() {
 	return (
 		<CatchBoundary errorComponent={LazyChunkErrorPanel} getResetKey={() => sessionId} onCatch={captureSessionViewCrash}>
 			<Suspense fallback={null}>
-				<SessionView cloudOrgId={org?.id} projectId={projectSession?.projectId} sessionId={sessionId} />
+				<SessionPanes session={{ sessionId, projectId: projectSession?.projectId }} cloudOrgId={org?.id}>
+					<SessionView cloudOrgId={org?.id} projectId={projectSession?.projectId} sessionId={sessionId} />
+				</SessionPanes>
 			</Suspense>
 		</CatchBoundary>
 	);

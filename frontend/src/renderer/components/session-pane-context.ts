@@ -1,7 +1,7 @@
 import { useSessionPanesStore } from "../stores/session-panes-store";
 import { createContext, useContext } from "react";
 
-export const SessionPaneContext = createContext<{ id: string; focused: boolean; sessionId?: string } | null>(null);
+export const SessionPaneContext = createContext<{ id: string; focused: boolean; sessionId?: string; projectId?: string; split?: boolean } | null>(null);
 
 export function focusedSessionRoot(): ParentNode {
 	return document.querySelector('[data-session-pane][data-focused="true"]') ?? document;

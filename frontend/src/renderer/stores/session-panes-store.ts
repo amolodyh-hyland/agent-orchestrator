@@ -63,7 +63,7 @@ export const useSessionPanesStore = create<SessionPanesState>((set, get) => {
 			return { selected: toggle && selected.some((item) => sameSession(item, session))
 				? selected.filter((item) => !sameSession(item, session)) : [...selected, session] };
 		}),
-		clearSelection: () => set({ selected: [] }),
+		clearSelection: () => { if (get().selected.length) set({ selected: [] }); },
 		viewSelected: () => {
 			const { selected } = get();
 			if (selected.length < 2 || selected.length > MAX_SESSION_PANES) return;
@@ -104,7 +104,8 @@ export const useSessionPanesStore = create<SessionPanesState>((set, get) => {
 		},
 		resize: (sizes) => {
 			const state = get();
-			if (!state.panes.every((pane) => Number.isFinite(sizes[pane.id]) && sizes[pane.id] > 0)) return;
+			if (Object.keys(sizes).length !== state.panes.length || !state.panes.every((pane) => Number.isFinite(sizes[pane.id]) && sizes[pane.id] > 0) ||
+				Math.abs(Object.values(sizes).reduce((sum, size) => sum + size, 0) - 100) > 0.1) return;
 			update({ panes: state.panes, focusedId: state.focusedId, sizes });
 		},
 	};
