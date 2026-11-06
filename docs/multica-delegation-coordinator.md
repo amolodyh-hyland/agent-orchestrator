@@ -84,12 +84,23 @@ Unmanaged machines with verified empty protected locations still resolve to
 
 `frontend/src/main/multica-runtime-provenance.ts` supplies the registered desktop's
 runtime resolver for preview validation, coordinator policy rechecks and result
-read/import. It reads only profile connection metadata, `daemon.port`,
-`daemon.pid` and daemon-ID files under `~/.multica`; no credential operation or
-token field is used. Files must be same-user, protected from group/other writes,
+read/import. It reads profile `config.json` (the complete JSON may contain a
+token), `daemon.port`, `daemon.pid` and daemon-ID files under `~/.multica`;
+only connection/executable metadata is used for authorization, with no token
+field lookup, credential operation or token forwarding. Files must be same-user, protected from group/other writes,
 bounded, contained under that directory and free of symlinks. Native `lsof` and
-`ps` verify that the health listener belongs to a stable same-user `multica`
-process. Its bounded `127.0.0.1` health response must match the profile, PID,
+`ps` verify that the health listener belongs to a stable same-user process.
+Its full OS executable path must appear in `lsof txt` and, after canonical
+`realpath` resolution, equal the profile's absolute `daemon_binary_path`.
+The optional `daemon_binary_sha256` must be 64 hexadecimal digits and match
+the current binary. An adjacent `bundle-manifest.json` is also honored: its
+single matching `binaries[].file` entry must supply a valid matching `sha256`;
+conflicting hashes, malformed/unreadable manifests, or absent executable records
+return `unknown`. Path and hash checks run before and after the health read.
+Record the approved binary path (and hash when available) during runner setup;
+AO never invents or writes that profile record. Existing profiles without it
+remain `unknown`. Executables can have names such as `multica-darwin-arm64`;
+a basename alone never supplies provenance. Its bounded `127.0.0.1` health response must match the profile, PID,
 daemon UUID, configured server origin and exact workspace/runtime IDs. Process
 identity and metadata are checked again afterward. Evidence is refreshed for
 each policy check, without caching a local classification. A server-provided
@@ -97,6 +108,11 @@ class field or a loopback server URL supplies no locality evidence. Missing
 tools, unsupported OS ownership checks, forwarded/container-only listeners,
 ambiguous identities or failed checks return `unknown` and remain blocked by
 the managed no-rule default.
+
+Same-user processes and their profile records are trusted principals under
+decisions 28 and 29 (including the accepted step-2 same-user host access).
+The path/hash checks detect mismatched binaries and stale records; they do not
+isolate AO from that user rewriting both the authorized record and executable.
 
 Migration `0219_multica_confirmation_verification.sql` marks legacy records
 unverified by default. Only authenticated, proof-verified reservations set the

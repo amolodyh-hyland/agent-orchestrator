@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { IpcMain, IpcMainInvokeEvent, WebContents } from "electron";
@@ -26,6 +26,8 @@ let dir: string;
 let origin: string;
 let child: ChildProcessWithoutNullStreams | undefined;
 let fixture: DelegationRecord;
+let fixtureBinary: string;
+let fixtureBinaryHash: string;
 
 beforeAll(async () => {
 	dir = await mkdtemp(path.join(tmpdir(), "ao-delegation-real-journal-"));
@@ -35,6 +37,8 @@ beforeAll(async () => {
 	await promisify(execFile)("go", ["build", "-o", binary, "./internal/httpd/testdata/delegation-journal"], {
 		cwd: backend, env: process.env, timeout: 240_000,
 	});
+	fixtureBinary = binary;
+	fixtureBinaryHash = createHash("sha256").update(await readFile(binary)).digest("hex");
 	const launched = spawn(binary, [dir], { stdio: "pipe", windowsHide: true });
 	child = launched;
 	launched.stdin.write(`${JSON.stringify({ browserToken: "test-browser-only", delegationKey: key.toString("base64url") })}\n`);
@@ -392,7 +396,7 @@ describe("coordinators against the real daemon SQLite journal", () => {
 });
 
 describe.skipIf(process.platform !== "darwin" && process.platform !== "linux")("registered desktop runtime provenance", () => {
- it.each(["local", "remote origin", "remote runtime", "unknown runtime", "server-spoofed locality", "revoked at reserve"])("enrolled/no-rule policy boundary handles %s", async mode => {
+ it.each(["local", "remote origin", "remote runtime", "unknown runtime", "server-spoofed locality", "executable path differs", "executable hash differs", "revoked at reserve"])("enrolled/no-rule policy boundary handles %s", async mode => {
   const home=path.join(dir,randomUUID()), profile=path.join(home,".multica/profiles/localproof");
   await mkdir(profile,{recursive:true,mode:0o700});
   const configuredOrigin=mode==="remote origin"?"https://remote.example":"http://localhost:8380";
@@ -401,7 +405,13 @@ describe.skipIf(process.platform !== "darwin" && process.platform !== "linux")("
    workspaces:[{id:fixture.intent.binding.workspaceId,runtimes:mode==="unknown runtime"||mode==="remote runtime"||mode==="server-spoofed locality"?[randomUUID()]:[payload.expected_runtime_id]}]};
   const healthFile=path.join(dir,"local-health.json");
   await writeFile(healthFile,JSON.stringify(health));
-  for(const [name,value] of Object.entries({"config.json":JSON.stringify({server_url:"http://localhost:8380",token:"must-not-be-sent"}),
+  let recordedBinary=fixtureBinary;
+  if(mode==="executable path differs"){
+   recordedBinary=path.join(home,"other/multica");await mkdir(path.dirname(recordedBinary),{recursive:true,mode:0o700});
+   await writeFile(recordedBinary,await readFile(fixtureBinary),{mode:0o700});
+  }
+  for(const [name,value] of Object.entries({"config.json":JSON.stringify({server_url:"http://localhost:8380",daemon_binary_path:recordedBinary,
+   daemon_binary_sha256:mode==="executable hash differs"?"0".repeat(64):fixtureBinaryHash,token:"must-not-be-sent"}),
    "daemon.port":JSON.stringify({port:Number(new URL(origin).port),pid:child!.pid}),"daemon.pid":String(child!.pid),"bundle-daemon.id":daemonId})){
    await writeFile(path.join(profile,name),value,{mode:0o600});
   }
