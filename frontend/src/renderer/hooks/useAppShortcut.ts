@@ -1,5 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useContext, useEffect, useRef } from "react";
 import { matchesAppShortcut, shortcutYieldsToTerminal, type AppShortcutEvent, type AppShortcutId } from "../../shared/shortcuts";
+import { SessionPaneContext, focusedSessionRoot } from "../components/session-pane-context";
 import { aoBridge } from "../lib/bridge";
 import { isMacPlatform } from "../lib/platform";
 import { useKeybindingsStore } from "../stores/keybindings-store";
@@ -8,7 +9,7 @@ import { useUiStore } from "../stores/ui-store";
 /** Focuses the first element matching `selector` once the next render has painted. */
 export function focusAfterPaint(selector: string): void {
 	window.requestAnimationFrame(() => {
-		window.requestAnimationFrame(() => document.querySelector<HTMLElement>(selector)?.focus());
+		window.requestAnimationFrame(() => focusedSessionRoot().querySelector<HTMLElement>(selector)?.focus());
 	});
 }
 
@@ -47,6 +48,8 @@ export function useAppShortcut(
 	handler: (event: AppShortcutEvent) => void,
 	enabled = true,
 ): void {
+	const pane = useContext(SessionPaneContext);
+	enabled = enabled && (pane?.focused ?? true);
 	const handlerRef = useRef(handler);
 	handlerRef.current = handler;
 	useEffect(() => {
