@@ -1,5 +1,5 @@
 import { desktopStartup } from "./main/desktop-bootstrap";
-import { bootstrapDaemonBeforeFeatures, readDaemonStartupLink } from "./main/desktop-daemon-bootstrap";
+import { bootstrapDaemonWithRecovery, verifyDesktopDaemonHandshake } from "./main/desktop-daemon-bootstrap";
 import { startUpdateControl } from "./main/update-control";
 import { deferStaleCopyCleanup } from "./main/stale-app-copies";
 import { NativeDictationEngine, dictationHelperPath } from "./main/dictation-engine";
@@ -433,6 +433,7 @@ const OPEN_FOLDER_PATH_CHANNEL = "app:openFolderPath";
 // via TRAY_RENDERER_READY_CHANNEL — see the OPEN_FOLDER_PATH_CHANNEL handler.
 let pendingFolderPath: string | null = null;
 let daemonProcess: ChildProcess | null = null;
+let daemonSpawnedAtMs = 0;
 let daemonStoppingProcess: ChildProcess | null = null;
 let daemonRestartAfterExitProcess: ChildProcess | null = null;
 type DaemonAutoRestartIntent = { generation: number; crashedPid: number; runFilePresent: boolean; keepAlive: boolean };
@@ -2726,6 +2727,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 	}
 	let child: ChildProcess;
 	desktopStartup.phase("daemon-spawn");
+	daemonSpawnedAtMs = Date.now();
 	try {
 		child = spawn(launch.command, launch.args, {
 			cwd: launch.cwd,
@@ -2769,7 +2771,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 	}
 	if (keep) child.unref();
 	daemonProcess = child;
-	if (child.pid) desktopStartup.linkDaemon(child.pid);
+	if (!launch.shell && child.pid) desktopStartup.linkDaemon(child.pid);
 	desktopStartup.phase("daemon-handshake");
 	daemonAutoRestartStandDown = false;
 
@@ -2789,16 +2791,16 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		fallbackTimer = undefined;
 	};
 
-	const reportBoundPort = (port: number) => {
+	const reportBoundPort = (port: number, daemonPid?: number) => {
 		if (portConfirmed || daemonProcess !== child || daemonStoppingProcess === child) return;
 		portConfirmed = true;
 		stopDiscovery();
-		setDaemonStatus({ state: "ready", port, pid: child.pid });
+		setDaemonStatus({ state: "ready", port, pid: daemonPid ?? (launch.shell ? undefined : child.pid) });
 		// The renderer opens event streams on a *.localhost name only while the
 		// daemon also serves [::1] at this port; its probe says whether it does.
 		void readDaemonProbe(port, "healthz").then((probe) => {
-			if (probe?.ipv6Loopback !== true || probe.pid !== child.pid) return;
-			if (daemonStatus.state !== "ready" || daemonStatus.port !== port || daemonStatus.pid !== child.pid) return;
+			if (probe?.ipv6Loopback !== true) return;
+			if (daemonStatus.state !== "ready" || daemonStatus.port !== port || daemonStatus.pid !== probe.pid) return;
 			// The same attachment, so only the renderer's copy changes.
 			daemonStatus = { ...daemonStatus, ipv6Loopback: true };
 			getShellWebContents()?.send("daemon:status", daemonStatus);
@@ -2856,7 +2858,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 					// Ignore a stale handshake left by a previous daemon: only trust a
 					// file written at/after this spawn.
 					if (info && info.startedAtMs >= spawnedAtMs - RUN_FILE_FRESHNESS_SKEW_MS) {
-						reportBoundPort(info.port);
+						reportBoundPort(info.port, info.pid);
 					}
 				})
 				.catch(() => undefined); // absent until the daemon binds; keep polling
@@ -4250,48 +4252,57 @@ app.whenReady().then(async () => {
 	soundNotificationsEnabled = initialUiSettings.soundNotificationsEnabled;
 	terminalShellPreference = initialUiSettings.terminalShell;
 	if (browserQuitRequested) return;
-	const bootstrapBegan = Date.now();
 	const startupAttachment = () => {
-		const pid = daemonStatus.pid ?? daemonProcess?.pid;
+		const pid = daemonProcess?.pid ?? daemonStatus.pid;
 		return pid ? `${daemonStartEpoch}:${pid}` : null;
 	};
-	const bootstrap = await bootstrapDaemonBeforeFeatures({
-		start: () => startDaemon(), status: () => daemonStatus,
+	let bootstrapAttempted = false;
+	const bootstrap = await bootstrapDaemonWithRecovery({
+		start: async () => {
+			if (!bootstrapAttempted || (!daemonProcess && !daemonStatus.pid)) {
+				bootstrapAttempted = true;
+				return startDaemon();
+			}
+			setDaemonStatus({ ...daemonStatus, state: "starting" });
+			return daemonStatus;
+		},
+		status: () => daemonStatus,
 		attachment: startupAttachment,
 		cancelled: () => browserQuitRequested || updateShutdownRequested,
 		handshake: async () => {
 			const attachment = startupAttachment();
-			const pid = daemonStatus.pid ?? daemonProcess?.pid;
 			const running = runFilePath();
-			if (!pid || !running) return false;
-			const executable = daemonStatus.executablePath ?? resolveDaemonLaunch(daemonLaunchEnv(), app.isPackaged, process.resourcesPath, app.getAppPath(), os.homedir(), process.platform)?.command ?? "";
-			const spawnedAt = daemonProcess?.pid === pid ? bootstrapBegan : 0;
-			try {
-				const { stdout } = await promisify(execFile)("ps", ["-o", "lstart=", "-p", String(pid)], { env: { ...process.env, LC_ALL: "C" }, timeout: 2000 });
-				const link = await readDaemonStartupLink(path.join(path.dirname(running), "startup"), {
-					pid, processStart: stdout, executable, spawnedAt,
-				});
-				if (!link) return false;
-				const confirmed = await promisify(execFile)("ps", ["-o", "lstart=", "-p", String(pid)], { env: { ...process.env, LC_ALL: "C" }, timeout: 2000 });
-				if (confirmed.stdout.trim().replace(/\s+/g, " ") !== stdout.trim().replace(/\s+/g, " ")) return false;
-				if (attachment !== startupAttachment()) return false;
-				desktopStartup.linkDaemon(link.pid, link.launchId);
-				return true;
-			} catch { return false; }
+			const launch = resolveDaemonLaunch(daemonLaunchEnv(), app.isPackaged, process.resourcesPath, app.getAppPath(), os.homedir(), process.platform);
+			if (!running || !launch) return false;
+			const child = daemonProcess;
+			if (child && !child.pid) return false;
+			const link = await verifyDesktopDaemonHandshake({
+				runFile: running, platform: process.platform, launch,
+				...(child ? { spawned: { appRunId, at: daemonSpawnedAtMs, wrapperPid: child.pid! } } : { attachedPid: daemonStatus.pid }),
+				probe: readDaemonProbe, identityError: (probe) => daemonIdentityError(launch, probe),
+			});
+			if (!link || attachment !== startupAttachment()) return false;
+			desktopStartup.linkDaemon(link.pid, link.launchId);
+			setDaemonStatus({ ...daemonStatus, state: "ready", pid: link.pid, port: link.port, executablePath: link.executable });
+			return true;
 		},
 		initializeFeatures: async () => {
 			markDaemonBaseReady();
 		},
+		recover: async (state) => {
+			desktopStartup.phase("failed");
+			const { response } = await dialog.showMessageBox({
+				type: "error", title: "AO startup needs attention",
+				message: state === "failed" ? "AO's local service did not start." : "AO could not verify its local service startup.",
+				detail: "Retry to check startup again without stopping a known service. Browser and sign-in features remain closed until verification succeeds. A legacy service without startup records needs an updated daemon before retrying. No rollback has been performed.",
+				buttons: ["Retry startup", "Leave running"], defaultId: 0, cancelId: 1, noLink: true,
+			});
+			if (response !== 0) return "leave-running";
+			desktopStartup.phase("daemon-handshake");
+			return "retry";
+		},
 	});
-	if (browserQuitRequested) return;
-	if (bootstrap.state !== "verified") {
-		if (bootstrap.state === "cancelled") return;
-		desktopStartup.phase("failed");
-		dialog.showErrorBox("AO startup needs attention", bootstrap.state === "failed"
-			? "AO's local service did not start. Browser and sign-in features have not been opened. Check the startup records under the AO data directory."
-			: "AO could not verify its local service startup. A legacy service or unavailable startup record may require attention. Browser and sign-in features have not been opened. The app and your data have been retained; no rollback was performed.");
-		return;
-	}
+	if (browserQuitRequested || bootstrap.state !== "verified") return;
 	desktopStartup.phase("version-policy");
 	if (app.isPackaged) {
 		const { checkDesktopVersionFloor } = await import("./main/desktop-version-floor");

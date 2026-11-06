@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { bootstrapDaemonBeforeFeatures, readDaemonStartupLink } from "./desktop-daemon-bootstrap";
+import { bootstrapDaemonBeforeFeatures, bootstrapDaemonWithRecovery, readDaemonStartupLink } from "./desktop-daemon-bootstrap";
 import { createSafeStorageVault } from "./multica-awareness-env";
 
 it("spawns and completes the daemon handshake before an unanswered credential request starts", async () => {
@@ -173,4 +173,48 @@ it("accepts only the daemon's exact live-launch identity and unchanged ciphertex
 		await writeFile(file, "{corrupt");
 		expect(await readDaemonStartupLink(path.dirname(file), identity)).toBeNull();
 	} finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+it("retries verification in process and opens features only after the retry succeeds", async () => {
+	let now = 0;
+	let verified = false;
+	const initializeFeatures = vi.fn(async () => {});
+	const recover = vi.fn(async () => {
+		expect(initializeFeatures).not.toHaveBeenCalled();
+		verified = true;
+		return "retry" as const;
+	});
+	const result = await bootstrapDaemonWithRecovery({
+		start: async () => {}, status: () => ({ state: "ready", pid: 123 }), attachment: () => "daemon-123",
+		handshake: async () => verified, cancelled: () => false, initializeFeatures, recover,
+		now: () => now, timeoutMs: 1, wait: async () => { now++; },
+	});
+	expect(result).toEqual({ state: "verified" });
+	expect(recover).toHaveBeenCalledWith("unverified");
+	expect(initializeFeatures).toHaveBeenCalledOnce();
+});
+
+it("leaves a failed start closed when the user declines recovery", async () => {
+	const initializeFeatures = vi.fn(async () => {});
+	const result = await bootstrapDaemonWithRecovery({
+		start: async () => {}, status: () => ({ state: "error" }), attachment: () => null,
+		handshake: async () => true, cancelled: () => false, initializeFeatures,
+		recover: async () => "leave-running",
+	});
+	expect(result).toEqual({ state: "failed" });
+	expect(initializeFeatures).not.toHaveBeenCalled();
+});
+
+it("honors cancellation while the native recovery dialog is pending", async () => {
+	let cancelled = false;
+	const start = vi.fn(async () => {});
+	const initializeFeatures = vi.fn(async () => {});
+	const result = await bootstrapDaemonWithRecovery({
+		start, status: () => ({ state: "error" }), attachment: () => null,
+		handshake: async () => true, cancelled: () => cancelled, initializeFeatures,
+		recover: async () => { cancelled = true; return "retry"; },
+	});
+	expect(result).toEqual({ state: "cancelled" });
+	expect(start).toHaveBeenCalledOnce();
+	expect(initializeFeatures).not.toHaveBeenCalled();
 });
