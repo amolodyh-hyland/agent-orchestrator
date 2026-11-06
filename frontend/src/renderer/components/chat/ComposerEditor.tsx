@@ -69,6 +69,8 @@ import { Box, Image as ImageIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { composerFileIcon } from "./composerFileIcon";
+import { useCodeThemeStyle } from "../../hooks/useCodeThemeStyle";
+import { ComposerSyntaxHighlight } from "./ComposerSyntaxHighlight";
 import { composerCodeRegions, createComposerGraphemeNavigator, isComposerOpenCodeFenceAt } from "./composerMarkdown";
 import { COMPOSER_CODE_LANGUAGE_TAG, ComposerCodeNode, ComposerCodePlaceholderNode, ComposerCodePlugin } from "./ComposerCode";
 import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
@@ -1584,6 +1586,7 @@ export const ComposerEditor = forwardRef<
 			promptSuggestion.onDismiss?.();
 		}
 	}, [promptSuggestion]);
+	const codeStyle = useCodeThemeStyle();
 	const initialConfig = {
 		namespace: "AOChatComposer",
 		nodes: [ComposerTokenNode, ComposerCodeNode, ComposerCodePlaceholderNode],
@@ -1625,7 +1628,7 @@ export const ComposerEditor = forwardRef<
 		<LexicalComposer initialConfig={initialConfig}>
 			<ComposerAttachments.Provider value={attachments}>
 			<ComposerImages.Provider value={images}>
-			<div className={cn("relative", suggestion && "chat-composer-scrollbar max-h-40 overflow-y-auto overscroll-contain")}>
+			<div className={cn("relative", suggestion && "chat-composer-scrollbar max-h-40 overflow-y-auto overscroll-contain")} style={codeStyle}>
 				<PlainTextPlugin
 					contentEditable={
 						<ContentEditable
@@ -1674,6 +1677,7 @@ export const ComposerEditor = forwardRef<
 				) : null}
 				<HistoryPlugin />
 				<ComposerCodePlugin />
+				<ComposerSyntaxHighlight />
 				<EditorBridge
 					ref={ref}
 					disabled={disabled}

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { codeLanguage, codeColorTheme, type CodeLanguage, type CodeColorTheme } from "../lib/code-style";
 import { useCallback, useSyncExternalStore } from "react";
 import { aoBridge } from "../lib/bridge";
 import { developerModeStorageKey, readStoredWindowTranslucency, windowTranslucencyStorageKey } from "../lib/window-translucency";
@@ -185,6 +186,9 @@ export type UiState = {
 	terminalCopyOnSelect: boolean;
 	/** Chat only: plain Enter sends by default; mod-enter reserves it for newlines. */
 	chatSendKeyMode: ChatSendKeyMode;
+	defaultCodeBlockLanguage: CodeLanguage;
+	defaultInlineCodeLanguage: CodeLanguage;
+	codeColorTheme: CodeColorTheme;
 	navigationGestures: boolean;
 	/** Typeset `$…$`, `$$…$$`, `\(…\)` and `\[…\]` in markdown. Default off: a lone `$` is also currency. */
 	renderMath: boolean;
@@ -248,6 +252,9 @@ export type UiState = {
 	setWindowTranslucency: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
 	setChatSendKeyMode: (mode: ChatSendKeyMode) => void;
+	setDefaultCodeBlockLanguage: (language: CodeLanguage) => void;
+	setDefaultInlineCodeLanguage: (language: CodeLanguage) => void;
+	setCodeColorTheme: (theme: CodeColorTheme) => void;
 	setNavigationGestures: (enabled: boolean) => void;
 	setRenderMath: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
@@ -318,6 +325,9 @@ const diagnosticsStorageKey = "ao.diagnostics";
 const sideChatsStorageKey = "ao.sideChats";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
 const chatSendKeyModeStorageKey = "ao.chatSendKeyMode";
+const codeBlockLanguageStorageKey = "ao.defaultCodeBlockLanguage";
+const inlineCodeLanguageStorageKey = "ao.defaultInlineCodeLanguage";
+const codeColorThemeStorageKey = "ao.codeColorTheme";
 const navigationGesturesStorageKey = "ao.navigationGestures";
 const renderMathStorageKey = "ao.renderMath";
 function getLocalStorage() {
@@ -414,6 +424,9 @@ export const useUiStore = create<UiState>((set, get) => ({
 	windowTranslucency: readStoredWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
 	chatSendKeyMode: initialChatSendKeyMode(),
+	defaultCodeBlockLanguage: codeLanguage(getLocalStorage()?.getItem(codeBlockLanguageStorageKey) ?? null),
+	defaultInlineCodeLanguage: codeLanguage(getLocalStorage()?.getItem(inlineCodeLanguageStorageKey) ?? null),
+	codeColorTheme: codeColorTheme(getLocalStorage()?.getItem(codeColorThemeStorageKey) ?? null),
 	navigationGestures: getLocalStorage()?.getItem(navigationGesturesStorageKey) !== "false",
 	renderMath: getLocalStorage()?.getItem(renderMathStorageKey) === "true",
 	restartingProjectIds: new Set<string>(),
@@ -493,6 +506,18 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setTerminalCopyOnSelect: (terminalCopyOnSelect) => {
 		getLocalStorage()?.setItem(terminalCopyOnSelectStorageKey, String(terminalCopyOnSelect));
 		set({ terminalCopyOnSelect });
+	},
+	setDefaultCodeBlockLanguage: (defaultCodeBlockLanguage) => {
+		getLocalStorage()?.setItem(codeBlockLanguageStorageKey, defaultCodeBlockLanguage);
+		set({ defaultCodeBlockLanguage });
+	},
+	setDefaultInlineCodeLanguage: (defaultInlineCodeLanguage) => {
+		getLocalStorage()?.setItem(inlineCodeLanguageStorageKey, defaultInlineCodeLanguage);
+		set({ defaultInlineCodeLanguage });
+	},
+	setCodeColorTheme: (codeColorTheme) => {
+		getLocalStorage()?.setItem(codeColorThemeStorageKey, codeColorTheme);
+		set({ codeColorTheme });
 	},
 	setChatSendKeyMode: (chatSendKeyMode) => {
 		getLocalStorage()?.setItem(chatSendKeyModeStorageKey, chatSendKeyMode);

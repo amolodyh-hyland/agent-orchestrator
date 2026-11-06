@@ -1,4 +1,12 @@
 {
+	"settings.code.blockLanguage": "Язык блоков кода по умолчанию",
+	"settings.code.blockLanguageHint": "Используется в чате и поле ввода, если язык блока не указан. Явно указанный язык всегда имеет приоритет.",
+	"settings.code.inlineLanguage": "Язык встроенного кода по умолчанию",
+	"settings.code.colorTheme": "Цветовая тема кода",
+	"settings.code.colorThemeHint": "Цвета кода в чате и поле ввода. Светлая или тёмная палитра выбирается автоматически.",
+	"settings.code.none": "Нет (обычный текст)",
+	"settings.code.followApp": "Как в приложении",
+	"settings.code.defaultLanguage": "По умолчанию",
 	"settings.agentAssetSources.title": "Дополнительные источники ресурсов агентов",
 	"settings.agentAssetSources.inherit": "Использовать глобальные настройки",
 	"settings.agentAssetSources.directories": "Исходные каталоги (по одному в строке)",

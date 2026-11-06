@@ -1,4 +1,12 @@
 {
+	"settings.code.blockLanguage": "コードブロックの既定の言語",
+	"settings.code.blockLanguageHint": "チャットと入力欄で言語が指定されていないコードブロックに使用します。明示された言語が常に優先されます。",
+	"settings.code.inlineLanguage": "インラインコードの既定の言語",
+	"settings.code.colorTheme": "コードの配色テーマ",
+	"settings.code.colorThemeHint": "チャットと入力欄のコードの色。ライトまたはダークの配色を自動で使用します。",
+	"settings.code.none": "なし（プレーン）",
+	"settings.code.followApp": "アプリに合わせる",
+	"settings.code.defaultLanguage": "既定",
 	"settings.agentAssetSources.title": "Extra agent asset sources",
 	"settings.agentAssetSources.inherit": "Use global defaults",
 	"settings.agentAssetSources.directories": "Source directories (one per line)",

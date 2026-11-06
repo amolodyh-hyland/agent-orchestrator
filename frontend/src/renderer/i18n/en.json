@@ -1,4 +1,12 @@
 {
+	"settings.code.blockLanguage": "Default code block language",
+	"settings.code.blockLanguageHint": "Used in chat and the composer when a code fence has no language. An explicit language always wins.",
+	"settings.code.inlineLanguage": "Default inline code language",
+	"settings.code.colorTheme": "Code color theme",
+	"settings.code.colorThemeHint": "Colors for chat code and the composer. Automatically uses the light or dark palette.",
+	"settings.code.none": "None (plain)",
+	"settings.code.followApp": "Follow app",
+	"settings.code.defaultLanguage": "Default",
 	"settings.agentAssetSources.title": "Extra agent asset sources",
 	"settings.agentAssetSources.inherit": "Use global defaults",
 	"settings.agentAssetSources.directories": "Source directories (one per line)",

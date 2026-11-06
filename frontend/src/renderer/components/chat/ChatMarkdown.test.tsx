@@ -5,7 +5,7 @@ import { aoBridge } from "../../lib/bridge";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { renderMermaidDiagram } from "../../lib/mermaid-diagram";
 import { useUiStore } from "../../stores/ui-store";
-import { ActivityTitle, ChatLinkProvider, ChatMarkdown, ChatOpeningRef } from "./ChatMarkdown";
+import { ActivityTitle, ChatCodeText, ChatLinkProvider, ChatMarkdown, ChatOpeningRef } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
 
 const sessionPreview = vi.hoisted(() => vi.fn());
@@ -997,5 +997,46 @@ describe("ChatMarkdown math", () => {
 		await waitFor(() => expect(container.querySelector('[data-math="inline"] .katex')).not.toBeNull());
 		expect(container.querySelectorAll('[data-math="inline"] .katex')).toHaveLength(1);
 		expect(container).toHaveTextContent("$\\notacommand{x}$");
+	});
+});
+
+describe("chat code appearance preferences", () => {
+	afterEach(() => useUiStore.setState({ defaultCodeBlockLanguage: "none", defaultInlineCodeLanguage: "none", codeColorTheme: "app", resolvedTheme: "dark" }));
+
+	it("highlights unlabeled fences and inline code with independent defaults", async () => {
+		useUiStore.setState({ defaultCodeBlockLanguage: "typescript", defaultInlineCodeLanguage: "python" });
+		const { container } = render(<ChatMarkdown text={'```\nconst answer = 42;\n```\n\n`def greet(): pass`'} />);
+		await waitFor(() => expect(container.querySelector("pre .hljs-keyword")).toHaveTextContent("const"));
+		await waitFor(() => expect(container.querySelector("code.chat-code .hljs-keyword")).toHaveTextContent("def"));
+	});
+
+	it("uses the same defaults in user messages", async () => {
+		useUiStore.setState({ defaultCodeBlockLanguage: "typescript", defaultInlineCodeLanguage: "python" });
+		const { container } = render(<ChatCodeText text={'```\nconst answer = 42;\n```\n\n`def greet(): pass`'} renderText={(text) => <span>{text}</span>} />);
+		await waitFor(() => expect(container.querySelector("pre .hljs-keyword")).toHaveTextContent("const"));
+		await waitFor(() => expect(container.querySelector("code.chat-code .hljs-keyword")).toHaveTextContent("def"));
+	});
+
+	it("honors explicit languages including plain and unknown labels", async () => {
+		useUiStore.setState({ defaultCodeBlockLanguage: "typescript" });
+		const { container } = render(<ChatMarkdown text={'```python\ndef greet(): pass\n```\n\n```text\nconst plain = 1;\n```\n\n```unknown\nconst unknown = 2;\n```'} />);
+		const blocks = container.querySelectorAll("pre");
+		await waitFor(() => expect(blocks[0].querySelector(".hljs-keyword")).toHaveTextContent("def"));
+		expect(blocks[1].querySelector("[class^=hljs]")).toBeNull();
+		expect(blocks[2].querySelector("[class^=hljs]")).toBeNull();
+	});
+
+	it("updates palettes and inline highlighting when preferences change", async () => {
+		const { container } = render(<ChatMarkdown text={'`const answer = 42`'} />);
+		expect(container.querySelector(".hljs-keyword")).toBeNull();
+		act(() => useUiStore.setState({ defaultInlineCodeLanguage: "typescript", codeColorTheme: "nord" }));
+		await waitFor(() => expect(container.querySelector(".hljs-keyword")).toBeInTheDocument());
+		const code = container.querySelector("code")!;
+		const dark = code.style.getPropertyValue("--ao-code-keyword");
+		act(() => useUiStore.setState({ resolvedTheme: "light" }));
+		expect(code.style.getPropertyValue("--ao-code-keyword")).not.toBe(dark);
+		act(() => useUiStore.setState({ defaultInlineCodeLanguage: "none", codeColorTheme: "app" }));
+		expect(container.querySelector(".hljs-keyword")).toBeNull();
+		expect(code.style.getPropertyValue("--ao-code-keyword")).toBe("");
 	});
 });

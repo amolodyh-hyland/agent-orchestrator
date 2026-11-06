@@ -61,6 +61,8 @@ const GRAMMARS = {
 
 export type GrammarName = (typeof GRAMMARS)[keyof typeof GRAMMARS];
 
+export const CODE_LANGUAGES = [...new Set(Object.values(GRAMMARS))].sort();
+
 /** The grammar for a fence label, or undefined when there is nothing to load. */
 const grammarAliases = new Map<string, GrammarName>(Object.entries(GRAMMARS));
 
@@ -264,7 +266,9 @@ export function createCodeHighlightStream() {
 	};
 }
 
-async function highlightInWorker(code: string, language: GrammarName): Promise<Root | undefined> {
+export async function highlightInWorker(code: string, language: GrammarName): Promise<Root | undefined> {
+	const cached = cache.get(cacheKey(code, language));
+	if (cached) return cached.tree;
 	const response = await sendWorker({ kind: "highlight", id: ++nextRequestId, code, language }, cacheKey(code, language));
 	return response?.kind === "highlight" ? response.tree : undefined;
 }

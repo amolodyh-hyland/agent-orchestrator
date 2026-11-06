@@ -42,7 +42,7 @@
 	/* Passive text is intentionally very faint and becomes unreadable on the
 	   raised dark code surface. Comments are content, so use the accessible
 	   secondary-text role instead. */
-	color: var(--color-text-muted);
+	color: var(--ao-code-comment, var(--color-text-muted));
 	font-style: italic;
 }
 
@@ -53,7 +53,7 @@
 :is(.chat-code, .diff-code, .markdown-code) .hljs-name,
 :is(.chat-code, .diff-code, .markdown-code) .hljs-tag,
 :is(.chat-code, .diff-code, .markdown-code) .hljs-selector-tag {
-	color: var(--color-term-magenta);
+	color: var(--ao-code-keyword, var(--color-term-magenta));
 }
 
 :is(.chat-code, .diff-code, .markdown-code) .hljs-string,
@@ -61,20 +61,20 @@
 :is(.chat-code, .diff-code, .markdown-code) .hljs-char.escape_,
 :is(.chat-code, .diff-code, .markdown-code) .hljs-addition,
 :is(.chat-code, .diff-code, .markdown-code) .hljs-template-tag {
-	color: var(--color-term-green);
+	color: var(--ao-code-string, var(--color-term-green));
 }
 
 :is(.chat-code, .diff-code, .markdown-code) .hljs-number,
 :is(.chat-code, .diff-code, .markdown-code) .hljs-symbol,
 :is(.chat-code, .diff-code, .markdown-code) .hljs-bullet,
 :is(.chat-code, .diff-code, .markdown-code) .hljs-link {
-	color: var(--color-term-yellow);
+	color: var(--ao-code-number, var(--color-term-yellow));
 }
 
 :is(.chat-code, .diff-code, .markdown-code) .hljs-title,
 :is(.chat-code, .diff-code, .markdown-code) .hljs-title.function_,
 :is(.chat-code, .diff-code, .markdown-code) .hljs-function .hljs-title {
-	color: var(--color-term-blue);
+	color: var(--ao-code-title, var(--color-term-blue));
 }
 
 :is(.chat-code, .diff-code, .markdown-code) .hljs-type,
@@ -82,7 +82,7 @@
 :is(.chat-code, .diff-code, .markdown-code) .hljs-class .hljs-title,
 :is(.chat-code, .diff-code, .markdown-code) .hljs-built_in,
 :is(.chat-code, .diff-code, .markdown-code) .hljs-formula {
-	color: var(--color-term-cyan);
+	color: var(--ao-code-type, var(--color-term-cyan));
 }
 
 :is(.chat-code, .diff-code, .markdown-code) .hljs-attr,
@@ -94,11 +94,11 @@
 :is(.chat-code, .diff-code, .markdown-code) .hljs-selector-class,
 :is(.chat-code, .diff-code, .markdown-code) .hljs-selector-id,
 :is(.chat-code, .diff-code, .markdown-code) .hljs-selector-pseudo {
-	color: var(--color-term-red);
+	color: var(--ao-code-variable, var(--color-term-red));
 }
 
 :is(.chat-code, .diff-code, .markdown-code) .hljs-deletion {
-	color: var(--color-term-red);
+	color: var(--ao-code-variable, var(--color-term-red));
 }
 
 /* Shell prompts, pragmas, shebangs: present but not worth a colour of their own. */
@@ -107,7 +107,7 @@
 :is(.chat-code, .diff-code, .markdown-code) .hljs-punctuation,
 :is(.chat-code, .diff-code, .markdown-code) .hljs-operator,
 :is(.chat-code, .diff-code, .markdown-code) .hljs-params {
-	color: var(--color-text-muted);
+	color: var(--ao-code-comment, var(--color-text-muted));
 }
 
 :is(.chat-code, .diff-code, .markdown-code) .hljs-emphasis {
@@ -116,4 +116,9 @@
 
 :is(.chat-code, .diff-code, .markdown-code) .hljs-strong {
 	font-weight: var(--font-weight-semibold);
+}
+
+.chat-code code,
+code.chat-code[data-highlighted="true"] {
+	color: var(--ao-code-foreground, var(--foreground));
 }

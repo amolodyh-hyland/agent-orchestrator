@@ -46,6 +46,7 @@ import { WrapText } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { isHostLocalWebLink } from "../../lib/loopback";
 import { canonicalLanguage } from "../../lib/code-highlight";
+import { useCodeThemeStyle } from "../../hooks/useCodeThemeStyle";
 import { fenceOf } from "../../lib/markdown-fence";
 import { EMOJI_GRAPHEME, rehypeStreamFade } from "../../lib/rehype-stream-fade";
 import { isInlineMath, remarkMath } from "../../lib/remark-math";
@@ -316,7 +317,9 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
 	const [body, setBody] = useState<HTMLPreElement | null>(null);
 	const bodyId = useId();
 	const streaming = useContext(StreamingProse);
-	const grammar = canonicalLanguage(language);
+	const defaultLanguage = useUiStore((state) => state.defaultCodeBlockLanguage);
+	const grammar = canonicalLanguage(language || defaultLanguage);
+	const codeStyle = useCodeThemeStyle();
 	const [wrap, setWrap] = useState(preferredWrap);
 
 	return (
@@ -326,7 +329,7 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
 		>
 			<div className="flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1">
 				<span className="text-caption text-muted-foreground">
-					{language || "text"}
+					{language || (defaultLanguage === "none" ? "text" : defaultLanguage)}
 				</span>
 				{/* Hover-revealed, and focus-revealed so the keyboard can reach it. The
 				    timeline's whole point is that prose dominates; a permanent row of
@@ -352,7 +355,7 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
 				</div>
 			</div>
 			<pre ref={collapsible ? setBody : undefined} id={bodyId} className="scrollbar-none overflow-auto px-3 py-2.5">
-				<code className="font-mono text-xs leading-[1.6] text-foreground">
+				<code className="font-mono text-xs leading-[1.6] text-foreground" style={codeStyle}>
 					<HighlightedCode code={code} language={grammar} streaming={streaming} />
 				</code>
 			</pre>
@@ -568,12 +571,15 @@ export function ArtifactPathCode({ text, children }: { text: string; children: R
 function InlineCode({ children, className }: { children?: ReactNode; className?: string }) {
 	const { openSession } = useContext(OpenChatLink);
 	const insideLink = useContext(InsideMarkdownLink);
+	const defaultLanguage = useUiStore((state) => state.defaultInlineCodeLanguage);
+	const grammar = canonicalLanguage(defaultLanguage);
+	const codeStyle = useCodeThemeStyle();
 	const text = typeof children === "string" ? children : undefined;
 	const file = useWorkspaceFile(text);
 	if (isInlineMath(className)) return <MathFormula tex={text ?? ""} />;
 	const code = (
-		<code className="rounded bg-surface px-[5px] py-[2px] font-mono text-xs text-markdown-code">
-			{children}
+		<code data-highlighted={Boolean(grammar)} className="chat-code rounded bg-surface px-[5px] py-[2px] font-mono text-xs text-markdown-code" style={codeStyle}>
+			{text !== undefined && grammar ? <HighlightedCode code={text} language={grammar} /> : children}
 		</code>
 	);
 	if (insideLink) return code;

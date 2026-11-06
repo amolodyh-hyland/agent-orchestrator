@@ -403,3 +403,19 @@ describe("palette search requests", () => {
 		expect(useUiStore.getState().chatMessageFocusRequest).toBeNull();
 	});
 });
+
+describe("code appearance persistence", () => {
+	it("restores saved defaults and code palette on the next load", async () => {
+		localStorage.clear();
+		useUiStore.getState().setDefaultCodeBlockLanguage("typescript");
+		useUiStore.getState().setDefaultInlineCodeLanguage("python");
+		useUiStore.getState().setCodeColorTheme("nord");
+		vi.resetModules();
+		const restored = (await import("./ui-store")).useUiStore.getState();
+		expect(restored.defaultCodeBlockLanguage).toBe("typescript");
+		expect(restored.defaultInlineCodeLanguage).toBe("python");
+		expect(restored.codeColorTheme).toBe("nord");
+		localStorage.clear();
+		useUiStore.setState({ defaultCodeBlockLanguage: "none", defaultInlineCodeLanguage: "none", codeColorTheme: "app" });
+	});
+});

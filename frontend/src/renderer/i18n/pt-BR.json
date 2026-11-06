@@ -1,4 +1,12 @@
 {
+	"settings.code.blockLanguage": "Linguagem padrão dos blocos de código",
+	"settings.code.blockLanguageHint": "Usada no chat e no editor quando o bloco não indica uma linguagem. A linguagem explícita sempre tem prioridade.",
+	"settings.code.inlineLanguage": "Linguagem padrão do código em linha",
+	"settings.code.colorTheme": "Tema de cores do código",
+	"settings.code.colorThemeHint": "Cores do código no chat e no editor. Usa automaticamente a paleta clara ou escura.",
+	"settings.code.none": "Nenhuma (texto simples)",
+	"settings.code.followApp": "Seguir o aplicativo",
+	"settings.code.defaultLanguage": "Padrão",
 	"settings.agentAssetSources.title": "Extra agent asset sources",
 	"settings.agentAssetSources.inherit": "Use global defaults",
 	"settings.agentAssetSources.directories": "Source directories (one per line)",
