@@ -257,12 +257,13 @@ export async function writeAuthStore(
       // Linux's basic_text backend also reports encryption as available despite
       // using an unprotected hardcoded password, so keep that process-local too.
       memoryStores.set(dataDir, store);
-      return;
+      return false;
     }
     const ciphertext = requireProtectedCiphertext(await safeStorage.encryptStringAsync(JSON.stringify(store)), process.platform);
     await withStoreFile(dataDir, () => replaceCiphertext(dataDir, ciphertext));
     memoryStores.delete(dataDir);
     unavailableReads.delete(dataDir);
+    return true;
   });
 }
 

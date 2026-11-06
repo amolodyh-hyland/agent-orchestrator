@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDesktopStartup, setDesktopStartup, type DesktopStartupRecord } from "./desktop-startup";
 
 const ACCESS_TOKEN = `header.${Buffer.from(
   JSON.stringify({ exp: 4_102_444_800, sid: "session_123" }),
@@ -130,6 +131,31 @@ describe("native WorkOS authentication", () => {
     mocks.encryptString.mockRejectedValueOnce(new Error("Keychain denied"));
     await expect(writeAuthStore(dataDir, { session: null, pkce: null })).rejects.toThrow();
     expect(await readFile(path.join(dataDir, "cloud-auth.bin"))).toEqual(bytes);
+  });
+
+  it("records a memory-only Cloud write as unavailable in the durable startup record", async () => {
+    const startup = createDesktopStartup({ directory: dataDir, executable: process.execPath, appVersion: "fixture", processStart: "fixture-start" });
+    setDesktopStartup(startup);
+    try {
+      const ciphertext = Buffer.from("v10-existing-ciphertext");
+      await writeFile(path.join(dataDir, "cloud-auth.bin"), ciphertext);
+      mocks.encryptionAvailable = false;
+      const store = { session: null, pkce: { codeVerifier: "fixture-memory-secret", state: "fixture", expiresAt: 1 } };
+      expect(await writeAuthStore(dataDir, store)).toBeUndefined();
+      const raw = await readFile(startup.file, "utf8");
+      expect(JSON.parse(raw) as DesktopStartupRecord).toMatchObject({
+        waitReason: null,
+        operations: {},
+        lastCredentialResult: { operation: "cloud-write", result: "unavailable" },
+      });
+      expect(raw).not.toContain("fixture-memory-secret");
+      expect(await readAuthStore(dataDir)).toEqual(store);
+      expect(await readFile(path.join(dataDir, "cloud-auth.bin"))).toEqual(ciphertext);
+      expect(mocks.encryptString).not.toHaveBeenCalled();
+    } finally {
+      setDesktopStartup(undefined);
+      startup.dispose();
+    }
   });
 
   it("keeps the event loop responsive while a cached session read awaits authorization", async () => {

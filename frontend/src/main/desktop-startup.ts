@@ -110,7 +110,7 @@ export function createDesktopStartup(options: {
 
 export type DesktopStartup = ReturnType<typeof createDesktopStartup>;
 let activeStartup: DesktopStartup | undefined;
-export function setDesktopStartup(startup: DesktopStartup) { activeStartup = startup; }
+export function setDesktopStartup(startup: DesktopStartup | undefined) { activeStartup = startup; }
 export async function credentialAccess<T>(operation: CredentialOperation, action: () => Promise<T>): Promise<T> {
 	const finish = activeStartup?.beginCredential(operation);
 	try { const result = await action(); finish?.(result === false ? "unavailable" : "completed"); return result; }
