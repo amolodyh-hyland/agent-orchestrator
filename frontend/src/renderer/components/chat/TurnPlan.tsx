@@ -18,7 +18,7 @@
  * re-plans.
  */
 
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type Ref } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChevronDown, ListChecks } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -30,11 +30,15 @@ export const TurnPlan = memo(function TurnPlan({
 	plan,
 	live,
 	collapseKey,
+	toggleRef,
+	onToggleBlur,
 }: {
 	plan: ConversationPlan;
 	/** The turn is still running, so the plan can still change. */
 	live?: boolean;
 	collapseKey?: string;
+	toggleRef?: Ref<HTMLButtonElement>;
+	onToggleBlur?: () => void;
 }) {
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
@@ -112,6 +116,8 @@ export const TurnPlan = memo(function TurnPlan({
 		>
 			{/* The whole header is the toggle, so the target is the row rather than an icon. */}
 			<button
+				ref={toggleRef}
+				onBlur={onToggleBlur}
 				type="button"
 				onClick={() => {
 					const next = !expanded;

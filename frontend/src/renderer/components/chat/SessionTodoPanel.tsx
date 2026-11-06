@@ -1,16 +1,21 @@
 import { useQuery } from "@tanstack/react-query";
-import { createContext, useContext, useLayoutEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { clientForSessionHost } from "../../lib/host-clients";
 import type { ConversationPlan, ConversationSnapshot } from "../../types/conversation";
 import { TurnPlan } from "./TurnPlan";
 
-const TodoContext = createContext<{ plan: ConversationPlan; floating: boolean; collapseKey: string } | null>(null);
+const TodoContext = createContext<{
+	plan: ConversationPlan;
+	floating: boolean;
+	collapseKey: string;
+	toggleRef: (node: HTMLButtonElement | null) => void;
+} | null>(null);
 
 export function InlineTurnPlan(props: ComponentProps<typeof TurnPlan>) {
 	const todo = useContext(TodoContext);
 	if (todo?.plan === props.plan && todo.floating) return null;
 	const collapseKey = todo?.plan === props.plan ? todo.collapseKey : undefined;
-	return <TurnPlan key={collapseKey} {...props} collapseKey={collapseKey} />;
+	return <TurnPlan key={collapseKey} {...props} collapseKey={collapseKey} toggleRef={todo?.plan === props.plan ? todo.toggleRef : undefined} />;
 }
 
 export function SessionTodoPanel({ snapshot, projectId, hostId, cloud, children }: {
@@ -47,7 +52,37 @@ export function SessionTodoLayout({ snapshot, placement, sessionKey, children }:
 		&& entry.plan?.steps.length && !entry.plan.superseded);
 	const viewport = useRef<HTMLDivElement>(null);
 	const [fits, setFits] = useState(false);
-	const enabled = placement === "top-right" && Boolean(turn);
+	const [holdFloatingFocus, setHoldFloatingFocus] = useState(false);
+	const inlineToggle = useRef<HTMLButtonElement>(null);
+	const floatingToggle = useRef<HTMLButtonElement>(null);
+	const transferFocus = useRef(false);
+	const setInlineToggle = useCallback((node: HTMLButtonElement | null) => {
+		if (!node && inlineToggle.current === document.activeElement) transferFocus.current = true;
+		inlineToggle.current = node;
+	}, []);
+	const setFloatingToggle = useCallback((node: HTMLButtonElement | null) => {
+		if (!node && floatingToggle.current === document.activeElement) transferFocus.current = true;
+		floatingToggle.current = node;
+	}, []);
+	const releaseFloatingFocus = useCallback(() => setHoldFloatingFocus(false), []);
+	const enabled = placement === "top-right";
+	const floating = enabled && Boolean(turn?.plan) && (fits || holdFloatingFocus);
+	const collapseKey = `ao.todo.expanded:${sessionKey}`;
+	const context = useMemo(() => enabled && turn?.plan
+		? { plan: turn.plan, floating, collapseKey, toggleRef: setInlineToggle }
+		: null, [enabled, turn?.plan, floating, collapseKey, setInlineToggle]);
+	useLayoutEffect(() => {
+		if (!transferFocus.current) return;
+		const target = floating ? floatingToggle.current : inlineToggle.current;
+		if (target) {
+			transferFocus.current = false;
+			target.focus({ preventScroll: true });
+		} else if (enabled && turn?.plan && !floating) {
+			setHoldFloatingFocus(true);
+		} else {
+			transferFocus.current = false;
+		}
+	});
 	useLayoutEffect(() => {
 		const element = viewport.current;
 		if (!enabled || !element) return;
@@ -60,13 +95,11 @@ export function SessionTodoLayout({ snapshot, placement, sessionKey, children }:
 		observer.observe(element);
 		return () => observer.disconnect();
 	}, [enabled]);
-	if (!enabled || !turn?.plan) return children;
-	const collapseKey = `ao.todo.expanded:${sessionKey}`;
-	return <TodoContext.Provider value={{ plan: turn.plan, floating: fits, collapseKey }}>
-		<div ref={viewport} className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden" data-todo-placement={fits ? "top-right" : "default"}>
+	return <TodoContext.Provider value={context}>
+		<div ref={viewport} className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden empty:hidden" data-todo-placement={floating ? "top-right" : "default"}>
 			{children}
-			{fits && <div className="absolute right-3 top-3 z-10 max-h-[calc(100%-1.5rem)] w-80 max-w-[calc(100%-1.5rem)] overflow-y-auto rounded-xl bg-background shadow-lg" data-session-todo="">
-				<TurnPlan key={collapseKey} plan={turn.plan} live={turn.state === "running"} collapseKey={collapseKey} />
+			{floating && turn?.plan && <div className="absolute right-3 top-3 z-10 max-h-[calc(100%-1.5rem)] w-80 max-w-[calc(100%-1.5rem)] overflow-y-auto rounded-xl bg-background shadow-lg" data-session-todo="">
+				<TurnPlan key={collapseKey} plan={turn.plan} live={turn.state === "running"} collapseKey={collapseKey} toggleRef={setFloatingToggle} onToggleBlur={releaseFloatingFocus} />
 			</div>}
 		</div>
 	</TodoContext.Provider>;

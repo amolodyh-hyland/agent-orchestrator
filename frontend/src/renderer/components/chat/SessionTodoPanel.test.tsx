@@ -26,7 +26,7 @@ beforeEach(() => {
 		disconnect() { for (const [element, callback] of observed) if (callback === this.callback) observed.delete(element); }
 	});
 });
-afterEach(() => { cleanup(); observed.clear(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); observed.clear(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 function resize(container: HTMLElement, width = 900, height = 500) {
 	const pane = container.querySelector<HTMLElement>("[data-todo-placement]")!;
@@ -49,7 +49,7 @@ describe("session Todo placement", () => {
 		const { container } = render(layout(placement));
 		expect(within(screen.getByTestId("transcript")).getByRole("region", { name: "Agent plan" })).toBeInTheDocument();
 		expect(container.querySelector("[data-session-todo]")).toBeNull();
-		expect(container.querySelector("[data-todo-placement]")).toBeNull();
+		expect(container.querySelector("[data-todo-placement]")).toHaveAttribute("data-todo-placement", "default");
 	});
 
 	it("moves the latest plan into the top-right overlay and keeps its collapsed count", async () => {
@@ -103,6 +103,38 @@ describe("session Todo placement", () => {
 		expect(second.container.querySelector("[data-session-todo]")).toBeNull();
 	});
 
+	it.each([[639, 500], [900, 279]])("transfers the focused toggle both ways at %sx%s without scrolling", (width, height) => {
+		const focus = vi.spyOn(HTMLElement.prototype, "focus");
+		const { container } = render(layout("top-right"));
+		const transcript = screen.getByTestId("transcript");
+		transcript.scrollTop = 120;
+		resize(container);
+		const floating = screen.getByRole("button", { name: "Collapse plan" });
+		floating.focus();
+		expect(floating).toHaveFocus();
+		resize(container, width, height);
+		const inline = within(transcript).getByRole("button", { name: "Collapse plan" });
+		expect(inline).toHaveFocus();
+		expect(focus).toHaveBeenLastCalledWith({ preventScroll: true });
+		expect(transcript.scrollTop).toBe(120);
+		resize(container);
+		expect(within(container.querySelector<HTMLElement>("[data-session-todo]")!).getByRole("button", { name: "Collapse plan" })).toHaveFocus();
+		expect(focus).toHaveBeenLastCalledWith({ preventScroll: true });
+		expect(transcript.scrollTop).toBe(120);
+	});
+
+	it("retains the focused floating toggle until blur when its inline turn is not mounted", () => {
+		const { container } = render(<SessionTodoLayout snapshot={snapshot} placement="top-right" sessionKey="session-1">
+			<div data-testid="transcript">Older history</div>
+		</SessionTodoLayout>);
+		resize(container);
+		screen.getByRole("button", { name: "Collapse plan" }).focus();
+		resize(container, 400);
+		expect(screen.getByRole("button", { name: "Collapse plan" })).toHaveFocus();
+		act(() => screen.getByRole("button", { name: "Collapse plan" }).blur());
+		expect(container.querySelector("[data-session-todo]")).toBeNull();
+	});
+
 	it("floats only the newest eligible plan while keeping older plans inline", () => {
 		const newer: ConversationPlan = { steps: [{ text: "Current task", status: "in_progress" }] };
 		const value = { ...snapshot, turns: [...snapshot.turns, { ...snapshot.turns[0], id: "newer", plan: newer }] };
@@ -122,7 +154,7 @@ describe("session Todo placement", () => {
 			{ ...snapshot.turns[0], id: "rolled-back", rolledBack: true },
 			{ ...snapshot.turns[0], id: "empty", plan: { steps: [] } },
 		] }));
-		expect(container.querySelector("[data-todo-placement]")).toBeNull();
+		expect(container.querySelector("[data-todo-placement]")).toHaveAttribute("data-todo-placement", "default");
 	});
 
 	it("reads placement from the owning project's persisted config", async () => {
@@ -131,7 +163,7 @@ describe("session Todo placement", () => {
 		const { container } = render(<QueryClientProvider client={client}>
 			<SessionTodoPanel snapshot={snapshot} projectId="project-1"><InlineTurnPlan plan={plan} /></SessionTodoPanel>
 		</QueryClientProvider>);
-		await waitFor(() => expect(container.querySelector("[data-todo-placement]")).not.toBeNull());
+		await waitFor(() => expect(observed.has(container.querySelector("[data-todo-placement]")!)).toBe(true));
 		resize(container);
 		expect(get).toHaveBeenCalledWith("/api/v1/projects/{id}", { params: { path: { id: "project-1" } } });
 		expect(container.querySelector("[data-session-todo]")).not.toBeNull();
