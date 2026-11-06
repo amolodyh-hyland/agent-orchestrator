@@ -24,19 +24,38 @@ export async function readDaemonStartupLink(directory: string, identity: {
 	return null;
 }
 
+export type DesktopDaemonBootstrapResult = { state: "verified" | "cancelled" | "failed" | "unverified" };
+
 export async function bootstrapDaemonBeforeFeatures(options: {
 	start: () => Promise<unknown>;
 	status: () => DaemonStatus;
+	attachment: () => object | string | number | null;
 	handshake: () => Promise<boolean>;
 	cancelled: () => boolean;
 	initializeFeatures: () => Promise<void>;
 	wait?: () => Promise<void>;
-}): Promise<void> {
-	await options.start();
-	if (!options.cancelled() && options.status().state === "ready") await options.handshake();
-	while (!options.cancelled() && options.status().state === "starting") {
-		if (await options.handshake()) break;
+	now?: () => number;
+	timeoutMs?: number;
+}): Promise<DesktopDaemonBootstrapResult> {
+	if (options.cancelled()) return { state: "cancelled" };
+	try { await options.start(); }
+	catch { return { state: options.cancelled() ? "cancelled" : "failed" }; }
+	const now = options.now ?? (() => performance.now());
+	const deadline = now() + (options.timeoutMs ?? 30_000);
+	for (;;) {
+		if (options.cancelled()) return { state: "cancelled" };
+		const status = options.status();
+		if (status.state === "error" || status.state === "stopped") return { state: "failed" };
+		if (now() >= deadline) return { state: "unverified" };
+		const attachment = options.attachment();
+		const verified = attachment !== null && await options.handshake();
+		if (options.cancelled()) return { state: "cancelled" };
+		const current = options.status();
+		if (current.state === "error" || current.state === "stopped") return { state: "failed" };
+		if (verified && attachment === options.attachment()) {
+			await options.initializeFeatures();
+			return { state: "verified" };
+		}
 		await (options.wait?.() ?? new Promise((resolve) => setTimeout(resolve, 100)));
 	}
-	if (!options.cancelled()) await options.initializeFeatures();
 }

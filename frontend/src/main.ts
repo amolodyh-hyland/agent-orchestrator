@@ -4251,19 +4251,30 @@ app.whenReady().then(async () => {
 	terminalShellPreference = initialUiSettings.terminalShell;
 	if (browserQuitRequested) return;
 	const bootstrapBegan = Date.now();
-	await bootstrapDaemonBeforeFeatures({
-		start: () => startDaemon(), status: () => daemonStatus, cancelled: () => browserQuitRequested,
+	const startupAttachment = () => {
+		const pid = daemonStatus.pid ?? daemonProcess?.pid;
+		return pid ? `${daemonStartEpoch}:${pid}` : null;
+	};
+	const bootstrap = await bootstrapDaemonBeforeFeatures({
+		start: () => startDaemon(), status: () => daemonStatus,
+		attachment: startupAttachment,
+		cancelled: () => browserQuitRequested || updateShutdownRequested,
 		handshake: async () => {
-			const pid = daemonProcess?.pid ?? daemonStatus.pid;
+			const attachment = startupAttachment();
+			const pid = daemonStatus.pid ?? daemonProcess?.pid;
 			const running = runFilePath();
 			if (!pid || !running) return false;
+			const executable = daemonStatus.executablePath ?? resolveDaemonLaunch(daemonLaunchEnv(), app.isPackaged, process.resourcesPath, app.getAppPath(), os.homedir(), process.platform)?.command ?? "";
+			const spawnedAt = daemonProcess?.pid === pid ? bootstrapBegan : 0;
 			try {
 				const { stdout } = await promisify(execFile)("ps", ["-o", "lstart=", "-p", String(pid)], { env: { ...process.env, LC_ALL: "C" }, timeout: 2000 });
 				const link = await readDaemonStartupLink(path.join(path.dirname(running), "startup"), {
-					pid, processStart: stdout, executable: daemonStatus.executablePath ?? resolveDaemonLaunch(daemonLaunchEnv(), app.isPackaged, process.resourcesPath, app.getAppPath(), os.homedir(), process.platform)?.command ?? "",
-					spawnedAt: daemonProcess?.pid ? bootstrapBegan : 0,
+					pid, processStart: stdout, executable, spawnedAt,
 				});
 				if (!link) return false;
+				const confirmed = await promisify(execFile)("ps", ["-o", "lstart=", "-p", String(pid)], { env: { ...process.env, LC_ALL: "C" }, timeout: 2000 });
+				if (confirmed.stdout.trim().replace(/\s+/g, " ") !== stdout.trim().replace(/\s+/g, " ")) return false;
+				if (attachment !== startupAttachment()) return false;
 				desktopStartup.linkDaemon(link.pid, link.launchId);
 				return true;
 			} catch { return false; }
@@ -4273,6 +4284,14 @@ app.whenReady().then(async () => {
 		},
 	});
 	if (browserQuitRequested) return;
+	if (bootstrap.state !== "verified") {
+		if (bootstrap.state === "cancelled") return;
+		desktopStartup.phase("failed");
+		dialog.showErrorBox("AO startup needs attention", bootstrap.state === "failed"
+			? "AO's local service did not start. Browser and sign-in features have not been opened. Check the startup records under the AO data directory."
+			: "AO could not verify its local service startup. A legacy service or unavailable startup record may require attention. Browser and sign-in features have not been opened. The app and your data have been retained; no rollback was performed.");
+		return;
+	}
 	desktopStartup.phase("version-policy");
 	if (app.isPackaged) {
 		const { checkDesktopVersionFloor } = await import("./main/desktop-version-floor");
