@@ -113,6 +113,7 @@ type containerReapConfig struct {
 // --config-json. Every domain key must be modeled here, or set-config drops it
 // (TestProjectConfigMirrorsDomainJSONKeys guards this).
 type projectConfig struct {
+	TodoPlacement         string               `json:"todoPlacement,omitempty"`
 	AgentAssetSources     *[]string            `json:"agentAssetSources,omitempty"`
 	ContainerReap         *containerReapConfig `json:"containerReap,omitempty"`
 	CanonicalRepoURL      string               `json:"canonicalRepoURL,omitempty"`

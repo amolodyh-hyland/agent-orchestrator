@@ -213,6 +213,33 @@ beforeEach(() => {
 });
 
 describe("ProjectSettingsForm", () => {
+	it.each(["single_repo", "scratch"])("defaults and persists Todo placement for %s projects", async (kind) => {
+		const project = { id: "proj-1", name: "Project One", kind, path: "/repo/one", config: {
+			worker: { agent: "codex" }, orchestrator: { agent: "claude-code" },
+		} };
+		mockProject(project);
+		renderSettings();
+		const control = await screen.findByRole("button", { name: "Todo placement" });
+		expect(control).toHaveTextContent("Default");
+		await chooseOption(control, "Top-right");
+		await waitFor(() => expect(putMock).toHaveBeenCalledWith("/api/v1/projects/{id}", expect.objectContaining({
+			body: expect.objectContaining({ config: expect.objectContaining({ todoPlacement: "top-right" }) }),
+		})));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Todo placement" })).toBeEnabled());
+		putMock.mockClear();
+		await chooseOption(screen.getByRole("button", { name: "Todo placement" }), "Default");
+		await waitFor(() => expect(putMock).toHaveBeenCalledWith("/api/v1/projects/{id}", expect.objectContaining({
+			body: expect.objectContaining({ config: expect.objectContaining({ todoPlacement: undefined }) }),
+		})));
+	});
+
+	it("loads the saved Todo placement", async () => {
+		mockProject({ id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/one", config: {
+			todoPlacement: "top-right", worker: { agent: "codex" }, orchestrator: { agent: "claude-code" },
+		} });
+		renderSettings();
+		expect(await screen.findByRole("button", { name: "Todo placement" })).toHaveTextContent("Top-right");
+	});
 	it("saves a changed project setting without a submit action", async () => {
 		mockProject({
 			id: "proj-1",

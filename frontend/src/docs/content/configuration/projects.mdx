@@ -44,6 +44,7 @@ ao project rm <project-id>
 | `workersRequestReview` | When `true`, new workers request an Orchestrator review of their own PR once it is ready, and again after each fix. When unset, workers ask the user or orchestrator before starting one. |
 | `defaultBranch` | Base branch for new Git worktrees. Defaults to `auto`. |
 | `sessionPrefix` | Prefix for generated session identifiers. |
+| `todoPlacement` | Chat plan placement: `default` (when omitted) or `top-right`. Narrow panes fall back inline. |
 | `env` | Extra environment variables passed to agent runtimes. |
 | `symlinks` | Repository-relative paths linked into each session workspace. |
 | `postCreate` | Shell commands Orchestrator runs after creating a workspace. A step whose first line is `# ao-timeout: <N>m` runs for at most N minutes (1 to 120). |
@@ -91,6 +92,12 @@ Choose each role's harness and provider settings independently:
 ```
 
 Use the model names provided by the installed agent. Orchestrator uses the provider CLI and its existing sign-in; project settings do not store provider tokens. The example's `bypass-permissions` mode lets provider tools act without their normal approval prompts. Choose it only when that behavior is intended. Available permission modes depend on the provider.
+
+## Position the Todo list
+
+For local and connected-host projects, **Project Settings → General → Todo placement** offers **Default** and **Top-right**. Default keeps plans at the end of their chat turns. Top-right floats the latest plan inside each session's transcript, below the pane controls and above the composer. Narrow or short panes fall back to the inline placement. Click the panel header to collapse or expand it; the header keeps the completed/total count, and the choice is remembered per session on this device.
+
+The project configuration key is `todoPlacement`: `"default"` (also the behavior when omitted) or `"top-right"`. It is supported through `ao project set-config <project-id> --config-json`; preserve the rest of the config because this option replaces the whole object.
 
 ## Choose Chat or Terminal UI
 

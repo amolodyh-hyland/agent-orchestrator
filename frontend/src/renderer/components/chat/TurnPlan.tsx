@@ -21,28 +21,32 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChevronDown, ListChecks } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import type { ConversationPlan, PlanStepStatus } from "../../types/conversation";
 import { syncEdgeFade as syncViewportEdgeFade } from "./edge-fade";
 
-const STEP_LABEL: Record<PlanStepStatus, string> = {
-	pending: "not started",
-	in_progress: "in progress",
-	completed: "done",
-};
-
 export const TurnPlan = memo(function TurnPlan({
 	plan,
 	live,
+	collapseKey,
 }: {
 	plan: ConversationPlan;
 	/** The turn is still running, so the plan can still change. */
 	live?: boolean;
+	collapseKey?: string;
 }) {
+	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
 	const done = plan.steps.filter((step) => step.status === "completed").length;
 	const allDone = plan.steps.length > 0 && done === plan.steps.length;
-	const [expanded, setExpanded] = useState(() => !allDone);
+	const [expanded, setExpanded] = useState(() => {
+		try {
+			const stored = collapseKey ? localStorage.getItem(collapseKey) : null;
+			if (stored === "true" || stored === "false") return stored === "true";
+		} catch {}
+		return !allDone;
+	});
 	const wasAllDone = useRef(allDone);
 	const viewportRef = useRef<HTMLDivElement>(null);
 	const followed = useRef(false);
@@ -51,10 +55,10 @@ export const TurnPlan = memo(function TurnPlan({
 	// Fold when the last step is ticked, open again if the agent re-plans. Only on
 	// the change, so a reader who reopens a finished plan keeps it open.
 	useEffect(() => {
-		if (wasAllDone.current === allDone) return;
+		if (collapseKey || wasAllDone.current === allDone) return;
 		wasAllDone.current = allDone;
 		setExpanded(!allDone);
-	}, [allDone]);
+	}, [allDone, collapseKey]);
 
 	const syncEdgeFade = useCallback(() => {
 		if (viewportRef.current) syncViewportEdgeFade(viewportRef.current);
@@ -99,7 +103,7 @@ export const TurnPlan = memo(function TurnPlan({
 
 	return (
 		<section
-			aria-label="Agent plan"
+			aria-label={t("chat.plan.label")}
 			// Busy while the agent can still tick steps off, so assistive tech knows the
 			// list is changing rather than final.
 			aria-busy={Boolean(live) && !allDone}
@@ -109,13 +113,19 @@ export const TurnPlan = memo(function TurnPlan({
 			{/* The whole header is the toggle, so the target is the row rather than an icon. */}
 			<button
 				type="button"
-				onClick={() => setExpanded((open) => !open)}
+				onClick={() => {
+					const next = !expanded;
+					setExpanded(next);
+					try {
+						if (collapseKey) localStorage.setItem(collapseKey, String(next));
+					} catch {}
+				}}
 				aria-expanded={expanded}
-				aria-label={expanded ? "Collapse plan" : "Expand plan"}
+				aria-label={t(expanded ? "chat.plan.collapse" : "chat.plan.expand")}
 				className="group/plan flex h-11 w-full items-center gap-2.5 px-3.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
 			>
 				<PlanMark done={allDone} />
-				<span className="shrink-0 text-sm font-medium text-foreground">Plan</span>
+				<span className="shrink-0 text-sm font-medium text-foreground">{t("chat.plan.title")}</span>
 				<span className="min-w-0 flex-1 truncate text-sm text-muted-foreground" title={currentStep}>
 					{currentStep}
 				</span>
@@ -162,7 +172,7 @@ export const TurnPlan = memo(function TurnPlan({
 										key={`${index}-${step.text}`}
 										data-plan-step={index}
 										className="flex items-start gap-2.5 py-1"
-										aria-label={`${step.text} — ${STEP_LABEL[step.status]}`}
+										aria-label={`${step.text} — ${t(`chat.plan.status.${step.status}`)}`}
 									>
 										<StepMark status={step.status} live={Boolean(live)} />
 										{/* The strike is always there and only its colour changes, so a step
