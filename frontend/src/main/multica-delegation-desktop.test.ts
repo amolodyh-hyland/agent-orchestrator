@@ -1,9 +1,10 @@
 import type { IpcMain, IpcMainInvokeEvent, WebContents } from "electron";
+import { createHmac } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DELEGATION_ENABLE_CLICK, DELEGATION_SETTINGS, DELEGATION_PREVIEW } from "../shared/multica-delegation-confirmation";
+import { DELEGATION_ENABLE_CLICK, DELEGATION_SETTINGS, DELEGATION_PREVIEW, DELEGATION_STATUS } from "../shared/multica-delegation-confirmation";
 import { createMainProcessDelegationAuthority } from "./multica-delegation-authority";
 import type { MulticaCredentials } from "./multica-credentials";
 import { readMulticaDelegationEnabled, writeMulticaDelegationEnabled } from "./multica-settings";
@@ -13,7 +14,7 @@ let stateDir: string;
 beforeEach(async () => { stateDir = await mkdtemp(path.join(tmpdir(), "ao-delegation-preference-")); });
 afterEach(async () => { await rm(stateDir, { recursive: true, force: true }); });
 
-function setup(overrides: Partial<Pick<Parameters<typeof registerDesktopDelegation>[0], "readEnabled" | "writeEnabled">> = {}) {
+function setup(overrides: Partial<Pick<Parameters<typeof registerDesktopDelegation>[0], "readEnabled" | "writeEnabled" | "daemonFetch" | "daemonOrigin">> = {}) {
 	const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>();
 	const listeners: ((...args: unknown[]) => void)[] = [];
 	const shell = { id: 7, mainFrame: {}, isDestroyed: () => false, isFocused: vi.fn(() => true), send: vi.fn(),
@@ -24,6 +25,7 @@ function setup(overrides: Partial<Pick<Parameters<typeof registerDesktopDelegati
 		ipcMain: { handle: (channel: string, handler: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown) => handlers.set(channel, handler), removeHandler: vi.fn() } as unknown as IpcMain,
 		shellWebContents: shell as unknown as WebContents, authority: createMainProcessDelegationAuthority(Buffer.alloc(32, 7)),
 		credentials: {} as MulticaCredentials, daemonOrigin: () => null,
+		daemonFetch: fetch,
 		readEnabled: () => readMulticaDelegationEnabled(stateDir), writeEnabled: (enabled) => writeMulticaDelegationEnabled(stateDir, enabled), ...overrides,
 		readSettings: async () => ({ mode: "local", customUrl: "http://contract.local", apiUrl: "http://contract.local", delegationEnabled: true }),
 		confirm: vi.fn(async () => true), confirmCancellation: vi.fn(async () => true), confirmEnable, fetch,
@@ -34,6 +36,22 @@ function setup(overrides: Partial<Pick<Parameters<typeof registerDesktopDelegati
 }
 
 describe("desktop delegation rollout", () => {
+	it("uses the native journal transport independently of the Chromium public API transport", async () => {
+		const daemonFetch = vi.fn<typeof fetch>(async (input, init) => {
+			if (String(input).endsWith("/api/v1/runs/monitoring")) return new Response(JSON.stringify({ runs: [] }));
+			const body = JSON.stringify({ record: null });
+			const requestMAC = new Headers(init?.headers).get("X-AO-Delegation-MAC");
+			const proof = createHmac("sha256", Buffer.alloc(32, 7)).update(`journal-response-v1:${requestMAC}:${body}`).digest("hex");
+			return new Response(body, { headers: { "X-AO-Delegation-Response-MAC": proof } });
+		});
+		const f = setup({ daemonOrigin: () => "http://127.0.0.1:4445", daemonFetch });
+		try {
+			expect(await f.handlers.get(DELEGATION_STATUS)!(f.event, "project", "task")).toEqual({ ok: true, status: null });
+			expect(daemonFetch.mock.calls.filter(([input]) => String(input).endsWith("/internal/multica-delegation-journal"))).toHaveLength(1);
+			expect(JSON.parse(String(daemonFetch.mock.calls.find(([input]) => String(input).endsWith("/internal/multica-delegation-journal"))?.[1]?.body))).toMatchObject({ operation: "find", projectId: "project", taskId: "task" });
+			expect(f.fetch).not.toHaveBeenCalled();
+		} finally { f.desktop.dispose(); }
+	});
 	it("starts disabled even with a supplied connection field and needs native approval", async () => {
 		const f = setup();
 		try {

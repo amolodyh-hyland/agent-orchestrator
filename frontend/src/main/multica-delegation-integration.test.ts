@@ -143,7 +143,7 @@ describe("coordinators against the real daemon SQLite journal", () => {
 			shellWebContents: shell as unknown as WebContents, authority, credentials, daemonOrigin: () => origin,
 			readEnabled: () => readMulticaDelegationEnabled(settingsDir), writeEnabled: (enabled) => writeMulticaDelegationEnabled(settingsDir, enabled),
 			readSettings: async () => ({ mode: "local", customUrl: providerOrigin, apiUrl: providerOrigin }), confirm, confirmCancellation, confirmEnable,
-			fetch: async (input, init) => {
+			daemonFetch: async (input, init) => {
 				if (String(input).startsWith(origin) && init?.body) {
 					const request = JSON.parse(String(init.body)) as { operation: string; record?: DelegationRecord };
 					if (request.operation === "save" && request.record?.attempted) armed = true;
@@ -155,6 +155,9 @@ describe("coordinators against the real daemon SQLite journal", () => {
 					if (armed && request.operation === "evaluatePolicy" && waitAt === "policy" && !held) { held = true; entered(); await resumed; }
 					return response;
 				}
+				return fetch(input, init);
+			},
+			fetch: async (input, init) => {
 				if (cancelArmed && String(input) === `${providerOrigin}/api/v1/delegations/${delegationId}`) cancelRead = true;
 				return fetch(input, init);
 			},

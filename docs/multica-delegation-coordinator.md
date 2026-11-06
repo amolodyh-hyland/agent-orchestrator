@@ -67,6 +67,23 @@ No UI/IPC/MCP route exposes the authority or the `human` handle. Task and projec
 handles expose only processing/reconciliation. The desktop invokes the private
 human API only from its validated explicit user-action flow.
 
+The desktop supplies Node's `globalThis.fetch` as the separate `daemonFetch`
+transport. Public Multica requests still use Electron's `net.fetch`. Chromium
+adds `Sec-Fetch-Site: none` even to main-process `net.fetch` requests; the daemon
+correctly rejects that originless browser metadata with `ORIGIN_FORBIDDEN`.
+Using the native journal transport preserves the browser guard and all request
+and response MAC verification. Both journal reads and `evaluatePolicy` use this
+transport; neither uses safeStorage or Keychain.
+
+If both journal and policy are unavailable, inspect the daemon transport before
+changing credentials. Restarting or allowing Keychain access cannot fix the
+Chromium metadata incompatibility in older builds. After upgrading, managed
+machines still require a valid administrator-owned `aoMulticaDelegation` in
+the protected managed settings. Existing enrollment or managed preferences with
+no delegation policy return `policy_unavailable`; a local server setting or
+rollout flag cannot override that decision. Unmanaged machines with verified
+empty protected locations resolve to `policy_absent`.
+
 Migration `0219_multica_confirmation_verification.sql` marks legacy records
 unverified by default. Only authenticated, proof-verified reservations set the
 provenance fact. Reads/updates never adopt pre-proof records. This durable fact
