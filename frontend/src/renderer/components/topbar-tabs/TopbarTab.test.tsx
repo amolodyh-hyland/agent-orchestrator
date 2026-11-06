@@ -77,7 +77,7 @@ describe("TopbarTab", () => {
 		expect(previewTab).not.toHaveClass("italic");
 		expect(screen.getByText("Build tabs")).toHaveClass("truncate", "italic");
 		expect(screen.getByTestId("topbar-tab-active-indicator")).toBeInTheDocument();
-		expect(previewTab).toHaveAttribute("aria-selected", "true");
+		expect(previewTab).toHaveAttribute("aria-selected", "false");
 		expect(previewTab).toHaveAttribute("aria-current", "true");
 
 		rerender(

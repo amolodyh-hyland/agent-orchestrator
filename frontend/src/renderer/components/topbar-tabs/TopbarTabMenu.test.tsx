@@ -569,3 +569,28 @@ describe("session pane menu actions", () => {
 	});
 });
 
+
+it("keeps ARIA, visual selection and split menu availability consistent after deselecting the active tab and Escape", async () => {
+	const view = makeView("task");
+	setTabs(view);
+	routerMocks.params.sessionId = "task-1";
+	menuMocks.useWorkspaceQuery.mockReturnValue({ data: [{ id: "project-1", name: "Project One", kind: "single_repo", sessions: [session, { ...session, id: "task-2", title: "Task Two" }] }] });
+	previousUnmount = renderTopbarTabs().unmount;
+	const wrappers = screen.getAllByTestId("topbar-tab");
+	const first = wrappers.find((node) => node.dataset.sessionId === "task-1")!;
+	const second = wrappers.find((node) => node.dataset.sessionId === "task-2")!;
+	fireEvent.click(within(first).getByRole("tab"));
+	fireEvent.click(within(second).getByRole("tab"), { ctrlKey: true, metaKey: true });
+	expect(within(first).getByRole("tab")).toHaveAttribute("aria-selected", "true");
+	expect(within(second).getByRole("tab")).toHaveAttribute("aria-selected", "true");
+	fireEvent.click(within(first).getByRole("tab"), { ctrlKey: true, metaKey: true });
+	expect(first).toHaveAttribute("data-selected", "false");
+	expect(within(first).getByRole("tab")).toHaveAttribute("aria-selected", "false");
+	expect(within(first).getByRole("tab")).toHaveAttribute("aria-current", "true");
+	fireEvent.contextMenu(first);
+	expect(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "View split panes" })).toHaveAttribute("aria-disabled", "true");
+	await userEvent.keyboard("{Escape}");
+	expect(useSessionPanesStore.getState().selected).toEqual([]);
+	expect(second).toHaveAttribute("data-selected", "false");
+	expect(within(second).getByRole("tab")).toHaveAttribute("aria-selected", "false");
+});

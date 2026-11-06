@@ -185,7 +185,7 @@ export const TopbarTab = memo(function TopbarTab({
 					aria-current={view.isActive}
 					aria-keyshortcuts={renameSession ? "F2" : undefined}
 					aria-label={ariaLabel}
-					aria-selected={selected || view.isActive}
+					aria-selected={selected}
 					className={mainButtonClassName}
 					onClick={(event) => {
 						if (event.detail >= 2) return;
