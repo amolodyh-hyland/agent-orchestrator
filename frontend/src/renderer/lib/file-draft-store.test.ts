@@ -4,6 +4,7 @@ import {
 	clearSessionFileDrafts,
 	draftedFilePaths,
 	getFileDraft,
+	hasUnstoredFileDrafts,
 	MAX_FILE_DRAFT_CHARS,
 	MAX_FILE_DRAFT_TOTAL_CHARS,
 	MAX_FILE_DRAFTS,
@@ -39,6 +40,20 @@ describe("file draft store", () => {
 		expect(getFileDraft("s", "a.ts")?.baseFingerprint).toBe("fp-2");
 		rebaseFileDraft("s", "a.ts", "fp-9", "fp-3");
 		expect(getFileDraft("s", "a.ts")?.baseFingerprint).toBe("fp-2");
+	});
+
+	it("finds unstored drafts across inactive files and session-owned artifact editors", () => {
+		setFileDraft("session", "active.ts", "kept", "fp");
+		setFileDraft("session:artifact", "notes.txt", "x".repeat(MAX_FILE_DRAFT_CHARS + 1), "fp");
+		expect(hasUnstoredFileDrafts("session")).toBe(true);
+		expect(hasUnstoredFileDrafts("unrelated")).toBe(false);
+		setFileDraft("session:artifact", "notes.txt", null);
+		expect(hasUnstoredFileDrafts("session")).toBe(false);
+		for (let i = 0; i < MAX_FILE_DRAFTS; i++) setFileDraft("other", `${i}.ts`, "kept", "fp");
+		setFileDraft("session", "inactive.ts", "not retained", "fp");
+		expect(hasUnstoredFileDrafts("session")).toBe(true);
+		setFileDraft("session", "inactive.ts", null);
+		expect(hasUnstoredFileDrafts("session")).toBe(false);
 	});
 
 	it("drops the text of a draft over the per-entry limit but keeps its record and base", () => {
