@@ -48,3 +48,17 @@ func TestLaunchRecordsAndMigrationIdentity(t *testing.T) {
 		t.Fatal("atomic write temporary file remains")
 	}
 }
+
+func TestWindowsProcessStartPreservesFiletimePrecision(t *testing.T) {
+	for _, test := range []struct {
+		high, low uint32
+		want      string
+	}{
+		{1, 2, "windows-filetime:4294967298"},
+		{0xffffffff, 0xffffffff, "windows-filetime:18446744073709551615"},
+	} {
+		if got := windowsProcessStart(test.high, test.low); got != test.want {
+			t.Fatalf("creation FILETIME = %q, want %q", got, test.want)
+		}
+	}
+}

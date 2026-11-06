@@ -5,10 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -50,12 +47,9 @@ func New(runFile string, log *slog.Logger) (*Status, error) {
 	if err != nil {
 		return nil, err
 	}
-	command := exec.Command("ps", "-o", "lstart=", "-p", strconv.Itoa(os.Getpid()))
-	command.Env = append(os.Environ(), "LC_ALL=C")
-	start, _ := command.Output()
 	now := time.Now()
 	id := uuid.NewString()
-	s := &Status{record: Record{LaunchID: id, PID: os.Getpid(), ProcessStart: strings.TrimSpace(string(start)), Executable: executable, StartedAt: now.Unix(), Phase: "starting", Stage: "initializing", StageStartedAt: now.Unix()}, file: filepath.Join(dir, id+".json"), log: log, since: now, stageSince: now, stop: make(chan struct{}), done: make(chan struct{})}
+	s := &Status{record: Record{LaunchID: id, PID: os.Getpid(), ProcessStart: currentProcessStart(), Executable: executable, StartedAt: now.Unix(), Phase: "starting", Stage: "initializing", StageStartedAt: now.Unix()}, file: filepath.Join(dir, id+".json"), log: log, since: now, stageSince: now, stop: make(chan struct{}), done: make(chan struct{})}
 	logPath := filepath.Join(dir, "stages.log")
 	if info, err := os.Stat(logPath); err == nil && info.Size() > 4*1024*1024 {
 		_ = os.Rename(logPath, logPath+".previous")
@@ -86,6 +80,10 @@ func New(runFile string, log *slog.Logger) (*Status, error) {
 		}
 	}()
 	return s, nil
+}
+
+func windowsProcessStart(high, low uint32) string {
+	return fmt.Sprintf("windows-filetime:%d", uint64(high)<<32|uint64(low))
 }
 
 func (s *Status) write() error {

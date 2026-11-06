@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { parseProcessIdentity, processIdentityQuery } from "./daemon-process-identity";
 
 export type DesktopPhase = "desktop-bootstrap" | "single-instance-check" | "electron-ready" | "version-policy" | "telemetry-policy" | "settings" | "daemon-discovery" | "shell-environment" | "daemon-spawn" | "daemon-handshake" | "window-runtime" | "renderer-ready" | "ready" | "failed";
 export type CredentialOperation = "cloud-read" | "cloud-write" | "multica-capability" | "multica-encrypt" | "multica-decrypt";
@@ -32,9 +33,11 @@ export type DesktopStartupRecord = {
 
 export function desktopProcessStart(): string {
 	try {
-		return execFileSync("ps", ["-o", "lstart=", "-p", String(process.pid)], {
-			encoding: "utf8", timeout: 2000, env: { ...process.env, LC_ALL: "C" },
-		}).trim().replace(/\s+/g, " ");
+		const query = processIdentityQuery(process.pid, process.platform);
+		const stdout = execFileSync(query.command, query.args, {
+			encoding: "utf8", timeout: query.timeout, windowsHide: true, env: { ...process.env, LC_ALL: "C" },
+		});
+		return parseProcessIdentity(stdout, process.platform)?.processStart ?? "";
 	} catch { return ""; }
 }
 
