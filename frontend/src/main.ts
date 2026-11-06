@@ -1,3 +1,5 @@
+import { startUpdateControl } from "./main/update-control";
+import { deferStaleCopyCleanup } from "./main/stale-app-copies";
 import { NativeDictationEngine, dictationHelperPath } from "./main/dictation-engine";
 import { registerDictationIpc } from "./main/dictation-ipc";
 import { registerOuterNative } from "./main/outer-native";
@@ -796,6 +798,10 @@ app.once("will-quit", () => {
 	sideStateTimer = undefined;
 });
 
+let updateShutdownRequested = false;
+let cleanupReady: (() => void) | undefined;
+const cleanupReadiness = new Promise<void>((resolve) => { cleanupReady = resolve; });
+
 function setDaemonStatus(nextStatus: DaemonStatus): void {
 	if (nextStatus.state !== "ready" || daemonStatus.state !== "ready" || nextStatus.port !== daemonStatus.port || nextStatus.pid !== daemonStatus.pid) daemonAttachmentGeneration++;
 	if (nextStatus.state !== "ready") disposeBrowserRuntimeLink();
@@ -805,7 +811,10 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 		disposeBrowserStreamLink();
 	}
 	daemonStatus = nextStatus;
-	if (nextStatus.state === "ready") void telemetryIdentity.flush();
+	if (nextStatus.state === "ready") {
+		cleanupReady?.();
+		void telemetryIdentity.flush();
+	}
 	else telemetryIdentity.invalidate();
 	getShellWebContents()?.send("daemon:status", daemonStatus);
 	if (nextStatus.state === "ready" && browserViewHost) {
@@ -2303,7 +2312,18 @@ async function refreshDaemonStatus(): Promise<DaemonStatus> {
 	return daemonStatus;
 }
 
+function acceptUpdateShutdown(): boolean {
+	if (daemonStatus.state !== "ready" && (daemonProcess !== null || daemonStatus.state === "starting")) return false;
+	updateShutdownRequested = true;
+	daemonStartEpoch += 1;
+	daemonStartPromise = null;
+	daemonStartAutoRestartIntent = undefined;
+	cancelDaemonAutoRestart();
+	return true;
+}
+
 async function startDaemon(options: { forceReplaceAdopted?: boolean; autoRestartIntent?: DaemonAutoRestartIntent } = {}): Promise<DaemonStatus> {
+	if (updateShutdownRequested) return daemonStatus;
 	if (!options.autoRestartIntent && daemonStartAutoRestartIntent) {
 		daemonStartEpoch += 1;
 		daemonStartPromise = null;
@@ -2396,8 +2416,8 @@ async function repairDevAcpRuntime(): Promise<void> {
 }
 
 async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAutoRestartIntent): Promise<DaemonStatus> {
-	const startCancelled = () => startEpoch !== daemonStartEpoch || (autoRestartIntent !== undefined &&
-		(autoRestartIntent.generation !== daemonAutoRestartGeneration || browserQuitRequested));
+	const startCancelled = () => updateShutdownRequested || browserQuitRequested || startEpoch !== daemonStartEpoch ||
+		(autoRestartIntent !== undefined && autoRestartIntent.generation !== daemonAutoRestartGeneration);
 	if (daemonProcess) {
 		return daemonStatus;
 	}
@@ -2445,6 +2465,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		if (shouldReplaceDaemonForStartup({ ownership, forceRequested: forceReplaceAdoptedRequested })) {
 			try {
 				await gracefullyReplaceDaemonForBrowser(existing.status);
+				if (startCancelled()) return daemonStatus;
 				replacementKeepAlive = keepAliveForReplacement({
 					ownership,
 					forceRequested: forceReplaceAdoptedRequested,
@@ -2510,9 +2531,11 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 			owner: portAttachOwner,
 			appRunId: portAttachAppRunId,
 		});
+		if (startCancelled()) return daemonStatus;
 		if (shouldReplaceDaemonForStartup({ ownership, forceRequested: forceReplaceAdoptedRequested })) {
 			try {
 				await gracefullyReplaceDaemonForBrowser(directDaemon);
+				if (startCancelled()) return daemonStatus;
 				replacementKeepAlive = keepAliveForReplacement({
 					ownership,
 					forceRequested: forceReplaceAdoptedRequested,
@@ -2577,6 +2600,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		runFile,
 		processStartMs: readProcessStartMs,
 	});
+	if (startCancelled()) return daemonStatus;
 	// Declining to signal is otherwise silent, so say why a live process named by
 	// running.json is left alone (a hung daemon that is not replaced shows up here).
 	if (holder.pid === null && runFile && processAlive(runFile.pid)) {
@@ -2599,6 +2623,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		const deadline = Date.now() + TAKEOVER_TIMEOUT_MS;
 		while (Date.now() < deadline) {
 			const still = await readDaemonProbe(resolvedDaemonPort(), "healthz");
+			if (startCancelled()) return daemonStatus;
 			if (!still) break;
 			await new Promise<void>((r) => setTimeout(r, TAKEOVER_POLL_MS));
 		}
@@ -2619,7 +2644,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 	try {
 		await ensureBundledTmuxStaged();
 	} catch (err) {
-		if (autoRestartIntent && startCancelled()) return daemonStatus;
+		if (startCancelled()) return daemonStatus;
 		setDaemonStatus({
 			state: "error",
 			message: `Could not stage AO's bundled tmux under the AO data directory: ${(err as Error).message}`,
@@ -2627,7 +2652,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		});
 		return daemonStatus;
 	}
-	if (autoRestartIntent && startCancelled()) return daemonStatus;
+	if (startCancelled()) return daemonStatus;
 
 	daemonOutput = "";
 	setDaemonStatus({ state: "starting" });
@@ -2635,7 +2660,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		try {
 			await mkdir(launch.cwd, { recursive: true, mode: 0o750 });
 		} catch (err) {
-			if (autoRestartIntent && startCancelled()) return daemonStatus;
+			if (startCancelled()) return daemonStatus;
 			// A failure here (home unwritable, launch.cwd exists as a file) would
 			// otherwise reject out of startDaemonInner; boot calls this via
 			// `void startDaemon()`, so it would surface as an unhandled rejection
@@ -4256,46 +4281,6 @@ app.whenReady().then(async () => {
 		console.error("failed to write app-state marker:", err);
 	}
 
-	// A pre-fix bundle cannot be patched retroactively. After the maintained
-	// /Applications build runs, offer to retire older AO copies that can still
-	// overwrite it if Finder, Spotlight, or an old Dock tile launches them.
-	try {
-		const { formatStaleAppCopies, retireStaleMacAppCopies } = await import("./main/stale-app-copies");
-		await retireStaleMacAppCopies({
-			platform: process.platform,
-			isPackaged: app.isPackaged,
-			runningPath: resolveBundlePath(),
-			runningVersion: app.getVersion(),
-			confirm: async (copies) => {
-				const result = await dialog.showMessageBox({
-					type: "warning",
-					buttons: ["Move old copies to Trash", "Not now"],
-					defaultId: 0,
-					cancelId: 1,
-					title: "Remove old AO copies",
-					message: `Old copies of ${APP_DISPLAY_NAME} can replace your updated app.`,
-					detail: `${formatStaleAppCopies(copies)}\n\nMove these copies to Trash to prevent another downgrade. Your AO projects and sessions will not be removed.`,
-					noLink: true,
-				});
-				return result.response === 0;
-			},
-			trashItem: (candidate) => shell.trashItem(candidate),
-			reportFailures: async (paths) => {
-				await dialog.showMessageBox({
-					type: "warning",
-					buttons: ["OK"],
-					defaultId: 0,
-					title: "Some old copies could not be removed",
-					message: "Move these copies to Trash manually before launching AO again.",
-					detail: paths.join("\n"),
-					noLink: true,
-				});
-			},
-		});
-	} catch (err) {
-		console.warn("stale AO copy cleanup failed:", err);
-	}
-
 	const keybindingRunFile = runFilePath();
 	if (keybindingRunFile) {
 		keybindingOverrides = await readKeybindingOverrides(path.dirname(keybindingRunFile));
@@ -4332,11 +4317,65 @@ app.whenReady().then(async () => {
 	// until the daemon answers. createWindow links the browser runtime itself
 	// when the daemon is already ready by the time the window exists. Windows
 	// keeps the old order until this path has been tried there.
+	if (process.platform === "darwin") {
+		try {
+			const disposeUpdateControl = await startUpdateControl({
+				directory: editorStateDir(),
+				canShutdown: acceptUpdateShutdown,
+				quit: () => desktopQuit.quitCompletely(),
+			});
+			app.once("will-quit", disposeUpdateControl);
+		} catch (error) { console.warn("update control unavailable:", error); }
+	}
+
 	const daemonStartsWithWindow = process.platform !== "win32";
 	if (daemonStartsWithWindow) void startDaemon();
 	await createWindow();
 	if (browserQuitRequested) return;
 	if (!daemonStartsWithWindow) void startDaemon();
+	void deferStaleCopyCleanup(
+		cleanupReadiness,
+		path.join(editorStateDir(), "stale-copy-snooze"),
+		async () => {
+			try {
+				const { formatStaleAppCopies, retireStaleMacAppCopies } = await import("./main/stale-app-copies");
+				await retireStaleMacAppCopies({
+					platform: process.platform,
+					isPackaged: app.isPackaged,
+					runningPath: resolveBundlePath(),
+					runningVersion: app.getVersion(),
+					confirm: async (copies) => {
+						const result = await dialog.showMessageBox({
+							type: "warning",
+							buttons: ["Move old copies to Trash", "Not now"],
+							defaultId: 0,
+							cancelId: 1,
+							title: "Remove old AO copies",
+							message: `Old copies of ${APP_DISPLAY_NAME} can replace your updated app.`,
+							detail: `${formatStaleAppCopies(copies)}\n\nMove these copies to Trash to prevent another downgrade. Your AO projects and sessions will not be removed.`,
+							noLink: true,
+						});
+						return result.response === 0;
+					},
+					trashItem: (candidate) => shell.trashItem(candidate),
+					reportFailures: async (paths) => {
+						await dialog.showMessageBox({
+							type: "warning",
+							buttons: ["OK"],
+							defaultId: 0,
+							title: "Some old copies could not be removed",
+							message: "Move these copies to Trash manually before launching AO again.",
+							detail: paths.join("\n"),
+							noLink: true,
+						});
+					},
+				});
+			} catch (err) {
+				console.warn("stale AO copy cleanup failed:", err);
+			}
+		},
+	).catch((err) => console.warn("stale AO copy cleanup deferred:", err));
+
 	initAutoUpdates();
 
 	// Windows/Linux: on first launch, the deep-link URL may arrive as a
@@ -4386,6 +4425,7 @@ app.on("before-quit", (event) => {
 			app.quit();
 		} else {
 			desktopQuit.cancelQuit();
+			updateShutdownRequested = false;
 		}
 		return;
 	}

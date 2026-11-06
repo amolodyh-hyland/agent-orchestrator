@@ -39,6 +39,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserstream"
 	"github.com/aoagents/agent-orchestrator/backend/internal/codexops"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/daemon/startupstatus"
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon/supervisor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
 	"github.com/aoagents/agent-orchestrator/backend/internal/delegationauth"
@@ -133,7 +134,7 @@ func daemonShutdownContext() (ctx context.Context, cancelWorkers, stopSignals co
 
 // Run starts the daemon and blocks until it exits. SIGINT/SIGTERM drive
 // graceful shutdown through the HTTP server and background workers.
-func Run(buildVersion string) error {
+func Run(buildVersion string) (runError error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -150,6 +151,11 @@ func Run(buildVersion string) error {
 	ignoreBrokenPipeSignal()
 
 	log := newLogger()
+	startup, err := startupstatus.New(cfg.RunFilePath, log)
+	if err != nil {
+		return fmt.Errorf("publish startup status: %w", err)
+	}
+	defer func() { startup.Close(runError) }()
 	var browserRuntimeToken string
 	var delegationAuthority *delegationauth.Authority
 	if os.Getenv(browserruntime.RuntimeTokenStdinEnv) == "1" {
@@ -210,20 +216,35 @@ func Run(buildVersion string) error {
 	// lifecycle stack) are not covered: a predecessor stuck in one past the
 	// wait still makes this daemon exit 75.
 	installerShutdownTimeout := max(cfg.ShutdownTimeout, systeminstall.DefaultShutdownTimeout())
+	startup.Set("waiting-for-lock", "data-directory-lock", "")
 	dataDirLock, err := lockDataDir(context.Background(), cfg.DataDir, dataDirTakeoverWait(cfg.ShutdownTimeout, installerShutdownTimeout), log)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = dataDirLock.Release() }()
 
+	if _, err := os.Stat(filepath.Join(cfg.DataDir, "RESTORE_IN_PROGRESS")); !os.IsNotExist(err) {
+		return fmt.Errorf("database restore requires recovery: inspect %s/RESTORE_IN_PROGRESS and retry the recorded rollback", cfg.DataDir)
+	}
+
 	// Open the durable store and bring up the CDC substrate: DB triggers capture
 	// changes into change_log, the poller tails it, and the broadcaster fans
 	// events out to live transports.
-	store, err := sqlite.Open(cfg.DataDir)
+	startup.Set("migrating", "schema-repairs", "")
+	store, err := sqlite.OpenWithMigrationObserver(cfg.DataDir, func(id string, completed bool, duration time.Duration, migrationErr error) {
+		if migrationErr != nil {
+			startup.Set("failed", "migration-failed", id)
+		} else if completed {
+			startup.Set("migrating", "schema-reconciliation", "")
+		} else {
+			startup.Set("migrating", "migration", id)
+		}
+	})
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
 	defer func() { _ = store.Close() }()
+	startup.Set("starting", "services", "")
 	if _, err := store.RequeueClaimedReports(context.Background()); err != nil {
 		return fmt.Errorf("recover report delivery claims: %w", err)
 	}
@@ -913,6 +934,7 @@ func Run(buildVersion string) error {
 	// daemon; every active saga must be closed or explicitly quarantined before
 	// binding a usable API, without accidentally reopening input. Runtime/worktree
 	// restoration follows in the background after the listener is live.
+	startup.Set("starting", "session-safety", "")
 	if reconcileErr := sessMgr.ReconcileStartupSafety(ctx); reconcileErr != nil {
 		stop()
 		managedPreview.Close()
@@ -1146,6 +1168,7 @@ func Run(buildVersion string) error {
 	browserLive.SetLoopbackBaseURL("http://" + srv.Addr().String())
 	previewDone := preview.NewPoller(store, sessionSvc, "http://"+srv.Addr().String(), preview.PollerConfig{Logger: log}).Start(ctx)
 	_ = os.Unsetenv(browserruntime.RuntimeAddressEnv)
+	startup.Set("starting", "browser-listeners", "")
 	if ln, addr, err := browserruntime.Listen(cfg.RunFilePath); err != nil {
 		log.Warn("browser runtime: listener unavailable; agent browser control disabled", "err", err)
 	} else {
@@ -1197,6 +1220,7 @@ func Run(buildVersion string) error {
 	// proxy never gets pinned to a dead port after an ephemeral fallback.
 	// Saved wake ownership is restored even when Connect Mobile is off.
 	// Best-effort: never blocks boot.
+	startup.Set("starting", "optional-remote-access", "")
 	if err := restoreMobileOnBoot(mobilebridge.Path(cfg.DataDir), bs); err != nil {
 		log.Warn("restore mobile and awake settings on boot failed", "err", err)
 	}
@@ -1228,7 +1252,9 @@ func Run(buildVersion string) error {
 
 	var startupReconcileDone <-chan struct{}
 	var usageLimitResumeDone <-chan struct{}
+	startup.Set("starting", "http-listener", "")
 	runErr := srv.RunWithReady(ctx, func() {
+		startup.Set("ready", "ready", "")
 		// Agent-readiness warming is advisory and idempotent, and request paths
 		// lazily Ensure on demand. Kick it here, after the listener is live, so its
 		// bounded subprocess probes no longer contend with the synchronous

@@ -54,7 +54,7 @@ past the desktop app or ShipIt); stop the old daemon with
 
 --update (opt-in, one command): capture state, print a PLAN and ask, stop AO in the
 safest supported order, back up, install, restart, verify, and roll back
-automatically if the new app is not healthy. The app argument defaults to
+safely after an explicit launch failure; health deadlines retain the new app. The app argument defaults to
 ../Applications/Agent Orchestrator.app next to this script. Update options:
   --fast                     RECOMMENDED for routine updates: quit, back up, swap and
                              relaunch; AO restores sessions on launch. No per-session
@@ -79,7 +79,7 @@ automatically if the new app is not healthy. The app argument defaults to
   --restart-multica-daemon   restart a standalone multica CLI daemon that was running
   --restart-multica-stack    restart the running local Multica Docker containers
   --rollback-restore-db      on a failed update also restore the database if the
-                             schema was migrated and the old app stays unhealthy
+                             schema compatibility requires the matched snapshot
   --detached                 re-run in a new session with nohup and a log file (use
                              from inside an AO session; that session ends)
   --quit-timeout N | --stop-timeout N | --health-timeout N   waits in seconds
@@ -90,7 +90,7 @@ Update exit codes: 0 ok; 20 inside an AO session (use --detached); 21 other
 processes block; 22 ShipIt; 50 cancelled; 51 live sessions; 52 session list
 unavailable; 53 a session could not be ended; 54 app did not quit; 55 daemon did
 not stop; 56 chat hosts/helpers remain; 57 the daemon on ~/.ao is not this
-bundle's; 60 rolled back and healthy; 61 rollback
+bundle's; 60 rolled back and healthy; 64 needs attention/new app retained; 61 rollback
 needs you; 62 healthy but post-install checks warn; 63 healthy but a session did
 not come back. Other codes as in the default mode.
 EOF
@@ -284,6 +284,7 @@ if [[ "$update_mode" -eq 1 ]]; then
 		update_capture_dir="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/noetaxis-update.XXXXXX")"
 	fi
 	noetaxis_update_log_file="$update_capture_dir/update-actions.log"
+	: > "$noetaxis_update_log_file" || exit 31
 	if [[ "$update_fast" -eq 1 ]]; then
 		noetaxis_fast_capture "$target_app" "$update_capture_dir"
 		noetaxis_fast_print_plan "$target_app"
@@ -350,7 +351,7 @@ noetaxis_install_cleanup() {
 		fi
 	fi
 	if [[ "$update_mode" -eq 1 ]]; then
-		if [[ "$update_fast" -eq 1 && "$install_complete" -eq 1 && "$update_rolled_back" -eq 0 && "$exit_status" -ne 0 && "$exit_status" -ne 62 && "$exit_status" -ne 63 ]]; then
+		if [[ "$update_fast" -eq 1 && "$install_complete" -eq 1 && "$update_rolled_back" -eq 0 && "$exit_status" -ne 0 && "$exit_status" -ne 62 && "$exit_status" -ne 63 && "$exit_status" -ne 64 && "$exit_status" -ne 61 && "$update_rollback_attempted" -eq 0 ]]; then
 			rollback_status=0
 			noetaxis_update_auto_rollback "update failed with exit $exit_status" "$target_app" || rollback_status=$?
 			exit_status="$rollback_status"
@@ -387,6 +388,8 @@ if [[ "$update_mode" -eq 1 ]]; then
 	backup_dir="$(noetaxis_new_backup_dir "$user_home")"
 	/bin/mkdir -p "$backup_dir/state-before"
 	/bin/cp -R "$update_capture_dir/." "$backup_dir/state-before/" 2>/dev/null || true
+ /bin/cp "$noetaxis_update_log_file" "$backup_dir/update-actions.log" || exit 31
+ noetaxis_update_log_file="$backup_dir/update-actions.log"
 	stop_status=0
 	if [[ "$update_fast" -eq 1 ]]; then
 		noetaxis_fast_stop_all "$target_app" || stop_status=$?

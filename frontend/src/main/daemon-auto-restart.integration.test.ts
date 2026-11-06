@@ -12,6 +12,7 @@ import { browserDaemonOwnershipDecision, browserRuntimeRecoveryDecision, keepAli
 
 const source = ts.createSourceFile("main.ts", readFileSync(new URL("../main.ts", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true);
 const functions = new Set([
+	"acceptUpdateShutdown",
 	"startDaemon", "startDaemonInner", "killDaemon", "readRunFileState", "cancelDaemonAutoRestart",
 	"scheduleDaemonAutoRestart", "daemonAutoRestartMarkerMatches", "stopDaemon", "reportDaemonRestartFailure", "startDaemonForRestart", "restartDaemon",
 	"refreshDaemonStatus", "handleBrowserRuntimeRejection",
@@ -19,7 +20,7 @@ const functions = new Set([
 const controllerSource = source.statements.filter((node) => {
 	if (ts.isFunctionDeclaration(node)) return functions.has(node.name?.text ?? "");
 	if (ts.isVariableStatement(node)) return node.declarationList.declarations.every((declaration) =>
-		ts.isIdentifier(declaration.name) && (/^daemon/.test(declaration.name.text) || declaration.name.text === "forceReplaceAdoptedRequested"));
+		ts.isIdentifier(declaration.name) && (/^daemon/.test(declaration.name.text) || ["forceReplaceAdoptedRequested", "updateShutdownRequested"].includes(declaration.name.text)));
 	if (!ts.isExpressionStatement(node) || !ts.isCallExpression(node.expression)) return false;
 	const call = node.expression;
 	const target = call.expression.getText(source);
@@ -55,11 +56,13 @@ function setup() {
 	});
 	const ipc = new Map<string, () => Promise<unknown> | unknown>();
 	const app = new EventEmitter();
-	Object.assign(app, { isPackaged: false, getAppPath: () => "/owned/lab" });
+	Object.assign(app, { isPackaged: false, getAppPath: () => "/owned/lab", quit: vi.fn() });
+	const quitCleanup = deferred<void>();
 	const replace = vi.fn(async () => undefined);
 	const inspect = vi.fn(async (): Promise<unknown> => null);
 	const direct = vi.fn(async (): Promise<unknown> => null);
 	const stage = vi.fn(async (): Promise<void> => undefined);
+	const shellEnv = vi.fn(async (): Promise<void> => undefined);
 	const supervisorDisposed = vi.fn();
 	const establishSupervisorLink = vi.fn();
 	const daemonEnv = vi.fn((keep: boolean) => ({ AO_OWNER: keep ? "persistent" : "app" }));
@@ -72,7 +75,7 @@ function setup() {
 		browserQuitRequested: false, daemonOutput: "", supervisorLink: { dispose: supervisorDisposed }, appRunId: "test-app",
 		browserRuntimeRecoveryDecision, browserRuntimeRecoveryAttempted: false,
 		forceReplaceAdoptedRequested: false, cachedShellEnv: {}, earlyShellEnvProbe: null,
-		repairDevAcpRuntime: async () => undefined, ensureShellEnv: async () => undefined,
+		repairDevAcpRuntime: async () => undefined, ensureShellEnv: shellEnv,
 		resolveDaemonLaunch: () => ({ command: "/owned/ao", args: [], cwd: "/owned/data", source: "override", shell: false }),
 		daemonLaunchEnv: () => ({}), inspectExistingDaemon: inspect, browserDaemonOwnershipDecision,
 		shouldReplaceDaemonForStartup, keepAliveForReplacement, gracefullyReplaceDaemonForBrowser: replace,
@@ -88,10 +91,21 @@ function setup() {
 		planDaemonAutoRestart, daemonExitWasUngraceful, disposeBrowserRuntimeLink: vi.fn(), captureSideChatState: async () => undefined,
 		desktopQuit: { handleBeforeQuit: () => false }, chatDraftRisks: [], browserCleanupComplete: true,
 		disposeBrowserStreamLink: vi.fn(), trayLifecycle: { dispose: vi.fn() },
+		browserQuitCleanupPromise: null, disposeAllBrowserViewHosts: () => quitCleanup.promise,
+		remoteRegistry: { closeAll: async () => undefined }, cloudAgentProxy: { close: async () => undefined },
+		telemetryPolicyController: null, flushDaemonUsage: async () => undefined, isUpdateRestartRequested: () => false,
 	});
 	vm.runInContext(`${controller}\nfunction setDaemonStatus(status) { daemonStatus = status; }`, context);
 	return {
-		read, unlink, spawn, children, replace, inspect, direct, stage, supervisorDisposed, establishSupervisorLink, daemonEnv, env,
+		read, unlink, spawn, children, replace, inspect, direct, stage, shellEnv, supervisorDisposed, establishSupervisorLink, daemonEnv, env,
+		acceptUpdateShutdown: () => vm.runInContext("acceptUpdateShutdown()", context),
+		cancelUpdateShutdown: () => vm.runInContext("updateShutdownRequested = false", context),
+		deferQuit: () => {
+			vm.runInContext("browserCleanupComplete = false", context);
+			app.emit("before-quit", { preventDefault: vi.fn() });
+			expect(vm.runInContext("browserQuitCleanupPromise !== null", context)).toBe(true);
+		},
+		finishQuitCleanup: () => quitCleanup.resolve(),
 		setMarker(value: string | Error) { marker = value; },
 		start: () => ipc.get("daemon:start")!(), stop: () => ipc.get("daemon:stop")!(), restart: () => ipc.get("daemon:restart")!(),
 		status: () => vm.runInContext("daemonStatus", context),
@@ -106,6 +120,35 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe("main.ts daemon lifecycle wiring with controlled I/O", () => {
+	it.each(["inspect", "shellEnv", "stage"] as const)("cancels ordinary startup awaiting %s before accepting update shutdown", async (pauseAt) => {
+		for (const keep of [undefined, "1"]) for (const cancelQuit of [false, true]) {
+			const h = setup();
+			h.env.AO_KEEP_DAEMON = keep;
+			const held = deferred<void>();
+			h[pauseAt].mockImplementationOnce(async () => { await held.promise; return undefined; });
+			const starting = h.start();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(h[pauseAt]).toHaveBeenCalled();
+			expect(h.status().state).toBe("stopped");
+			expect(h.acceptUpdateShutdown()).toBe(true);
+			await h.start();
+			if (cancelQuit) h.cancelUpdateShutdown();
+			else h.deferQuit();
+			held.resolve();
+			await starting;
+			expect(h.spawn).not.toHaveBeenCalled();
+			expect(h.replace).not.toHaveBeenCalled();
+			h.finishQuitCleanup();
+		}
+	});
+
+	it("refuses update shutdown after child assignment until readiness", async () => {
+		const h = setup();
+		await h.start();
+		expect(h.acceptUpdateShutdown()).toBe(false);
+		expect(h.children[0].kill).not.toHaveBeenCalled();
+	});
+
 	it("restarts a crashed child through the actual startup path", async () => {
 		const h = setup();
 		await h.start();

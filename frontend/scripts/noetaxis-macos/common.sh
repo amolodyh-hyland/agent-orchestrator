@@ -368,6 +368,7 @@ noetaxis_bundle_descendant_processes() {
 
 noetaxis_error() {
 	printf 'Error: %s\n' "$1" >&2
+ if [[ -n "${noetaxis_update_log_file:-}" ]]; then printf '%s ERROR %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$1" >> "$noetaxis_update_log_file"; fi
 }
 
 noetaxis_user_name() {
@@ -979,4 +980,38 @@ noetaxis_release_lock() {
 		/bin/rm -rf "$noetaxis_lock_held"
 	fi
 	noetaxis_lock_held=0
+}
+
+noetaxis_request_supervisor_shutdown() {
+ local app_path="$1" descriptor="$ao_home/update-control.json" pid start executable actual_start
+ [[ -f "$descriptor" ]] || return 2
+ pid="$(noetaxis_json_get "$descriptor" pid || true)"
+ start="$(noetaxis_json_get "$descriptor" processStart || true)"
+ executable="$(noetaxis_json_get "$descriptor" executable || true)"
+ [[ "$pid" =~ ^[0-9]+$ && -n "$start" && -n "$executable" ]] || return 1
+ noetaxis_pid_may_be_alive "$pid" || return 2
+ actual_start="$(LC_ALL=C noetaxis_process_start "$pid")"
+ [[ -n "$actual_start" ]] || return 1
+ [[ "$actual_start" == "$start" ]] || return 2
+ noetaxis_process_executable_is_in_bundle "$app_path" "$pid" || return 1
+ [[ "$(noetaxis_process_executable_path "$pid")" -ef "$executable" ]] || return 1
+ [[ "$(LC_ALL=C noetaxis_process_start "$pid")" == "$start" ]] || return 1
+ /usr/bin/python3 -I -S - "$descriptor" <<'CONTROL'
+import json, socket, sys
+try:
+    with open(sys.argv[1]) as source:
+        record = json.load(source)
+    with socket.socket(socket.AF_UNIX) as client:
+        client.settimeout(5)
+        client.connect(record["socketPath"])
+        client.sendall((json.dumps({"token": record["token"], "launchId": record["launchId"], "command": "shutdown"}) + "\n").encode())
+        response = client.recv(4096)
+    result = json.loads(response)["result"]
+    if result != "accepted":
+        print("Supervisor refused shutdown: " + result, file=sys.stderr)
+        sys.exit(1)
+except Exception as error:
+    print("Supervisor shutdown failed: " + str(error), file=sys.stderr)
+    sys.exit(1)
+CONTROL
 }

@@ -6,6 +6,7 @@ import path from "node:path";
 import { lstat } from "node:fs/promises";
 import {
 	AO_BUNDLE_ID,
+	deferStaleCopyCleanup,
 	findStaleAppCopies,
 	isUnchangedStaleAppCopy,
 	readBundleMetadata,
@@ -370,5 +371,37 @@ describe("retireStaleMacAppCopies", () => {
 		const options = runtime();
 		await retireStaleMacAppCopies(options);
 		expect(options.findCopies).toHaveBeenCalledOnce();
+	});
+});
+
+describe("deferred stale-copy cleanup", () => {
+	it("waits for readiness and never blocks it on an unanswered ten-minute dialog", async () => {
+		vi.useFakeTimers();
+		const directory = await mkdtemp(path.join(os.tmpdir(), "ao-cleanup-"));
+		try {
+			let ready!: () => void;
+			const readiness = new Promise<void>((resolve) => { ready = resolve; });
+			let answer!: () => void;
+			let shown!: () => void;
+			const displayed = new Promise<void>((resolve) => { shown = resolve; });
+			const dialog = vi.fn(() => { shown(); return new Promise<void>((resolve) => { answer = resolve; }); });
+			const snooze = path.join(directory, "snooze");
+			const cleanup = deferStaleCopyCleanup(readiness, snooze, dialog);
+			await vi.advanceTimersByTimeAsync(300_001);
+			expect(dialog).not.toHaveBeenCalled();
+			ready();
+			await readiness;
+			await displayed;
+			await vi.advanceTimersByTimeAsync(600_000);
+			expect(dialog).toHaveBeenCalledOnce();
+			const nextLaunchDialog = vi.fn(async () => undefined);
+			await deferStaleCopyCleanup(Promise.resolve(), snooze, nextLaunchDialog);
+			expect(nextLaunchDialog).not.toHaveBeenCalled();
+			answer();
+			await cleanup;
+		} finally {
+			vi.useRealTimers();
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 });

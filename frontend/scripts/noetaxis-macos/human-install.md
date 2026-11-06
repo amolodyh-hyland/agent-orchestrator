@@ -55,8 +55,8 @@ quitting AO ends the terminal session that started an update from inside the app
 
 The updater verifies checksums, app signature and version, stages the build,
 quits AO completely, backs up selected state and the old app under `~/ao-backups`,
-swaps the app, relaunches and checks daemon health. If macOS denies tray scripting,
-click **Quit AO Completely** in AO's menu-bar tray while the updater waits (up to
+swaps the app, relaunches and checks daemon health. New builds support authenticated
+shutdown without the tray. For legacy builds, if macOS denies tray scripting, click **Quit AO Completely** in AO's menu-bar tray while the updater waits (up to
 120 seconds). Cmd+Q only closes the window.
 
 Sessions will be restored by AO on launch. Fast mode performs no per-session
@@ -68,9 +68,13 @@ Routine updates target roughly 1–3 minutes; manual interaction, copying a larg
 app, a health timeout or rollback can take longer. `--restore-sessions` explicitly
 adds one best-effort restore pass and may take longer with many sessions.
 
-Failures after the old app moves automatically restore it. A failed health check
-returns 60 when the previous app is healthy again, or 61 when rollback needs
-attention. Read the final summary and retain the backup.
+A health deadline warns and checks startup progress. Live startup or migration is
+never interrupted for rollback. Stale or ambiguous startup returns 64 with the new
+app retained and instructions in the summary and update-actions.log. An explicit
+launch failure can attempt safe rollback: 60 means the previous app was restored
+and is healthy; 61 means rollback is blocked or incomplete. Keep the backup and
+inspect its restore journal before retrying. Do not launch an older app against
+a newer database or remove an interrupted-restore fence.
 
 The original cautious updater remains available by omitting `--fast`; see
 `installer/README.md` for its session controls and manual install/rollback flow.

@@ -678,43 +678,28 @@ test("an update when the same build is already installed stops nothing (exit 0)"
 // Automatic rollback
 // ---------------------------------------------------------------------------
 
-test("an unhealthy new daemon is rolled back automatically: new app quit, old app restored, reopened and healthy (exit 60)", darwin, async (t) => {
-	const world = await makeWorld(t, "rollback", { cfg: { unhealthy_versions: `${newVersion}\n` } });
-	const result = world.update(["--yes"]);
-	assert.equal(result.status, 60, result.stdout + result.stderr);
-	assert.equal(world.installedVersion(), oldVersion, "the previous app is back");
-	assert.match(result.stdout, /The new app is not healthy \(ao status: not_ready\): rolling back automatically/);
-	assert.match(result.stdout, /Restoring the backed-up app/);
-	assert.match(result.stdout, /the previous app is healthy again/);
-	const calls = await world.calls();
-	assert.equal(matching(calls, /^osascript/).length, 2, "the new app is quit through the tray before the restore");
-	assert.equal(matching(calls, /^open -a /).length, 2, "new app, then the restored old app");
-	const dir = await onlyBackup(world);
-	assert.ok(existsSync(path.join(dir, "BACKUP_COMPLETE")));
-	assert.ok((await readdir(dir)).filter((name) => name.endsWith(".app.bak")).length >= 1);
-	assert.match(result.stdout, /exit 60: new app unhealthy; previous app restored and healthy/);
-	assert.equal(matching(calls, /^kill /).length, 0);
-	assert.equal(world.schema(), "190", "the database was not touched");
+test("a health deadline retains the new app without tray quit, rollback or signals", darwin, async (t) => {
+ const world = await makeWorld(t, "health-attention", { cfg: { unhealthy_versions: `${newVersion}\n` } });
+ const result = world.update(["--yes"]);
+ assert.equal(result.status, 64, result.stdout + result.stderr);
+ assert.equal(world.installedVersion(), newVersion);
+ const calls = await world.calls();
+ assert.equal(matching(calls, /^osascript/).length, 1);
+ assert.equal(matching(calls, /^open -a /).length, 1);
+ assert.equal(matching(calls, /^kill /).length, 0);
+ assert.match(result.stdout + result.stderr, /needs-attention.*new app retained/);
+ assert.equal(world.schema(), "190");
+ const log = await readFile(path.join(await onlyBackup(world), "update-actions.log"), "utf8");
+ assert.match(log, /state=needs-attention/);
 });
 
-test("--restore-sessions is honoured when the update ends on the previous app, and otherwise the ended sessions are listed", darwin, async (t) => {
-	const world = await makeWorld(t, "rollback-restore", { sessions: [liveSession("s1"), liveSession("s2")], cfg: { unhealthy_versions: `${newVersion}\n` } });
-	const result = world.update(["--yes", "--end-sessions", "--restore-sessions"]);
-	assert.equal(result.status, 60, result.stdout + result.stderr);
-	assert.equal(world.installedVersion(), oldVersion);
-	const calls = await world.calls();
-	assert.equal(matching(calls, /session restore s1/).length, 1);
-	assert.equal(matching(calls, /session restore s2/).length, 1);
-	assert.match(result.stdout, /s1: came back/);
-	assert.deepEqual((await world.sessionsNow()).map((s) => s.activity), ["active", "active"]);
-
-	// A failed rollback restores nothing but says which sessions are waiting and how to resume them.
-	const stuck = await makeWorld(t, "rollback-no-restore", { sessions: [liveSession("s1")], cfg: { unhealthy_versions: `${newVersion}\n`, tray_fail_versions: `${newVersion}\n` } });
-	const failed = stuck.update(["--yes", "--end-sessions", "--restore-sessions"]);
-	assert.equal(failed.status, 61);
-	assert.equal(matching(await stuck.calls(), /session restore/).length, 0);
-	assert.match(failed.stdout, /--restore-sessions was given, but no restore ran/);
-	assert.match(failed.stdout, /- s1 \[demo\]/);
+test("needs-attention lists ended sessions without restoring them into an unready daemon", darwin, async (t) => {
+ const world = await makeWorld(t, "health-sessions", { sessions: [liveSession("s1")], cfg: { unhealthy_versions: `${newVersion}\n` } });
+ const result = world.update(["--yes", "--end-sessions", "--restore-sessions"]);
+ assert.equal(result.status, 64, result.stdout + result.stderr);
+ assert.equal(matching(await world.calls(), /session restore/).length, 0);
+ assert.match(result.stdout, /--restore-sessions was given, but no restore ran/);
+ assert.match(result.stdout, /- s1 \[demo\]/);
 });
 
 test("--restore-sessions also applies when a failure before the swap reopens the previous app", darwin, async (t) => {
@@ -725,58 +710,25 @@ test("--restore-sessions also applies when a failure before the swap reopens the
 	assert.match(result.stdout, /s1: came back/);
 });
 
-test("a new app that never starts is rolled back too", darwin, async (t) => {
-	const world = await makeWorld(t, "rollback-nostart", { cfg: { no_start_versions: `${newVersion}\n` } });
-	const result = world.update(["--yes"]);
-	assert.equal(result.status, 60, result.stdout + result.stderr);
-	assert.match(result.stdout, /the app process did not appear within 3s/);
-	assert.equal(world.installedVersion(), oldVersion);
-});
+for (const cfg of [{ no_start_versions: `${newVersion}\n` }, { healthz_fail: true }, { unhealthy_versions: `${newVersion}\n`, tray_fail_versions: `${newVersion}\n` }]) {
+ test("missing readiness retains the new app without needing its tray", darwin, async (t) => {
+  const world = await makeWorld(t, "health-no-readiness", { cfg });
+  const result = world.update(["--yes"]);
+  assert.equal(result.status, 64, result.stdout + result.stderr);
+  assert.equal(world.installedVersion(), newVersion);
+  assert.equal(matching(await world.calls(), /^kill /).length, 0);
+ });
+}
 
-test("a failed open is rolled back, and a healthz that never answers is not healthy", darwin, async (t) => {
-	const world = await makeWorld(t, "rollback-healthz", { cfg: { healthz_fail: true } });
-	const result = world.update(["--yes"]);
-	// healthz fails for the restored old app as well, so the rollback itself is reported as unfinished.
-	assert.ok([60, 61].includes(result.status), `${result.status}`);
-	assert.match(result.stdout, /ao status ready but \/healthz on port 3999 did not answer/);
-	assert.equal(world.installedVersion(), oldVersion);
-});
-
-test("when the new app cannot be quit the rollback stops with exit 61 and the exact manual command", darwin, async (t) => {
-	// The old app quits through the tray; the new one cannot be scripted.
-	const world = await makeWorld(t, "rollback-stuck", { cfg: { unhealthy_versions: `${newVersion}\n`, tray_fail_versions: `${newVersion}\n` } });
-	const result = world.update(["--yes"]);
-	assert.equal(result.status, 61, result.stdout + result.stderr);
-	assert.match(result.stdout, /Automatic rollback did not finish|AUTOMATIC ROLLBACK FAILED/);
-	assert.match(result.stdout, /rollback\.sh" --backup-dir ".*ao-backups/);
-	assert.equal(world.installedVersion(), newVersion, "the new app was left in place: nothing was force-killed or swapped under a running app");
-	assert.equal(matching(await world.calls(), /^kill /).length, 0);
-});
-
-test("the database is restored on rollback only when the schema was migrated, the old app stays unhealthy and --rollback-restore-db is given", darwin, async (t) => {
-	const options = { cfg: { unhealthy_versions: `${newVersion}\n`, [`migrate_${newVersion}`]: "194", [`max_schema_${oldVersion}`]: "190" } };
-	const without = await makeWorld(t, "rollback-db-no", options);
-	let result = without.update(["--yes"]);
-	assert.equal(result.status, 61, result.stdout + result.stderr);
-	assert.equal(without.installedVersion(), oldVersion);
-	assert.equal(without.schema(), "194", "the database is not restored without the flag");
-	assert.match(result.stdout, /migrated the database from schema 190 to 194/);
-	assert.match(result.stdout, /--restore-db/);
-
-	const withFlag = await makeWorld(t, "rollback-db-yes", options);
-	result = withFlag.update(["--yes", "--rollback-restore-db"]);
-	assert.equal(result.status, 60, result.stdout + result.stderr);
-	assert.equal(withFlag.installedVersion(), oldVersion);
-	assert.equal(withFlag.schema(), "190", "the backed-up database is back");
-	const dir = await onlyBackup(withFlag);
-	assert.ok((await readdir(dir)).some((name) => name.startsWith("rollback-current-data-")), "the migrated database was saved first");
-	assert.match(result.stdout, /restoring the backed-up database \(--rollback-restore-db\)/);
-
-	// No migration happened, so the flag has nothing to restore even though the old app is unhealthy.
-	const unmigrated = await makeWorld(t, "rollback-db-nomig", { cfg: { unhealthy_versions: `${newVersion}\n${oldVersion}\n` } });
-	result = unmigrated.update(["--yes", "--rollback-restore-db"]);
-	assert.equal(result.status, 61);
-	assert.match(result.stdout, /restoring it is not indicated/);
+test("a deadline never restores a migrated database, including with rollback opt-in", darwin, async (t) => {
+ for (const flags of [[], ["--rollback-restore-db"]]) {
+  const world = await makeWorld(t, "health-migrated", { cfg: { unhealthy_versions: `${newVersion}\n`, [`migrate_${newVersion}`]: "194", [`max_schema_${oldVersion}`]: "190" } });
+  const result = world.update(["--yes", ...flags]);
+  assert.equal(result.status, 64, result.stdout + result.stderr);
+  assert.equal(world.installedVersion(), newVersion);
+  assert.equal(world.schema(), "194");
+  assert.equal(matching(await world.calls(), /^open -a /).length, 1);
+ }
 });
 
 // ---------------------------------------------------------------------------
@@ -1958,12 +1910,11 @@ test("mutation: always using SIGKILL is caught", darwin, async (t) => {
 	assert.ok(violations.some((v) => /signal other than plain TERM|forbidden/.test(v)), violations.join("; "));
 });
 
-test("mutation: skipping the automatic rollback is caught", darwin, async (t) => {
-	const mutant = await mutatedScripts(t, "update-lib.sh", '		noetaxis_update_auto_rollback "$update_health_detail" "$app_path" || status_code=$?\n		return "$status_code"', "		return 61");
-	const world = await makeWorld(t, "mutant-rollback", { cfg: { unhealthy_versions: `${newVersion}\n` } });
-	const result = world.update(["--yes"], { scriptsDir: mutant });
-	assert.notEqual(world.installedVersion(), oldVersion, "the mutant leaves the unhealthy new app in place");
-	assert.equal(result.status, 61);
+test("mutation: replacing needs-attention with rollback is caught", darwin, async (t) => {
+ const mutant = await mutatedScripts(t, "update-lib.sh", 'if [[ "$status_code" -eq 64 ]]; then return 64; fi', 'if [[ "$status_code" -eq 64 ]]; then noetaxis_update_auto_rollback "$update_health_detail" "$app_path"; return $?; fi');
+ const world = await makeWorld(t, "mutant-health", { cfg: { unhealthy_versions: `${newVersion}\n` } });
+ const result = world.update(["--yes"], { scriptsDir: mutant });
+ assert.notEqual(result.status, 64, "the mutant attempts rollback instead of retaining the startup result");
 });
 
 // ---------------------------------------------------------------------------

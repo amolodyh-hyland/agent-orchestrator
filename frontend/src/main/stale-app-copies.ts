@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { lstat, readFile, rename } from "node:fs/promises";
+import { lstat, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import semver from "semver";
@@ -226,4 +226,22 @@ export async function retireStaleMacAppCopies(options: MacRetirementOptions): Pr
 		trashItem: options.trashItem,
 		reportFailures: options.reportFailures,
 	});
+}
+
+const STALE_COPY_SNOOZE_MS = 7 * 24 * 60 * 60 * 1_000;
+
+export async function deferStaleCopyCleanup(
+	ready: Promise<unknown>,
+	snoozeFile: string,
+	cleanup: () => Promise<void>,
+	now: () => number = Date.now,
+): Promise<void> {
+	await ready;
+	const snoozedUntil = Number(await readFile(snoozeFile, "utf8").catch(() => "0"));
+	if (Number.isFinite(snoozedUntil) && snoozedUntil > now()) return;
+	await mkdir(path.dirname(snoozeFile), { recursive: true });
+	const temporary = `${snoozeFile}.${randomUUID()}.tmp`;
+	await writeFile(temporary, String(now() + STALE_COPY_SNOOZE_MS), { mode: 0o600 });
+	await rename(temporary, snoozeFile);
+	await cleanup();
 }
