@@ -77,12 +77,10 @@ transport; neither uses safeStorage or Keychain.
 
 If both journal and policy are unavailable, inspect the daemon transport before
 changing credentials. Restarting or allowing Keychain access cannot fix the
-Chromium metadata incompatibility in older builds. After upgrading, managed
-machines still require a valid administrator-owned `aoMulticaDelegation` in
-the protected managed settings. Existing enrollment or managed preferences with
-no delegation policy return `policy_unavailable`; a local server setting or
-rollout flag cannot override that decision. Unmanaged machines with verified
-empty protected locations resolve to `policy_absent`.
+Chromium metadata incompatibility in older builds.
+Without an `aoMulticaDelegation` rule, verified managed devices resolve `policy_absent` only for HTTP(S) origins at literal `localhost`, `127.0.0.1` or `[::1]` (optional valid port, no userinfo, path, query or fragment) with local runtimes; any managed rule remains authoritative, invalid sources fail closed, and the remote-settings cache can only narrow the result.
+Unmanaged machines with verified empty protected locations still resolve to
+`policy_absent`; a local setting or rollout flag cannot override a managed rule.
 
 Migration `0219_multica_confirmation_verification.sql` marks legacy records
 unverified by default. Only authenticated, proof-verified reservations set the

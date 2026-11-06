@@ -47,7 +47,7 @@ export type DelegationConfirmationBridge = {
 };
 
 export const delegationPolicyLabels = {
-	policy_absent: "Personal selection (no managed policy)",
+	policy_absent: "Personal selection (no AO delegation rule)",
 	policy_allowed: "Managed policy and local restrictions",
 };
 
