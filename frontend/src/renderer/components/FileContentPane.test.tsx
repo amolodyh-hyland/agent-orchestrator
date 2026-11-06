@@ -1,3 +1,5 @@
+import { CloudFileContentPane } from "./cloud-workspace/CloudFileContentPane";
+import type { CloudCpClient } from "../lib/cloud-cp";
 import { SessionPaneContext } from "./session-pane-context";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -62,6 +64,35 @@ describe("FileContentPane", () => {
 		subscribeMock.mockClear();
 		highlightReadyMock.mockReturnValue(true);
 		useUiStore.setState({ inspectorSessions: {} });
+	});
+
+	it.each(["cloud", "local"] as const)("routes Save only to the focused editor with %s and cloud panes mounted", async (firstKind) => {
+		const detail = { path: "src/file.ts", status: "modified" as const, content: "original", size: 8, binary: false, deleted: false, contentTruncated: false, diff: "", diffTruncated: false, editable: true, fileFingerprint: "fp-1", workspaceVersion: "v1", additions: 1, deletions: 0 };
+		getMock.mockResolvedValue({ data: detail });
+		putMock.mockResolvedValue({ data: { ...detail, content: "first draft", fileFingerprint: "fp-2" } });
+		const update = vi.fn().mockResolvedValue({ ...detail, content: "saved", fileFingerprint: "fp-2" });
+		const client = { getWorkspaceReviewFile: vi.fn().mockResolvedValue(detail), updateWorkspaceReviewFile: update } as unknown as CloudCpClient;
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const cloud = (id: string) => <CloudFileContentPane annotation={noopAnnotation()} baseUrl="https://cloud.test" client={client} initialEditing initialMode="file" orgId="org" path="src/file.ts" sessionId={id} split={false} />;
+		const panes = (focused: string) => <QueryClientProvider client={queryClient}><TooltipProvider>
+			<SessionPaneContext.Provider value={{ id: "first", focused: focused === "first" }}>
+				{firstKind === "cloud" ? cloud("first") : <FileContentPane annotation={noopAnnotation()} initialEditing initialMode="file" path="src/file.ts" sessionId="first" split={false} />}
+			</SessionPaneContext.Provider>
+			<SessionPaneContext.Provider value={{ id: "second", focused: focused === "second" }}>{cloud("second")}</SessionPaneContext.Provider>
+		</TooltipProvider></QueryClientProvider>;
+		const view = render(panes("first"));
+		await waitFor(() => expect(screen.getAllByRole("textbox", { name: "Edit src/file.ts" })).toHaveLength(2));
+		const editors = screen.getAllByRole("textbox", { name: "Edit src/file.ts" });
+		fireEvent.change(editors[0], { target: { value: "first draft" } });
+		fireEvent.change(editors[1], { target: { value: "second draft" } });
+		fireEvent.keyDown(window, { key: "s", metaKey: true });
+		if (firstKind === "cloud") await waitFor(() => expect(update).toHaveBeenCalledWith("org", "first", expect.objectContaining({ content: "first draft" })));
+		else await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(update.mock.calls.some((call) => call[1] === "second")).toBe(false);
+		view.rerender(panes("second"));
+		fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+		await waitFor(() => expect(update).toHaveBeenCalledWith("org", "second", expect.objectContaining({ content: "second draft" })));
+		expect(firstKind === "cloud" ? update : putMock).toHaveBeenCalledTimes(firstKind === "cloud" ? 2 : 1);
 	});
 
 	it.each(["tab", "pane"] as const)("keeps inactive %s editor drafts without handling the save shortcut", async (scope) => {

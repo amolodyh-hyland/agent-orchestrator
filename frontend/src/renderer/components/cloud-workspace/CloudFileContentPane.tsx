@@ -1,3 +1,4 @@
+import { useSessionPaneFocused } from "../session-pane-context";
 import { Editor, type EditorFactory } from "@pierre/diffs/edit";
 import { EditProvider } from "@pierre/diffs/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -44,6 +45,7 @@ export function CloudFileContentPane({
 	split: boolean;
 }) {
 	const { t } = useTranslation();
+	const paneFocused = useSessionPaneFocused();
 	const queryClient = useQueryClient();
 	const [mode, setMode] = useState<CloudFileViewMode>(initialMode);
 	const [editing, setEditing] = useState(false);
@@ -128,10 +130,10 @@ export function CloudFileContentPane({
 		finally { setSaving(false); }
 	}, [baseUrl, client, commitSha, detail, draft, draftSessionKey, orgId, path, queryClient, saving, scope, sessionId, t]);
 	useEffect(() => {
-		if (!editing) return;
+		if (!editing || !paneFocused) return;
 		const shortcut = (event: KeyboardEvent) => { if (event.key.toLowerCase() === "s" && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) { event.preventDefault(); if (hasUnsavedChanges) void save(); } };
 		window.addEventListener("keydown", shortcut, true); return () => window.removeEventListener("keydown", shortcut, true);
-	}, [editing, hasUnsavedChanges, save]);
+	}, [editing, hasUnsavedChanges, paneFocused, save]);
 
 	if (!path) return <PanelMessage>{t("files.explorer.selectFile")}</PanelMessage>;
 	if (query.isPending) return <PanelMessage>{t("files.loading")}</PanelMessage>;
