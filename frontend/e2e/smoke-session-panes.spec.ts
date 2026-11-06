@@ -47,26 +47,41 @@ test("renderer: selected sessions split, resize, persist and close @T0 @PANES", 
 	await expect(page.getByTestId("session-detail")).toBeVisible();
 });
 
-test("renderer: new panes retain existing views and enforce the pane limit @T0 @PANES", async ({ page }) => {
+test("renderer: new panes retain views, focus existing sessions and enforce the pane limit @T0 @PANES", async ({ page }) => {
 	await page.setViewportSize({ width: 1800, height: 1000 });
+	await page.addInitScript(() => {
+		localStorage.setItem("ao.topbarTabs.v1", JSON.stringify({ version: 1, groups: [{
+			id: "ao-demo", collapsed: false, head: { sessionId: "ao-demo-orchestrator", mode: "persistent", lastActiveAt: 0 },
+			tabs: ["demo-working", "demo-needs-input", "demo-in-review", "demo-ready"].map((sessionId) => ({ sessionId, mode: "persistent", lastActiveAt: 0 })),
+		}] }));
+	});
 	await page.goto("/#/projects/ao-demo/sessions/demo-working");
 	await expect(page.getByTestId("session-detail")).toBeVisible();
-	const tab = page.locator('[data-testid="topbar-tab"][data-session-id="demo-working"]').first();
-	await tab.getByRole("button", { name: "Tab options" }).click();
-	await page.getByRole("menuitem", { name: "New pane to the right" }).click();
+	const newRight = async (sessionId: string) => {
+		const tab = page.locator(`[data-testid="topbar-tab"][data-session-id="${sessionId}"]`).first().getByRole("tab");
+		await tab.evaluate((node) => node.scrollIntoView({ inline: "center", block: "nearest" }));
+		await tab.click({ button: "right" });
+		await page.getByRole("menuitem", { name: "New pane to the right" }).click();
+		await expect(page.locator('[role="menu"]')).toHaveCount(0);
+	};
+	await newRight("demo-working");
+	await expect(page.getByTestId("session-panes")).toHaveCount(0);
+	await newRight("demo-needs-input");
 	const panes = page.locator("[data-session-pane]");
 	await expect(panes).toHaveCount(2);
-	await expect(page.locator('[role="menu"]')).toHaveCount(0);
 	await expect(panes.nth(1).getByTestId("session-terminal")).toBeVisible();
 	await panes.nth(0).getByTestId("session-detail").evaluate((element) => { element.dataset.retained = "yes"; });
-	for (const count of [3, 4]) {
-		await panes.nth(0).locator('[data-testid="topbar-tab"][data-session-id="demo-working"]').getByRole("button", { name: "Tab options" }).click();
-		await page.getByRole("menuitem", { name: "New pane to the right" }).click();
+	await newRight("demo-working");
+	await expect(panes).toHaveCount(2);
+	await expect(panes.nth(0)).toHaveAttribute("data-focused", "true");
+	for (const [id, count] of [["demo-in-review", 3], ["ao-demo-orchestrator", 4]] as const) {
+		await newRight(id);
 		await expect(panes).toHaveCount(count);
-		await expect(page.locator('[role="menu"]')).toHaveCount(0);
 		await expect(panes.nth(0).getByTestId("session-detail")).toHaveAttribute("data-retained", "yes");
 	}
-	await panes.nth(0).locator('[data-testid="topbar-tab"][data-session-id="demo-working"]').click({ button: "right" });
+	const unviewed = panes.nth(0).locator('[data-testid="topbar-tab"][data-session-id="demo-ready"]').getByRole("tab");
+	await unviewed.evaluate((node) => node.scrollIntoView({ inline: "center", block: "nearest" }));
+	await unviewed.click({ button: "right" });
 	await expect(page.getByRole("menuitem", { name: "New pane to the right" })).toHaveAttribute("aria-disabled", "true");
 	await page.keyboard.press("Escape");
 	await expect(panes.nth(0).locator('[data-testid="topbar-tab"][data-selected="true"]')).toHaveCount(0);

@@ -99,7 +99,9 @@ function SessionPaneMenuItems({ kind, view }: { kind: "dropdown" | "context"; vi
 	const navigate = useNavigate();
 	const params = useParams({ strict: false }) as { projectId?: string; sessionId?: string; hostId?: string };
 	const selected = useSessionPanesStore((state) => state.selected);
-	const paneCount = useSessionPanesStore((state) => state.panes.length);
+	const panes = useSessionPanesStore((state) => state.panes);
+	const paneCount = panes.length;
+	const existing = panes.some((pane) => pane.sessionId === view.sessionId && pane.projectId === (view.groupId === STANDALONE_WORKSPACE_ID ? undefined : view.groupId));
 	const Item = kind === "dropdown" ? DropdownMenuItem : ContextMenuItem;
 	const Separator = kind === "dropdown" ? DropdownMenuSeparator : ContextMenuSeparator;
 	return <>
@@ -110,11 +112,11 @@ function SessionPaneMenuItems({ kind, view }: { kind: "dropdown" | "context"; vi
 			const first = selected[0];
 			if (first) void navigate(sessionNavigateTarget(first.projectId, first.sessionId));
 		}}>{t("shell.tabs.menu.viewSplitPanes")}</Item>
-		<Item disabled={!view.sessionId || paneCount >= MAX_SESSION_PANES} onSelect={async () => {
-			if (!paneCount && !await confirmPaneRemoval()) return;
+		<Item disabled={!view.sessionId || (paneCount >= MAX_SESSION_PANES && !existing)} onSelect={async () => {
 			if (!view.sessionId) return;
 			const session = { sessionId: view.sessionId, projectId: view.groupId === STANDALONE_WORKSPACE_ID ? undefined : view.groupId };
 			const current = !params.hostId && params.sessionId ? { sessionId: params.sessionId, projectId: params.projectId } : session;
+			if (!paneCount && (current.sessionId !== session.sessionId || current.projectId !== session.projectId) && !await confirmPaneRemoval()) return;
 			useSessionPanesStore.getState().openRight(session, current);
 			void navigate(sessionNavigateTarget(session.projectId, session.sessionId));
 		}}>{t("shell.tabs.menu.newPaneRight")}</Item>

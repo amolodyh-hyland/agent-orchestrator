@@ -550,6 +550,7 @@ describe("session pane menu actions", () => {
 
 	it.each(["dropdown", "context"] as const)("opens a pane for the menu tab from %s", async (kind) => {
 		renderTab(makeView("task"));
+		routerMocks.params.sessionId = "task-2";
 		const menu = await openMenu(kind);
 		await userEvent.click(within(menu).getByRole("menuitem", { name: "New pane to the right" }));
 		expect(useSessionPanesStore.getState().panes).toHaveLength(2);
@@ -562,8 +563,9 @@ describe("session pane menu actions", () => {
 		expect(within(menu).getByRole("menuitem", { name: "New pane to the right" })).toHaveAttribute("aria-disabled", "true");
 		await userEvent.keyboard("{Escape}");
 		renderTab(makeView("task"));
-		for (let i = 0; i < 3; i++) useSessionPanesStore.getState().openRight({ sessionId: "task-1", projectId: "project-1" });
+		for (let i = 0; i < 3; i++) useSessionPanesStore.getState().openRight({ sessionId: `pane-${i}`, projectId: "project-1" }, { sessionId: "initial", projectId: "project-1" });
 		menu = await openMenu("context");
 		expect(within(menu).getByRole("menuitem", { name: "New pane to the right" })).toHaveAttribute("aria-disabled", "true");
 	});
 });
+

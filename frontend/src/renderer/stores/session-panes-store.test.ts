@@ -41,17 +41,31 @@ describe("session panes", () => {
 		expect(readSessionPanes()).toEqual({ panes: store().panes, focusedId: right.id, sizes: { [left.id]: 40, [right.id]: 60 } });
 	});
 
-	it("inserts to the right of the focused pane, supports duplicate views, and caps at four", () => {
+	it("focuses an existing session without changing pane ownership, sizes, or the pane limit", () => {
 		store().openRight(a);
+		expect(store().panes).toHaveLength(0);
+		store().openRight(b, a);
 		const [left, right] = store().panes;
-		expect(left.sessionId).toBe(right.sessionId);
-		expect(left.id).not.toBe(right.id);
-		store().focus(left.id);
-		store().openRight(b);
-		expect(store().panes.map((pane) => pane.sessionId)).toEqual(["a", "b", "a"]);
-		store().openRight(b);
+		store().resize({ [left.id]: 40, [right.id]: 60 });
+		const panes = store().panes;
+		const sizes = store().sizes;
 		store().openRight(a);
+		expect(store().focusedId).toBe(left.id);
+		expect(store().panes).toBe(panes);
+		expect(store().sizes).toBe(sizes);
+		store().openRight({ sessionId: "c" });
+		store().openRight({ sessionId: "d" });
+		store().openRight({ sessionId: "e" });
 		expect(store().panes).toHaveLength(MAX_SESSION_PANES);
+		store().openRight(b);
+		expect(store().focusedId).toBe(right.id);
+		store().close(left.id);
+		expect(store().panes.find((pane) => pane.id === right.id)).toEqual(right);
+	});
+
+	it("normalizes legacy duplicate session layouts before mounting Browser owners", () => {
+		sessionStorage.setItem(SESSION_PANES_STORAGE_KEY, JSON.stringify({ panes: [{ ...a, id: "first" }, { ...a, id: "duplicate" }], focusedId: "duplicate", sizes: { first: 50, duplicate: 50 } }));
+		expect(readSessionPanes()).toMatchObject({ panes: [{ ...a, id: "first" }], focusedId: "first", sizes: {} });
 	});
 
 	it("closes panes without closing sessions and retains a valid focus down to one", () => {
@@ -78,7 +92,7 @@ describe("session panes", () => {
 	it("ignores corrupt persisted layouts and invalid resize values", () => {
 		sessionStorage.setItem(SESSION_PANES_STORAGE_KEY, "{");
 		expect(readSessionPanes().panes).toEqual([]);
-		store().openRight(a);
+		store().openRight(b, a);
 		const sizes = store().sizes;
 		store().resize({});
 		expect(store().sizes).toBe(sizes);

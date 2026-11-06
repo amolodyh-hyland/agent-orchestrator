@@ -13,10 +13,11 @@ export function readSessionPanes(storage?: Storage): PaneLayout {
 	try {
 		const raw = JSON.parse((storage ?? window.sessionStorage).getItem(SESSION_PANES_STORAGE_KEY) ?? "null");
 		if (!raw || !Array.isArray(raw.panes) || raw.panes.length > MAX_SESSION_PANES) return emptyLayout();
-		const panes: SessionPane[] = raw.panes.filter((pane: SessionPane) => pane &&
+		const stored: SessionPane[] = raw.panes.filter((pane: SessionPane) => pane &&
 			typeof pane.id === "string" && pane.id.length > 0 && typeof pane.sessionId === "string" && pane.sessionId.length > 0 &&
 			(pane.projectId === undefined || typeof pane.projectId === "string"));
-		if (panes.length !== raw.panes.length || new Set(panes.map((pane) => pane.id)).size !== panes.length) return emptyLayout();
+		if (stored.length !== raw.panes.length || new Set(stored.map((pane) => pane.id)).size !== stored.length) return emptyLayout();
+		const panes = stored.filter((pane, index) => !stored.slice(0, index).some((previous) => sameSession(previous, pane)));
 		const sizes = Object.fromEntries(panes.map((pane) => [pane.id, raw.sizes?.[pane.id]]));
 		const validSizes = Object.values(sizes).every((size) => typeof size === "number" && Number.isFinite(size) && size > 0) &&
 			Math.abs(Object.values(sizes).reduce((sum, size) => sum + size, 0) - 100) < 0.1;
@@ -67,11 +68,16 @@ export const useSessionPanesStore = create<SessionPanesState>((set, get) => {
 		viewSelected: () => {
 			const { selected } = get();
 			if (selected.length < 2 || selected.length > MAX_SESSION_PANES) return;
-			const panes = selected.map(newPane);
+			const unique = selected.filter((session, index) => !selected.slice(0, index).some((previous) => sameSession(previous, session)));
+			if (unique.length < 2) return;
+			const panes = unique.map(newPane);
 			update({ panes, focusedId: panes[0].id, sizes: equalSizes(panes) });
 		},
 		openRight: (session, current) => {
 			const state = get();
+			const existing = state.panes.find((pane) => sameSession(pane, session));
+			if (existing) { get().focus(existing.id); return; }
+			if (!state.panes.length && sameSession(current ?? session, session)) return;
 			if (state.panes.length >= MAX_SESSION_PANES) return;
 			const panes = state.panes.length ? [...state.panes] : [newPane(current ?? session)];
 			const index = Math.max(0, panes.findIndex((pane) => pane.id === state.focusedId));
