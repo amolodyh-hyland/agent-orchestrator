@@ -1,4 +1,5 @@
-import { render, screen, within } from "@testing-library/react";
+import { useUiStore } from "../../stores/ui-store";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "../ui/tooltip";
 import { useTopbarTabsStore } from "../../stores/topbar-tabs-store";
@@ -127,4 +128,14 @@ describe("TopbarTabGroup", () => {
 		expect(screen.queryByText("Scratchpad")).not.toBeInTheDocument();
 	});
 
+});
+
+
+it("places a square new-session button after the last tab and uses that group's project", () => {
+	renderGroup(makeGroup({ id: "other-project", name: "Other Project" }));
+	const button = screen.getByRole("button", { name: "New session in Other Project" });
+	expect(button).toHaveAttribute("title", "New session in Other Project");
+	expect(screen.getByTestId("topbar-tab-group").lastElementChild).toBe(button);
+	fireEvent.click(button);
+	expect(useUiStore.getState().newTaskRequest?.projectId).toBe("other-project");
 });

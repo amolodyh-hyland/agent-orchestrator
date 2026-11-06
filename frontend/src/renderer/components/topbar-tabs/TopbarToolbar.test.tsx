@@ -220,6 +220,8 @@ describe("TopbarToolbar", () => {
 			"Close to the right",
 			"Close all",
 			"Copy session link",
+			"View split panes",
+			"New pane to the right",
 		]);
 
 		await userEvent.keyboard("{Escape}");

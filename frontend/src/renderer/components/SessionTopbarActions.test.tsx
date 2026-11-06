@@ -1,3 +1,4 @@
+import { SessionPaneContext } from "./session-pane-context";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -43,12 +44,12 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: useWorkspaceQueryMock,
-	useWorkspaceScope: () => {
+	useWorkspaceScope: (projectId?: string, sessionId?: string) => {
 		const query = useWorkspaceQueryMock();
-		const project = query.data?.find((workspace: WorkspaceSummary) => workspace.id === paramsMock.projectId);
+		const project = query.data?.find((workspace: WorkspaceSummary) => workspace.id === projectId);
 		const session = query.data
 			?.flatMap((workspace: WorkspaceSummary) => workspace.sessions)
-			.find((candidate: WorkspaceSession) => candidate.id === paramsMock.sessionId);
+			.find((candidate: WorkspaceSession) => candidate.id === sessionId);
 		return {
 			...query,
 			data: {
@@ -315,6 +316,18 @@ describe("optimistic orchestrator topbar", () => {
 });
 
 describe("SessionTopbarActions embedded actions", () => {
+	it("starts a task in the pane's project before its route becomes active", async () => {
+		const other = { ...orchestrator, id: "pane-orchestrator", workspaceId: "pane-project", workspaceName: "Pane Project" };
+		paramsMock.projectId = worker.workspaceId;
+		paramsMock.sessionId = worker.id;
+		useWorkspaceQueryMock.mockReturnValue({ data: [{ id: other.workspaceId, name: other.workspaceName, kind: "single_repo", path: "/pane", sessions: [other] }], isSuccess: true });
+		render(<QueryClientProvider client={new QueryClient()}><TooltipProvider>
+			<SessionPaneContext.Provider value={{ id: "pane", focused: false, sessionId: other.id, projectId: other.workspaceId }}><SessionTopbarActions /></SessionPaneContext.Provider>
+		</TooltipProvider></QueryClientProvider>);
+		await userEvent.click(screen.getByRole("button", { name: "New task" }));
+		expect(useUiStore.getState().newTaskRequest?.projectId).toBe(other.workspaceId);
+	});
+
 	// The branch belongs to detail surfaces, not the top bar: an orchestrator's
 	// actions stay intact (#3874, regressed by the badge #4252 added beside these actions).
 	it("keeps the worktree branch out of the orchestrator actions", () => {

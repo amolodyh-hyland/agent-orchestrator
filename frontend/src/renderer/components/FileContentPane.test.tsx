@@ -1,3 +1,4 @@
+import { SessionPaneContext } from "./session-pane-context";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -63,7 +64,7 @@ describe("FileContentPane", () => {
 		useUiStore.setState({ inspectorSessions: {} });
 	});
 
-	it("keeps inactive editor drafts without letting them handle the active tab's save shortcut", async () => {
+	it.each(["tab", "pane"] as const)("keeps inactive %s editor drafts without handling the save shortcut", async (scope) => {
 		const detail = {
 			sessionId: "sess-1",
 			path: "src/App.tsx",
@@ -85,7 +86,9 @@ describe("FileContentPane", () => {
 		const pane = (active: boolean) => (
 			<QueryClientProvider client={client}>
 				<TooltipProvider>
-					<FileContentPane active={active} annotation={annotation} initialEditing initialMode="file" path="src/App.tsx" sessionId="sess-1" split={false} />
+					<SessionPaneContext.Provider value={{ id: "pane", focused: scope === "pane" ? active : true }}>
+						<FileContentPane active={scope === "tab" ? active : true} annotation={annotation} initialEditing initialMode="file" path="src/App.tsx" sessionId="sess-1" split={false} />
+					</SessionPaneContext.Provider>
 				</TooltipProvider>
 			</QueryClientProvider>
 		);

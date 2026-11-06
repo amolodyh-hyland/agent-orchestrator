@@ -1,3 +1,4 @@
+import { useSessionPanesStore } from "../../stores/session-panes-store";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -172,6 +173,7 @@ let writeText: ReturnType<typeof vi.fn>;
 let previousUnmount: (() => void) | undefined;
 
 beforeEach(() => {
+	useSessionPanesStore.setState({ panes: [], selected: [], focusedId: null, sizes: {} });
 	localStorage.clear();
 	routerMocks.navigate.mockReset();
 	routerMocks.params.projectId = "project-1";
@@ -242,8 +244,10 @@ describe("TopbarTabMenu", () => {
 			"Close to the right",
 			"Close all",
 			"Copy session link",
+			"View split panes",
+			"New pane to the right",
 		]);
-		expect(within(dropdown).getAllByRole("separator")).toHaveLength(2);
+		expect(within(dropdown).getAllByRole("separator")).toHaveLength(3);
 
 		await userEvent.keyboard("{Escape}");
 		await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
@@ -268,6 +272,8 @@ describe("TopbarTabMenu", () => {
 			"Close group",
 			"Close to the right",
 			"Close other groups",
+			"View split panes",
+			"New pane to the right",
 		]);
 	});
 
@@ -313,7 +319,7 @@ describe("TopbarTabMenu", () => {
 	] as const)("opens the %s menu with the expected entries from the dropdown", async (_name, view, expected) => {
 		renderTab(view);
 		const menu = await openMenu("dropdown");
-		expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent?.trim())).toEqual(expected);
+		expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent?.trim())).toEqual([...expected, "View split panes", "New pane to the right"]);
 	});
 
 	it.each([
@@ -340,7 +346,7 @@ describe("TopbarTabMenu", () => {
 	] as const)("opens the %s menu with the same entries from right-click", async (_name, view, expected) => {
 		renderTab(view);
 		const menu = await openMenu("context");
-		expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent?.trim())).toEqual(expected);
+		expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent?.trim())).toEqual([...expected, "View split panes", "New pane to the right"]);
 	});
 
 	it("starts inline rename from the menu", async () => {
@@ -527,3 +533,37 @@ function renderTopbarTabs() {
 		</QueryClientProvider>,
 	);
 }
+
+
+describe("session pane menu actions", () => {
+	it.each(["dropdown", "context"] as const)("enables split for multiple selected sessions in the %s menu", async (kind) => {
+		renderTab(makeView("task"));
+		let menu = await openMenu(kind);
+		expect(within(menu).getByRole("menuitem", { name: "View split panes" })).toHaveAttribute("aria-disabled", "true");
+		await userEvent.keyboard("{Escape}");
+		useSessionPanesStore.getState().select({ sessionId: "task-1", projectId: "project-1" }, false);
+		useSessionPanesStore.getState().select({ sessionId: "task-2", projectId: "project-1" }, true);
+		menu = await openMenu(kind);
+		await userEvent.click(within(menu).getByRole("menuitem", { name: "View split panes" }));
+		expect(useSessionPanesStore.getState().panes.map((pane) => pane.sessionId)).toEqual(["task-1", "task-2"]);
+	});
+
+	it.each(["dropdown", "context"] as const)("opens a pane for the menu tab from %s", async (kind) => {
+		renderTab(makeView("task"));
+		const menu = await openMenu(kind);
+		await userEvent.click(within(menu).getByRole("menuitem", { name: "New pane to the right" }));
+		expect(useSessionPanesStore.getState().panes).toHaveLength(2);
+		expect(useSessionPanesStore.getState().panes[1]).toMatchObject({ sessionId: "task-1", projectId: "project-1" });
+	});
+
+	it("disables new panes at the limit and on project anchors", async () => {
+		renderTab(makeView("head", { anchor: true }));
+		let menu = await openMenu("dropdown");
+		expect(within(menu).getByRole("menuitem", { name: "New pane to the right" })).toHaveAttribute("aria-disabled", "true");
+		await userEvent.keyboard("{Escape}");
+		renderTab(makeView("task"));
+		for (let i = 0; i < 3; i++) useSessionPanesStore.getState().openRight({ sessionId: "task-1", projectId: "project-1" });
+		menu = await openMenu("context");
+		expect(within(menu).getByRole("menuitem", { name: "New pane to the right" })).toHaveAttribute("aria-disabled", "true");
+	});
+});

@@ -1,3 +1,4 @@
+import { useSessionPanesStore } from "../../stores/session-panes-store";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -67,6 +68,7 @@ function renderTab(props: Partial<TopbarTabProps> = {}, view = makeView()) {
 describe("TopbarTab", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		useSessionPanesStore.setState({ selected: [] });
 	});
 
 	it("styles preview and persistent task tabs and marks the active tab", () => {
@@ -447,4 +449,26 @@ describe("TopbarTab", () => {
 		expect(within(menu).queryByRole("menuitem", { name: "Switch agent" })).not.toBeInTheDocument();
 		expect(within(menu).getByRole("menuitem", { name: "New task" })).toBeInTheDocument();
 	});
+});
+
+
+it.each([
+	["MacIntel", { metaKey: true }],
+	["Win32", { ctrlKey: true }],
+	["Linux x86_64", { ctrlKey: true }],
+])("toggles multi-selection with the platform modifier on %s", (platform, modifiers) => {
+	vi.spyOn(navigator, "platform", "get").mockReturnValue(platform as string);
+	useSessionPanesStore.setState({ selected: [] });
+	const activate = vi.fn();
+	renderTab({ onActivate: activate });
+	const tab = screen.getByRole("tab");
+	fireEvent.click(tab, modifiers as object);
+	expect(activate).not.toHaveBeenCalled();
+	expect(screen.getByTestId("topbar-tab")).toHaveAttribute("data-selected", "true");
+	fireEvent.click(tab, modifiers as object);
+	expect(screen.getByTestId("topbar-tab")).toHaveAttribute("data-selected", "false");
+	fireEvent.click(tab);
+	expect(activate).toHaveBeenCalledTimes(1);
+	expect(useSessionPanesStore.getState().selected).toHaveLength(1);
+	vi.restoreAllMocks();
 });

@@ -1,3 +1,4 @@
+import { SessionPaneContext } from "./session-pane-context";
 import { StrictMode, useEffect, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -3699,6 +3700,23 @@ describe("SessionView", () => {
 		);
 		expect(publishRisk).not.toHaveBeenCalledWith([]);
 
+		view.unmount();
+		expect(publishRisk).toHaveBeenLastCalledWith([]);
+		publishRisk.mockRestore();
+	});
+
+	it("aggregates native draft risks across visible panes and retains the remaining pane's risk", async () => {
+		const publishRisk = vi.spyOn(window.ao!.app, "setChatDraftRisk");
+		setChatDraftBoundary("sess-1", "composer", "persistence-failed");
+		setChatDraftBoundary("sess-2", "composer", "pending-attachments");
+		const panes = (showFirst: boolean) => <>
+			{showFirst ? <SessionPaneContext.Provider key="first" value={{ id: "first", focused: true }}><SessionView sessionId="sess-1" /></SessionPaneContext.Provider> : null}
+			<SessionPaneContext.Provider key="second" value={{ id: "second", focused: false }}><SessionView sessionId="sess-2" /></SessionPaneContext.Provider>
+		</>;
+		const view = render(panes(true));
+		await waitFor(() => expect(publishRisk).toHaveBeenLastCalledWith(["persistence-failed", "pending-attachments"], expect.anything()));
+		view.rerender(panes(false));
+		await waitFor(() => expect(publishRisk).toHaveBeenLastCalledWith(["pending-attachments"], expect.anything()));
 		view.unmount();
 		expect(publishRisk).toHaveBeenLastCalledWith([]);
 		publishRisk.mockRestore();
