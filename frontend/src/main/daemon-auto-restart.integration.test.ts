@@ -78,6 +78,7 @@ function setup(realDesktopShutdown = false) {
 		process: { env, platform: "linux", resourcesPath: "/owned/lab", kill: vi.fn() },
 		os: { homedir: () => "/owned/home" }, app, ipcMain: { handle: (name: string, handler: () => unknown) => ipc.set(name, handler) },
 		browserQuitRequested: false, daemonOutput: "", supervisorLink: { dispose: supervisorDisposed }, appRunId: "test-app",
+		desktopStartup: { phase: vi.fn(), linkDaemon: vi.fn() },
 		browserRuntimeRecoveryDecision, browserRuntimeRecoveryAttempted: false,
 		forceReplaceAdoptedRequested: false, cachedShellEnv: {}, earlyShellEnvProbe: null,
 		repairDevAcpRuntime: async () => undefined, ensureShellEnv: shellEnv,
