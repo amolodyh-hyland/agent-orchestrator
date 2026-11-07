@@ -1,3 +1,4 @@
+import { useSessionPaneFocused } from "./session-pane-context";
 import { useSelectionSnapshot } from "./diffs/SelectionStableContent";
 import type { FileAnnotationRange } from "../../shared/chat-file-reference";
 import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -159,6 +160,7 @@ export function FileContentPane({
 	toolbar?: "tabs" | "compact";
 }) {
 	const { t } = useTranslation();
+	const paneFocused = useSessionPaneFocused();
 	// The menu actions this render offers; published once it commits, and
 	// withdrawn while loading, on an error, or when the pane goes away.
 	const menuPublish = useRef<ArtifactMenuAction[]>([]);
@@ -390,7 +392,7 @@ export function FileContentPane({
 		}
 	}, [commitSha, draft, draftSessionKey, initialMode, path, query.data, queryClient, saving, scope, sessionId, source, hostId, t]);
 	useEffect(() => {
-		if (!active || !editing) return;
+		if (!active || !editing || !paneFocused) return;
 		const onSaveShortcut = (event: KeyboardEvent) => {
 			if (
 				event.key.toLowerCase() !== "s"
@@ -403,7 +405,7 @@ export function FileContentPane({
 		};
 		window.addEventListener("keydown", onSaveShortcut, true);
 		return () => window.removeEventListener("keydown", onSaveShortcut, true);
-	}, [active, editing, hasUnsavedChanges, saveEditing, saving]);
+	}, [active, editing, hasUnsavedChanges, paneFocused, saveEditing, saving]);
 	const refetch = refreshSource;
 	const retryAction = <span data-file-annotation-retry={annotationRange?.requestKey}><RetryButton onClick={() => void refetch()} /></span>;
 

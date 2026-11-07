@@ -7,6 +7,17 @@
 	"settings.code.none": "Ninguno (texto plano)",
 	"settings.code.followApp": "Seguir la aplicación",
 	"settings.code.defaultLanguage": "Predeterminado",
+	"settings.project.todoPlacement": "Ubicación de las tareas",
+	"settings.project.todoPlacementDescription": "Mostrar el último plan en la esquina superior derecha de cada panel de sesión. Los paneles estrechos usan la ubicación predeterminada.",
+	"settings.project.todoPlacementDefault": "Predeterminada",
+	"settings.project.todoPlacementTopRight": "Arriba a la derecha",
+	"chat.plan.label": "Plan del agente",
+	"chat.plan.title": "Plan",
+	"chat.plan.collapse": "Contraer plan",
+	"chat.plan.expand": "Expandir plan",
+	"chat.plan.status.pending": "sin iniciar",
+	"chat.plan.status.in_progress": "en curso",
+	"chat.plan.status.completed": "completado",
 	"chat.path.copy": "Copiar ruta",
 	"chat.path.revealInFinder": "Mostrar en Finder",
 	"chat.path.revealInFileManager": "Mostrar en el gestor de archivos",
@@ -4829,5 +4840,8 @@
 	"outer.recordAcknowledged": "Record acknowledged",
 	"outer.recordUnacknowledged": "Record unacknowledged",
 	"outer.firstMailboxPage": "First page",
-	"outer.nextMailboxPage": "Next page"
+	"outer.nextMailboxPage": "Next page",
+	"shell.tabs.newSessionInGroup": "Nueva sesión en {{project}}",
+	"shell.tabs.menu.viewSplitPanes": "Ver paneles divididos",
+	"shell.tabs.menu.newPaneRight": "Nuevo panel a la derecha"
 }

@@ -1,12 +1,14 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { SecretVault } from "./multica-credentials";
+import { credentialAccess } from "./desktop-startup";
+import { protectedStorageBackend, requireProtectedCiphertext } from "./safe-storage-policy";
 
 type SafeStorageLike = {
-	isEncryptionAvailable: () => boolean;
+	isAsyncEncryptionAvailable: () => Promise<boolean>;
 	getSelectedStorageBackend?: () => string;
-	encryptString: (plain: string) => Buffer;
-	decryptString: (blob: Buffer) => string;
+	encryptStringAsync: (plain: string) => Promise<Buffer>;
+	decryptStringAsync: (blob: Buffer) => Promise<{ result: string; shouldReEncrypt: boolean }>;
 };
 
 /**
@@ -16,14 +18,12 @@ type SafeStorageLike = {
  */
 export function createSafeStorageVault(safeStorage: SafeStorageLike, platform: NodeJS.Platform): SecretVault {
 	return {
-		isProtected: () => {
-			if (!safeStorage.isEncryptionAvailable()) return false;
-			if (platform !== "linux") return true;
-			const backend = safeStorage.getSelectedStorageBackend?.();
-			return backend !== undefined && backend !== "basic_text" && backend !== "unknown";
+		isProtected: async () => {
+			if (!(await credentialAccess("multica-capability", () => safeStorage.isAsyncEncryptionAvailable()))) return false;
+			return protectedStorageBackend(platform, platform === "linux" ? safeStorage.getSelectedStorageBackend?.() : undefined);
 		},
-		encrypt: (plain) => safeStorage.encryptString(plain),
-		decrypt: (blob) => safeStorage.decryptString(blob),
+		encrypt: (plain) => credentialAccess("multica-encrypt", async () => requireProtectedCiphertext(await safeStorage.encryptStringAsync(plain), platform)),
+		decrypt: (blob) => credentialAccess("multica-decrypt", () => safeStorage.decryptStringAsync(blob)),
 	};
 }
 

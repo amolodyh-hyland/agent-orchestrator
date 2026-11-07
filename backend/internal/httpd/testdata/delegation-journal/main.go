@@ -55,7 +55,18 @@ func run() error {
 			return decision
 		},
 	}, httpd.ControlDeps{})
-	server := &http.Server{Handler: handler, ReadHeaderTimeout: time.Second}
+	mux := http.NewServeMux()
+	mux.Handle("/", handler)
+	mux.HandleFunc("/health", func(w http.ResponseWriter, req *http.Request) {
+		body, err := os.ReadFile(filepath.Join(os.Args[1], "local-health.json"))
+		if err != nil || req.Method != http.MethodGet {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	})
+	server := &http.Server{Handler: mux, ReadHeaderTimeout: time.Second}
 	defer func() { _ = server.Close() }()
 	go func() { _ = server.Serve(listener) }()
 	fmt.Println("journal-test-origin:http://" + listener.Addr().String())

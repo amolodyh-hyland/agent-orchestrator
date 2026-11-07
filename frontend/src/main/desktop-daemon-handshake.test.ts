@@ -1,0 +1,270 @@
+// @vitest-environment node
+import { mkdtemp, mkdir, writeFile, rm, readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import vm from "node:vm";
+import ts from "typescript";
+import { afterEach, expect, it, vi } from "vitest";
+import { resolveDaemonLaunch } from "../shared/daemon-launch";
+import { resolveDaemonFromRunFile, type DaemonProber } from "../shared/daemon-attach";
+import { parseRunFile } from "../shared/daemon-discovery";
+import { browserDaemonOwnershipDecision } from "../shared/daemon-takeover";
+import type { DaemonStatus } from "../shared/daemon-status";
+import { bootstrapDaemonBeforeFeatures, bootstrapDaemonWithRecovery, verifyDesktopDaemonHandshake } from "./desktop-daemon-bootstrap";
+import { readDaemonProcessIdentity, type ProcessIdentityQuery } from "./daemon-process-identity";
+
+const cleanups: Array<() => Promise<void>> = [];
+afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
+
+async function fixture(platform: NodeJS.Platform = "darwin") {
+	const directory = await mkdtemp(path.join(os.tmpdir(), "ao-verified-handshake-"));
+	cleanups.push(() => rm(directory, { recursive: true, force: true }));
+	const executable = path.join(directory, platform === "win32" ? "ao.exe" : "ao");
+	await writeFile(executable, "fixture executable");
+	await mkdir(path.join(directory, "startup"));
+	const runFile = path.join(directory, "running.json");
+	const at = Date.now();
+	const processStart = platform === "win32" ? "windows-filetime:134121123456789123" : "Mon Nov 9 00:00:00 2026";
+	const run = { pid: 4242, port: 3001, startedAt: new Date(at).toISOString(), appRunId: "desktop-launch" };
+	const record = { launchId: "daemon-launch", pid: run.pid, processStart, executable, startedAt: Math.floor(at / 1000) };
+	const recordFile = path.join(directory, "startup/daemon-launch.json");
+	await writeFile(runFile, JSON.stringify(run));
+	await writeFile(recordFile, JSON.stringify(record));
+	const execute = vi.fn(async (query: ProcessIdentityQuery) => {
+		if (platform === "win32") {
+			expect(query.command).toMatch(/powershell\.exe$/);
+			expect(query.args.at(-1)).toContain("Get-Process -Id 4242");
+			return JSON.stringify({ processStart, executable });
+		}
+		expect(query.command).toBe("ps");
+		expect(query.args.at(-1)).toBe("4242");
+		return processStart;
+	});
+	const probe = vi.fn<DaemonProber>(async (_port, endpoint) => ({ status: endpoint === "healthz" ? "ok" : "ready", service: "agent-orchestrator-daemon", pid: run.pid, executablePath: executable }));
+	const options = {
+		runFile, platform, launch: { command: executable, shell: false }, spawned: { at, appRunId: run.appRunId, wrapperPid: run.pid }, probe,
+		identityError: () => null,
+		processIdentity: (pid: number, target: NodeJS.Platform) => readDaemonProcessIdentity(pid, target, execute),
+	};
+	return { directory, executable, run, runFile, record, recordFile, execute, probe, options };
+}
+
+const source = ts.createSourceFile("main.ts", readFileSync(new URL("../main.ts", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true);
+let startSource = "";
+function findBootstrapStart(node: ts.Node): void {
+	if (ts.isCallExpression(node) && node.expression.getText(source) === "bootstrapDaemonWithRecovery") {
+		const options = node.arguments[0];
+		if (options && ts.isObjectLiteralExpression(options)) {
+			const start = options.properties.find((property) => property.name?.getText(source) === "start");
+			if (start && ts.isPropertyAssignment(start)) startSource = start.initializer.getText(source);
+		}
+	}
+	ts.forEachChild(node, findBootstrapStart);
+}
+findBootstrapStart(source);
+const inspectSource = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "inspectExistingDaemon")!.getText(source);
+const retryController = ts.transpileModule(`const bootstrapStart = ${startSource};\n${inspectSource}`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+
+function productionRetry(f: Awaited<ReturnType<typeof fixture>>) {
+	const verifiedPids: number[] = [];
+	const processIdentity = vi.fn(async () => ({ processStart: f.record.processStart, executable: f.executable }));
+	f.probe.mockImplementation(async (_port, endpoint) => ({ status: endpoint === "healthz" ? "ok" : "ready", service: "agent-orchestrator-daemon", pid: JSON.parse(await readFile(f.runFile, "utf8")).pid, executablePath: f.executable }));
+	const verify = vi.fn(async (options: Parameters<typeof verifyDesktopDaemonHandshake>[0]) => {
+		const link = await verifyDesktopDaemonHandshake({ ...options, processIdentity });
+		if (link) verifiedPids.push(link.pid);
+		return link;
+	});
+	let context: vm.Context;
+	const startDaemon = vi.fn(async () => context.daemonStatus);
+	const establishSupervisorLink = vi.fn();
+	context = vm.createContext({
+		bootstrapAttempted: false, daemonProcess: null, daemonStartEpoch: 0,
+		daemonStatus: { state: "ready", pid: f.run.pid, port: f.run.port },
+		browserQuitRequested: false, updateShutdownRequested: false, appRunId: f.run.appRunId,
+		process: { platform: "darwin", resourcesPath: f.directory }, os: { homedir: () => f.directory },
+		app: { isPackaged: true, getAppPath: () => f.directory }, resolveDaemonLaunch,
+		daemonLaunchEnv: () => ({ AO_DAEMON_COMMAND: `${f.executable} daemon` }),
+		runFilePath: () => f.runFile, readFile, parseRunFile, resolveDaemonFromRunFile,
+		processAlive: () => true, readDaemonProbe: f.probe, daemonIdentityError: () => null,
+		verifyDesktopDaemonHandshake: verify, browserDaemonOwnershipDecision,
+		shouldLinkOnAttach: () => true, establishSupervisorLink, startDaemon,
+		setDaemonStatus: (status: DaemonStatus) => {
+			if (status.pid && status.pid !== f.run.pid) expect(verifiedPids).toContain(status.pid);
+			context.daemonStatus = status;
+		},
+	});
+	vm.runInContext(retryController, context);
+	return {
+		context, verify, processIdentity, startDaemon, establishSupervisorLink,
+		start: () => vm.runInContext("bootstrapStart()", context) as Promise<unknown>,
+		status: () => context.daemonStatus as DaemonStatus,
+		handshake: async () => (await verify({ ...f.options, spawned: undefined, attachedPid: context.daemonStatus.pid })) !== null,
+	};
+}
+
+it("discovers and fully verifies adopted PID B on retry after PID A is replaced under a pinned launch ID", async () => {
+	const f = await fixture();
+	await rm(f.recordFile);
+	const h = productionRetry(f);
+	let now = 0;
+	const initializeFeatures = vi.fn(async () => { expect(h.status().pid).toBe(4343); });
+	const result = await bootstrapDaemonWithRecovery({
+		...h, attachment: () => h.status().pid ?? null, cancelled: () => false, initializeFeatures,
+		now: () => now, timeoutMs: 1, wait: async () => { now++; },
+		recover: async () => {
+			expect(h.status().pid).toBe(f.run.pid);
+			expect(initializeFeatures).not.toHaveBeenCalled();
+			await writeFile(f.runFile, JSON.stringify({ ...f.run, pid: 4343, owner: "persistent" }));
+			await writeFile(f.recordFile, JSON.stringify({ ...f.record, pid: 4343 }));
+			return "retry";
+		},
+	});
+	expect(result).toEqual({ state: "verified" });
+	expect(h.startDaemon).toHaveBeenCalledOnce();
+	expect(h.establishSupervisorLink).toHaveBeenCalledOnce();
+	expect(initializeFeatures).toHaveBeenCalledOnce();
+});
+
+it.each(["missing-record", "other-launch"])("does not publish an adopted replacement with %s or open features", async (failure) => {
+	const f = await fixture();
+	await rm(f.recordFile);
+	const h = productionRetry(f);
+	let now = 0;
+	let attempts = 0;
+	const initializeFeatures = vi.fn(async () => {});
+	const result = await bootstrapDaemonWithRecovery({
+		...h, attachment: () => h.status().pid ?? null, cancelled: () => false, initializeFeatures,
+		now: () => now, timeoutMs: 1, wait: async () => { now++; },
+		recover: async () => {
+			if (attempts++) return "leave-running";
+			await writeFile(f.runFile, JSON.stringify({ ...f.run, pid: 4343, appRunId: failure === "other-launch" ? "other" : f.run.appRunId }));
+			if (failure === "other-launch") await writeFile(f.recordFile, JSON.stringify({ ...f.record, pid: 4343 }));
+			return "retry";
+		},
+	});
+	expect(result).toEqual({ state: "unverified" });
+	expect(h.status().pid).toBe(f.run.pid);
+	expect(h.startDaemon).toHaveBeenCalledOnce();
+	expect(h.establishSupervisorLink).not.toHaveBeenCalled();
+	expect(initializeFeatures).not.toHaveBeenCalled();
+});
+
+it.each(["discovery", "verification"].flatMap((stage) => ["quit", "update", "attachment"].map((change) => ({ stage, change }))))("discards retry when $change changes during $stage", async ({ stage, change }) => {
+	const f = await fixture();
+	const h = productionRetry(f);
+	h.context.bootstrapAttempted = true;
+	await writeFile(f.runFile, JSON.stringify({ ...f.run, pid: 4343 }));
+	await writeFile(f.recordFile, JSON.stringify({ ...f.record, pid: 4343 }));
+	let release!: () => void;
+	const pending = new Promise<void>((resolve) => { release = resolve; });
+	if (stage === "discovery") {
+		const probe = f.probe.getMockImplementation()!;
+		f.probe.mockImplementationOnce(async (port, endpoint) => { await pending; return probe(port, endpoint); });
+	} else {
+		h.processIdentity.mockImplementationOnce(async () => { await pending; return { processStart: f.record.processStart, executable: f.executable }; });
+	}
+	const retry = h.start();
+	await vi.waitFor(() => expect(stage === "discovery" ? f.probe : h.processIdentity).toHaveBeenCalled());
+	if (change === "quit") h.context.browserQuitRequested = true;
+	if (change === "update") h.context.updateShutdownRequested = true;
+	if (change === "attachment") h.context.daemonStartEpoch++;
+	release();
+	await retry;
+	expect(h.status().pid).toBe(f.run.pid);
+	expect(h.verify).toHaveBeenCalledTimes(stage === "verification" ? 1 : 0);
+	expect(h.startDaemon).not.toHaveBeenCalled();
+	expect(h.establishSupervisorLink).not.toHaveBeenCalled();
+});
+
+it("opens the Windows feature gate through native identity verification with no Unix ps", async () => {
+	const f = await fixture("win32");
+	const initializeFeatures = vi.fn(async () => {});
+	const result = await bootstrapDaemonBeforeFeatures({
+		start: async () => {}, status: () => ({ state: "ready", pid: f.run.pid }), attachment: () => "windows-launch",
+		handshake: async () => (await verifyDesktopDaemonHandshake(f.options)) !== null,
+		cancelled: () => false, initializeFeatures,
+	});
+	expect(result).toEqual({ state: "verified" });
+	expect(f.execute).toHaveBeenCalledTimes(2);
+	expect(f.execute.mock.calls.every(([query]) => query.command !== "ps")).toBe(true);
+	expect(initializeFeatures).toHaveBeenCalledOnce();
+});
+
+it("verifies a configured command with arguments using the daemon identity instead of its wrapper PID", async () => {
+	const f = await fixture();
+	const launch = resolveDaemonLaunch({ AO_DAEMON_COMMAND: `${f.executable} daemon --port=0` }, true, f.directory, f.directory, f.directory, "darwin");
+	expect(launch).toMatchObject({ shell: true, source: "configured" });
+	const wrapperPid = 2121;
+	const options = { ...f.options, launch: launch!, spawned: { ...f.options.spawned, wrapperPid } };
+	let verifiedPid: number | undefined;
+	const result = await bootstrapDaemonBeforeFeatures({
+		start: async () => {}, status: () => ({ state: "ready", pid: wrapperPid }), attachment: () => `wrapper-${wrapperPid}`,
+		handshake: async () => {
+			const link = await verifyDesktopDaemonHandshake(options);
+			verifiedPid = link?.pid;
+			return link !== null;
+		},
+		cancelled: () => false,
+		initializeFeatures: async () => { expect(verifiedPid).toBe(f.run.pid); },
+	});
+	expect(result).toEqual({ state: "verified" });
+	expect(verifiedPid).not.toBe(wrapperPid);
+	expect(f.probe.mock.calls).toEqual([[3001, "healthz"], [3001, "readyz"]]);
+});
+
+it("does not accept a different process PID for a direct executable launch", async () => {
+	const f = await fixture();
+	expect(await verifyDesktopDaemonHandshake({ ...f.options, spawned: { ...f.options.spawned, wrapperPid: 2121 } })).toBeNull();
+});
+
+for (const values of [{ appRunId: "other-launch" }, { startedAt: "2020-01-01T00:00:00Z" }]) it(`rejects a run file not correlated to this spawn: ${JSON.stringify(values)}`, async () => {
+	const f = await fixture();
+	await writeFile(f.runFile, JSON.stringify({ ...f.run, ...values }));
+	expect(await verifyDesktopDaemonHandshake(f.options)).toBeNull();
+	expect(f.probe).not.toHaveBeenCalled();
+});
+
+it("requires matching live daemon service, PID, readiness, and install identity", async () => {
+	const f = await fixture();
+	for (const values of [{ service: "foreign" }, { pid: 2121 }, { executablePath: "/missing" }, { status: "starting" }]) {
+		f.probe.mockImplementationOnce(async () => ({ status: "ok", service: "agent-orchestrator-daemon", pid: f.run.pid, executablePath: f.executable, ...values }));
+		expect(await verifyDesktopDaemonHandshake(f.options)).toBeNull();
+	}
+	expect(await verifyDesktopDaemonHandshake({ ...f.options, identityError: () => "foreign install" })).toBeNull();
+});
+
+it("does not replace native identity with readiness on Windows failure or PID reuse", async () => {
+	const f = await fixture("win32");
+	expect(await verifyDesktopDaemonHandshake({ ...f.options, processIdentity: async () => null })).toBeNull();
+	f.execute.mockResolvedValueOnce(JSON.stringify({ processStart: f.record.processStart, executable: f.executable }));
+	f.execute.mockResolvedValueOnce(JSON.stringify({ processStart: "windows-filetime:134121123456789124", executable: f.executable }));
+	expect(await verifyDesktopDaemonHandshake(f.options)).toBeNull();
+});
+
+it("rejects a Windows executable mismatch and a startup record for a different process", async () => {
+	const f = await fixture("win32");
+	const other = path.join(f.directory, "other.exe");
+	await writeFile(other, "fixture");
+	f.execute.mockResolvedValueOnce(JSON.stringify({ processStart: f.record.processStart, executable: other }));
+	expect(await verifyDesktopDaemonHandshake(f.options)).toBeNull();
+	await writeFile(f.recordFile, JSON.stringify({ ...f.record, pid: 2121 }));
+	expect(await verifyDesktopDaemonHandshake(f.options)).toBeNull();
+});
+
+it("rejects a run-file replacement during live verification", async () => {
+	const f = await fixture();
+	f.probe.mockImplementation(async (_port, endpoint) => {
+		if (endpoint === "readyz") await writeFile(f.runFile, JSON.stringify({ ...f.run, pid: 9999 }));
+		return { status: endpoint === "healthz" ? "ok" : "ready", service: "agent-orchestrator-daemon", pid: f.run.pid, executablePath: f.executable };
+	});
+	expect(await verifyDesktopDaemonHandshake(f.options)).toBeNull();
+});
+
+it("verifies an adopted daemon only when the run file matches the current attachment", async () => {
+	const f = await fixture();
+	const options = { ...f.options, spawned: undefined, attachedPid: f.run.pid };
+	expect((await verifyDesktopDaemonHandshake(options))?.pid).toBe(f.run.pid);
+	expect(await verifyDesktopDaemonHandshake({ ...options, attachedPid: 2121 })).toBeNull();
+	expect(JSON.parse(await readFile(f.runFile, "utf8")).pid).toBe(f.run.pid);
+});

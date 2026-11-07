@@ -870,6 +870,7 @@ func TestProjectConfigRoundTrips(t *testing.T) {
 	// JSON round trip.
 	cfg := domain.ProjectConfig{
 		DefaultBranch:     "develop",
+		TodoPlacement:     "top-right",
 		Env:               map[string]string{"FOO": "bar"},
 		Symlinks:          []string{".env"},
 		PostCreate:        []string{"echo hi"},

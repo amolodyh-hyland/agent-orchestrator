@@ -7,6 +7,17 @@
 	"settings.code.none": "无（纯文本）",
 	"settings.code.followApp": "跟随应用",
 	"settings.code.defaultLanguage": "默认",
+	"settings.project.todoPlacement": "待办事项位置",
+	"settings.project.todoPlacementDescription": "在每个会话窗格的右上角显示最新计划。较窄的窗格使用默认位置。",
+	"settings.project.todoPlacementDefault": "默认",
+	"settings.project.todoPlacementTopRight": "右上角",
+	"chat.plan.label": "智能体计划",
+	"chat.plan.title": "计划",
+	"chat.plan.collapse": "折叠计划",
+	"chat.plan.expand": "展开计划",
+	"chat.plan.status.pending": "未开始",
+	"chat.plan.status.in_progress": "进行中",
+	"chat.plan.status.completed": "已完成",
 	"chat.path.copy": "复制路径",
 	"chat.path.revealInFinder": "在 Finder 中显示",
 	"chat.path.revealInFileManager": "在文件管理器中显示",
@@ -4728,5 +4739,8 @@
 	"outer.recordAcknowledged": "Record acknowledged",
 	"outer.recordUnacknowledged": "Record unacknowledged",
 	"outer.firstMailboxPage": "First page",
-	"outer.nextMailboxPage": "Next page"
+	"outer.nextMailboxPage": "Next page",
+	"shell.tabs.newSessionInGroup": "在 {{project}} 中新建会话",
+	"shell.tabs.menu.viewSplitPanes": "查看拆分窗格",
+	"shell.tabs.menu.newPaneRight": "在右侧新建窗格"
 }

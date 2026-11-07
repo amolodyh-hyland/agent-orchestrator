@@ -1,6 +1,11 @@
+import { sessionTabKey, sessionTabPaneScope } from "../../lib/session-tab-panes";
+import { leafKeys } from "../../lib/pane-split";
+import { useSplitPanesStore } from "../../stores/split-panes-store";
+import { useTabSelectionStore } from "../../stores/tab-selection-store";
+import { registerPaneCloseGuard } from "../session-pane-context";
 import { TabSplitMenuContext } from "../TabContextMenu";
 import { SESSION_TAB_KEY } from "../../lib/pane-split";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -174,6 +179,9 @@ let writeText: ReturnType<typeof vi.fn>;
 let previousUnmount: (() => void) | undefined;
 
 beforeEach(() => {
+	useUiStore.setState({ developerMode: false, splitPanes: false });
+	useSplitPanesStore.setState({ groupsBySession: {} });
+	useTabSelectionStore.getState().clear();
 	localStorage.clear();
 	routerMocks.navigate.mockReset();
 	routerMocks.params.projectId = "project-1";
@@ -530,15 +538,58 @@ function renderTopbarTabs() {
 	);
 }
 
-it("keeps grouped tab actions and routes active session splits through the session view", async () => {
+it.each(["context", "dropdown"] as const)("routes %s menu split actions through the existing session view", async (kind) => {
 	const right = vi.fn();
 	const split = vi.fn(() => ({ right }));
 	const view = makeView("task");
 	setTabs(view);
 	render(<TabSplitMenuContext.Provider value={split}><MenuHarness view={view} /></TabSplitMenuContext.Provider>);
-	const menu = await openMenu("context");
+	const menu = await openMenu(kind);
 	expect(split).toHaveBeenCalledWith(SESSION_TAB_KEY);
+	expect(within(menu).getByRole("menuitem", { name: "Split down" })).toHaveAttribute("aria-disabled", "true");
 	expect(within(menu).getByRole("menuitem", { name: "Close" })).toBeInTheDocument();
 	await userEvent.click(within(menu).getByRole("menuitem", { name: "Split right" }));
 	expect(right).toHaveBeenCalledOnce();
+});
+
+
+it.each(["context", "dropdown"] as const)("groups selected sessions in the upstream tree from the %s menu", async (kind) => {
+	useUiStore.setState({ developerMode: true, splitPanes: true });
+	const view = makeView("task");
+	setTabs(view);
+	const first = { sessionId: "task-1", projectId: "project-1" };
+	const second = { sessionId: "task-3", projectId: "project-2" };
+	useTabSelectionStore.getState().select(first, false);
+	render(<MenuHarness view={view} />);
+	const menu = await openMenu(kind);
+	expect(within(menu).getByRole("menuitem", { name: "View split panes" })).toHaveAttribute("aria-disabled", "true");
+	act(() => useTabSelectionStore.getState().select(second, true));
+	expect(within(menu).getByRole("menuitem", { name: "View split panes" })).not.toHaveAttribute("aria-disabled", "true");
+	await userEvent.click(within(menu).getByRole("menuitem", { name: "View split panes" }));
+	await waitFor(() => expect(useSplitPanesStore.getState().groupsBySession[sessionTabPaneScope()]).toHaveLength(1));
+	const group = useSplitPanesStore.getState().groupsBySession[sessionTabPaneScope()][0];
+	expect(leafKeys(group.root)).toEqual([first, second].map(sessionTabKey));
+	expect(routerMocks.navigate).toHaveBeenCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: first });
+});
+it.each(["context", "dropdown"] as const)("opens another session right through the %s menu and respects draft cancellation", async (kind) => {
+	useUiStore.setState({ developerMode: true, splitPanes: true });
+	const view = makeView("task");
+	setTabs(view); routerMocks.params.sessionId = "task-2";
+	render(<MenuHarness view={view} />);
+	const menu = await openMenu(kind);
+	await userEvent.click(within(menu).getByRole("menuitem", { name: "New pane to the right" }));
+	await waitFor(() => expect(useSplitPanesStore.getState().groupsBySession[sessionTabPaneScope()]).toHaveLength(1));
+	const group = useSplitPanesStore.getState().groupsBySession[sessionTabPaneScope()][0];
+	expect(leafKeys(group.root)).toEqual(["task-2", "task-1"].map(sessionId => sessionTabKey({ sessionId, projectId: "project-1" })));
+	// A regrouping that removes an unsafe pane is cancelled before mutating the tree.
+	const guard = vi.fn(async () => false);
+	const dispose = registerPaneCloseGuard("unsafe-owner", guard);
+	useTabSelectionStore.getState().select({ sessionId: "task-1", projectId: "project-1" }, false);
+	useTabSelectionStore.getState().select({ sessionId: "task-3", projectId: "project-2" }, true);
+	await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+	const reopened = await openMenu(kind);
+	await userEvent.click(within(reopened).getByRole("menuitem", { name: "View split panes" }));
+	await waitFor(() => expect(guard).toHaveBeenCalledOnce());
+	expect(useSplitPanesStore.getState().groupsBySession[sessionTabPaneScope()][0]).toBe(group);
+	dispose();
 });

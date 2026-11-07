@@ -7,6 +7,17 @@
 	"settings.code.none": "Aucun (texte brut)",
 	"settings.code.followApp": "Suivre l’application",
 	"settings.code.defaultLanguage": "Par défaut",
+	"settings.project.todoPlacement": "Position des tâches",
+	"settings.project.todoPlacementDescription": "Afficher le dernier plan en haut à droite de chaque volet de session. Les volets étroits utilisent la position par défaut.",
+	"settings.project.todoPlacementDefault": "Par défaut",
+	"settings.project.todoPlacementTopRight": "En haut à droite",
+	"chat.plan.label": "Plan de l’agent",
+	"chat.plan.title": "Plan",
+	"chat.plan.collapse": "Réduire le plan",
+	"chat.plan.expand": "Développer le plan",
+	"chat.plan.status.pending": "non commencé",
+	"chat.plan.status.in_progress": "en cours",
+	"chat.plan.status.completed": "terminé",
 	"chat.path.copy": "Copier le chemin",
 	"chat.path.revealInFinder": "Afficher dans le Finder",
 	"chat.path.revealInFileManager": "Afficher dans le gestionnaire de fichiers",
@@ -4829,5 +4840,8 @@
 	"outer.recordAcknowledged": "Record acknowledged",
 	"outer.recordUnacknowledged": "Record unacknowledged",
 	"outer.firstMailboxPage": "First page",
-	"outer.nextMailboxPage": "Next page"
+	"outer.nextMailboxPage": "Next page",
+	"shell.tabs.newSessionInGroup": "Nouvelle session dans {{project}}",
+	"shell.tabs.menu.viewSplitPanes": "Afficher les volets divisés",
+	"shell.tabs.menu.newPaneRight": "Nouveau volet à droite"
 }

@@ -5,20 +5,26 @@ import { describe, expect, it } from "vitest";
 import { createProfileConfigReader, createSafeStorageVault, multicaProfileConfigPath } from "./multica-awareness-env";
 
 const storage = (available: boolean, backend?: string) => ({
-	isEncryptionAvailable: () => available,
+	isAsyncEncryptionAvailable: async () => available,
 	getSelectedStorageBackend: backend === undefined ? undefined : () => backend,
-	encryptString: (plain: string) => Buffer.from(plain),
-	decryptString: (blob: Buffer) => blob.toString(),
+	encryptStringAsync: async (plain: string) => Buffer.from(plain),
+	decryptStringAsync: async (blob: Buffer) => ({ result: blob.toString(), shouldReEncrypt: false }),
 });
 
 describe("safeStorage vault", () => {
-	it("is protected only when encryption is available and, on Linux, not a plain-text backend", () => {
-		expect(createSafeStorageVault(storage(true), "darwin").isProtected()).toBe(true);
-		expect(createSafeStorageVault(storage(false), "darwin").isProtected()).toBe(false);
-		expect(createSafeStorageVault(storage(true, "gnome_libsecret"), "linux").isProtected()).toBe(true);
-		expect(createSafeStorageVault(storage(true, "basic_text"), "linux").isProtected()).toBe(false);
-		expect(createSafeStorageVault(storage(true, "unknown"), "linux").isProtected()).toBe(false);
-		expect(createSafeStorageVault(storage(true), "linux").isProtected()).toBe(false);
+	it("refuses Linux async fallback output despite a protected backend name", async () => {
+		const vault = createSafeStorageVault({ ...storage(true, "gnome_libsecret"), encryptStringAsync: async () => Buffer.from("v10-fixed-key-fixture") }, "linux");
+		expect(await vault.isProtected()).toBe(true);
+		await expect(vault.encrypt("fixture")).rejects.toThrow("Protected encryption provider unavailable");
+	});
+
+	it("is protected only when encryption is available and, on Linux, not a plain-text backend", async () => {
+		expect(await createSafeStorageVault(storage(true), "darwin").isProtected()).toBe(true);
+		expect(await createSafeStorageVault(storage(false), "darwin").isProtected()).toBe(false);
+		expect(await createSafeStorageVault(storage(true, "gnome_libsecret"), "linux").isProtected()).toBe(true);
+		expect(await createSafeStorageVault(storage(true, "basic_text"), "linux").isProtected()).toBe(false);
+		expect(await createSafeStorageVault(storage(true, "unknown"), "linux").isProtected()).toBe(false);
+		expect(await createSafeStorageVault(storage(true), "linux").isProtected()).toBe(false);
 	});
 });
 

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -66,18 +67,17 @@ func resolveManagedDelegationPolicy(ctx context.Context, req DelegationPolicyReq
 	for _, source := range sources {
 		protectedPolicies += len(source.delegationPolicies)
 	}
-	if enrolled && protectedPolicies == 0 {
+	if enrolled && protectedPolicies == 0 && (req.RuntimeClass != "local" || !loopbackDelegationOrigin(req.ServerOrigin)) {
 		return result("policy_unavailable")
 	}
-	// A cache can only intersect the protected decision; it never proves enrollment
-	// absent or supplies the policy required by a protected enrollment marker.
+	// A cache can only narrow the protected decision, including the local no-rule default.
 	cached := readClaudePolicyDocument(ctx, filepath.Join(dir, "remote-settings.json"))
 	if !cached.empty {
 		sources = append(sources, cached)
 	}
 	var firstExpiry time.Time
 	code := "policy_absent"
-	if enrolled {
+	if enrolled && protectedPolicies > 0 {
 		code = "policy_allowed"
 	}
 	for _, source := range sources {
@@ -119,6 +119,30 @@ func resolveManagedDelegationPolicy(ctx context.Context, req DelegationPolicyReq
 		return result("policy_unavailable")
 	}
 	return result(code)
+}
+
+func loopbackDelegationOrigin(value string) bool {
+	origin, err := url.Parse(value)
+	if err != nil || origin.Scheme != "http" && origin.Scheme != "https" || origin.User != nil || origin.Opaque != "" || origin.Path != "" || origin.RawQuery != "" || origin.ForceQuery || strings.Contains(value, "#") {
+		return false
+	}
+	host := origin.Hostname()
+	switch host {
+	case "localhost", "127.0.0.1":
+	case "::1":
+		host = "[::1]"
+	default:
+		return false
+	}
+	if origin.Host == host {
+		return true
+	}
+	port := origin.Port()
+	if port == "" || origin.Host != host+":"+port {
+		return false
+	}
+	_, err = strconv.ParseUint(port, 10, 16)
+	return err == nil
 }
 
 func decodeManagedDelegationPolicy(raw []byte, policy *managedDelegationPolicy) error {

@@ -9,6 +9,9 @@ func TestProjectConfigValidate(t *testing.T) {
 		wantErr bool
 	}{
 		{"empty ok", ProjectConfig{}, false},
+		{"default todo placement", ProjectConfig{TodoPlacement: "default"}, false},
+		{"floating todo placement", ProjectConfig{TodoPlacement: "top-right"}, false},
+		{"invalid todo placement", ProjectConfig{TodoPlacement: "top-left"}, true},
 		{"good agent config", ProjectConfig{AgentConfig: AgentConfig{Model: "m", Permissions: PermissionModeAuto}}, false},
 		{"good agent mode", ProjectConfig{AgentConfig: AgentConfig{Mode: "ultra"}}, false},
 		{"bad agent mode", ProjectConfig{AgentConfig: AgentConfig{Mode: "turbo"}}, true},

@@ -22351,6 +22351,8 @@ components:
           items:
             type: string
           type: array
+        todoPlacement:
+          type: string
         trackerIntake:
           $ref: '#/components/schemas/TrackerIntakeConfig'
         worker:

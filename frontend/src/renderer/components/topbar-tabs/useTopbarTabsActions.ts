@@ -1,3 +1,5 @@
+import { useContext } from "react";
+import { SessionPaneContext } from "../session-pane-context";
 import { useCallback, useRef } from "react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { findSession, type TopbarGroup, type TopbarTabsState } from "../../lib/topbar-tabs";
@@ -32,8 +34,10 @@ function nearestSessionAfterGroupRemoval(tabs: TopbarTabsState, groupId: string)
 export function useTopbarTabsActions({ onOpenOrchestrator }: TopbarTabsActionsOptions = {}) {
 	const navigate = useNavigate();
 	const params = useParams({ strict: false }) as { projectId?: string; sessionId?: string };
-	const paramsRef = useRef(params);
-	paramsRef.current = params;
+	const pane = useContext(SessionPaneContext);
+	const current = pane?.sessionId ? { sessionId: pane.sessionId, projectId: pane.projectId } : params;
+	const paramsRef = useRef(current);
+	paramsRef.current = current;
 
 	const navigateToSession = useCallback((sessionId: string, tabs: TopbarTabsState): boolean => {
 		const found = findSession(tabs, sessionId);

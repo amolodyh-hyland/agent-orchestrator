@@ -21,6 +21,17 @@ type projectCapture struct {
 	body   []byte
 }
 
+func TestProjectTodoPlacementConfigJSON(t *testing.T) {
+	for _, placement := range []string{"", "default", "top-right"} {
+		t.Run(placement, func(t *testing.T) {
+			cfg, err := buildProjectConfig(projectSetConfigOptions{configJSON: `{"todoPlacement":"` + placement + `"}`}, nil, nil)
+			if err != nil || cfg.TodoPlacement != placement {
+				t.Fatalf("config = %#v, err = %v", cfg, err)
+			}
+		})
+	}
+}
+
 func projectServer(t *testing.T, status int, respBody string) (*httptest.Server, *projectCapture) {
 	t.Helper()
 	capture := &projectCapture{}
@@ -223,7 +234,7 @@ func TestProjectConfigFlagsListsEveryFieldFlag(t *testing.T) {
 
 // storedProjectConfig carries fields set in the desktop app that no
 // set-config flag manages (effort, preRemove, workersRequestReview).
-const storedProjectConfig = `{"sessionPrefix":"old","env":{"KEEP":"1"},"preRemove":["make clean"],` +
+const storedProjectConfig = `{"todoPlacement":"top-right","sessionPrefix":"old","env":{"KEEP":"1"},"preRemove":["make clean"],` +
 	`"agentConfig":{"model":"m1","effort":"high"},"worker":{"agent":"codex","agentConfig":{"effort":"medium"}},` +
 	`"reviewers":[{"harness":"claude-code","agentConfig":{"effort":"max"}}],"workersRequestReview":true}`
 

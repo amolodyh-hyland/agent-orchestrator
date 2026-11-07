@@ -64,6 +64,129 @@ func TestManagedDelegationPolicy(t *testing.T) {
 	}
 }
 
+func TestManagedDelegationNoRuleLocalDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name, source, origin, runtime, cache, want string
+	}{
+		{"enrolled local", "no rule", "http://localhost:8380", "local", "", "policy_absent"},
+		{"remote origin", "no rule", "https://multica.example", "local", "", "policy_unavailable"},
+		{"remote runtime", "no rule", "http://localhost:8380", "remote", "", "policy_unavailable"},
+		{"unknown runtime", "no rule", "http://localhost:8380", "unknown", "", "policy_unavailable"},
+		{"managed deny", "deny", "http://localhost:8380", "local", "", "policy_denied"},
+		{"managed profile excluded", "profile excluded", "http://localhost:8380", "local", "", "policy_denied"},
+		{"managed allow", "allow", "http://localhost:8380", "local", "", "policy_allowed"},
+		{"broken source", "broken", "http://localhost:8380", "local", "", "policy_unavailable"},
+		{"dynamic source", "dynamic", "http://localhost:8380", "local", "", "policy_unavailable"},
+		{"unreadable source", "unreadable", "http://localhost:8380", "local", "", "policy_unavailable"},
+		{"invalid rule", "invalid rule", "http://localhost:8380", "local", "", "policy_unavailable"},
+		{"marker only", "marker", "http://localhost:8380", "local", "", "policy_absent"},
+		{"not enrolled", "none", "https://multica.example", "remote", "", "policy_absent"},
+		{"cache denies", "no rule", "http://localhost:8380", "local", "deny", "policy_denied"},
+		{"cache excludes profile", "no rule", "http://localhost:8380", "local", "profile excluded", "policy_denied"},
+		{"cache allow keeps absent", "no rule", "http://localhost:8380", "local", "allow", "policy_absent"},
+		{"cache cannot allow remote", "no rule", "https://multica.example", "local", "allow", "policy_unavailable"},
+		{"broken cache", "no rule", "http://localhost:8380", "local", "broken", "policy_unavailable"},
+		{"dynamic cache", "no rule", "http://localhost:8380", "local", "dynamic", "policy_unavailable"},
+		{"cache cannot override deny", "deny", "http://localhost:8380", "local", "allow", "policy_denied"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := ResolveOptions{ConfigDir: t.TempDir(), ManagedSettingsDir: t.TempDir(), GOOS: "linux", Env: envFrom(nil)}
+			opts.ConfigDir, _ = filepath.EvalSymlinks(opts.ConfigDir)
+			opts.ManagedSettingsDir, _ = filepath.EvalSymlinks(opts.ManagedSettingsDir)
+			req, policy := delegationPolicyFixture()
+			req.ServerOrigin, req.RuntimeClass = tc.origin, tc.runtime
+			policy.ServerOrigins = []string{tc.origin}
+			encode := func(kind string) string {
+				switch kind {
+				case "no rule", "unreadable":
+					return `{"model":"sonnet"}`
+				case "broken":
+					return `{`
+				case "dynamic":
+					return `{"policyHelper":"must-not-run"}`
+				case "invalid rule":
+					return `{"aoMulticaDelegation":null}`
+				}
+				p := policy
+				if kind == "deny" {
+					p.Effect = "deny"
+				}
+				if kind == "profile excluded" {
+					p.ProfileIDs = []string{"other-profile"}
+				}
+				data, err := json.Marshal(map[string]any{"aoMulticaDelegation": p})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return string(data)
+			}
+			managed := filepath.Join(opts.ManagedSettingsDir, "managed-settings.json")
+			if tc.source == "marker" {
+				writeClaudeSettingsFixture(t, filepath.Join(opts.ManagedSettingsDir, "ao-managed-enrollment"), "enrolled")
+			} else if tc.source != "none" {
+				writeClaudeSettingsFixture(t, managed, encode(tc.source))
+			}
+			if tc.cache != "" {
+				writeClaudeSettingsFixture(t, filepath.Join(opts.ConfigDir, "remote-settings.json"), encode(tc.cache))
+			}
+			fs := fixturePolicyFiles(opts.ConfigDir, opts.ManagedSettingsDir)
+			if tc.source == "unreadable" {
+				open := fs.open
+				fs.open = func(path string) (*os.File, error) {
+					if path == managed {
+						return nil, os.ErrPermission
+					}
+					return open(path)
+				}
+			}
+			got := resolveManagedDelegationPolicy(context.Background(), req, opts, func() time.Time { return time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC) }, fs)
+			if got.Code != tc.want {
+				t.Fatalf("got %s, want %s", got.Code, tc.want)
+			}
+		})
+	}
+}
+
+func TestManagedDelegationNoRuleOriginValidation(t *testing.T) {
+	for _, tc := range []struct {
+		origin string
+		local  bool
+	}{
+		{"http://localhost", true}, {"https://localhost:8380", true},
+		{"http://127.0.0.1:0", true}, {"https://127.0.0.1:65535", true},
+		{"http://[::1]", true}, {"https://[::1]:8380", true},
+		{"http://localhost:", false}, {"http://localhost:65536", false},
+		{"http://localhost:port", false}, {"http://localhost:-1", false},
+		{"http://localhost/", false}, {"http://localhost/path", false},
+		{"http://localhost/%2e", false}, {"http://localhost?", false},
+		{"http://localhost?x=1", false}, {"http://localhost#", false},
+		{"http://localhost#fragment", false}, {"http://user@localhost", false},
+		{"http://user:password@localhost", false}, {"ftp://localhost", false},
+		{"//localhost", false}, {"http:localhost", false},
+		{"http://localhost.evil.example", false}, {"http://localhost.", false},
+		{"http://127.0.0.1.nip.io", false}, {"http://127.0.0.2", false},
+		{"http://127.1", false}, {"http://2130706433", false},
+		{"http://[::ffff:127.0.0.1]", false}, {"http://[::1%25lo0]", false},
+		{"http://::1", false}, {"http://[localhost]", false},
+		{" http://localhost", false}, {"http://localhost\n", false},
+	} {
+		t.Run(tc.origin, func(t *testing.T) {
+			opts := ResolveOptions{ConfigDir: t.TempDir(), ManagedSettingsDir: t.TempDir(), GOOS: "linux", Env: envFrom(nil)}
+			writeClaudeSettingsFixture(t, filepath.Join(opts.ManagedSettingsDir, "managed-settings.json"), `{}`)
+			req, _ := delegationPolicyFixture()
+			req.ServerOrigin = tc.origin
+			want := "policy_unavailable"
+			if tc.local {
+				want = "policy_absent"
+			}
+			got := resolveFixtureDelegationPolicy(context.Background(), req, opts, time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC))
+			if got.Code != want {
+				t.Fatalf("got %s, want %s", got.Code, want)
+			}
+		})
+	}
+}
+
 func TestManagedDelegationSourcesAndLocalPrecedence(t *testing.T) {
 	opts := ResolveOptions{ConfigDir: t.TempDir(), ManagedSettingsDir: t.TempDir(), GOOS: "linux", Env: envFrom(nil)}
 	r, p := delegationPolicyFixture()

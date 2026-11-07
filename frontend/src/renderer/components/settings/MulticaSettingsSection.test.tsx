@@ -56,6 +56,7 @@ describe("MulticaSettingsSection", () => {
 		const setting = screen.getByRole("switch", { name: "Confirmed delegation" });
 		expect(setting).toHaveAttribute("aria-checked", "false");
 		expect(setting).toHaveAttribute("data-delegation-enabled", "true");
+		expect(screen.getByText(/Without an AO delegation rule, managed devices allow only loopback servers with local runtimes; any managed rule still applies\./)).toBeInTheDocument();
 		await userEvent.click(setting);
 		expect(invoke).not.toHaveBeenCalled();
 		expect(setting).toHaveAttribute("aria-checked", "false");

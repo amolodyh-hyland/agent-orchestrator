@@ -1,3 +1,4 @@
+import { SessionTabsView } from "../components/SessionTabsView";
 import { apiErrorException } from "../lib/api-error-exception";
 import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
 import { AppBrowserLinkContext } from "../components/AppLink";
@@ -209,7 +210,7 @@ function LocalSessionHost() {
 	return (
 		<CatchBoundary errorComponent={LazyChunkErrorPanel} getResetKey={() => sessionId} onCatch={captureSessionViewCrash}>
 			<Suspense fallback={null}>
-				<SessionView cloudOrgId={org?.id} projectId={projectSession?.projectId} sessionId={sessionId} />
+				<SessionTabsView View={SessionView} cloudOrgId={org?.id} projectId={projectSession?.projectId} sessionId={sessionId} />
 			</Suspense>
 		</CatchBoundary>
 	);

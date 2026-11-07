@@ -7,6 +7,17 @@
 	"settings.code.none": "Нет (обычный текст)",
 	"settings.code.followApp": "Как в приложении",
 	"settings.code.defaultLanguage": "По умолчанию",
+	"settings.project.todoPlacement": "Расположение списка задач",
+	"settings.project.todoPlacementDescription": "Показывать последний план в правом верхнем углу каждой панели сессии. В узких панелях используется стандартное расположение.",
+	"settings.project.todoPlacementDefault": "По умолчанию",
+	"settings.project.todoPlacementTopRight": "Справа сверху",
+	"chat.plan.label": "План агента",
+	"chat.plan.title": "План",
+	"chat.plan.collapse": "Свернуть план",
+	"chat.plan.expand": "Развернуть план",
+	"chat.plan.status.pending": "не начато",
+	"chat.plan.status.in_progress": "в работе",
+	"chat.plan.status.completed": "выполнено",
 	"chat.path.revealInFinder": "Показать в Finder",
 	"chat.path.revealInFileManager": "Показать в файловом менеджере",
 	"chat.path.openWith": "Открыть в {{editor}}",
@@ -4258,5 +4269,8 @@
 	"outer.recordAcknowledged": "Запись подтверждена",
 	"outer.recordUnacknowledged": "Запись не подтверждена",
 	"outer.firstMailboxPage": "Первая страница",
-	"outer.nextMailboxPage": "Следующая страница"
+	"outer.nextMailboxPage": "Следующая страница",
+	"shell.tabs.newSessionInGroup": "Новая сессия в {{project}}",
+	"shell.tabs.menu.viewSplitPanes": "Открыть в разделённых панелях",
+	"shell.tabs.menu.newPaneRight": "Новая панель справа"
 }

@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { shellTerminalsQueryKey, type ShellTerminal } from "../hooks/useShellTerminals";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
@@ -18,7 +18,17 @@ import {
 	TerminalPane,
 	providerScrollsByKeyboard,
 } from "./TerminalPane";
+import { SessionTabsView } from "./SessionTabsView";
+import { ChatComposer } from "./chat/ChatComposer";
+import { useSessionShortcut, runAppShortcut } from "../hooks/useAppShortcut";
+import { selectedSessionTabsGroup } from "../lib/session-tab-panes";
+import { useSplitPanesStore } from "../stores/split-panes-store";
+import type { SessionTabSelection } from "../stores/tab-selection-store";
+import type { LexicalEditor } from "lexical";
 import { TooltipProvider } from "./ui/tooltip";
+
+const paneNavigate = vi.hoisted(() => vi.fn());
+vi.mock("@tanstack/react-router", async (load) => ({ ...await load<typeof import("@tanstack/react-router")>(), useNavigate: () => paneNavigate }));
 
 const {
 	attachMock,
@@ -918,6 +928,52 @@ describe("TerminalPane replay cover", () => {
 describe("TerminalCacheProvider", () => {
 	const sessionA = { ...worker, id: "sess-a", title: "session A", terminalHandleId: "handle-a" };
 	const sessionB = { ...worker, id: "sess-b", title: "session B", terminalHandleId: "handle-b" };
+
+	it.each(["pointer", "focus", "typing"])("passively focuses a cross-session leaf from its cached terminal %s interaction", async (interaction) => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(workspaceQueryKey, workspaceWithSessions([sessionA, sessionB]));
+		queryClient.setQueryData(shellTerminalsQueryKey, []);
+		useUiStore.setState({ developerMode: true, splitPanes: true });
+		useSplitPanesStore.setState({ groupsBySession: {} });
+		const tabs = [sessionA, sessionB].map((session) => ({ sessionId: session.id }));
+		selectedSessionTabsGroup(tabs);
+		const shortcuts = [vi.fn(), vi.fn()];
+		function Session({ sessionId }: SessionTabSelection) {
+			const index = sessionId === sessionA.id ? 0 : 1;
+			useSessionShortcut("copy-session-path", shortcuts[index]);
+			return <><TerminalPane daemonReady fontSize={12} session={[sessionA, sessionB][index]} theme="dark" /><ChatComposer onSend={vi.fn()} autoFocusKey={sessionId} /></>;
+		}
+		function Harness() {
+			const [current, setCurrent] = useState(tabs[0]);
+			paneNavigate.mockImplementation(async (target: { params: SessionTabSelection }) => setCurrent(target.params));
+			return <SessionTabsView {...current} View={Session} />;
+		}
+		const view = render(<QueryClientProvider client={queryClient}><TooltipProvider><TerminalCacheProvider daemonReady theme="dark"><Harness /></TerminalCacheProvider></TooltipProvider></QueryClientProvider>);
+		try {
+			await waitFor(() => expect(screen.getAllByTestId("xterm")).toHaveLength(2));
+			const paneB = document.querySelector<HTMLElement>(`[data-session-pane][data-session-id="${sessionB.id}"]`)!;
+			const terminal = within(paneB).getByTestId("xterm");
+			expect(terminal.closest("[data-terminal-cache-key]")).not.toBeNull();
+			const editors = screen.getAllByLabelText("Message the agent") as (HTMLElement & { __lexicalEditor: LexicalEditor })[];
+			const editorFocus = editors.map((editor) => vi.spyOn(editor.__lexicalEditor, "focus"));
+			const domFocus = editors.map((editor) => vi.spyOn(editor, "focus"));
+			paneNavigate.mockClear();
+			if (interaction === "pointer") fireEvent.pointerDown(terminal);
+			if (interaction === "focus") act(() => terminal.focus());
+			if (interaction === "typing") fireEvent.keyDown(terminal, { key: "x" });
+			expect(paneB).toHaveAttribute("data-focused", "true");
+			expect(paneNavigate).toHaveBeenCalledWith(expect.objectContaining({ params: { sessionId: sessionB.id } }));
+			act(() => runAppShortcut({ id: "copy-session-path" }));
+			expect(shortcuts[1]).toHaveBeenCalledOnce();
+			expect(shortcuts[0]).not.toHaveBeenCalled();
+			for (const focus of [...editorFocus, ...domFocus]) expect(focus).not.toHaveBeenCalled();
+			if (interaction === "focus") expect(terminal).toHaveFocus();
+		} finally {
+			view.unmount();
+			useSplitPanesStore.setState({ groupsBySession: {} });
+			vi.restoreAllMocks();
+		}
+	});
 
 	it("uses a caller-provided mux without retaining a remote shell in the local cache", async () => {
 		const shell = { handleId: "auth-a", title: "Log in", workingDir: "/host-a", createdAt: "2026-09-29T00:00:00Z" } satisfies ShellTerminal;

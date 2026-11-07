@@ -1,3 +1,4 @@
+import { useTabSelectionStore } from "../../stores/tab-selection-store";
 import { registerPaneDropTarget } from "../../lib/pane-drag";
 import { SESSION_TAB_KEY } from "../../lib/pane-split";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -68,6 +69,7 @@ function renderTab(props: Partial<TopbarTabProps> = {}, view = makeView()) {
 
 describe("TopbarTab", () => {
 	beforeEach(() => {
+	useTabSelectionStore.getState().clear();
 		vi.clearAllMocks();
 	});
 
@@ -77,7 +79,7 @@ describe("TopbarTab", () => {
 		expect(previewTab).not.toHaveClass("italic");
 		expect(screen.getByText("Build tabs")).toHaveClass("truncate", "italic");
 		expect(screen.getByTestId("topbar-tab-active-indicator")).toBeInTheDocument();
-		expect(previewTab).toHaveAttribute("aria-selected", "true");
+		expect(previewTab).toHaveAttribute("aria-selected", "false");
 		expect(previewTab).toHaveAttribute("aria-current", "true");
 
 		rerender(
@@ -470,4 +472,27 @@ it("offers only the active grouped session tab to the pane drag target", () => {
 		fireEvent.blur(window);
 		dispose();
 	}
+});
+
+
+it.each([
+	["MacIntel", { metaKey: true }],
+	["Win32", { ctrlKey: true }],
+	["Linux x86_64", { ctrlKey: true }],
+])("selects and deselects the active tab with the platform modifier on %s", (platform, modifiers) => {
+	useTabSelectionStore.getState().clear();
+	vi.spyOn(navigator, "platform", "get").mockReturnValue(platform as string);
+	const activate = vi.fn();
+	renderTab({ onActivate: activate });
+	const tab = screen.getByRole("tab");
+	fireEvent.click(tab, modifiers as object);
+	expect(activate).not.toHaveBeenCalled();
+	expect(tab).toHaveAttribute("aria-selected", "true");
+	fireEvent.click(tab, modifiers as object);
+	expect(tab).toHaveAttribute("aria-selected", "false");
+	expect(tab).toHaveAttribute("aria-current", "true");
+	fireEvent.click(tab);
+	expect(tab).toHaveAttribute("aria-selected", "true");
+	expect(activate).toHaveBeenCalledOnce();
+	vi.restoreAllMocks();
 });

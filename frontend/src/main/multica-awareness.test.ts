@@ -59,9 +59,9 @@ async function startFake(token: string, userId: string, port: number): Promise<F
 
 const decryptSpy = vi.fn((blob: Buffer) => blob.toString().replace(/^enc:/, ""));
 const vault: SecretVault = {
-	isProtected: () => true,
-	encrypt: (plain) => Buffer.from(`enc:${plain}`),
-	decrypt: (blob) => decryptSpy(blob),
+	isProtected: async () => true,
+	encrypt: async (plain) => Buffer.from(`enc:${plain}`),
+	decrypt: async (blob) => ({ result: decryptSpy(blob), shouldReEncrypt: false }),
 };
 
 type Harness = {
@@ -210,6 +210,17 @@ describe("multica awareness service", () => {
 	const live = (workspaceId = "ws-1") => h.serverState().workspaces.find((workspace) => workspace.workspaceId === workspaceId)?.state === "live";
 
 	describe("nothing is watched by default", () => {
+		it("does not probe protected storage on startup or initial get-state IPC", async () => {
+			const probe = vi.spyOn(vault, "isProtected").mockRejectedValue(new Error("unexpected Keychain access"));
+			try {
+				await h.rebuild();
+				await h.invoke(MULTICA_AWARENESS_GET_STATE_CHANNEL);
+				h.state();
+				await settle(100);
+				expect(probe).not.toHaveBeenCalled();
+			} finally { probe.mockRestore(); }
+		});
+
 		it("starts with everything off and sends no request", async () => {
 			await settle(100);
 			expect(h.state()).toMatchObject({ masterEnabled: false, servers: [], issues: [], runs: [] });
