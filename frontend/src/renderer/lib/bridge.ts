@@ -25,6 +25,7 @@ export const aoBridge: AoBridge =
 			openExternal: async (url: string) => {
 				window.open(url, "_blank", "noopener,noreferrer");
 			},
+			openChromeExtensions: async () => undefined,
 			scanImportFolder: async ({ path }) => ({ path, repos: [] }),
 			checkAncestorRepo: async () => undefined,
 		getRepositoryBranch: async () => undefined,
@@ -55,6 +56,10 @@ export const aoBridge: AoBridge =
 			saveDroppedFile: async () => "",
 			setFocused: () => undefined,
 			onFontSizeShortcut: () => () => undefined,
+		},
+		artifactZoom: {
+			setEngaged: () => undefined,
+			onShortcut: () => () => undefined,
 		},
 		window: {
 			getZoomFactor: async () => 1,
@@ -145,8 +150,10 @@ export const aoBridge: AoBridge =
 			restart: async () => ({ state: "starting" }),
 			onStatus: () => () => undefined,
 		},
+		agentLogin: { request: async () => null },
 		sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
 		editorHandoff: {
+			pathAction: async () => { throw new Error("Desktop app is required to open local paths."); },
 			getState: async () => ({
 				targets: [],
 				preferredEditorId: "cursor",
@@ -161,6 +168,9 @@ export const aoBridge: AoBridge =
 				throw new Error("Desktop app is required to open a workspace.");
 			},
 			openArtifacts: async () => {
+				throw new Error("Desktop app is required to open artifacts.");
+			},
+			openArtifactInBrowser: async () => {
 				throw new Error("Desktop app is required to open artifacts.");
 			},
 			copyWorkspacePath: async () => {
@@ -486,6 +496,7 @@ export const aoBridge: AoBridge =
 			onSessionChanged: () => () => undefined,
 			onOpenShareLink: () => () => undefined,
 			takePendingShareLink: async () => null,
+			takePendingSignIn: async () => null,
 		},
 		cloudCp: {
 			request: async () => {

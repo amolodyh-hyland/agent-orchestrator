@@ -1,3 +1,5 @@
+import { registerPaneDropTarget } from "../../lib/pane-drag";
+import { SESSION_TAB_KEY } from "../../lib/pane-split";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -447,4 +449,25 @@ describe("TopbarTab", () => {
 		expect(within(menu).queryByRole("menuitem", { name: "Switch agent" })).not.toBeInTheDocument();
 		expect(within(menu).getByRole("menuitem", { name: "New task" })).toBeInTheDocument();
 	});
+});
+
+it("offers only the active grouped session tab to the pane drag target", () => {
+	const canDrag = vi.fn(() => true);
+	const dispose = registerPaneDropTarget({ canDrag, resolve: () => null });
+	const { unmount } = renderTab();
+	try {
+		fireEvent.pointerDown(screen.getByRole("tab"), { pointerId: 1, button: 0 });
+		expect(canDrag).toHaveBeenCalledWith(SESSION_TAB_KEY);
+		fireEvent.pointerCancel(window, { pointerId: 1 });
+		canDrag.mockClear();
+		fireEvent.pointerDown(screen.getByRole("button", { name: "Close tab" }), { pointerId: 2, button: 0 });
+		expect(canDrag).not.toHaveBeenCalled();
+		unmount();
+		renderTab({}, makeView({ isActive: false }));
+		fireEvent.pointerDown(screen.getByRole("tab"), { pointerId: 3, button: 0 });
+		expect(canDrag).not.toHaveBeenCalled();
+	} finally {
+		fireEvent.blur(window);
+		dispose();
+	}
 });

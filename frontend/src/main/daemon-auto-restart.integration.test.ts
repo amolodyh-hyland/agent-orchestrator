@@ -94,6 +94,7 @@ function setup() {
 		browserQuitCleanupPromise: null, disposeAllBrowserViewHosts: () => quitCleanup.promise,
 		remoteRegistry: { closeAll: async () => undefined }, cloudAgentProxy: { close: async () => undefined },
 		telemetryPolicyController: null, flushDaemonUsage: async () => undefined, isUpdateRestartRequested: () => false,
+		agentQuitCleanupComplete: false, agentQuitCleanupPromise: null, shutdownDaemonForDesktopQuit: () => quitCleanup.promise,
 	});
 	vm.runInContext(`${controller}\nfunction setDaemonStatus(status) { daemonStatus = status; }`, context);
 	return {
@@ -103,7 +104,7 @@ function setup() {
 		deferQuit: () => {
 			vm.runInContext("browserCleanupComplete = false", context);
 			app.emit("before-quit", { preventDefault: vi.fn() });
-			expect(vm.runInContext("browserQuitCleanupPromise !== null", context)).toBe(true);
+			expect(vm.runInContext("agentQuitCleanupPromise !== null && browserQuitRequested", context)).toBe(true);
 		},
 		finishQuitCleanup: () => quitCleanup.resolve(),
 		setMarker(value: string | Error) { marker = value; },

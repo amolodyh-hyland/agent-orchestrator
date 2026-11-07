@@ -1,5 +1,7 @@
+import { TabSplitItems, TabSplitMenuContext } from "../TabContextMenu";
+import { SESSION_TAB_KEY } from "../../lib/pane-split";
 import { useParams } from "@tanstack/react-router";
-import type { ReactNode } from "react";
+import { useContext, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useProjectOrchestratorAction } from "../../hooks/useProjectOrchestratorAction";
 import { useWorkspaceScope } from "../../hooks/useWorkspaceQuery";
@@ -53,6 +55,7 @@ function OpenOrchestratorItem({
 
 export function useTopbarTabMenu(canRename = true): RenderMenu {
 	const actions = useTopbarTabsActions();
+	const split = useContext(TabSplitMenuContext);
 	return ({ kind, view, startRename, sessionMenuItems }): ReactNode => {
 		const state = useTopbarTabsStore.getState().tabs;
 		const group = state.groups.find((candidate) => candidate.id === view.groupId);
@@ -74,6 +77,7 @@ export function useTopbarTabMenu(canRename = true): RenderMenu {
 						<DropdownMenuSeparator />
 					</>
 				) : null}
+				{kind === "context" && view.isActive && view.session && split ? <TabSplitItems actions={split(SESSION_TAB_KEY)} /> : null}
 				{entries.map((entry) => (
 					<MenuEntry
 						key={entry.id}
