@@ -149,6 +149,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 	const activeOrchestrator = newestActiveOrchestrator(workspace?.sessions ?? []);
 	const intake: TrackerIntakeConfig = config.trackerIntake ?? {};
 	const initialValues: ProjectSettingsDraft = {
+		todoPlacement: config.todoPlacement === "top-right" ? "top-right" : "default",
 		agentAssetSources: config.agentAssetSources ?? null,
 		displayName: project.name,
 		defaultBranch: config.defaultBranch ?? DEFAULT_BRANCH_AUTO,
@@ -190,6 +191,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 		const next: ProjectConfig = isScratchProject
 			? {
 					...scratchSupportedConfig(config),
+					todoPlacement: values.todoPlacement === "top-right" ? "top-right" : undefined,
 					agentAssetSources: values.agentAssetSources?.map((source) => source.trim()).filter(Boolean) ?? undefined,
 					worker: {
 						...config.worker,
@@ -215,6 +217,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 				}
 			: {
 					...config,
+					todoPlacement: values.todoPlacement === "top-right" ? "top-right" : undefined,
 					agentAssetSources: values.agentAssetSources?.map((source) => source.trim()).filter(Boolean) ?? undefined,
 					defaultBranch: values.defaultBranch.trim() === DEFAULT_BRANCH_AUTO ? undefined : values.defaultBranch || undefined,
 					sessionPrefix: values.sessionPrefix || undefined,
@@ -333,7 +336,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 		}
 	};
 	return <ProjectSettingsEditor initialValues={initialValues} section={section} disabled={!hostConnected}
-		capabilities={{ agentAssetSources: true, workflow: !isScratchProject, sessionPrefix: !isScratchProject, intake: intakeVisible, reviewer: !isScratchProject, requiredAgents: true, workersRequestReview: !isScratchProject }}
+		capabilities={{ todoPlacement: true, agentAssetSources: true, workflow: !isScratchProject, sessionPrefix: !isScratchProject, intake: intakeVisible, reviewer: !isScratchProject, requiredAgents: true, workersRequestReview: !isScratchProject }}
 		details={[{ label: t("settings.project.path"), value: project.path || "—", href: hostId || !project.path ? undefined : `file://${encodeURI(project.path)}` }, { label: t("settings.project.repo"), value: project.repo || "—", href: project.repo ? repositoryHref(project.repo) : undefined }]}
 		workspaceRepos={project.kind === "workspace" ? project.workspaceRepos ?? [] : undefined} repository={project.repo}
 		modelScope={() => ""} defaultReviewer={(draft) => WORKER_DEFAULT_REVIEWERS[draft.workerAgent] ?? "claude-code"}

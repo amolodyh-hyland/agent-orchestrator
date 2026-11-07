@@ -181,7 +181,7 @@ import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
 import { isOrdinaryActivity } from "./activity-action";
-import { TurnPlan } from "./TurnPlan";
+import { InlineTurnPlan as TurnPlan, SessionTodoPanel } from "./SessionTodoPanel";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
 import { McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
@@ -1971,6 +1971,7 @@ function ChatWorkspaceContent({
 							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles}>
 							<ChatHostId.Provider value={activeRemoteHostId}>
 
+								<SessionTodoPanel snapshot={snapshot} projectId={session?.workspaceId} hostId={activeRemoteHostId} cloud={Boolean(session?.cloud)}>
 								<Timeline
 							onAddToSideChat={onAddToSideChat}
 									checkingSideChatAvailability={checkingSideChatAvailability}
@@ -2010,6 +2011,7 @@ function ChatWorkspaceContent({
 									openingStartupLabel={cloudStarting && openingStartedAt ? t("chat.startup.sandbox") : undefined}
 									arriving={arrivingInChat}
 								/>
+								</SessionTodoPanel>
 							</ChatHostId.Provider>
 							</ChatImageSourceProvider>
 						</ChatLinkProvider>

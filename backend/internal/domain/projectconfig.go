@@ -26,6 +26,7 @@ type ProjectConfig struct {
 	DefaultBranch string `json:"defaultBranch,omitempty"`
 	// SessionPrefix overrides the displayed session-id prefix.
 	SessionPrefix string `json:"sessionPrefix,omitempty"`
+	TodoPlacement string `json:"todoPlacement,omitempty"`
 
 	// Env are extra environment variables forwarded into worker session
 	// runtimes. The AO_ namespace is reserved for AO-owned variables.
@@ -219,6 +220,11 @@ func (c ProjectConfig) IsZero() bool {
 // Validate rejects values outside the typed vocabulary so a bad config is
 // refused when it is set (CLI/API) rather than surfacing at spawn.
 func (c ProjectConfig) Validate() error {
+	switch c.TodoPlacement {
+	case "", "default", "top-right":
+	default:
+		return fmt.Errorf("todoPlacement: must be default or top-right")
+	}
 	if c.CanonicalRepoURL != "" {
 		if err := c.ValidateCanonicalRepository(c.CanonicalRepoURL); err != nil {
 			return err

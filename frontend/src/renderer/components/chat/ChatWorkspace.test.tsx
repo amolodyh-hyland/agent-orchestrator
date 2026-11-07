@@ -158,9 +158,8 @@ function seedChatToolbar(ui: ReactElement): void {
 	});
 }
 
-function render(ui: ReactElement) {
+function render(ui: ReactElement, queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
 	seedChatToolbar(ui);
-	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const wrap = (content: ReactElement) => (
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>{content}</TooltipProvider>
@@ -700,6 +699,42 @@ describe("Chat message timestamps", () => {
 });
 
 describe("ChatWorkspace timeline", () => {
+	it("preserves the reader's scroll and open disclosure when the first floating plan arrives or disappears", async () => {
+		const bounds = HTMLElement.prototype.getBoundingClientRect;
+		const geometry = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+			const rect = bounds.call(this);
+			return this.hasAttribute("data-todo-placement") ? { ...rect, width: 900, height: 500 } as DOMRect : rect;
+		});
+		restoreTimelineGeometry = () => geometry.mockRestore();
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+		client.setQueryData(["project-config", chatSession.workspaceId], { todoPlacement: "top-right" });
+		const snapshot = { ...chatFixtureSettled, turns: chatFixtureSettled.turns.map((turn) => ({ ...turn, plan: undefined })) };
+		const view = render(<ChatWorkspace snapshot={snapshot} session={chatSession} />, client);
+		const log = screen.getByRole("log");
+		const disclosure = screen.getAllByRole("button", { name: /Worked for/ })[0];
+		await userEvent.click(disclosure);
+		expect(disclosure).toHaveAttribute("aria-expanded", "true");
+		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 1000 });
+		fireEvent.wheel(log, { deltaY: -120 });
+		fireEvent.scroll(log);
+		expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+		const withPlan = { ...snapshot, turns: snapshot.turns.map((turn, index) => index === snapshot.turns.length - 1
+			? { ...turn, plan: { steps: [{ text: "First streamed task", status: "in_progress" as const }] } } : turn) };
+		view.rerender(<ChatWorkspace snapshot={withPlan} session={chatSession} />);
+		expect(view.container.querySelector("[data-session-todo]")).toBeInTheDocument();
+		expect(screen.getByRole("log")).toBe(log);
+		expect(screen.getAllByRole("button", { name: /Worked for/ })[0]).toBe(disclosure);
+		expect(disclosure).toHaveAttribute("aria-expanded", "true");
+		expect(log.scrollTop).toBe(1000);
+		expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+		view.rerender(<ChatWorkspace snapshot={snapshot} session={chatSession} />);
+		expect(view.container.querySelector("[data-session-todo]")).toBeNull();
+		expect(screen.getByRole("log")).toBe(log);
+		expect(disclosure).toHaveAttribute("aria-expanded", "true");
+		expect(log.scrollTop).toBe(1000);
+		expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+	});
+
 	it("brings the reader to their prompt when they send after scrolling away", () => {
 		const snapshot = chatFixtureLongHistory(8);
 		const view = render(<ChatWorkspace snapshot={snapshot} />);
