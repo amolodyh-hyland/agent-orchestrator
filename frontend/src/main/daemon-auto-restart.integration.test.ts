@@ -7,6 +7,8 @@ import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { daemonExitWasUngraceful, planDaemonAutoRestart } from "./daemon-auto-restart";
 import { keepDaemonAlive } from "./daemon-owner";
+import { requestDesktopShutdown } from "./desktop-shutdown";
+import { authorizeUpdateShutdown } from "./update-control";
 import { createListenPortScanner, parseRunFile } from "../shared/daemon-discovery";
 import { browserDaemonOwnershipDecision, browserRuntimeRecoveryDecision, keepAliveForReplacement, portHolderPidToReplace, shouldReplaceDaemonForStartup } from "../shared/daemon-takeover";
 
@@ -31,6 +33,8 @@ const controllerSource = source.statements.filter((node) => {
 	);
 }).map((node) => node.getText(source)).join("\n");
 const controller = ts.transpileModule(controllerSource, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+const desktopShutdownSource = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "shutdownDaemonForDesktopQuit")!.getText(source);
+const desktopShutdownController = ts.transpileModule(desktopShutdownSource, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
@@ -38,7 +42,7 @@ function deferred<T>() {
 	return { promise, resolve };
 }
 
-function setup() {
+function setup(realDesktopShutdown = false) {
 	let marker: string | Error = JSON.stringify({ pid: 42, port: 3001 });
 	const read = vi.fn(async () => {
 		if (marker instanceof Error) throw marker;
@@ -67,8 +71,9 @@ function setup() {
 	const establishSupervisorLink = vi.fn();
 	const daemonEnv = vi.fn((keep: boolean) => ({ AO_OWNER: keep ? "persistent" : "app" }));
 	const env: Record<string, string | undefined> = {};
+	const fetch = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 202 }));
 	const context = vm.createContext({
-		console, Date, setTimeout, clearTimeout, setInterval, clearInterval, Buffer, path,
+		console, Date, setTimeout, clearTimeout, setInterval, clearInterval, Buffer, path, AbortSignal, fetch, requestDesktopShutdown,
 		openSync: vi.fn(() => 73), closeSync: vi.fn(),
 		process: { env, platform: "linux", resourcesPath: "/owned/lab", kill: vi.fn() },
 		os: { homedir: () => "/owned/home" }, app, ipcMain: { handle: (name: string, handler: () => unknown) => ipc.set(name, handler) },
@@ -94,16 +99,20 @@ function setup() {
 		browserQuitCleanupPromise: null, disposeAllBrowserViewHosts: () => quitCleanup.promise,
 		remoteRegistry: { closeAll: async () => undefined }, cloudAgentProxy: { close: async () => undefined },
 		telemetryPolicyController: null, flushDaemonUsage: async () => undefined, isUpdateRestartRequested: () => false,
+		agentQuitCleanupComplete: false, agentQuitCleanupPromise: null, shutdownDaemonForDesktopQuit: () => quitCleanup.promise,
+		preserveAgentsOnQuit: false, desktopAgentShutdownAccepted: false,
 	});
 	vm.runInContext(`${controller}\nfunction setDaemonStatus(status) { daemonStatus = status; }`, context);
+	if (realDesktopShutdown) vm.runInContext(desktopShutdownController, context);
 	return {
-		read, unlink, spawn, children, replace, inspect, direct, stage, shellEnv, supervisorDisposed, establishSupervisorLink, daemonEnv, env,
+		read, unlink, spawn, children, replace, inspect, direct, stage, shellEnv, supervisorDisposed, establishSupervisorLink, daemonEnv, env, fetch,
+		setReadyDaemon: () => vm.runInContext('setDaemonStatus({ state: "ready", pid: 42, port: 3001 })', context),
 		acceptUpdateShutdown: () => vm.runInContext("acceptUpdateShutdown()", context),
 		cancelUpdateShutdown: () => vm.runInContext("updateShutdownRequested = false", context),
 		deferQuit: () => {
 			vm.runInContext("browserCleanupComplete = false", context);
 			app.emit("before-quit", { preventDefault: vi.fn() });
-			expect(vm.runInContext("browserQuitCleanupPromise !== null", context)).toBe(true);
+			expect(vm.runInContext("agentQuitCleanupPromise !== null && browserQuitRequested", context)).toBe(true);
 		},
 		finishQuitCleanup: () => quitCleanup.resolve(),
 		setMarker(value: string | Error) { marker = value; },
@@ -120,6 +129,26 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe("main.ts daemon lifecycle wiring with controlled I/O", () => {
+	it.each([
+		{ name: "authenticated fast-update shutdown", update: true, stopAgents: false },
+		{ name: "ordinary user Quit", update: false, stopAgents: true },
+	])("sends stopAgents=$stopAgents for $name", async ({ update, stopAgents }) => {
+		const h = setup(true);
+		h.setReadyDaemon();
+		h.setMarker(JSON.stringify({ pid: 42, port: 3001, owner: "app", appRunId: "test-app", startedAt: new Date().toISOString() }));
+		if (update) {
+			const identity = { token: "a".repeat(64), launchId: "this-launch" };
+			expect(authorizeUpdateShutdown({ ...identity, command: "shutdown" }, identity, h.acceptUpdateShutdown)).toBe("accepted");
+		}
+		h.quit();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.fetch).toHaveBeenCalledOnce();
+		const [url, init] = h.fetch.mock.calls[0]!;
+		expect(url).toBe("http://127.0.0.1:3001/shutdown");
+		expect(init?.method).toBe("POST");
+		expect(JSON.parse(init?.body as string)).toEqual({ stopAgents, appRunId: "test-app" });
+	});
+
 	it.each(["inspect", "shellEnv", "stage"] as const)("cancels ordinary startup awaiting %s before accepting update shutdown", async (pauseAt) => {
 		for (const keep of [undefined, "1"]) for (const cancelQuit of [false, true]) {
 			const h = setup();

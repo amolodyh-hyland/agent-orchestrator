@@ -854,5 +854,17 @@
   "PUT /api/v1/sessions/{sessionId}/workspace/file": {
     "operation": "session.scoped",
     "mode": "confirm"
+  },
+  "DELETE /api/v1/agents/{agent}/auth/operations/{operationId}": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "POST /api/v1/agents/{agent}/auth/operations": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "POST /api/v1/agents/{agent}/auth/operations/{operationId}/code": {
+    "operation": "native_only",
+    "mode": "held"
   }
 }

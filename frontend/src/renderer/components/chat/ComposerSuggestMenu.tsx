@@ -16,6 +16,7 @@ import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CornerDownLeft } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { Pressable } from "../ui/pressable";
 import { composerFileIcon } from "./composerFileIcon";
 import type { Suggestion, TriggerKind } from "./composerSuggest";
 
@@ -111,8 +112,7 @@ export function ComposerSuggestMenu({
 				>
 					{items.map((item, index) => (
 						<li key={item.value} data-index={index}>
-							<button
-								type="button"
+							<Pressable
 								tabIndex={-1}
 								role="option"
 								id={`${id}-option-${index}`}
@@ -170,7 +170,7 @@ export function ComposerSuggestMenu({
 										<CornerDownLeft aria-hidden="true" className="size-3" />
 									</span>
 								) : null}
-							</button>
+							</Pressable>
 						</li>
 					))}
 				</ul>

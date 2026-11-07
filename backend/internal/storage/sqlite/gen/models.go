@@ -1116,6 +1116,7 @@ type ShellTerminal struct {
 	SessionID                 sql.NullString
 	Transient                 bool
 	PreviewCapabilityVerifier string
+	CommandOwner              string
 }
 
 type TelemetryEvent struct {

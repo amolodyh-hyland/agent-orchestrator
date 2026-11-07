@@ -1,7 +1,8 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -25,7 +26,7 @@ export function CreateContextProjectDialog({ onClose, onCreated }: { onClose: ()
 				setError(undefined);
 				try {
 					const { data, error } = await apiClient.POST("/api/v1/projects/containers", { body: { displayName: name.trim() } });
-					if (error || !data) throw new Error(apiErrorMessage(error));
+					if (error || !data) throw apiErrorException(error);
 					await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost() });
 					onCreated(data.project.id);
 				} catch (error) { setError(error instanceof Error ? error.message : String(error)); }

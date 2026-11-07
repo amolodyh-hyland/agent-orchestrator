@@ -23,8 +23,9 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChevronDown, ListChecks } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
+import { Pressable } from "../ui/pressable";
 import type { ConversationPlan, PlanStepStatus } from "../../types/conversation";
-import { syncEdgeFade as syncViewportEdgeFade } from "./edge-fade";
+import { syncEdgeFade as syncViewportEdgeFade } from "../../hooks/useEdgeFade";
 
 export const TurnPlan = memo(function TurnPlan({
 	plan,
@@ -115,10 +116,9 @@ export const TurnPlan = memo(function TurnPlan({
 			data-turn-plan="true"
 		>
 			{/* The whole header is the toggle, so the target is the row rather than an icon. */}
-			<button
+			<Pressable
 				ref={toggleRef}
 				onBlur={onToggleBlur}
-				type="button"
 				onClick={() => {
 					const next = !expanded;
 					setExpanded(next);
@@ -128,7 +128,7 @@ export const TurnPlan = memo(function TurnPlan({
 				}}
 				aria-expanded={expanded}
 				aria-label={t(expanded ? "chat.plan.collapse" : "chat.plan.expand")}
-				className="group/plan flex h-11 w-full items-center gap-2.5 px-3.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+				className="group/plan flex h-11 w-full items-center gap-2.5 px-3.5 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
 			>
 				<PlanMark done={allDone} />
 				<span className="shrink-0 text-sm font-medium text-foreground">{t("chat.plan.title")}</span>
@@ -147,7 +147,7 @@ export const TurnPlan = memo(function TurnPlan({
 						expanded && "rotate-180",
 					)}
 				/>
-			</button>
+			</Pressable>
 
 			<AnimatePresence initial={false}>
 				{expanded ? (
@@ -168,7 +168,7 @@ export const TurnPlan = memo(function TurnPlan({
 						<div
 							ref={viewportRef}
 							onScroll={syncEdgeFade}
-							className="edge-fade-viewport scrollbar-none relative max-h-60 overflow-y-auto"
+							className="edge-fade scrollbar-none relative max-h-60 overflow-y-auto"
 						>
 							{/* A real list, so a screen reader hears "list, 5 items" and the status of each
 							    step is spoken rather than left to a colour. */}
