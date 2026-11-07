@@ -5,6 +5,7 @@ import type { AppShortcutId } from "../../shared/shortcuts";
 import { runAppShortcut } from "../hooks/useAppShortcut";
 import { isMacPlatform } from "../lib/platform";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut, ContextMenuTrigger } from "./ui/context-menu";
+import { DropdownMenuItem, DropdownMenuSeparator } from "./ui/dropdown-menu";
 import { useShortcutKeys } from "./ui/tooltip";
 
 /**
@@ -152,21 +153,23 @@ export function ArchiveSessionMenuItem() {
 	);
 }
 
-export function TabSplitItems({ actions }: { actions: TabSplitActions }) {
+export function TabSplitItems({ actions, kind = "context" }: { actions: TabSplitActions; kind?: "context" | "dropdown" }) {
 	const { t } = useTranslation();
+	const Item = kind === "dropdown" ? DropdownMenuItem : ContextMenuItem;
+	const Separator = kind === "dropdown" ? DropdownMenuSeparator : ContextMenuSeparator;
 	return (
 		<>
-			<ContextMenuItem disabled={!actions.right} onSelect={actions.right}>
+			<Item disabled={!actions.right} onSelect={actions.right}>
 				<Columns2 aria-hidden="true" />
 				{t("tabMenu.splitRight")}
 				{actions.newTerminal ? <TabMenuShortcut id="split-shell-terminal" /> : null}
-			</ContextMenuItem>
-			<ContextMenuItem disabled={!actions.down} onSelect={actions.down}>
+			</Item>
+			<Item disabled={!actions.down} onSelect={actions.down}>
 				<Rows2 aria-hidden="true" />
 				{t("tabMenu.splitDown")}
 				{actions.newTerminal ? <TabMenuShortcut id="split-shell-terminal-down" /> : null}
-			</ContextMenuItem>
-			<ContextMenuSeparator />
+			</Item>
+			<Separator />
 		</>
 	);
 }

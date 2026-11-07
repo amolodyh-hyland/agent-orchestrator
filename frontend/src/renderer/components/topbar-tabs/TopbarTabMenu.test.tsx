@@ -530,14 +530,15 @@ function renderTopbarTabs() {
 	);
 }
 
-it("keeps grouped tab actions and routes active session splits through the session view", async () => {
+it.each(["context", "dropdown"] as const)("routes %s menu split actions through the existing session view", async (kind) => {
 	const right = vi.fn();
 	const split = vi.fn(() => ({ right }));
 	const view = makeView("task");
 	setTabs(view);
 	render(<TabSplitMenuContext.Provider value={split}><MenuHarness view={view} /></TabSplitMenuContext.Provider>);
-	const menu = await openMenu("context");
+	const menu = await openMenu(kind);
 	expect(split).toHaveBeenCalledWith(SESSION_TAB_KEY);
+	expect(within(menu).getByRole("menuitem", { name: "Split down" })).toHaveAttribute("aria-disabled", "true");
 	expect(within(menu).getByRole("menuitem", { name: "Close" })).toBeInTheDocument();
 	await userEvent.click(within(menu).getByRole("menuitem", { name: "Split right" }));
 	expect(right).toHaveBeenCalledOnce();

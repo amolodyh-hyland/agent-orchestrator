@@ -77,7 +77,7 @@ export function useTopbarTabMenu(canRename = true): RenderMenu {
 						<DropdownMenuSeparator />
 					</>
 				) : null}
-				{kind === "context" && view.isActive && view.session && split ? <TabSplitItems actions={split(SESSION_TAB_KEY)} /> : null}
+				{view.isActive && view.session && split ? <TabSplitItems actions={split(SESSION_TAB_KEY)} kind={kind} /> : null}
 				{entries.map((entry) => (
 					<MenuEntry
 						key={entry.id}
