@@ -15,7 +15,8 @@ ended separately (list them with "<app>/Contents/Resources/daemon/ao session
 ls"). Only the install script (with --allow-background-processes) can proceed
 while they run; the PKG cannot.
 
-This app uses an ad-hoc signature and has no Apple certificate or notarization.
+Default builds use an ad-hoc signature; a consistent local signing identity is optional.
+See the build output's BUILD-INFO.txt for its identity. Neither mode provides Apple notarization.
 If Gatekeeper blocks the first open, use Finder's Open action on the app, then
 choose Open Anyway in Privacy & Security if macOS asks. The installer clears
 quarantine. If macOS says the app is damaged, run this in Terminal:

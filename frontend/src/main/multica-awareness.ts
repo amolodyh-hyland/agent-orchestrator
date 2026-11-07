@@ -279,7 +279,7 @@ export function createMulticaAwareness(options: MulticaAwarenessOptions): Multic
 		state.killSwitch = killSwitch;
 		state.masterEnabled = config.masterEnabled;
 		state.maxSockets = config.maxSockets;
-		state.tokenStoragePersistent = options.credentials.canPersist();
+		state.tokenStoragePersistent = options.credentials.persistenceCapability() === true;
 		for (const server of config.servers) {
 			const entry = connections.get(server.serverKey);
 			const view = entry?.connection.view();

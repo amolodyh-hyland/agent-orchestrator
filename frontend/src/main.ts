@@ -1,3 +1,5 @@
+import { desktopStartup } from "./main/desktop-bootstrap";
+import { bootstrapDaemonWithRecovery, verifyDesktopDaemonHandshake } from "./main/desktop-daemon-bootstrap";
 import { startUpdateControl } from "./main/update-control";
 import { deferStaleCopyCleanup } from "./main/stale-app-copies";
 import { NativeDictationEngine, dictationHelperPath } from "./main/dictation-engine";
@@ -444,6 +446,7 @@ const OPEN_FOLDER_PATH_CHANNEL = "app:openFolderPath";
 // via TRAY_RENDERER_READY_CHANNEL — see the OPEN_FOLDER_PATH_CHANNEL handler.
 let pendingFolderPath: string | null = null;
 let daemonProcess: ChildProcess | null = null;
+let daemonSpawnedAtMs = 0;
 let daemonStoppingProcess: ChildProcess | null = null;
 let daemonRestartAfterExitProcess: ChildProcess | null = null;
 type DaemonAutoRestartIntent = { generation: number; crashedPid: number; runFilePresent: boolean; keepAlive: boolean };
@@ -688,6 +691,7 @@ protocol.registerSchemesAsPrivileged([
 // releases) the ao-app:// deep-link protocol used by WorkOS auth callbacks and
 // billing returns: a second launch that is about to exit must not change it.
 // See registerCloudProtocol. Must run before app.whenReady().
+desktopStartup.phase("single-instance-check");
 if (!app.requestSingleInstanceLock()) {
 	app.exit(0);
 } else {
@@ -831,6 +835,7 @@ app.once("will-quit", () => {
 
 let updateShutdownRequested = false;
 let cleanupReady: (() => void) | undefined;
+let desktopRendererReady = false;
 const cleanupReadiness = new Promise<void>((resolve) => { cleanupReady = resolve; });
 
 function setDaemonStatus(nextStatus: DaemonStatus): void {
@@ -843,6 +848,8 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 		disposeBrowserStreamLink();
 	}
 	daemonStatus = nextStatus;
+	if (nextStatus.state === "ready" && nextStatus.pid) desktopStartup.linkDaemon(nextStatus.pid);
+	if (nextStatus.state === "ready" && desktopRendererReady) desktopStartup.phase("ready");
 	if (nextStatus.state === "ready") {
 		cleanupReady?.();
 		void telemetryIdentity.flush();
@@ -940,6 +947,7 @@ async function disposeAllBrowserViewHosts(): Promise<void> {
 }
 
 async function createWindowInternal(): Promise<void> {
+	await daemonBaseReady;
 	await disposeAllBrowserViewHosts();
 	const agentBrowserRuntime = new AgentBrowserRuntime({
 		binaryPath: resolveAgentBrowserBinaryPath(),
@@ -2495,6 +2503,7 @@ async function repairDevAcpRuntime(): Promise<void> {
 }
 
 async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAutoRestartIntent): Promise<DaemonStatus> {
+	desktopStartup.phase("daemon-discovery");
 	const startCancelled = () => updateShutdownRequested || browserQuitRequested || startEpoch !== daemonStartEpoch ||
 		(autoRestartIntent !== undefined && autoRestartIntent.generation !== daemonAutoRestartGeneration);
 	if (daemonProcess) {
@@ -2635,6 +2644,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 	}
 
 	// Every path from here spawns a daemon, which needs the login-shell env.
+	desktopStartup.phase("shell-environment");
 	await shellEnvReady;
 	if (startCancelled()) {
 		return daemonStatus;
@@ -2795,6 +2805,8 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		}
 	}
 	let child: ChildProcess;
+	desktopStartup.phase("daemon-spawn");
+	daemonSpawnedAtMs = Date.now();
 	try {
 		child = spawn(launch.command, launch.args, {
 			cwd: launch.cwd,
@@ -2838,6 +2850,8 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 	}
 	if (keep) child.unref();
 	daemonProcess = child;
+	if (!launch.shell && child.pid) desktopStartup.linkDaemon(child.pid);
+	desktopStartup.phase("daemon-handshake");
 	daemonAutoRestartStandDown = false;
 
 	// Discover the port the daemon ACTUALLY bound rather than trusting AO_PORT:
@@ -2856,16 +2870,16 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		fallbackTimer = undefined;
 	};
 
-	const reportBoundPort = (port: number) => {
+	const reportBoundPort = (port: number, daemonPid?: number) => {
 		if (portConfirmed || daemonProcess !== child || daemonStoppingProcess === child) return;
 		portConfirmed = true;
 		stopDiscovery();
-		setDaemonStatus({ state: "ready", port, pid: child.pid });
+		setDaemonStatus({ state: "ready", port, pid: daemonPid ?? (launch.shell ? undefined : child.pid) });
 		// The renderer opens event streams on a *.localhost name only while the
 		// daemon also serves [::1] at this port; its probe says whether it does.
 		void readDaemonProbe(port, "healthz").then((probe) => {
-			if (probe?.ipv6Loopback !== true || probe.pid !== child.pid) return;
-			if (daemonStatus.state !== "ready" || daemonStatus.port !== port || daemonStatus.pid !== child.pid) return;
+			if (probe?.ipv6Loopback !== true) return;
+			if (daemonStatus.state !== "ready" || daemonStatus.port !== port || daemonStatus.pid !== probe.pid) return;
 			// The same attachment, so only the renderer's copy changes.
 			daemonStatus = { ...daemonStatus, ipv6Loopback: true };
 			getShellWebContents()?.send("daemon:status", daemonStatus);
@@ -2923,7 +2937,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 					// Ignore a stale handshake left by a previous daemon: only trust a
 					// file written at/after this spawn.
 					if (info && info.startedAtMs >= spawnedAtMs - RUN_FILE_FRESHNESS_SKEW_MS) {
-						reportBoundPort(info.port);
+						reportBoundPort(info.port, info.pid);
 					}
 				})
 				.catch(() => undefined); // absent until the daemon binds; keep polling
@@ -4083,6 +4097,10 @@ ipcMain.on(TRAY_SET_ATTENTION_STATE_CHANNEL, (event, state) => trayLifecycle.han
 
 ipcMain.on(TRAY_RENDERER_READY_CHANNEL, (event) => {
 	trayLifecycle.handleRendererReady(event);
+	if (event.sender === getShellWebContents()) {
+		desktopRendererReady = true;
+		desktopStartup.phase(daemonStatus.state === "ready" ? "ready" : "renderer-ready");
+	}
 	// This existing handshake comes from TrayRuntime after the React shell has
 	// mounted. Loading the HTML or merely observing a new PID is not success.
 	if (app.isPackaged && process.platform === "darwin" && event.sender === getShellWebContents()) {
@@ -4231,8 +4249,10 @@ function handleMulticaDeepLinkAndFocus(url: string): boolean {
 // on first launch (handled in app.whenReady below).
 app.on("open-url", (event, url) => {
 	event.preventDefault();
-	if (handleMulticaDeepLinkAndFocus(url)) return;
-	void handleCloudDeepLinkAndFocus(url);
+	void desktopFeaturesReady.then(() => {
+		if (handleMulticaDeepLinkAndFocus(url)) return;
+		void handleCloudDeepLinkAndFocus(url);
+	});
 });
 
 app.on("second-instance", (_event, argv) => {
@@ -4240,7 +4260,7 @@ app.on("second-instance", (_event, argv) => {
 	if (multicaLink && handleMulticaDeepLinkAndFocus(multicaLink)) return;
 	const deepLink = argv.find((value) => value.startsWith("ao-app://"));
 	if (deepLink) {
-		void handleCloudDeepLinkAndFocus(deepLink);
+		void desktopFeaturesReady.then(() => handleCloudDeepLinkAndFocus(deepLink));
 		return;
 	}
 	// A folder dropped on the taskbar icon/shortcut while already running.
@@ -4343,10 +4363,109 @@ async function writeAppStateOnLaunch(): Promise<void> {
 	});
 }
 
+let markDesktopFeaturesReady: () => void;
+const desktopFeaturesReady = new Promise<void>((resolve) => { markDesktopFeaturesReady = resolve; });
+let markDaemonBaseReady: () => void;
+const daemonBaseReady = new Promise<void>((resolve) => { markDaemonBaseReady = resolve; });
+
 app.whenReady().then(async () => {
 	applyUserAgentFallback(app);
-	powerMonitor.on("suspend", () => recordUpdateDiagnostic("power-suspend"));
-	powerMonitor.on("resume", () => recordUpdateDiagnostic("power-resume"));
+	desktopStartup.phase("electron-ready");
+	powerMonitor.on("suspend", () => { desktopStartup.power("suspended"); recordUpdateDiagnostic("power-suspend"); });
+	powerMonitor.on("resume", () => { desktopStartup.power("awake"); recordUpdateDiagnostic("power-resume"); });
+	if (process.platform === "darwin" && app.isPackaged) {
+		const bundlePath = resolveBundlePath();
+		const action = decideRelocation({ inApplicationsFolder: app.isInApplicationsFolder(), runningVersion: app.getVersion(), ...inspectInstalledBundle(bundlePath) });
+		if (action === "handoff") {
+			await shell.openPath(installedBundlePath(bundlePath));
+			app.quit();
+			return;
+		}
+	}
+	const keybindingRunFile = runFilePath();
+	desktopStartup.phase("settings");
+	if (keybindingRunFile) {
+		keybindingOverrides = await readKeybindingOverrides(path.dirname(keybindingRunFile));
+	}
+
+	const initialUiSettings = keybindingRunFile
+		? await readUiSettings(path.dirname(keybindingRunFile))
+		: { ...DEFAULT_UI_SETTINGS };
+	soundNotificationsEnabled = initialUiSettings.soundNotificationsEnabled;
+	terminalShellPreference = initialUiSettings.terminalShell;
+	if (browserQuitRequested) return;
+	const startupAttachment = () => {
+		const pid = daemonProcess?.pid ?? daemonStatus.pid;
+		return pid ? `${daemonStartEpoch}:${pid}` : null;
+	};
+	let bootstrapAttempted = false;
+	const bootstrap = await bootstrapDaemonWithRecovery({
+		start: async () => {
+			if (bootstrapAttempted && !daemonProcess && daemonStatus.pid) {
+				const previous = daemonStatus;
+				const epoch = daemonStartEpoch;
+				const current = () => !browserQuitRequested && !updateShutdownRequested && !daemonProcess && daemonStartEpoch === epoch && daemonStatus === previous;
+				const launch = resolveDaemonLaunch(daemonLaunchEnv(), app.isPackaged, process.resourcesPath, app.getAppPath(), os.homedir(), process.platform);
+				const running = runFilePath();
+				const existing = launch && running ? await inspectExistingDaemon(launch) : null;
+				if (!current()) return daemonStatus;
+				if (launch && running && existing?.status.pid && browserDaemonOwnershipDecision(appRunId, existing).action === "attach") {
+					const link = await verifyDesktopDaemonHandshake({
+						runFile: running, platform: process.platform, launch, attachedPid: existing.status.pid,
+						probe: readDaemonProbe, identityError: (probe) => daemonIdentityError(launch, probe),
+					});
+					if (!current()) return daemonStatus;
+					if (link) {
+						setDaemonStatus({ ...existing.status, state: "ready", pid: link.pid, port: link.port, executablePath: link.executable });
+						if (shouldLinkOnAttach(existing.owner)) establishSupervisorLink();
+					}
+				}
+			}
+			if (!bootstrapAttempted || (!daemonProcess && !daemonStatus.pid)) {
+				bootstrapAttempted = true;
+				return startDaemon();
+			}
+			setDaemonStatus({ ...daemonStatus, state: "starting" });
+			return daemonStatus;
+		},
+		status: () => daemonStatus,
+		attachment: startupAttachment,
+		cancelled: () => browserQuitRequested || updateShutdownRequested,
+		handshake: async () => {
+			const attachment = startupAttachment();
+			const running = runFilePath();
+			const launch = resolveDaemonLaunch(daemonLaunchEnv(), app.isPackaged, process.resourcesPath, app.getAppPath(), os.homedir(), process.platform);
+			if (!running || !launch) return false;
+			const child = daemonProcess;
+			if (child && !child.pid) return false;
+			const link = await verifyDesktopDaemonHandshake({
+				runFile: running, platform: process.platform, launch,
+				...(child ? { spawned: { appRunId, at: daemonSpawnedAtMs, wrapperPid: child.pid! } } : { attachedPid: daemonStatus.pid }),
+				probe: readDaemonProbe, identityError: (probe) => daemonIdentityError(launch, probe),
+			});
+			if (!link || attachment !== startupAttachment()) return false;
+			desktopStartup.linkDaemon(link.pid, link.launchId);
+			setDaemonStatus({ ...daemonStatus, state: "ready", pid: link.pid, port: link.port, executablePath: link.executable });
+			return true;
+		},
+		initializeFeatures: async () => {
+			markDaemonBaseReady();
+		},
+		recover: async (state) => {
+			desktopStartup.phase("failed");
+			const { response } = await dialog.showMessageBox({
+				type: "error", title: "AO startup needs attention",
+				message: state === "failed" ? "AO's local service did not start." : "AO could not verify its local service startup.",
+				detail: "Retry to check startup again without stopping a known service. Browser and sign-in features remain closed until verification succeeds. A legacy service without startup records needs an updated daemon before retrying. No rollback has been performed.",
+				buttons: ["Retry startup", "Leave running"], defaultId: 0, cancelId: 1, noLink: true,
+			});
+			if (response !== 0) return "leave-running";
+			desktopStartup.phase("daemon-handshake");
+			return "retry";
+		},
+	});
+	if (browserQuitRequested || bootstrap.state !== "verified") return;
+	desktopStartup.phase("version-policy");
 	if (app.isPackaged) {
 		const { checkDesktopVersionFloor } = await import("./main/desktop-version-floor");
 		await checkDesktopVersionFloor().catch((err) =>
@@ -4354,6 +4473,7 @@ app.whenReady().then(async () => {
 		);
 	}
 	void refreshGitHubOwners();
+	desktopStartup.phase("telemetry-policy");
 	const authority = new TelemetryPolicyAuthority({ dataDir: desktopDataDir, packagedDefault: app.isPackaged, platform: process.platform });
 	const policyController = new DesktopTelemetryController({
 		authority,
@@ -4426,18 +4546,8 @@ app.whenReady().then(async () => {
 		console.error("failed to write app-state marker:", err);
 	}
 
-	const keybindingRunFile = runFilePath();
-	if (keybindingRunFile) {
-		keybindingOverrides = await readKeybindingOverrides(path.dirname(keybindingRunFile));
-	}
-
 	registerRendererProtocol();
 	applyRuntimeAppIcon();
-	const initialUiSettings = keybindingRunFile
-		? await readUiSettings(path.dirname(keybindingRunFile))
-		: { ...DEFAULT_UI_SETTINGS };
-	soundNotificationsEnabled = initialUiSettings.soundNotificationsEnabled;
-	terminalShellPreference = initialUiSettings.terminalShell;
 	if (browserQuitRequested) return;
 	if (isTrayEnabled(process.platform)) {
 		trayController = createTrayController({
@@ -4458,10 +4568,6 @@ app.whenReady().then(async () => {
 	if (process.platform === "darwin") {
 		powerMonitor.on("shutdown", () => desktopQuit.quitCompletely());
 	}
-	// Boot the daemon alongside the window, not after it: the board cannot show
-	// until the daemon answers. createWindow links the browser runtime itself
-	// when the daemon is already ready by the time the window exists. Windows
-	// keeps the old order until this path has been tried there.
 	if (process.platform === "darwin") {
 		try {
 			const disposeUpdateControl = await startUpdateControl({
@@ -4473,11 +4579,10 @@ app.whenReady().then(async () => {
 		} catch (error) { console.warn("update control unavailable:", error); }
 	}
 
-	const daemonStartsWithWindow = process.platform !== "win32";
-	if (daemonStartsWithWindow) void startDaemon();
+	desktopStartup.phase("window-runtime");
 	await createWindow();
+	markDesktopFeaturesReady();
 	if (browserQuitRequested) return;
-	if (!daemonStartsWithWindow) void startDaemon();
 	void deferStaleCopyCleanup(
 		cleanupReadiness,
 		path.join(editorStateDir(), "stale-copy-snooze"),
@@ -4545,7 +4650,7 @@ app.whenReady().then(async () => {
 			void createWindow().catch((error) => console.error("failed to recreate main window:", error));
 		}
 	});
-});
+}).catch((error) => { desktopStartup.phase("failed"); console.error("desktop startup failed:", error); });
 
 // Daemon teardown is now handled via the OS-native supervisor socket: the daemon
 // self-stops ~5s after the last client (this process) drops its connection.

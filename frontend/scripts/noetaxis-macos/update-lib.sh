@@ -1363,11 +1363,68 @@ noetaxis_update_daemon_healthy_quiet() {
 	noetaxis_update_daemon_healthy "$1"
 }
 
+noetaxis_update_desktop_state() {
+ local app_path="$1" record pid start actual executable launch_id phase heartbeat now age stage_start wait_reason operation daemon_pid daemon_launch found=0 uncertain=0 detail=""
+ update_desktop_detail="desktop absent"
+ now="$(date '+%s')"
+ for record in "$ao_home"/startup/desktop/*.json; do
+  [[ -f "$record" ]] || continue
+  [[ "$(noetaxis_json_get "$record" version || true)" == 1 && "$(noetaxis_json_get "$record" kind || true)" == desktop ]] || { uncertain=1; continue; }
+  launch_id="$(noetaxis_json_get "$record" launchId || true)"
+  [[ "$launch_id" =~ ^[A-Za-z0-9-]+$ && "$record" == "$ao_home/startup/desktop/$launch_id.json" ]] || { uncertain=1; continue; }
+  pid="$(noetaxis_json_get "$record" pid || true)"
+  [[ "$pid" =~ ^[0-9]+$ ]] || { uncertain=1; continue; }
+  noetaxis_pid_may_be_alive "$pid" || continue
+  start="$(noetaxis_json_get "$record" processStart || true)"
+  actual="$(LC_ALL=C noetaxis_process_start "$pid")"
+  [[ -n "$start" && -n "$actual" ]] || { uncertain=1; continue; }
+  [[ "$actual" == "$(printf '%s' "$start" | /usr/bin/tr -s ' ')" ]] || continue
+  executable="$(noetaxis_json_get "$record" executable || true)"
+  [[ -n "$executable" && "$executable" -ef "$app_path/Contents/MacOS/agent-orchestrator" ]] || { uncertain=1; continue; }
+  actual="$(noetaxis_process_executable_path "$pid" || true)"
+  [[ -n "$actual" && "$actual" -ef "$executable" ]] || { uncertain=1; continue; }
+  [[ "$(LC_ALL=C noetaxis_process_start "$pid")" == "$(printf '%s' "$start" | /usr/bin/tr -s ' ')" ]] || { uncertain=1; continue; }
+  phase="$(noetaxis_json_get "$record" phase || true)"
+  case "$phase" in desktop-bootstrap|single-instance-check|electron-ready|version-policy|telemetry-policy|settings|daemon-discovery|shell-environment|daemon-spawn|daemon-handshake|window-runtime|renderer-ready|ready|failed) ;; *) uncertain=1; continue ;; esac
+  daemon_pid="$(noetaxis_json_get "$record" daemon.pid || true)"
+  daemon_launch="$(noetaxis_json_get "$record" daemon.launchId || true)"
+  if [[ "$daemon_pid" =~ ^[0-9]+$ && -n "${update_startup_pid:-}" && "$daemon_pid" != "$update_startup_pid" ]]; then uncertain=1; continue; fi
+  if [[ -n "$daemon_launch" && "$daemon_launch" != null && -n "${update_startup_launch_id:-}" && ( "$daemon_launch" != "$update_startup_launch_id" || "$daemon_pid" != "$update_startup_pid" ) ]]; then uncertain=1; continue; fi
+  found=$((found + 1))
+  heartbeat="$(noetaxis_json_get "$record" heartbeatAt || true)"
+  detail="desktop pid $pid, phase $phase"
+  stage_start="$(noetaxis_json_get "$record" stageStartedAt || true)"
+  if [[ "$stage_start" =~ ^[0-9]+$ && "$stage_start" -le "$now" ]]; then detail="$detail for $((now - stage_start))s"; fi
+  if [[ "$heartbeat" =~ ^[0-9]+$ && "$heartbeat" -le "$now" ]]; then
+   age=$((now - heartbeat))
+   detail="$detail, main-thread heartbeat ${age}s ago"
+   if [[ "$age" -gt "${NOETAXIS_STARTUP_STALL_SECONDS:-90}" ]]; then detail="$detail (stalled main thread or sleep; no progress inferred)"; fi
+  else detail="$detail, main-thread heartbeat age unavailable (clock change or invalid record)"; fi
+  if [[ "$(noetaxis_json_get "$record" powerState || true)" == suspended ]]; then detail="$detail, last power state suspended"; fi
+  wait_reason="$(noetaxis_json_get "$record" waitReason || true)"
+  if [[ "$wait_reason" == keychain-access ]]; then
+   operation="$(noetaxis_json_get "$record" waitOperation || true)"
+   case "$operation" in cloud-read|cloud-write|multica-capability|multica-encrypt|multica-decrypt) ;; *) operation=credential-access ;; esac
+   detail="$detail; desktop waiting on Keychain approval/access for $operation (check the macOS authorization prompt)"
+  fi
+  if [[ "$daemon_pid" =~ ^[0-9]+$ ]]; then
+   if [[ -n "${update_startup_launch_id:-}" && "$daemon_pid" == "$update_startup_pid" && "$daemon_launch" == "$update_startup_launch_id" ]]; then
+    detail="$detail; linked daemon launch $daemon_launch"
+   else detail="$detail; daemon pid $daemon_pid spawned, launch correlation pending"; fi
+  else detail="$detail; daemon has not spawned"; fi
+ done
+ if [[ "$found" -eq 1 && "$uncertain" -eq 0 ]]; then update_desktop_detail="$detail"
+ elif [[ "$found" -gt 1 || "$uncertain" -eq 1 ]]; then update_desktop_detail="desktop startup records ambiguous or mismatched; no progress inferred"
+ elif noetaxis_update_desktop_started "$app_path"; then update_desktop_detail="desktop running without an instrumented startup record (legacy build or unverified identity)"; fi
+}
+
 noetaxis_update_startup_state() {
- local app_path="$1" record pid start actual_start executable actual phase heartbeat now launch_id found=0 uncertain=0
+ local app_path="$1" record pid start actual_start executable actual phase heartbeat now stage_start launch_id found=0 uncertain=0
  update_startup_state=absent
  update_startup_veto=0
  update_startup_detail="no verified startup record"
+ update_startup_launch_id=""
+ update_startup_pid=""
  now="$(date '+%s')"
  for record in "$ao_home"/startup/*.json; do
   [[ -f "$record" ]] || continue
@@ -1386,9 +1443,13 @@ noetaxis_update_startup_state() {
   [[ -n "$actual" && "$actual" -ef "$executable" ]] || { uncertain=1; continue; }
   [[ "$(LC_ALL=C noetaxis_process_start "$pid")" == "$(printf '%s' "$start" | /usr/bin/tr -s ' ')" ]] || { uncertain=1; continue; }
   found=$((found + 1))
+  update_startup_launch_id="$launch_id"
+  update_startup_pid="$pid"
   phase="$(noetaxis_json_get "$record" phase || true)"
   heartbeat="$(noetaxis_json_get "$record" heartbeatAt || true)"
   update_startup_detail="pid $pid, phase $phase, stage $(noetaxis_json_get "$record" stage || true), migration $(noetaxis_json_get "$record" migrationId || true)"
+  stage_start="$(noetaxis_json_get "$record" stageStartedAt || true)"
+  if [[ "$stage_start" =~ ^[0-9]+$ && "$stage_start" -le "$now" ]]; then update_startup_detail="$update_startup_detail, stage age $((now - stage_start))s"; fi
   update_startup_state=stale
   if [[ "$heartbeat" =~ ^[0-9]+$ && "$heartbeat" -le "$now" && $((now - heartbeat)) -le "${NOETAXIS_STARTUP_STALL_SECONDS:-90}" ]]; then
    case "$phase" in starting|waiting-for-lock|migrating) update_startup_state=active ;; ready|failed) update_startup_state=quiescent ;; *) update_startup_state=ambiguous ;; esac
@@ -1396,6 +1457,9 @@ noetaxis_update_startup_state() {
   if [[ "$update_startup_state" == active || "$update_startup_state" == stale ]]; then update_startup_veto=1; fi
  done
  if [[ "$found" -gt 1 || "$uncertain" -eq 1 ]]; then update_startup_state=ambiguous; fi
+ if [[ "$found" -ne 1 || "$uncertain" -eq 1 ]]; then update_startup_launch_id=""; update_startup_pid=""; fi
+ noetaxis_update_desktop_state "$app_path"
+ update_startup_detail="$update_desktop_detail; daemon: $update_startup_detail"
 }
 
 noetaxis_update_startup_interlock() {
@@ -1416,15 +1480,23 @@ noetaxis_update_needs_attention() {
 }
 
 noetaxis_update_wait_for_health() {
- local app_path="$1" began now elapsed warned=0 iterations=0
+ local app_path="$1" began now elapsed warned=0 iterations=0 last_progress=-30
  began="$(date '+%s')"
  while :; do
-  if noetaxis_update_daemon_healthy "$app_path"; then return 0; fi
+  if noetaxis_update_daemon_healthy "$app_path"; then
+   noetaxis_update_startup_state "$app_path"
+   noetaxis_update_log "Startup ready: $update_startup_detail; verified daemon health ready"
+   return 0
+  fi
   now="$(date '+%s')"
   elapsed=$((now - began))
   iterations=$((iterations + 1))
+  noetaxis_update_startup_state "$app_path"
+  if [[ $((elapsed - last_progress)) -ge 30 ]]; then
+   noetaxis_update_log "Startup progress after ${elapsed}s: $update_startup_detail"
+   last_progress="$elapsed"
+  fi
   if [[ "$elapsed" -ge "$update_health_timeout" ]]; then
-   noetaxis_update_startup_state "$app_path"
    if [[ "$warned" -eq 0 ]]; then
     noetaxis_update_warn "Health deadline reached; checking startup progress, without authorizing rollback. $update_startup_detail"
     warned=1

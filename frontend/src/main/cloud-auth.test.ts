@@ -1,7 +1,8 @@
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDesktopStartup, setDesktopStartup, type DesktopStartupRecord } from "./desktop-startup";
 
 const ACCESS_TOKEN = `header.${Buffer.from(
   JSON.stringify({ exp: 4_102_444_800, sid: "session_123" }),
@@ -13,8 +14,8 @@ const EXPIRED_ACCESS_TOKEN = `header.${Buffer.from(
 const mocks = vi.hoisted(() => ({
   authenticateWithCode: vi.fn(),
   authenticateWithRefreshToken: vi.fn(),
-  decryptString: vi.fn((value: Buffer) => value.toString("utf8")),
-  encryptString: vi.fn((value: string) => Buffer.from(value, "utf8")),
+  decryptString: vi.fn(async (value: Buffer) => ({ result: value.toString("utf8").replace(/^v11/, ""), shouldReEncrypt: false })),
+  encryptString: vi.fn(async (value: string) => Buffer.from(`v11${value}`, "utf8")),
   encryptionAvailable: true,
   selectedStorageBackend: "gnome_libsecret",
   getAuthorizationUrlWithPKCE: vi.fn(),
@@ -54,10 +55,10 @@ vi.mock("electron", () => ({
   dialog: { showMessageBox: mocks.showMessageBox },
   ipcMain: { handle: mocks.ipcHandle },
   safeStorage: {
-    decryptString: mocks.decryptString,
-    encryptString: mocks.encryptString,
+    decryptStringAsync: mocks.decryptString,
+    encryptStringAsync: mocks.encryptString,
     getSelectedStorageBackend: () => mocks.selectedStorageBackend,
-    isEncryptionAvailable: () => mocks.encryptionAvailable,
+    isAsyncEncryptionAvailable: async () => mocks.encryptionAvailable,
   },
   shell: { openExternal: mocks.openExternal },
 }));
@@ -66,6 +67,7 @@ import {
   beginCloudSignIn,
   getCloudAccessToken,
   getCloudSession,
+  getCloudSessionCached,
   handleCloudDeepLink,
   installCloudIPC,
   readAuthStore,
@@ -106,6 +108,95 @@ describe("native WorkOS authentication", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     await rm(dataDir, { recursive: true, force: true });
+  });
+
+  it("retains old ciphertext on locked/denied access and does not prompt repeatedly", async () => {
+    const bytes = Buffer.from("v10-existing-ciphertext");
+    await writeFile(path.join(dataDir, "cloud-auth.bin"), bytes);
+    mocks.decryptString.mockRejectedValueOnce(new Error("Keychain denied"));
+    expect(await readAuthStore(dataDir)).toEqual({ session: null, pkce: null });
+    expect(await readAuthStore(dataDir)).toEqual({ session: null, pkce: null });
+    expect(mocks.decryptString).toHaveBeenCalledTimes(1);
+    expect(mocks.decryptString).toHaveBeenCalledWith(bytes);
+    expect(await readFile(path.join(dataDir, "cloud-auth.bin"))).toEqual(bytes);
+  });
+
+  it("preserves ciphertext when storage is unavailable or a replacement encryption is denied", async () => {
+    const bytes = Buffer.from("v10-existing-ciphertext");
+    await writeFile(path.join(dataDir, "cloud-auth.bin"), bytes);
+    mocks.encryptionAvailable = false;
+    expect(await readAuthStore(dataDir)).toEqual({ session: null, pkce: null });
+    await writeAuthStore(dataDir, { session: null, pkce: null });
+    expect(await readFile(path.join(dataDir, "cloud-auth.bin"))).toEqual(bytes);
+    mocks.encryptionAvailable = true;
+    mocks.encryptString.mockRejectedValueOnce(new Error("Keychain denied"));
+    await expect(writeAuthStore(dataDir, { session: null, pkce: null })).rejects.toThrow();
+    expect(await readFile(path.join(dataDir, "cloud-auth.bin"))).toEqual(bytes);
+  });
+
+  it("records a memory-only Cloud write as unavailable in the durable startup record", async () => {
+    const startup = createDesktopStartup({ directory: dataDir, executable: process.execPath, appVersion: "fixture", processStart: "fixture-start" });
+    setDesktopStartup(startup);
+    try {
+      const ciphertext = Buffer.from("v10-existing-ciphertext");
+      await writeFile(path.join(dataDir, "cloud-auth.bin"), ciphertext);
+      mocks.encryptionAvailable = false;
+      const store = { session: null, pkce: { codeVerifier: "fixture-memory-secret", state: "fixture", expiresAt: 1 } };
+      expect(await writeAuthStore(dataDir, store)).toBeUndefined();
+      const raw = await readFile(startup.file, "utf8");
+      expect(JSON.parse(raw) as DesktopStartupRecord).toMatchObject({
+        waitReason: null,
+        operations: {},
+        lastCredentialResult: { operation: "cloud-write", result: "unavailable" },
+      });
+      expect(raw).not.toContain("fixture-memory-secret");
+      expect(await readAuthStore(dataDir)).toEqual(store);
+      expect(await readFile(path.join(dataDir, "cloud-auth.bin"))).toEqual(ciphertext);
+      expect(mocks.encryptString).not.toHaveBeenCalled();
+    } finally {
+      setDesktopStartup(undefined);
+      startup.dispose();
+    }
+  });
+
+  it("keeps the event loop responsive while a cached session read awaits authorization", async () => {
+    await writeFile(path.join(dataDir, "cloud-auth.bin"), "v10-fixture");
+    let approve!: (value: { result: string; shouldReEncrypt: boolean }) => void;
+    mocks.decryptString.mockImplementationOnce(() => new Promise((resolve) => { approve = resolve; }));
+    const pending = getCloudSessionCached(dataDir);
+    await vi.waitFor(() => expect(approve).toBeTypeOf("function"));
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    approve({ result: JSON.stringify({ session: null, pkce: null }), shouldReEncrypt: false });
+    expect(await pending).toBeNull();
+  });
+
+  it("rotates old encrypted data atomically and preserves it if rotation fails", async () => {
+    const store = { session: null, pkce: null };
+    const original = Buffer.from("v10-fixture");
+    await writeFile(path.join(dataDir, "cloud-auth.bin"), original);
+    mocks.decryptString.mockResolvedValueOnce({ result: JSON.stringify(store), shouldReEncrypt: true });
+    mocks.encryptString.mockRejectedValueOnce(new Error("locked during rotation"));
+    expect(await readAuthStore(dataDir)).toEqual(store);
+    expect(await readFile(path.join(dataDir, "cloud-auth.bin"))).toEqual(original);
+    mocks.decryptString.mockResolvedValueOnce({ result: JSON.stringify(store), shouldReEncrypt: true });
+    mocks.encryptString.mockResolvedValueOnce(Buffer.from("v11new-encrypted-fixture"));
+    expect(await readAuthStore(dataDir)).toEqual(store);
+    expect((await readFile(path.join(dataDir, "cloud-auth.bin"))).toString()).toBe("v11new-encrypted-fixture");
+    expect((await stat(path.join(dataDir, "cloud-auth.bin"))).mode & 0o777).toBe(0o600);
+  });
+
+  it("cannot restore auth when sign-out wins an asynchronous read or key rotation", async () => {
+    const store = { session: null, pkce: { codeVerifier: "fixture", state: "fixture", expiresAt: 1 } };
+    await writeFile(path.join(dataDir, "cloud-auth.bin"), "v10-fixture");
+    let finishRotation!: (value: Buffer<ArrayBuffer>) => void;
+    mocks.decryptString.mockResolvedValueOnce({ result: JSON.stringify(store), shouldReEncrypt: true });
+    mocks.encryptString.mockImplementationOnce(() => new Promise((resolve) => { finishRotation = resolve; }));
+    const pending = readAuthStore(dataDir);
+    await vi.waitFor(() => expect(finishRotation).toBeTypeOf("function"));
+    await signOutCloud(dataDir);
+    finishRotation(Buffer.from("v11rotated-fixture"));
+    expect(await pending).toEqual({ session: null, pkce: null });
+    await expect(readFile(path.join(dataDir, "cloud-auth.bin"))).rejects.toThrow();
   });
 
   it("starts PKCE and exchanges the callback without an AO website", async () => {

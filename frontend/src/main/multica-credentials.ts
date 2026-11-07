@@ -23,9 +23,9 @@ export const MAX_TOKEN_LENGTH = 4096;
 
 /** The OS-backed secret store. `isProtected` is false when encryption is missing or only obfuscates (Linux `basic_text`). */
 export type SecretVault = {
-	isProtected: () => boolean;
-	encrypt: (plain: string) => Buffer;
-	decrypt: (blob: Buffer) => string;
+	isProtected: () => Promise<boolean>;
+	encrypt: (plain: string) => Promise<Buffer>;
+	decrypt: (blob: Buffer) => Promise<{ result: string; shouldReEncrypt: boolean }>;
 };
 
 export type CredentialFailure =
@@ -55,7 +55,7 @@ export type MulticaCredentials = {
 	clearPasted: (serverKey: string) => Promise<void>;
 	hasPasted: (serverKey: string) => Promise<boolean>;
 	/** True when a pasted token survives a restart. */
-	canPersist: () => boolean;
+	persistenceCapability: () => boolean | null;
 };
 
 /** Refuses empty values, whitespace and control characters (header injection) and oversize input. */
@@ -104,6 +104,12 @@ export function createMulticaCredentials(options: MulticaCredentialsOptions): Mu
 	const file = path.join(options.stateDir, MULTICA_CREDENTIALS_FILE);
 	// Pasted tokens when protected storage is missing. Never a cache of decrypted ones.
 	const memory = new Map<string, string>();
+	const unavailable = new Set<string>();
+	let persistent: boolean | null = null;
+	let protection: Promise<boolean> | undefined;
+	function protectedStorage(): Promise<boolean> {
+		return protection ??= options.vault.isProtected().then((available) => persistent = available).catch(() => persistent = false);
+	}
 	let queue: Promise<void> = Promise.resolve();
 	const run = <T>(operation: () => Promise<T>): Promise<T> => {
 		const queued = queue.then(operation, operation);
@@ -143,20 +149,31 @@ export function createMulticaCredentials(options: MulticaCredentialsOptions): Mu
 
 	/** Decrypts on every call, so the plaintext lives only as long as the caller keeps it. */
 	async function pastedToken(serverKey: string): Promise<string | null> {
-		if (!options.vault.isProtected()) return memory.get(serverKey) ?? null;
+		if (memory.has(serverKey)) return memory.get(serverKey) ?? null;
+		if (unavailable.has(serverKey)) return null;
 		const stored = (await readStored()).tokens[serverKey];
 		if (typeof stored !== "string") return null;
 		try {
-			return normalizeToken(options.vault.decrypt(Buffer.from(stored, "base64")));
+			if (!(await protectedStorage())) return null;
+			const decoded = await options.vault.decrypt(Buffer.from(stored, "base64"));
+			const token = normalizeToken(decoded.result);
+			if (token !== null && decoded.shouldReEncrypt) {
+				try {
+					const all = await readStored();
+					all.tokens[serverKey] = (await options.vault.encrypt(token)).toString("base64");
+					await writeStored(all);
+				} catch { /* Retain the original ciphertext if rotation is unavailable. */ }
+			}
+			return token;
 		} catch {
+			unavailable.add(serverKey);
 			return null;
 		}
 	}
 
 	/** Whether a token is stored, without decrypting it (decrypting can prompt for the keychain). */
 	async function hasStoredToken(serverKey: string): Promise<boolean> {
-		if (!options.vault.isProtected()) return memory.has(serverKey);
-		return typeof (await readStored()).tokens[serverKey] === "string";
+		return memory.has(serverKey) || typeof (await readStored()).tokens[serverKey] === "string";
 	}
 
 	return {
@@ -180,14 +197,16 @@ export function createMulticaCredentials(options: MulticaCredentialsOptions): Mu
 			run(async () => {
 				const token = normalizeToken(rawToken);
 				if (token === null || serverKey.length === 0) return false;
-				if (!options.vault.isProtected()) {
+				if (!(await protectedStorage())) {
 					memory.set(serverKey, token);
 					return true;
 				}
 				try {
 					const stored = await readStored();
-					stored.tokens[serverKey] = options.vault.encrypt(token).toString("base64");
+					stored.tokens[serverKey] = (await options.vault.encrypt(token)).toString("base64");
 					await writeStored(stored);
+					memory.delete(serverKey);
+					unavailable.delete(serverKey);
 				} catch {
 					// Nothing was stored, so there is no token to use: report it rather than pretend.
 					return false;
@@ -197,6 +216,7 @@ export function createMulticaCredentials(options: MulticaCredentialsOptions): Mu
 		clearPasted: (serverKey) =>
 			run(async () => {
 				memory.delete(serverKey);
+				unavailable.delete(serverKey);
 				try {
 					const stored = await readStored();
 					if (serverKey in stored.tokens) {
@@ -208,6 +228,6 @@ export function createMulticaCredentials(options: MulticaCredentialsOptions): Mu
 				}
 			}),
 		hasPasted: (serverKey) => run(() => hasStoredToken(serverKey)),
-		canPersist: () => options.vault.isProtected(),
+		persistenceCapability: () => persistent,
 	};
 }

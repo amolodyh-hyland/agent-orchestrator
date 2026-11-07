@@ -202,7 +202,7 @@ export function createMulticaPublicApi(options: PublicApiOptions) {
 			catch { return failure("storage_unavailable"); }
 		},
 		getState: async () => {
-			try { return { ...binding, tokenConfigured: await credentials.hasPasted(credentialKey), persistent: credentials.canPersist() }; }
+			try { return { ...binding, tokenConfigured: await credentials.hasPasted(credentialKey), persistent: credentials.persistenceCapability() === true }; }
 			catch { return { ...binding, tokenConfigured: false, persistent: false }; }
 		},
 		listAgents: (page: PublicApiPage & { includeArchived?: boolean } = {}) => run(async () => request("GET", `/agents${pageQuery(page, page.includeArchived)}`, (v) => {

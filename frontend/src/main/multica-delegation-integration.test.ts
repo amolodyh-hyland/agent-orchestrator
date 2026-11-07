@@ -120,7 +120,7 @@ describe("coordinators against the real daemon SQLite journal", () => {
 			send: (channel: string, value: { result: DelegationConfirmationResult }) => { if (channel === DELEGATION_RESULT) results.push(value.result); } };
 		const event = { sender: { id: shell.id }, senderFrame: frame } as unknown as IpcMainInvokeEvent;
 		const credentials = createMulticaCredentials({ stateDir: path.join(dir, randomUUID()),
-			vault: { isProtected: () => false, encrypt: () => { throw new Error("must not encrypt"); }, decrypt: () => { throw new Error("must not decrypt"); } },
+			vault: { isProtected: async () => false, encrypt: async () => { throw new Error("must not encrypt"); }, decrypt: async () => { throw new Error("must not decrypt"); } },
 			readProfileConfig: async () => null });
 		let armed = false;
 		let held = false;

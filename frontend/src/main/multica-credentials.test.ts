@@ -29,9 +29,9 @@ const other = resolveMulticaServer({ mode: "local", customUrl: "http://other.lan
 const cloud = resolveMulticaServer({ mode: "cloud", customUrl: "", apiUrl: "" }) as MulticaServer;
 
 const vault = (protectedStorage = true): SecretVault => ({
-	isProtected: () => protectedStorage,
-	encrypt: (plain) => Buffer.from(`enc:${plain.split("").reverse().join("")}`),
-	decrypt: (blob) => blob.toString().replace(/^enc:/, "").split("").reverse().join(""),
+	isProtected: async () => protectedStorage,
+	encrypt: async (plain) => Buffer.from(`enc:${plain.split("").reverse().join("")}`),
+	decrypt: async (blob) => ({ result: blob.toString().replace(/^enc:/, "").split("").reverse().join(""), shouldReEncrypt: false }),
 });
 
 const profileFile = (extra: Record<string, unknown> = {}) => JSON.stringify({ server_url: "http://localhost:8080", token: PROFILE_TOKEN, ...extra });
@@ -90,6 +90,42 @@ describe("profile credential (T3') and consent", () => {
 });
 
 describe("pasted credential (T2)", () => {
+	it("does not probe on construction, capability reads or token-presence checks", async () => {
+		const isProtected = vi.fn(async () => { throw new Error("Keychain must not be probed"); });
+		const credentials = createMulticaCredentials({ stateDir: dir, vault: { ...vault(), isProtected }, readProfileConfig: async () => null });
+		expect(credentials.persistenceCapability()).toBeNull();
+		expect(await credentials.hasPasted(local.key)).toBe(false);
+		expect(await credentials.resolve(local, "pasted", false)).toEqual({ ok: false, reason: "no_token" });
+		expect(isProtected).not.toHaveBeenCalled();
+	});
+
+	it("retains encrypted tokens after denial and suppresses repeated background decrypts", async () => {
+		const initial = createMulticaCredentials({ stateDir: dir, vault: vault(), readProfileConfig: async () => null });
+		await initial.setPasted(local.key, PASTED_TOKEN);
+		const bytes = await readFile(path.join(dir, MULTICA_CREDENTIALS_FILE));
+		const decrypt = vi.fn(async () => { throw new Error("Keychain denied"); });
+		const denied = createMulticaCredentials({ stateDir: dir, vault: { ...vault(), decrypt }, readProfileConfig: async () => null });
+		expect(await denied.hasPasted(local.key)).toBe(true);
+		await denied.resolve(local, "pasted", false);
+		await denied.resolve(local, "pasted", false);
+		expect(decrypt).toHaveBeenCalledTimes(1);
+		expect(await readFile(path.join(dir, MULTICA_CREDENTIALS_FILE))).toEqual(bytes);
+	});
+
+	it("rotates old ciphertext only after successful asynchronous decryption and encryption", async () => {
+		const first = createMulticaCredentials({ stateDir: dir, vault: vault(), readProfileConfig: async () => null });
+		await first.setPasted(local.key, PASTED_TOKEN);
+		const base = vault();
+		const rotated = createMulticaCredentials({ stateDir: dir, vault: {
+			...base,
+			decrypt: async (blob) => ({ ...(await base.decrypt(blob)), shouldReEncrypt: true }),
+			encrypt: async () => Buffer.from("rotated-encrypted-token"),
+		}, readProfileConfig: async () => null });
+		expect(await rotated.resolve(local, "pasted", false)).toEqual({ ok: true, token: PASTED_TOKEN });
+		const stored = JSON.parse(await readFile(path.join(dir, MULTICA_CREDENTIALS_FILE), "utf8"));
+		expect(Buffer.from(stored.tokens[local.key], "base64").toString()).toBe("rotated-encrypted-token");
+	});
+
 	it("stores the token encrypted and finds it again after a restart", async () => {
 		const first = createMulticaCredentials({ stateDir: dir, vault: vault(), readProfileConfig: async () => null });
 		expect(await first.setPasted(local.key, PASTED_TOKEN)).toBe(true);
@@ -115,8 +151,9 @@ describe("pasted credential (T2)", () => {
 
 	it("never writes plaintext when protected storage is missing and keeps the token for this run only", async () => {
 		const credentials = createMulticaCredentials({ stateDir: dir, vault: vault(false), readProfileConfig: async () => null });
-		expect(credentials.canPersist()).toBe(false);
+		expect(credentials.persistenceCapability()).toBeNull();
 		await credentials.setPasted(local.key, PASTED_TOKEN);
+		expect(credentials.persistenceCapability()).toBe(false);
 		expect(await credentials.resolve(local, "pasted", false)).toEqual({ ok: true, token: PASTED_TOKEN });
 		await expect(stat(path.join(dir, MULTICA_CREDENTIALS_FILE))).rejects.toThrow();
 		const restarted = createMulticaCredentials({ stateDir: dir, vault: vault(false), readProfileConfig: async () => null });
@@ -124,7 +161,7 @@ describe("pasted credential (T2)", () => {
 	});
 
 	it("tells whether a token is stored without decrypting it, and decrypts only when it is resolved", async () => {
-		const decrypt = vi.fn((blob: Buffer) => blob.toString().replace(/^enc:/, "").split("").reverse().join(""));
+		const decrypt = vi.fn(async (blob: Buffer) => ({ result: blob.toString().replace(/^enc:/, "").split("").reverse().join(""), shouldReEncrypt: false }));
 		const spyVault: SecretVault = { ...vault(), decrypt };
 		const first = createMulticaCredentials({ stateDir: dir, vault: spyVault, readProfileConfig: async () => null });
 		await first.setPasted(local.key, PASTED_TOKEN);
