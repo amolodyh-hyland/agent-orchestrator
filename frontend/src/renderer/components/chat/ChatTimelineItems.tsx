@@ -14,11 +14,6 @@ import { AttachmentPathChip } from "./AttachmentPathChip";
 import { ChatImage } from "./ChatImage";
 import { CloudMessageAttachments } from "./CloudMessageAttachments";
 import { splitCloudAttachmentReferences } from "../../lib/cloud-attachments";
-import {
-	ACCENT_ACTION_SEGMENT,
-	ACCENT_ACTION_SHELL,
-	QUIET_ACTION_PILL,
-} from "./action-pill";
 import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -83,6 +78,7 @@ import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-poli
 import { useChatFileActions, ActivityTitle, ChatCodeText, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
+import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
 import { LatticeLoader } from "./LatticeLoader";
 import { ScriptRunPanel } from "../ScriptRunPanel";
 import { HumanMessageEditor } from "./HumanMessageEditor";
@@ -99,6 +95,8 @@ import {
 } from "./activity-command";
 import { actionDetailLines, describeConversationActivity } from "./activity-action";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { Button } from "../ui/button";
+import { Pressable } from "../ui/pressable";
 import { ChatAnnotationSummary } from "./ChatAnnotationSummary";
 import {
 	DropdownMenu,
@@ -567,7 +565,6 @@ export function TurnOutcome({
 	onRollback,
 	rollbackDisabled,
 	timestamp,
-	durationMs,
 }: {
 	state: "recovered" | "interrupted" | "failed";
 	error?: string;
@@ -594,7 +591,6 @@ export function TurnOutcome({
 					onRollback={onRollback}
 					rollbackDisabled={rollbackDisabled}
 					timestamp={timestamp}
-					durationMs={durationMs}
 				/>
 			</div>
 		);
@@ -613,7 +609,7 @@ export function TurnOutcome({
 			{needsDeepSeekKey ? (
 				<>
 					<p className="pl-[22px] text-sm text-foreground">Set up the key in DeepSeek Harness, then retry this turn.</p>
-					<button type="button" onClick={onConfigure} className="ml-[22px] w-fit rounded px-2 py-1 text-sm text-primary hover:bg-interactive-hover">Set up DeepSeek</button>
+					<Button type="button" variant="primary" size="sm" onClick={onConfigure} className="ml-[22px] w-fit">Set up DeepSeek</Button>
 					{error ? (
 						<details className="pl-[22px] text-sm text-muted-foreground">
 							<summary className="cursor-pointer">Technical details</summary>
@@ -641,19 +637,12 @@ export function TurnOutcome({
 				onRollback={onRollback}
 				rollbackDisabled={rollbackDisabled}
 				timestamp={timestamp}
-				durationMs={durationMs}
 			/>
 		</div>
 	);
 }
 
 interface TurnActionsProps {
-	/**
-	 * How long the turn ran. "Worked for" carries this when the turn has work to
-	 * fold; a turn that went straight to its answer has no fold, so the time leads
-	 * the action row instead and every turn still says how long it took.
-	 */
-	durationMs?: number;
 	/** Present only when this failed turn is eligible for a new attempt. */
 	retry?: TurnOutcomeRetryControl;
 	/** The answer's stored markdown, so a paste gives back what the agent wrote. */
@@ -666,21 +655,16 @@ interface TurnActionsProps {
 	timestamp?: string;
 }
 
-const TURN_ACTION_BUTTON =
-	"flex h-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] disabled:pointer-events-none disabled:opacity-40 motion-reduce:transition-none motion-reduce:active:scale-100";
-
 /**
- * The row a turn closes on: how long it ran (when no fold above says so), retry,
- * copy, roll back, then the time on hover.
+ * The row a turn closes on: retry, copy, roll back, then the time on hover. How
+ * long the turn ran heads it instead, in "Worked for".
  *
  * Every ending shares it — a finished answer, a tool-only turn, a stopped or failed
  * one — so the controls are always in the same place. The negative margin is on the
  * row rather than its first button, so the leading glyph lines up with the text
- * above whichever control comes first; the duration pads itself back to the text
- * edge for the same reason.
+ * above whichever control comes first.
  */
 export function TurnActions({
-	durationMs,
 	retry,
 	copyText,
 	onRollback,
@@ -688,29 +672,28 @@ export function TurnActions({
 	timestamp,
 	className,
 }: TurnActionsProps & { className?: string }) {
-	const showDuration = durationMs !== undefined && durationMs > 0;
-	if (!retry && copyText === undefined && !onRollback && !showDuration) return null;
+	if (!retry && copyText === undefined && !onRollback) return null;
 	const time = timestamp ? formatMessageTimestamp(timestamp) : "";
 	return (
 		<div className={cn("flex min-w-0 flex-col gap-1", className)}>
 			<div className="-ml-1.5 flex h-7 items-center gap-0.5" data-turn-actions="">
-				{durationMs !== undefined ? <TurnDuration durationMs={durationMs} /> : null}
 				{retry ? (
-					<button
+					<Button
 						type="button"
+						variant="quiet"
+						size="sm"
 						onClick={retry.onRetry}
 						disabled={retry.pending || retry.disabled}
 						aria-label="Retry this turn"
 						title={retry.error ?? (retry.disabled ? "Wait for the current turn to finish" : "Send this prompt again as a new turn")}
 						data-testid="retry-turn"
-						className={cn(TURN_ACTION_BUTTON, "gap-1.5 px-2 text-xs")}
 					>
 						<RotateCw
 							aria-hidden="true"
 							className={cn("size-3", retry.pending && "animate-spin motion-reduce:animate-none")}
 						/>
 						{retry.pending ? "Retrying…" : "Retry"}
-					</button>
+					</Button>
 				) : null}
 				{copyText !== undefined ? (
 					<div className="size-7 shrink-0">
@@ -718,22 +701,22 @@ export function TurnActions({
 							text={copyText}
 							label="Copy message as markdown"
 							compact
-							className={cn(TURN_ACTION_BUTTON, "size-7 px-0 py-0")}
 						/>
 					</div>
 				) : null}
 				{onRollback ? (
 					<Tooltip>
 						<TooltipTrigger asChild>
-							<button
+							<Button
 								type="button"
+								variant="quiet"
+								size="icon-sm"
 								onClick={onRollback}
 								disabled={rollbackDisabled}
 								aria-label="Roll back to here"
-								className={cn(TURN_ACTION_BUTTON, "size-7")}
 							>
-								<Undo2 aria-hidden="true" className="size-3" />
-							</button>
+								<Undo2 aria-hidden="true" className="size-3.5" />
+							</Button>
 						</TooltipTrigger>
 						<TooltipContent side="bottom">Roll back to here</TooltipContent>
 					</Tooltip>
@@ -948,7 +931,6 @@ export function HumanMessage({
 	onEdit,
 	editing = false,
 	editText,
-	editReconstructedContext = false,
 	onEditStart,
 	onEditDraftChange,
 	onEditCancel,
@@ -976,7 +958,6 @@ export function HumanMessage({
 	onEdit?: (turnId: string, text: string) => Promise<unknown> | void;
 	editing?: boolean;
 	editText?: string;
-	editReconstructedContext?: boolean;
 	onEditStart?: () => void;
 	onEditDraftChange?: (text: string) => void;
 	onEditCancel?: () => void;
@@ -1001,7 +982,7 @@ export function HumanMessage({
 	);
 	return (
 		<div
-			className="group/message flex flex-col items-end gap-1"
+			className="group/message relative flex flex-col items-end gap-1"
 			data-chat-message-id={!queued && !editing ? message.id : undefined}
 			data-chat-message-revision={!queued && !editing ? message.revision : undefined}
 			data-chat-message-role={!queued && !editing ? message.role : undefined}
@@ -1022,7 +1003,6 @@ export function HumanMessage({
 					recoveryLabel={editRecoveryLabel}
 					sendBlocked={editSendBlocked}
 					busy={editBusy}
-					reconstructedContext={editReconstructedContext}
 					error={editError}
 					onDraftChange={onEditDraftChange}
 					onCancel={() => onEditCancel?.()}
@@ -1039,6 +1019,7 @@ export function HumanMessage({
 					data-queued={queued ? "" : undefined}
 					className={cn(humanBubbleClass(queued), animateIn && "chat-human-message-enter")}
 				>
+					<CollapsibleHumanBody stateKey={visibleMessageText}>
 					{excerptReferences.length > 0 ? (
 						<ChatAnnotationSummary
 							annotations={excerptReferences.map((excerpt) => ({
@@ -1076,32 +1057,30 @@ export function HumanMessage({
 						className={cn(body && "mt-2")}
 					/>
 					<CloudMessageAttachments attachments={message.cloudAttachments} className={cn((body || attachments.length > 0) && "mt-2")} />
+					</CollapsibleHumanBody>
 				</div>
 			)}
 			{editing ? null : (
-				<div className="mt-1 flex h-7 items-center gap-1">
+				// Hover-only actions float under the bubble instead of reserving a blank row;
+				// a branch navigator is always visible, so it keeps its place in the flow.
+				<div className={cn("flex h-7 items-center gap-1", branchPoint && onActivateBranch ? "mt-1" : "absolute right-0 top-full z-10")}>
 					<div className="flex items-center gap-1 opacity-0 transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/message:opacity-100 motion-reduce:transition-none">
 						<MessageTimestamp createdAt={message.createdAt} />
 						{onEdit && onEditStart && message.turnId ? (
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<button
-										type="button"
-										onClick={onEditStart}
-										aria-label="Edit user message"
-										className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
-									>
-										<Pencil aria-hidden="true" className="size-3" />
-									</button>
-								</TooltipTrigger>
-								<TooltipContent side="bottom">Edit user message</TooltipContent>
-							</Tooltip>
+							<Button
+								type="button"
+								variant="quiet"
+								size="icon-sm"
+								onClick={onEditStart}
+								aria-label="Edit user message"
+							>
+								<Pencil aria-hidden="true" className="size-3.5" />
+							</Button>
 						) : null}
 						<CopyButton
 							text={visibleMessageText}
 							label="Copy user message"
 							compact
-							className="size-7 justify-center rounded-md px-0 py-0 transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
 						/>
 					</div>
 					{branchPoint && onActivateBranch ? (
@@ -1180,15 +1159,14 @@ function AutomationMessageFrame({
 
 function AutomationExpandButton({ expanded, onClick }: { expanded: boolean; onClick: () => void }) {
 	return (
-		<button
-			type="button"
+		<Pressable
 			onClick={onClick}
 			aria-expanded={expanded}
 			className="mt-2 flex items-center gap-1 text-xs font-medium text-logo-accent transition-colors hover:text-markdown-link-hover"
 		>
 			<ChevronRight aria-hidden="true" className={cn("size-3 transition-transform", expanded && "rotate-90")} />
 			{expanded ? "Hide report" : "Show full report"}
-		</button>
+		</Pressable>
 	);
 }
 
@@ -1199,13 +1177,10 @@ export function AssistantMessage({
 	live = false,
 	onRollback,
 	rollbackDisabled = false,
-	durationMs,
 }: {
 	message: ConversationMessage;
 	/** The final answer owns the copy action; it stays available while that answer streams. */
 	showCopy?: boolean;
-	/** How long the turn ran, for the action row when no "Worked for" fold carries it. */
-	durationMs?: number;
 	/** The enclosing turn is still active, even if its last text chunk has landed. */
 	live?: boolean;
 	/**
@@ -1240,7 +1215,6 @@ export function AssistantMessage({
 				// visible; only the wall-clock time reveals on hover.
 				<TurnActions
 					className="mt-1"
-					durationMs={durationMs}
 					copyText={copyReady ? message.text : undefined}
 					onRollback={rollbackReady ? onRollback : undefined}
 					rollbackDisabled={rollbackDisabled}
@@ -1496,8 +1470,7 @@ function AOActionRow({ activity }: { activity: ConversationActivity }) {
 	const open = override ?? false;
 	return (
 		<div className="flex min-w-0 max-w-full flex-col">
-			<button
-				type="button"
+			<Pressable
 				onClick={() => setOverride(!open)}
 				disabled={!hasBody}
 				aria-expanded={hasBody ? open : undefined}
@@ -1524,7 +1497,7 @@ function AOActionRow({ activity }: { activity: ConversationActivity }) {
 						)}
 					/>
 				) : null}
-			</button>
+			</Pressable>
 			<AnimatePresence initial={false}>
 				{open && hasBody ? (
 					<motion.div
@@ -1605,8 +1578,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 						: "group/activity border-t border-border first:border-t-0",
 			)}
 		>
-			<button
-				type="button"
+			<Pressable
 				onClick={() => setOverride(!open)}
 				disabled={!hasBody}
 				aria-expanded={hasBody ? open : undefined}
@@ -1696,7 +1668,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 						)}
 					/>
 				) : null}
-			</button>
+			</Pressable>
 
 			<AnimatePresence initial={false}>
 				{open && hasBody ? (
@@ -2093,8 +2065,7 @@ function FileChangeRow({ file }: { file: FileChangeFile }) {
 
 	return (
 		<li className="flex flex-col">
-			<button
-				type="button"
+			<Pressable
 				onClick={() => setOpen((prev) => !prev)}
 				aria-expanded={open}
 				aria-label={accessibleName}
@@ -2108,7 +2079,7 @@ function FileChangeRow({ file }: { file: FileChangeFile }) {
 						open && "rotate-90",
 					)}
 				/>
-			</button>
+			</Pressable>
 			{open ? <Patch patch={file.patch!} truncated={file.patchTruncated} /> : null}
 		</li>
 	);
@@ -2235,8 +2206,7 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 
 	return (
 		<div className="min-w-0 max-w-full">
-			<button
-				type="button"
+			<Pressable
 				onClick={() => setOpen((prev) => !prev)}
 				disabled={!hasBody}
 				aria-expanded={hasBody ? open : undefined}
@@ -2248,9 +2218,10 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 			>
 				<strong
 					className={cn(
-						"activity-row-label shrink-0 text-xs font-normal",
+						"activity-row-label min-w-0 truncate text-xs font-normal",
 						failed ? "text-destructive" : "text-muted-foreground",
 					)}
+					title={tool}
 				>
 					<span>{tool}</span>
 				</strong>
@@ -2276,7 +2247,7 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 						className={cn("size-3 shrink-0 text-muted-foreground/40 transition-transform", open && "rotate-90")}
 					/>
 				) : null}
-			</button>
+			</Pressable>
 
 			<AnimatePresence initial={false}>
 				{open && hasBody ? (
@@ -2494,8 +2465,7 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 
 	return (
 		<div className="group/activity border-t border-border first:border-t-0">
-			<button
-				type="button"
+			<Pressable
 				onClick={() => setOpen((prev) => !prev)}
 				disabled={!hasBody}
 				aria-expanded={hasBody ? open : undefined}
@@ -2542,7 +2512,7 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 						)}
 					/>
 				) : null}
-			</button>
+			</Pressable>
 
 			{open && hasBody ? (
 				<div className="flex flex-col gap-2 px-[11px] pb-2.5">
@@ -2907,15 +2877,14 @@ function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
 				<Icon aria-hidden="true" className={cn("size-3.5 shrink-0", failed ? "text-destructive" : "text-muted-foreground")} />
 				<span className={cn("min-w-0 flex-1 text-xs", failed ? "text-destructive" : "text-foreground")}>{headline}</span>
 				{output ? (
-					<button
-						type="button"
+					<Pressable
 						aria-expanded={expanded}
-						className="inline-flex shrink-0 items-center gap-1 rounded text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+						className="inline-flex shrink-0 items-center gap-1 rounded text-xs text-muted-foreground hover:text-foreground"
 						onClick={() => setExpanded((value) => !value)}
 					>
 						{expanded ? <ChevronDown aria-hidden="true" className="size-3.5" /> : <ChevronRight aria-hidden="true" className="size-3.5" />}
 						{expanded ? t("chat.projectSetup.hideOutput") : t("chat.projectSetup.showOutput")}
-					</button>
+					</Pressable>
 				) : null}
 			</div>
 			{hint ? <p className="pl-6 text-xs text-muted-foreground">{hint}</p> : null}
@@ -3178,9 +3147,11 @@ export function ApprovalCard({
 
 				<div className="mt-2 flex flex-wrap justify-end gap-1.5">
 					{denyDecision ? (
-						<button
+						<Button
 							type="button"
-							className={QUIET_ACTION_PILL}
+							variant="secondary"
+							size="sm"
+							shape="pill"
 							disabled={busy}
 							onClick={() => onDecide?.(requestId, denyDecision.id)}
 						>
@@ -3190,14 +3161,16 @@ export function ApprovalCard({
 									Esc
 								</kbd>
 							) : null}
-						</button>
+						</Button>
 					) : null}
 
 					{allowOnceDecision ? (
-						<div className={ACCENT_ACTION_SHELL}>
-							<button
+						<div className="flex overflow-hidden rounded-full">
+							<Button
 								type="button"
-								className={ACCENT_ACTION_SEGMENT}
+								variant="accent"
+								size="sm"
+								className="rounded-none"
 								disabled={busy}
 								onClick={() => onDecide?.(requestId, allowOnceDecision.id)}
 							>
@@ -3205,18 +3178,20 @@ export function ApprovalCard({
 								<kbd className="rounded-full bg-logo-accent-foreground/15 p-0.5" aria-label="Press Return">
 									<CornerDownLeft aria-hidden="true" className="size-3" />
 								</kbd>
-							</button>
+							</Button>
 							{alternateAllowDecisions.length > 0 ? (
 								<DropdownMenu>
 									<DropdownMenuTrigger asChild>
-										<button
+										<Button
 											type="button"
+											variant="accent"
+											size="icon-sm"
 											aria-label="More approval options"
-											className="flex w-7 items-center justify-center border-l border-logo-accent-foreground/20 transition-colors hover:bg-logo-accent-bright focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+											className="rounded-none border-l border-l-logo-accent-foreground/20"
 											disabled={busy}
 										>
 											<ChevronDown aria-hidden="true" className="size-3.5" />
-										</button>
+										</Button>
 									</DropdownMenuTrigger>
 									<DropdownMenuContent
 										align="end"
@@ -3240,15 +3215,17 @@ export function ApprovalCard({
 						</div>
 					) : null}
 					{otherDecisions.map((decision) => (
-						<button
+						<Button
 							key={decision.id}
 							type="button"
-							className={QUIET_ACTION_PILL}
+							variant="secondary"
+							size="sm"
+							shape="pill"
 							disabled={busy}
 							onClick={() => onDecide?.(requestId, decision.id)}
 						>
 							{decisionLabel(decision)}
-						</button>
+						</Button>
 					))}
 					{decisions.length === 0 ? (
 						<p className="text-xs text-warning">
@@ -3459,13 +3436,14 @@ export function TurnChangedFiles({
 				) : null}
 				<span className="flex-1" />
 				{onReview ? (
-					<button
+					<Button
 						type="button"
+						variant="quiet"
+						size="xs"
 						onClick={onReview}
-						className="shrink-0 text-xs text-muted-foreground transition-colors hover:text-foreground"
 					>
 						Review
-					</button>
+					</Button>
 				) : null}
 			</div>
 
@@ -3514,14 +3492,13 @@ export function TurnChangedFiles({
 							{onOpenFile ? (
 								<Tooltip>
 									<TooltipTrigger asChild>
-										<button
-											type="button"
+										<Pressable
 											onClick={() => onOpenFile(tooltipPath)}
 											aria-label={`Open ${openPath} in Files`}
 											className={rowClass}
 										>
 											{body}
-										</button>
+										</Pressable>
 									</TooltipTrigger>
 									<TooltipContent side="top" className="max-w-[min(28rem,90vw)] font-mono text-caption font-normal">
 										{location}
@@ -3561,14 +3538,13 @@ export function TurnChangedFiles({
 			</ul>
 
 			{hidden > 0 ? (
-				<button
-					type="button"
+				<Pressable
 					onClick={() => setExpanded((prev) => !prev)}
 					aria-expanded={expanded}
 					className="flex w-full items-center gap-1.5 px-3 pb-2 text-left text-xs text-muted-foreground transition-colors hover:text-foreground"
 				>
 					{expanded ? "Show less" : `Show ${hidden} more`}
-				</button>
+				</Pressable>
 			) : null}
 
 			{diff.truncated ? (
@@ -3637,25 +3613,11 @@ function fileBasename(path: string): string {
 /* turn boundary                                                               */
 /* -------------------------------------------------------------------------- */
 
-/**
- * Turn wall-clock duration: inline after "Worked for", or on its own at the head of
- * the action row when the turn had no work to fold. On its own it still says what
- * the number is to a screen reader, since nothing visible does.
- */
-export function TurnDuration({ durationMs, inline = false }: { durationMs: number; inline?: boolean }) {
+/** Turn wall-clock duration, after "Worked for" at the head of a settled turn. */
+export function TurnDuration({ durationMs }: { durationMs: number }) {
 	if (durationMs <= 0) return null;
-	return (
-		<span
-			className={cn(
-				"shrink-0 font-sans text-sm leading-none tabular-nums text-muted-foreground",
-				inline ? "group-hover/row:text-foreground" : "pl-1.5 pr-0.5",
-			)}
-			data-turn-duration={inline ? undefined : ""}
-		>
-			{inline ? null : <span className="sr-only">Worked for </span>}
-			{formatDuration(durationMs)}
-		</span>
-	);
+	// The summary's own color (and the fold's hover color) carries the number with the words.
+	return <span className="shrink-0 font-sans text-sm leading-none tabular-nums">{formatDuration(durationMs)}</span>;
 }
 
 export { User };
