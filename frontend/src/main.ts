@@ -4401,6 +4401,26 @@ app.whenReady().then(async () => {
 	let bootstrapAttempted = false;
 	const bootstrap = await bootstrapDaemonWithRecovery({
 		start: async () => {
+			if (bootstrapAttempted && !daemonProcess && daemonStatus.pid) {
+				const previous = daemonStatus;
+				const epoch = daemonStartEpoch;
+				const current = () => !browserQuitRequested && !updateShutdownRequested && !daemonProcess && daemonStartEpoch === epoch && daemonStatus === previous;
+				const launch = resolveDaemonLaunch(daemonLaunchEnv(), app.isPackaged, process.resourcesPath, app.getAppPath(), os.homedir(), process.platform);
+				const running = runFilePath();
+				const existing = launch && running ? await inspectExistingDaemon(launch) : null;
+				if (!current()) return daemonStatus;
+				if (launch && running && existing?.status.pid && browserDaemonOwnershipDecision(appRunId, existing).action === "attach") {
+					const link = await verifyDesktopDaemonHandshake({
+						runFile: running, platform: process.platform, launch, attachedPid: existing.status.pid,
+						probe: readDaemonProbe, identityError: (probe) => daemonIdentityError(launch, probe),
+					});
+					if (!current()) return daemonStatus;
+					if (link) {
+						setDaemonStatus({ ...existing.status, state: "ready", pid: link.pid, port: link.port, executablePath: link.executable });
+						if (shouldLinkOnAttach(existing.owner)) establishSupervisorLink();
+					}
+				}
+			}
 			if (!bootstrapAttempted || (!daemonProcess && !daemonStatus.pid)) {
 				bootstrapAttempted = true;
 				return startDaemon();

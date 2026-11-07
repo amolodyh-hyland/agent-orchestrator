@@ -1,10 +1,17 @@
+// @vitest-environment node
 import { mkdtemp, mkdir, writeFile, rm, readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import vm from "node:vm";
+import ts from "typescript";
 import { afterEach, expect, it, vi } from "vitest";
 import { resolveDaemonLaunch } from "../shared/daemon-launch";
-import { type DaemonProber } from "../shared/daemon-attach";
-import { bootstrapDaemonBeforeFeatures, verifyDesktopDaemonHandshake } from "./desktop-daemon-bootstrap";
+import { resolveDaemonFromRunFile, type DaemonProber } from "../shared/daemon-attach";
+import { parseRunFile } from "../shared/daemon-discovery";
+import { browserDaemonOwnershipDecision } from "../shared/daemon-takeover";
+import type { DaemonStatus } from "../shared/daemon-status";
+import { bootstrapDaemonBeforeFeatures, bootstrapDaemonWithRecovery, verifyDesktopDaemonHandshake } from "./desktop-daemon-bootstrap";
 import { readDaemonProcessIdentity, type ProcessIdentityQuery } from "./daemon-process-identity";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -42,6 +49,133 @@ async function fixture(platform: NodeJS.Platform = "darwin") {
 	};
 	return { directory, executable, run, runFile, record, recordFile, execute, probe, options };
 }
+
+const source = ts.createSourceFile("main.ts", readFileSync(new URL("../main.ts", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true);
+let startSource = "";
+function findBootstrapStart(node: ts.Node): void {
+	if (ts.isCallExpression(node) && node.expression.getText(source) === "bootstrapDaemonWithRecovery") {
+		const options = node.arguments[0];
+		if (options && ts.isObjectLiteralExpression(options)) {
+			const start = options.properties.find((property) => property.name?.getText(source) === "start");
+			if (start && ts.isPropertyAssignment(start)) startSource = start.initializer.getText(source);
+		}
+	}
+	ts.forEachChild(node, findBootstrapStart);
+}
+findBootstrapStart(source);
+const inspectSource = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "inspectExistingDaemon")!.getText(source);
+const retryController = ts.transpileModule(`const bootstrapStart = ${startSource};\n${inspectSource}`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+
+function productionRetry(f: Awaited<ReturnType<typeof fixture>>) {
+	const verifiedPids: number[] = [];
+	const processIdentity = vi.fn(async () => ({ processStart: f.record.processStart, executable: f.executable }));
+	f.probe.mockImplementation(async (_port, endpoint) => ({ status: endpoint === "healthz" ? "ok" : "ready", service: "agent-orchestrator-daemon", pid: JSON.parse(await readFile(f.runFile, "utf8")).pid, executablePath: f.executable }));
+	const verify = vi.fn(async (options: Parameters<typeof verifyDesktopDaemonHandshake>[0]) => {
+		const link = await verifyDesktopDaemonHandshake({ ...options, processIdentity });
+		if (link) verifiedPids.push(link.pid);
+		return link;
+	});
+	let context: vm.Context;
+	const startDaemon = vi.fn(async () => context.daemonStatus);
+	const establishSupervisorLink = vi.fn();
+	context = vm.createContext({
+		bootstrapAttempted: false, daemonProcess: null, daemonStartEpoch: 0,
+		daemonStatus: { state: "ready", pid: f.run.pid, port: f.run.port },
+		browserQuitRequested: false, updateShutdownRequested: false, appRunId: f.run.appRunId,
+		process: { platform: "darwin", resourcesPath: f.directory }, os: { homedir: () => f.directory },
+		app: { isPackaged: true, getAppPath: () => f.directory }, resolveDaemonLaunch,
+		daemonLaunchEnv: () => ({ AO_DAEMON_COMMAND: `${f.executable} daemon` }),
+		runFilePath: () => f.runFile, readFile, parseRunFile, resolveDaemonFromRunFile,
+		processAlive: () => true, readDaemonProbe: f.probe, daemonIdentityError: () => null,
+		verifyDesktopDaemonHandshake: verify, browserDaemonOwnershipDecision,
+		shouldLinkOnAttach: () => true, establishSupervisorLink, startDaemon,
+		setDaemonStatus: (status: DaemonStatus) => {
+			if (status.pid && status.pid !== f.run.pid) expect(verifiedPids).toContain(status.pid);
+			context.daemonStatus = status;
+		},
+	});
+	vm.runInContext(retryController, context);
+	return {
+		context, verify, processIdentity, startDaemon, establishSupervisorLink,
+		start: () => vm.runInContext("bootstrapStart()", context) as Promise<unknown>,
+		status: () => context.daemonStatus as DaemonStatus,
+		handshake: async () => (await verify({ ...f.options, spawned: undefined, attachedPid: context.daemonStatus.pid })) !== null,
+	};
+}
+
+it("discovers and fully verifies adopted PID B on retry after PID A is replaced under a pinned launch ID", async () => {
+	const f = await fixture();
+	await rm(f.recordFile);
+	const h = productionRetry(f);
+	let now = 0;
+	const initializeFeatures = vi.fn(async () => { expect(h.status().pid).toBe(4343); });
+	const result = await bootstrapDaemonWithRecovery({
+		...h, attachment: () => h.status().pid ?? null, cancelled: () => false, initializeFeatures,
+		now: () => now, timeoutMs: 1, wait: async () => { now++; },
+		recover: async () => {
+			expect(h.status().pid).toBe(f.run.pid);
+			expect(initializeFeatures).not.toHaveBeenCalled();
+			await writeFile(f.runFile, JSON.stringify({ ...f.run, pid: 4343, owner: "persistent" }));
+			await writeFile(f.recordFile, JSON.stringify({ ...f.record, pid: 4343 }));
+			return "retry";
+		},
+	});
+	expect(result).toEqual({ state: "verified" });
+	expect(h.startDaemon).toHaveBeenCalledOnce();
+	expect(h.establishSupervisorLink).toHaveBeenCalledOnce();
+	expect(initializeFeatures).toHaveBeenCalledOnce();
+});
+
+it.each(["missing-record", "other-launch"])("does not publish an adopted replacement with %s or open features", async (failure) => {
+	const f = await fixture();
+	await rm(f.recordFile);
+	const h = productionRetry(f);
+	let now = 0;
+	let attempts = 0;
+	const initializeFeatures = vi.fn(async () => {});
+	const result = await bootstrapDaemonWithRecovery({
+		...h, attachment: () => h.status().pid ?? null, cancelled: () => false, initializeFeatures,
+		now: () => now, timeoutMs: 1, wait: async () => { now++; },
+		recover: async () => {
+			if (attempts++) return "leave-running";
+			await writeFile(f.runFile, JSON.stringify({ ...f.run, pid: 4343, appRunId: failure === "other-launch" ? "other" : f.run.appRunId }));
+			if (failure === "other-launch") await writeFile(f.recordFile, JSON.stringify({ ...f.record, pid: 4343 }));
+			return "retry";
+		},
+	});
+	expect(result).toEqual({ state: "unverified" });
+	expect(h.status().pid).toBe(f.run.pid);
+	expect(h.startDaemon).toHaveBeenCalledOnce();
+	expect(h.establishSupervisorLink).not.toHaveBeenCalled();
+	expect(initializeFeatures).not.toHaveBeenCalled();
+});
+
+it.each(["discovery", "verification"].flatMap((stage) => ["quit", "update", "attachment"].map((change) => ({ stage, change }))))("discards retry when $change changes during $stage", async ({ stage, change }) => {
+	const f = await fixture();
+	const h = productionRetry(f);
+	h.context.bootstrapAttempted = true;
+	await writeFile(f.runFile, JSON.stringify({ ...f.run, pid: 4343 }));
+	await writeFile(f.recordFile, JSON.stringify({ ...f.record, pid: 4343 }));
+	let release!: () => void;
+	const pending = new Promise<void>((resolve) => { release = resolve; });
+	if (stage === "discovery") {
+		const probe = f.probe.getMockImplementation()!;
+		f.probe.mockImplementationOnce(async (port, endpoint) => { await pending; return probe(port, endpoint); });
+	} else {
+		h.processIdentity.mockImplementationOnce(async () => { await pending; return { processStart: f.record.processStart, executable: f.executable }; });
+	}
+	const retry = h.start();
+	await vi.waitFor(() => expect(stage === "discovery" ? f.probe : h.processIdentity).toHaveBeenCalled());
+	if (change === "quit") h.context.browserQuitRequested = true;
+	if (change === "update") h.context.updateShutdownRequested = true;
+	if (change === "attachment") h.context.daemonStartEpoch++;
+	release();
+	await retry;
+	expect(h.status().pid).toBe(f.run.pid);
+	expect(h.verify).toHaveBeenCalledTimes(stage === "verification" ? 1 : 0);
+	expect(h.startDaemon).not.toHaveBeenCalled();
+	expect(h.establishSupervisorLink).not.toHaveBeenCalled();
+});
 
 it("opens the Windows feature gate through native identity verification with no Unix ps", async () => {
 	const f = await fixture("win32");
