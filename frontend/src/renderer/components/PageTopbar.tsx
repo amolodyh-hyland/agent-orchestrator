@@ -1,3 +1,4 @@
+import { SessionPaneContext, useSessionPaneFocused } from "./session-pane-context";
 import { createContext, useContext, useLayoutEffect, useRef, useState, type ComponentProps, type ComponentPropsWithoutRef, type CSSProperties, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
@@ -67,7 +68,8 @@ export function PageTopbarSurface({ children, notifications = false }: { childre
 /** Session controls join the panel's trailing group, immediately before the bell. */
 export function PageTopbarTrailingAction({ children }: { children: ReactNode }) {
 	const host = useContext(TopbarTrailingActionsContext);
-	return host ? createPortal(children, host) : null;
+	const focused = useSessionPaneFocused();
+	return host && focused ? createPortal(children, host) : null;
 }
 
 // Linux's fixed navigation cluster extends beyond the collapsed sidebar.
@@ -173,6 +175,7 @@ export function SessionTabsTopbar({
 	fullscreen?: boolean;
 }) {
 	const simplifiedTopbar = useSimplifiedTopbar();
+	const pane = useContext(SessionPaneContext);
 	return (
 		<PageTopbarFrame className={cn("items-stretch bg-sidebar", className)}>
 			<div className="session-topbar-surface flex min-w-0 flex-1" data-testid="session-workspace-topbar">
@@ -193,6 +196,7 @@ export function SessionTabsTopbar({
 					<div
 						className="session-topbar-actions ml-auto flex shrink-0 items-center"
 						data-testid="session-action-region"
+						style={pane?.split ? { paddingRight: 0 } : undefined}
 						data-fullscreen={fullscreen || undefined}
 					>
 						{hideActions ? null : (

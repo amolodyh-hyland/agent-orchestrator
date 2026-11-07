@@ -1,3 +1,4 @@
+import { SessionPaneContext } from "../components/session-pane-context";
 import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appShortcutBus } from "../test/app-shortcut-bus";
@@ -100,4 +101,22 @@ describe("useSessionShortcut", () => {
 		emit();
 		expect(handler).not.toHaveBeenCalled();
 	});
+});
+
+
+it("routes native shortcut events only to the focused pane", () => {
+	const first = vi.fn();
+	const second = vi.fn();
+	const panes = (focused: string) => <>
+		<SessionPaneContext.Provider value={{ id: "a", focused: focused === "a" }}><Session handler={first} /></SessionPaneContext.Provider>
+		<SessionPaneContext.Provider value={{ id: "b", focused: focused === "b" }}><Session handler={second} /></SessionPaneContext.Provider>
+	</>;
+	const { rerender } = render(panes("a"));
+	emit();
+	expect(first).toHaveBeenCalledTimes(1);
+	expect(second).not.toHaveBeenCalled();
+	rerender(panes("b"));
+	emit();
+	expect(first).toHaveBeenCalledTimes(1);
+	expect(second).toHaveBeenCalledTimes(1);
 });

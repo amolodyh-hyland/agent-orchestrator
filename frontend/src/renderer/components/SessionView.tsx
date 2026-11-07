@@ -1,3 +1,5 @@
+import { useSessionPaneCloseGuard } from "../hooks/useSessionPaneCloseGuard";
+import { SessionPaneContext, sessionPaneStaysMounted, useSessionPaneAutoFocus, useSessionPaneFocused } from "./session-pane-context";
 import { apiErrorException } from "../lib/api-error-exception";
 import { BrowserIcon } from "./icons";
 import { getApiBaseUrl } from "../lib/api-client";
@@ -8,6 +10,8 @@ import { useBlocker, useRouter } from "@tanstack/react-router";
 import { motion } from "motion/react";
 import {
 	useCallback,
+	useContext,
+	useId,
 	useEffect,
 	useLayoutEffect,
 	useMemo,
@@ -113,7 +117,7 @@ import {
 } from "../hooks/useWorkspaceQuery";
 import { subscribeChatReveal } from "../lib/chat-context-bus";
 import { useUnsavedLeaveGuard } from "../hooks/useUnsavedLeaveGuard";
-import { cloudDraftSessionKey, draftedFilePaths, unstoredFileDraftReasonFor } from "../lib/file-draft-store";
+import { cloudDraftSessionKey, draftedFilePaths, hasUnstoredFileDrafts, unstoredFileDraftReasonFor } from "../lib/file-draft-store";
 import {
 	readAONavigationLocationForHref,
 	subscribeNavigationRestore,
@@ -140,6 +144,7 @@ import { filesProjectKind } from "../lib/files-review-selection";
 import { aoBridge } from "../lib/bridge";
 import {
 	chatDraftDialogCopy,
+	type ChatDraftBoundaryKind,
 } from "../lib/chat-draft-boundary";
 import {
 	activateSessionFile,
@@ -259,6 +264,13 @@ function reviewerChatFromReviews(data?: ReviewsResponse): ReviewerChatTarget | u
 	const surface = workingReviewerSurface(data) ?? data?.reviewerSurface;
 	if (surface?.mode !== "chat" || !surface.reviewId) return undefined;
 	return { reviewId: surface.reviewId, harness: surface.harness || "codex" };
+}
+
+const visibleDraftRisks = new Map<string, readonly ChatDraftBoundaryKind[]>();
+function publishVisibleDraftRisk(clearEmpty = false) {
+	const risks = [...new Set([...visibleDraftRisks.values()].flat())];
+	if (risks.length || !clearEmpty) aoBridge.app.setChatDraftRisk?.(risks, chatDraftDialogCopy(risks));
+	else aoBridge.app.setChatDraftRisk?.([]);
 }
 
 type SessionViewProps = {
@@ -485,6 +497,10 @@ function CloudPausedStatus({ stage }: { stage: "paused" | "paused_by_coder" }) {
 }
 
 export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: SessionViewProps) {
+	const sessionPane = useContext(SessionPaneContext);
+	const paneFocused = useSessionPaneFocused();
+	const paneAutoFocus = useSessionPaneAutoFocus();
+	const draftRiskOwner = useId();
 	const { t } = useTranslation();
 	const router = useRouter();
 	const queryClient = useQueryClient();
@@ -556,14 +572,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		: undefined;
 	// Reading a cloud session counts as using it, so it is not idle-paused
 	// under someone who is watching the agent work.
-	useCloudSessionPresence(session?.cloud?.orgId, session?.cloud ? session.id : undefined, Boolean(session?.cloud));
+	useCloudSessionPresence(session?.cloud?.orgId, session?.cloud ? session.id : undefined, Boolean(session?.cloud) && sessionPane?.visible !== false);
 	const { draftBoundaries: chatDraftBoundaries, confirmUnsafeDraftLeave } = interfaceUi;
 	const remoteHostsEnabled = useUiStore((state) => state.remoteHosts);
 	const setRemoteHosts = useUiStore((state) => state.setRemoteHosts);
 	useBlocker({
 		disabled: chatDraftBoundaries.length === 0,
 		enableBeforeUnload: chatDraftBoundaries.length > 0,
-		shouldBlockFn: async () => {
+		shouldBlockFn: async (location) => {
+			if (sessionPane && location && sessionPaneStaysMounted(sessionPane.id, location.next.pathname)) return false;
 			const decision = await confirmUnsafeDraftLeave();
 			if (decision.kind === "cancelled") {
 				if (hostId && !remoteHostsEnabled) setRemoteHosts(true);
@@ -579,11 +596,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		},
 	});
 	useEffect(() => {
-		aoBridge.app.setChatDraftRisk?.(chatDraftBoundaries, chatDraftDialogCopy(chatDraftBoundaries));
-	}, [chatDraftBoundaries, t]);
+		visibleDraftRisks.set(draftRiskOwner, chatDraftBoundaries);
+		publishVisibleDraftRisk();
+	}, [chatDraftBoundaries, draftRiskOwner, t]);
 	useEffect(
-		() => () => aoBridge.app.setChatDraftRisk?.([]),
-		[sessionId],
+		() => () => { visibleDraftRisks.delete(draftRiskOwner); publishVisibleDraftRisk(true); },
+		[draftRiskOwner],
 	);
 	const { client: cloudCpClient, ready: cloudCpReady, baseUrl: cloudCpBaseUrl, userId: cloudCpUserId } = useCloudCp();
 	// The session's own organization decides whether it can be shared (feature=share).
@@ -666,12 +684,26 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const dirtyFiles = dirtyFilesBySession[uiSessionId] ?? {};
 	const activeFileDirty = Boolean(fileTabs.activePath && dirtyFiles[fileTabs.activePath]);
 	const draftSessionKey = session?.cloud ? cloudDraftSessionKey(session.cloud.orgId, sessionId) : uiSessionId;
+	useSessionPaneCloseGuard(sessionPane?.id ?? draftRiskOwner, draftSessionKey, async () => {
+		const decision = await confirmUnsafeDraftLeave();
+		if (decision.kind === "cancelled") return false;
+		if (decision.kind === "confirmed") discardCapturedPendingFileAttachments(decision.pendingAttachments);
+		return true;
+	});
+	useBlocker({
+		disabled: Object.keys(dirtyFiles).length === 0,
+		enableBeforeUnload: Object.keys(dirtyFiles).length > 0,
+		shouldBlockFn: (location) => {
+			if (sessionPane && sessionPaneStaysMounted(sessionPane.id, location.next.pathname)) return false;
+			return hasUnstoredFileDrafts(draftSessionKey) && !window.confirm(t("files.unsavedLeaveTooLargeConfirm"));
+		},
+	});
 	const activeFilePath = fileTabs.activePath;
 	const activeDraftUnstored = useCallback(
 		() => unstoredFileDraftReasonFor(draftSessionKey, activeFilePath) !== null,
 		[activeFilePath, draftSessionKey],
 	);
-	useUnsavedLeaveGuard(activeFileDirty, t("files.unsavedLeaveConfirm"), t("files.unsavedLeaveTooLargeConfirm"), activeDraftUnstored);
+	useUnsavedLeaveGuard(activeFileDirty && paneFocused, t("files.unsavedLeaveConfirm"), t("files.unsavedLeaveTooLargeConfirm"), activeDraftUnstored);
 	// Unsaved edits outlive this view (see file-draft-store): reopen their files so the editors
 	// remount with the drafts.
 	const draftsReopenedForRef = useRef<string | null>(null);
@@ -688,7 +720,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	useBlocker({
 		disabled: chatDraftBoundaries.length === 0,
 		enableBeforeUnload: chatDraftBoundaries.length > 0,
-		shouldBlockFn: async () => {
+		shouldBlockFn: async (location) => {
+			if (sessionPane && location && sessionPaneStaysMounted(sessionPane.id, location.next.pathname)) return false;
 			const decision = await confirmUnsafeDraftLeave();
 			if (decision.kind === "cancelled") {
 				if (hostId && !remoteHostsEnabled) setRemoteHosts(true);
@@ -775,12 +808,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		inspectorOverride?: Partial<Pick<SessionNavigationLocation, "inspectorView" | "inspectorOpen">>,
 		mode: "push" | "replace" = "push",
 	) => {
+		if (!paneFocused) return;
 		writeAONavigationLocation(router.history as unknown as NavigationHistoryLike, {
 			settingsModal: useUiStore.getState().settingsModal,
 			multicaActive: useMulticaStore.getState().view.active,
 			sessionView: createSessionNavigationLocation(target, inspectorOverride),
 		}, mode);
-	}, [createSessionNavigationLocation, router]);
+	}, [createSessionNavigationLocation, paneFocused, router]);
 	const recordCenterFileMode = useCallback((mode: FileViewMode) => {
 		const path = fileTabs.activePath;
 		if (!path) return;
@@ -1605,6 +1639,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// Closed file tabs, newest last, so ⌘⇧T can bring them back.
 	const closedFilePathsRef = useRef<Record<string, string[]>>({});
 	const closeCenterFile = useCallback((path: string) => {
+		const actualPath = centerFileRequestsBySession[uiSessionId]?.[path]?.path ?? path;
+		if (hasUnstoredFileDrafts(draftSessionKey, actualPath) && !window.confirm(t("files.unsavedLeaveTooLargeConfirm"))) return;
 		const closed = (closedFilePathsRef.current[uiSessionId] ??= []);
 		closed.push(path);
 		if (closed.length > 20) closed.shift();
@@ -1616,20 +1652,20 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			activateAuxiliaryTab(adjacentAuxiliaryTab(`file:${path}`));
 		}
 		removeAuxiliaryTab(`file:${path}`);
-	}, [activateAuxiliaryTab, adjacentAuxiliaryTab, fileTabs.activePath, removeAuxiliaryTab, uiSessionId]);
+	}, [activateAuxiliaryTab, adjacentAuxiliaryTab, centerFileRequestsBySession, draftSessionKey, fileTabs.activePath, removeAuxiliaryTab, t, uiSessionId]);
 	// The shell layout owns opening (it is mounted on every route, so the button
 	// and ⌘T / Ctrl+T work everywhere); this view only follows the result. When a new
 	// shell becomes active while a session is on screen, switch the pane to it —
 	// that is what makes the shortcut feel like it opened a terminal *here*.
 	useEffect(() => {
-		if (!activeShellTerminalHandleId) return;
+		if (!paneFocused || !activeShellTerminalHandleId) return;
 		const shell = shellTerminals.find((s) => s.handleId === activeShellTerminalHandleId);
 		if (!shell) return;
 		if (terminalTarget.kind === "shell" && terminalTarget.handleId === shell.handleId &&
 			terminalTarget.generation === shell.createdAt && terminalTarget.title === shell.title &&
 			!fileTabs.activePath && !reviewerChatId) return;
 		selectShellTerminal(shell.handleId);
-	}, [activeShellTerminalHandleId, fileTabs.activePath, reviewerChatId, selectShellTerminal, shellTerminals, terminalTarget]);
+	}, [activeShellTerminalHandleId, fileTabs.activePath, paneFocused, reviewerChatId, selectShellTerminal, shellTerminals, terminalTarget]);
 	// A tab selected while it was pending follows it to the shell it became.
 	// Only what still points at the pending tab moves: the user may have
 	// selected another tab in the meantime.
@@ -1954,6 +1990,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		!mainReviewerChatId &&
 		!mainActiveFilePath;
 
+	const selectSessionTerminalWithFocus = useCallback(() => {
+		sessionPane?.activate?.({ sessionId, projectId }); selectSessionTerminal();
+	}, [sessionPane?.activate, sessionId, projectId, selectSessionTerminal]);
+	const selectShellTerminalWithFocus = useCallback((handleId: string) => {
+		sessionPane?.activate?.({ sessionId, projectId }); selectShellTerminal(handleId);
+	}, [sessionPane?.activate, sessionId, projectId, selectShellTerminal]);
+	const selectReviewerTerminalWithFocus = useCallback((target: Parameters<typeof selectReviewerTerminal>[0]) => {
+		sessionPane?.activate?.({ sessionId, projectId }); selectReviewerTerminal(target);
+	}, [sessionPane?.activate, sessionId, projectId, selectReviewerTerminal]);
 	// Routes the selection to a tab; a grouped tab brings its group with it.
 	const selectTab = useCallback(
 		(key: string) => (key === SESSION_TAB_KEY ? selectSessionTerminal() : activateAuxiliaryTab(key)),
@@ -2008,6 +2053,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	useEffect(
 		() =>
 			!splitPanes ? undefined : registerPaneDropTarget({
+				containsSource: (source) => sessionSplitRef.current?.contains(source) ?? false,
 				// Other tabs come to the tab on screen; it never leaves itself. A
 				// member of the group on screen can still move within or out of it.
 				canDrag: (key) => {
@@ -2087,6 +2133,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		const sibling = selectedTabKey === key ? (members[index - 1] ?? members[index + 1]) : undefined;
 		if (key.startsWith("file:")) {
 			const path = key.slice("file:".length);
+			const actualPath = centerFileRequestsBySession[uiSessionId]?.[path]?.path ?? path;
+			if (hasUnstoredFileDrafts(draftSessionKey, actualPath) && !window.confirm(t("files.unsavedLeaveTooLargeConfirm"))) return;
 			const closed = (closedFilePathsRef.current[uiSessionId] ??= []);
 			closed.push(path);
 			if (closed.length > 20) closed.shift();
@@ -2226,6 +2274,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		const anchor = splittableKeys.has(selectedTabKey) ? selectedTabKey : SESSION_TAB_KEY;
 		const shell = openShellTerminal.open({ projectId: session.workspaceId, sessionId, cloud: session.cloud });
 		if (!shell) return;
+		sessionPane?.activate?.({ sessionId, projectId });
 		const key = shell.handleId;
 		updateGroups((current) => splitBeside(current, anchor, key, side));
 		setReviewerChatId(null);
@@ -2821,7 +2870,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							) : null}
 							{/* The committed mode owns the agent surface. Auxiliary shell and
 							    reviewer targets remain terminal surfaces in either mode. */}
-							<SplitCloseFocusedContext.Provider value={shownGroup ? closeFocusedPane : undefined}>
+							<SplitCloseFocusedContext.Provider value={shownGroup ? closeFocusedPane : sessionPane?.close}>
 							<SplitHiddenTabKeysContext.Provider value={groupedKeySet}>
 							<TabSplitMenuContext.Provider value={splitTabMenu}>
 							<div
@@ -2846,12 +2895,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									session={session}
 									sessionTabAction={sessionTabActions}
 									reviewerTerminal={reviewerTerminal}
-									onOpenReviewerTerminal={selectReviewerTerminal}
+									onOpenReviewerTerminal={selectReviewerTerminalWithFocus}
 									reviewerTarget={routedTerminalTarget.kind === "reviewer" ? routedTerminalTarget : undefined}
 
 									shellTerminals={shellTerminals}
 									shellTarget={routedTerminalTarget.kind === "shell" ? routedTerminalTarget : undefined}
-									onSelectShellTerminal={selectShellTerminal}
+									onSelectShellTerminal={selectShellTerminalWithFocus}
 									onCloseShellTerminal={closeShellTerminalByHandle}
 									onRenameShellTerminal={renameShellTerminalByHandle}
 									daemonReady={hostId ? Boolean(remoteBase) : daemonStatus.state === "ready"}
@@ -2878,7 +2927,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									reviewerTerminal={reviewerTerminal}
 									reviewerChat={reviewerChat}
 									reviewerChatSelected={Boolean(mainReviewerChatId)}
-									onOpenReviewerTerminal={selectReviewerTerminal}
+									onOpenReviewerTerminal={selectReviewerTerminalWithFocus}
 									onOpenReviewerChat={(target) => selectReviewerChat(target.reviewId)}
 									onSessionRenamed={refreshWorkspaces}
 									reviewerTarget={
@@ -2889,7 +2938,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									shellTarget={
 										routedTerminalTarget.kind === "shell" ? routedTerminalTarget : undefined
 									}
-									onSelectShellTerminal={selectShellTerminal}
+									onSelectShellTerminal={selectShellTerminalWithFocus}
 									onCloseShellTerminal={closeShellTerminalByHandle}
 									onRenameShellTerminal={renameShellTerminalByHandle}
 									daemonReady={hostId ? Boolean(remoteBase) : daemonStatus.state === "ready"}
@@ -2941,11 +2990,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									daemonReady={hostId ? Boolean(remoteBase) : daemonStatus.state === "ready"}
 									onCloseShellTerminal={closeShellTerminalByHandle}
 									onRenameShellTerminal={renameShellTerminalByHandle}
-									onSelectSessionTerminal={selectSessionTerminal}
+									onSelectSessionTerminal={selectSessionTerminalWithFocus}
 									onSessionTerminalAttached={onSessionTerminalAttached}
-									onSelectReviewerTerminal={selectReviewerTerminal}
+									onSelectReviewerTerminal={selectReviewerTerminalWithFocus}
 									onSelectReviewerChat={(target) => selectReviewerChat(target.reviewId)}
-									onSelectShellTerminal={selectShellTerminal}
+									onSelectShellTerminal={selectShellTerminalWithFocus}
 									reviewerTerminal={reviewerTerminal}
 									reviewerChat={reviewerChat}
 									reviewerChatSelected={Boolean(mainReviewerChatId)}
@@ -2984,7 +3033,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 														<SplitPaneTerminal
 															createMux={hostId ? paneCreateMux : undefined}
 															daemonReady={paneDaemonReady}
-															focusRequested={selectedTabKey === key}
+															focusRequested={paneAutoFocus && selectedTabKey === key}
 															session={session}
 															target={target}
 															theme={theme}
@@ -3140,7 +3189,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							onOpenArtifact={browserOnly ? undefined : handleOpenArtifact}
 							onOpenFiles={browserOnly ? undefined : handleOpenFiles}
 							onOpenReviewFile={handleOpenReviewFile}
-							onOpenReviewerTerminal={selectReviewerTerminal}
+							onOpenReviewerTerminal={selectReviewerTerminalWithFocus}
 							onOpenReviewerChat={selectReviewerChat}
 							onWorkerMessageSent={showChatSurface || reviewerChatId ? selectSessionTerminal : undefined}
 							onToggleBrowserPopOut={handleToggleBrowserPopOut}

@@ -1,3 +1,4 @@
+import { useSessionPaneAutoFocus } from "../session-pane-context";
 import { DictationControls, type DictationControlHandle } from "./DictationControls";
 import { hasCodeSelection } from "../diffs/SelectionStableContent";
 import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
@@ -307,7 +308,7 @@ export const ChatComposer = memo(function ChatComposer({
 	compactUnavailable,
 	compactBlocked,
 	autoFocusKey,
-	autoFocus = true,
+	autoFocus: autoFocusRequested = true,
 	draftSessionId,
 	draftSessionIncarnation,
 	assetBaseUrl,
@@ -959,18 +960,21 @@ export const ChatComposer = memo(function ChatComposer({
 			)
 		: queuedDock;
 
+	const paneAutoFocus = useSessionPaneAutoFocus();
+	const autoFocus = autoFocusRequested && paneAutoFocus;
 	const focusEditor = useCallback(() => {
-		if (!autoFocus || disabled) return;
+		if (disabled) return;
 		editor.current?.focus();
-	}, [autoFocus, disabled]);
+	}, [disabled]);
 
 	const previousAutoFocusKey = useRef(autoFocusKey);
 	useEffect(() => {
 		const changedSession = previousAutoFocusKey.current !== autoFocusKey;
 		previousAutoFocusKey.current = autoFocusKey;
+		if (!autoFocus) return;
 		if (!changedSession && (window.getSelection()?.isCollapsed === false || hasCodeSelection(document.body))) return;
 		focusEditor();
-	}, [autoFocusKey, focusEditor]);
+	}, [autoFocus, autoFocusKey, focusEditor]);
 
 	const hasQueuedDock = Boolean(queuedDock);
 	const restoreFocusAfterQueueAppears =

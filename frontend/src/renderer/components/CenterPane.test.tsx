@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import { useTopbarTabsStore } from "../stores/topbar-tabs-store";
 import { CenterPane } from "./CenterPane";
+import { SessionPaneContext } from "./session-pane-context";
 import { DropdownMenuItem } from "./ui/dropdown-menu";
 import { useUiStore } from "../stores/ui-store";
 import { TabSplitMenuContext } from "./TabContextMenu";
@@ -204,6 +205,24 @@ describe("CenterPane toolbar session label", () => {
 			workingDir: "/tmp/ws",
 			createdAt: "2026-07-22T00:00:00Z",
 		}));
+
+	it("requests terminal autofocus only for explicit pane activation", () => {
+		seedTopbarTabs(worker);
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const pane = (focused: boolean, autoFocus: boolean) => (
+			<QueryClientProvider client={queryClient}><TooltipProvider>
+				<SessionPaneContext.Provider value={{ id: "pane", focused, autoFocus }}>
+					<CenterPane daemonReady theme="dark" session={worker} />
+				</SessionPaneContext.Provider>
+			</TooltipProvider></QueryClientProvider>
+		);
+		const view = render(pane(false, false));
+		expect(screen.getByText("terminal body")).toHaveAttribute("data-focus-requested", "false");
+		view.rerender(pane(true, false));
+		expect(screen.getByText("terminal body")).toHaveAttribute("data-focus-requested", "false");
+		view.rerender(pane(true, true));
+		expect(screen.getByText("terminal body")).toHaveAttribute("data-focus-requested", "true");
+	});
 
 	it("shows the session display name while naming the harness accessibly", () => {
 		renderCenterPane({ session: worker });

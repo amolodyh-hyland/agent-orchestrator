@@ -1,3 +1,4 @@
+import { SessionPaneContext } from "../components/session-pane-context";
 import { act, render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appShortcutBus } from "../test/app-shortcut-bus";
@@ -78,4 +79,17 @@ describe("useAppShortcut window fallback", () => {
 		press({ key: "k", ctrlKey: true });
 		expect(handler).not.toHaveBeenCalled();
 	});
+});
+
+
+it("routes window keyboard chords only to the focused pane", () => {
+	const first = vi.fn();
+	const second = vi.fn();
+	render(<>
+		<SessionPaneContext.Provider value={{ id: "a", focused: false }}><App handler={first} /></SessionPaneContext.Provider>
+		<SessionPaneContext.Provider value={{ id: "b", focused: true }}><App handler={second} /></SessionPaneContext.Provider>
+	</>);
+	act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true, cancelable: true })));
+	expect(first).not.toHaveBeenCalled();
+	expect(second).toHaveBeenCalledTimes(1);
 });
