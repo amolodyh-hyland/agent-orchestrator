@@ -6608,25 +6608,13 @@ html[data-window-translucent="true"] .app-shell-root .ao-startup-screen {
 	visibility: visible;
 }
 
-/* The live page is a native view below the shell. Cut the tint out over its
- * rect (published by useBrowserView on .app-shell-root) so the page is not
- * tinted. The rect changes every frame while the inspector slides, so the
- * properties do not inherit: only this pseudo-element restyles, not the app. */
-@property --browser-hole-x { syntax: "<length>"; inherits: false; initial-value: 0px; }
-@property --browser-hole-y { syntax: "<length>"; inherits: false; initial-value: 0px; }
-@property --browser-hole-w { syntax: "<length>"; inherits: false; initial-value: 0px; }
-@property --browser-hole-h { syntax: "<length>"; inherits: false; initial-value: 0px; }
+/* Native pages sit below the shell. Exclude the union of their visible rectangles
+ * from the tint plate. Only the pseudo-element inherits the animated mask. */
+@property --browser-hole-mask { syntax: "*"; inherits: false; initial-value: none; }
 
 html[data-window-translucent="true"][data-browser-hole="true"]:has(.browser-panel[data-browser-native-page="live"]) .app-shell-root::before {
-	--browser-hole-x: inherit;
-	--browser-hole-y: inherit;
-	--browser-hole-w: inherit;
-	--browser-hole-h: inherit;
-	mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
-	mask-size: 100% 100%, var(--browser-hole-w) var(--browser-hole-h);
-	mask-position: 0 0, var(--browser-hole-x) var(--browser-hole-y);
-	mask-repeat: no-repeat;
-	mask-composite: exclude;
+	--browser-hole-mask: inherit;
+	mask: var(--browser-hole-mask);
 }
 
 /* Nightly build-info tooltip: a fixed deep-indigo card (theme independent) with a

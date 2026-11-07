@@ -17,6 +17,7 @@ import type {
 } from "../../shared/browser-annotations";
 import type { BrowserProfileViewState } from "../../shared/browser-profiles";
 import { aoBridge } from "../lib/bridge";
+import { publishBrowserHole } from "../lib/browser-hole-mask";
 import { subscribeBrowserOverlaySync } from "../lib/browser-overlay-sync";
 
 export type { BrowserNavState };
@@ -215,35 +216,6 @@ let nextLayoutRevision = Math.floor(globalThis.performance?.timeOrigin ?? Date.n
 function claimLayoutRevision(): number {
 	nextLayoutRevision += 1;
 	return nextLayoutRevision;
-}
-
-// The macOS translucent window tints the shell over the vibrancy blur. The live
-// page sits below the shell, so styles.css cuts the tint out over this rect
-// rather than tinting the page. Last visible view owns the hole.
-let browserHoleOwner: string | null = null;
-
-function publishBrowserHole(viewId: string, rect: BrowserRect | null): void {
-	const root = document.documentElement;
-	// Only the translucent window needs the hole.
-	if (rect && root.dataset.windowTranslucent !== "true") rect = null;
-	if (!rect) {
-		if (browserHoleOwner !== viewId) return;
-		browserHoleOwner = null;
-		delete root.dataset.browserHole;
-		return;
-	}
-	browserHoleOwner = viewId;
-	root.dataset.browserHole = "true";
-	// This runs on every frame of an inspector slide. The hole properties are
-	// registered non-inheriting (styles.css) and live on the shell root, whose
-	// tint pseudo-element alone reads them, so a write restyles that one element
-	// instead of the whole document, as :root custom properties did.
-	const shell = document.querySelector<HTMLElement>(".app-shell-root");
-	if (!shell) return;
-	shell.style.setProperty("--browser-hole-x", `${rect.x}px`);
-	shell.style.setProperty("--browser-hole-y", `${rect.y}px`);
-	shell.style.setProperty("--browser-hole-w", `${rect.width}px`);
-	shell.style.setProperty("--browser-hole-h", `${rect.height}px`);
 }
 
 // ResizeHandle.tsx sits at the inspector panel's left edge with a

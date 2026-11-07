@@ -237,6 +237,56 @@ describe("useBrowserView", () => {
 		resetNativeViewCacheForTest();
 	});
 
+	it.each([2, 4])("keeps all %i native page holes through overlay, resize, hide and close", async (count) => {
+		const bridge = setupBridge();
+		const root = document.documentElement;
+		root.dataset.windowTranslucent = "true";
+		const shell = document.createElement("div");
+		shell.className = "app-shell-root";
+		document.body.appendChild(shell);
+		const slots = Array.from({ length: count }, (_, index) => createSlot({ left: 12 + 340 * index, right: 332 + 340 * index }));
+		const views = slots.map((_, index) => renderHook(({ active }) => useBrowserView({ sessionId: `hole-${index}`, active, poppedOut: false }), { initialProps: { active: true } }));
+		const mask = () => shell.style.getPropertyValue("--browser-hole-mask");
+		const hole = (index: number) => `${12 + 340 * index}px 34px / 320px 240px`;
+		try {
+			await waitFor(() => views.forEach((view, index) => expect(view.result.current.viewId).toBe(`42:hole-${index}`)));
+			act(() => views.forEach((view, index) => view.result.current.slotRef(slots[index])));
+			await waitFor(() => slots.forEach((_, index) => expect(mask()).toContain(hole(index))));
+			expect(root).toHaveAttribute("data-browser-hole", "true");
+			const menu = document.createElement("div");
+			menu.setAttribute("role", "menu");
+			menu.setAttribute("data-browser-native-overlay", "true");
+			menu.setAttribute("data-state", "open");
+			document.body.appendChild(menu);
+			await waitFor(() => expect(bridge.setOverlayOpen).toHaveBeenLastCalledWith(true));
+			slots.forEach((_, index) => expect(mask()).toContain(hole(index)));
+
+			slots[0].getBoundingClientRect = () => ({ x: 20, y: 40, left: 20, top: 40, right: 220, bottom: 200, width: 200, height: 160, toJSON: () => ({}) });
+			act(() => window.dispatchEvent(new Event("resize")));
+			await waitFor(() => expect(mask()).toContain("20px 40px / 200px 160px"));
+			expect(mask()).not.toContain(hole(0));
+			for (let index = 1; index < count; index++) expect(mask()).toContain(hole(index));
+
+			views[0].rerender({ active: false });
+			await waitFor(() => expect(mask()).not.toContain("20px 40px / 200px 160px"));
+			expect(mask()).toContain(hole(1));
+			views[0].rerender({ active: true });
+			await waitFor(() => expect(mask()).toContain("20px 40px / 200px 160px"));
+			// Closing another owner must leave the first hole and overlay intact.
+			views[1].unmount();
+			expect(mask()).not.toContain(hole(1));
+			expect(mask()).toContain("20px 40px / 200px 160px");
+			expect(bridge.setOverlayOpen).toHaveBeenLastCalledWith(true);
+			menu.remove();
+			await waitFor(() => expect(bridge.setOverlayOpen).toHaveBeenLastCalledWith(false));
+		} finally {
+			views.forEach((view) => view.unmount());
+			delete root.dataset.windowTranslucent;
+		}
+		expect(root).not.toHaveAttribute("data-browser-hole");
+		expect(mask()).toBe("");
+	});
+
 	it("ensures a scoped browser view and reports the measured slot bounds", async () => {
 		const bridge = setupBridge();
 		const slot = createSlot();
