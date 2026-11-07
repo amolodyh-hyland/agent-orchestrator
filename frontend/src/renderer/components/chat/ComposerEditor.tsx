@@ -189,7 +189,7 @@ const completionHandledEvents = new WeakSet<Event>();
 const PROGRAMMATIC_TEXT_UPDATE_TAG = "ao:composer-programmatic-text";
 const COMPOSER_MARKDOWN_FORMAT_TAG = "ao:composer-markdown-format";
 const COMPOSER_CODE_BLOCK_STYLE =
-	"background-color: var(--card); border-radius: var(--radius-sm); padding-inline: 0.25rem";
+	"background-color: var(--ao-code-background, var(--card)); border-radius: var(--radius-sm); padding-inline: 0.25rem";
 
 type SerializedComposerTokenNode = Spread<
 	{

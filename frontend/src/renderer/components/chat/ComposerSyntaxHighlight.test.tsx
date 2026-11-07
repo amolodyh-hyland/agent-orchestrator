@@ -4,6 +4,9 @@ import { createRef } from "react";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { createEngine } from "../../lib/code-highlight-engine";
 import type { HighlightWorkerRequest } from "../../lib/code-highlight-protocol";
+import { CODE_TOKEN_COLORS } from "../../lib/code-style";
+import { contrastRatio } from "../../lib/theme-color";
+import { THEMES } from "../../lib/theme-palettes";
 import { useUiStore } from "../../stores/ui-store";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 
@@ -99,6 +102,34 @@ it("repaints light/dark palettes without a new worker request or caret move", as
 	expect(field.parentElement!.style.getPropertyValue("--ao-code-keyword")).not.toBe(dark);
 	expect(requests).toHaveLength(calls);
 	expect(editor.getEditorState().read(() => $getSelection()?.is(selection!))).toBe(true);
+});
+
+it.each(["dark", "light"] as const)("keeps fenced text and tokens on the selected code surface across all palettes in %s mode", async (mode) => {
+	useUiStore.setState({ defaultCodeBlockLanguage: "typescript", resolvedTheme: mode });
+	const { field } = setup("```\n// comment\nconst value = 23;\n```");
+	await waitFor(() => expect(highlighted("comment")).toContain("// comment"));
+	const commentRange = [...registry].find(([name]) => name.endsWith("-comment"))![1].values().next().value!;
+	const textElement = commentRange.startContainer.parentElement!.closest<HTMLElement>("code")!;
+	expect(textElement.closest(".chat-composer-code-body")).not.toBeNull();
+	for (const code of THEMES) {
+		act(() => useUiStore.setState({ codeColorTheme: code.id }));
+		for (const app of THEMES) {
+			field.parentElement!.style.setProperty("--card", app[mode].panel);
+			const computed = getComputedStyle(textElement);
+			// jsdom inherits custom properties but leaves var() in computed colors unresolved.
+			const resolveColor = (expression: string): string => {
+				const variable = /^var\((--[\w-]+)(?:,\s*(.*))?\)$/.exec(expression.trim());
+				return variable ? resolveColor(computed.getPropertyValue(variable[1]).trim() || variable[2] || "") : expression;
+			};
+			// Inspect the highlighted text itself: its inline background can cover the block surface.
+			const background = resolveColor(computed.backgroundColor);
+			const context = `${code.id} code over ${app.id} app in ${mode} mode`;
+			expect(background, context).toBe(code[mode].panel);
+			for (const [kind, color] of Object.entries(CODE_TOKEN_COLORS)) {
+				expect(contrastRatio(resolveColor(color), background), `${context}: ${kind}`).toBeGreaterThanOrEqual(4.5);
+			}
+		}
+	}
 });
 
 it("coalesces rapid edits and keeps inserted text editable", async () => {
