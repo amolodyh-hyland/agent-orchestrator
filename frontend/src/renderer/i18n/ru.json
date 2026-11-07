@@ -4251,5 +4251,7 @@
 	"outer.recordUnacknowledged": "Запись не подтверждена",
 	"outer.firstMailboxPage": "Первая страница",
 	"outer.nextMailboxPage": "Следующая страница",
-	"shell.tabs.newSessionInGroup": "Новая сессия в {{project}}"
+	"shell.tabs.newSessionInGroup": "Новая сессия в {{project}}",
+	"shell.tabs.menu.viewSplitPanes": "Открыть в разделённых панелях",
+	"shell.tabs.menu.newPaneRight": "Новая панель справа"
 }

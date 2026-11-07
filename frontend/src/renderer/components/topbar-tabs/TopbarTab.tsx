@@ -1,3 +1,5 @@
+import { useContext } from "react";
+import { SessionPaneContext } from "../session-pane-context";
 import { sameSessionTab, useTabSelectionStore } from "../../stores/tab-selection-store";
 import { STANDALONE_WORKSPACE_ID } from "../../types/workspace";
 import { isMacPlatform } from "../../lib/platform";
@@ -66,6 +68,7 @@ export const TopbarTab = memo(function TopbarTab({
 	accent,
 }: TopbarTabProps): JSX.Element {
 	const { t } = useTranslation();
+	const pane = useContext(SessionPaneContext);
 	const projectId = view.groupId === STANDALONE_WORKSPACE_ID ? undefined : view.groupId;
 	const selected = useTabSelectionStore((state) => Boolean(view.sessionId && state.selected.some((tab) => sameSessionTab(tab, { sessionId: view.sessionId!, projectId }))));
 	const wrapperRef = useRef<HTMLSpanElement>(null);
@@ -98,6 +101,7 @@ export const TopbarTab = memo(function TopbarTab({
 		density === "comfortable" ? "px-3 text-control" : "px-2 text-xs",
 		isProminent && "font-semibold text-foreground",
 		!isProminent && "max-w-[200px]",
+		pane?.split && "max-w-24!",
 	);
 	const actionButtonClassName = cn(
 		"self-center inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-none text-passive opacity-0 pointer-events-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/50 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-data-[active=true]:pointer-events-auto group-data-[active=true]:opacity-100",
@@ -201,7 +205,10 @@ export const TopbarTab = memo(function TopbarTab({
 							const activeId = active?.dataset.sessionId;
 							store.select({ sessionId: view.sessionId, projectId }, toggle, activeId ? { sessionId: activeId, projectId: active.dataset.groupId === STANDALONE_WORKSPACE_ID ? undefined : active.dataset.groupId } : undefined);
 						} else if (!toggle) store.clear();
-						if (!toggle) onActivate(view);
+						if (!toggle) {
+							if (view.sessionId) pane?.activate?.({ sessionId: view.sessionId, projectId });
+							onActivate(view);
+						}
 					}}
 					onDoubleClick={() => onPersist(view)}
 					onKeyDown={renameSession
