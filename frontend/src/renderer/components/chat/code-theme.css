@@ -122,3 +122,12 @@
 code.chat-code[data-highlighted="true"] {
 	color: var(--ao-code-foreground, var(--foreground));
 }
+
+.chat-code pre,
+code.chat-code {
+	background-color: var(--ao-code-background, var(--surface));
+}
+
+code.chat-code[data-highlighted="false"] {
+	color: var(--ao-code-foreground, var(--color-text-markdown-code));
+}

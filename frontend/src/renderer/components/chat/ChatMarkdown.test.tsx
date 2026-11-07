@@ -1001,7 +1001,7 @@ describe("ChatMarkdown math", () => {
 });
 
 describe("chat code appearance preferences", () => {
-	afterEach(() => useUiStore.setState({ defaultCodeBlockLanguage: "none", defaultInlineCodeLanguage: "none", codeColorTheme: "app", resolvedTheme: "dark" }));
+	afterEach(() => useUiStore.setState({ defaultCodeBlockLanguage: "none", defaultInlineCodeLanguage: "none", codeColorTheme: "app", resolvedTheme: "dark", themeStyle: "orchestrate" }));
 
 	it("highlights unlabeled fences and inline code with independent defaults", async () => {
 		useUiStore.setState({ defaultCodeBlockLanguage: "typescript", defaultInlineCodeLanguage: "python" });
@@ -1024,6 +1024,15 @@ describe("chat code appearance preferences", () => {
 		await waitFor(() => expect(blocks[0].querySelector(".hljs-keyword")).toHaveTextContent("def"));
 		expect(blocks[1].querySelector("[class^=hljs]")).toBeNull();
 		expect(blocks[2].querySelector("[class^=hljs]")).toBeNull();
+	});
+
+	it("applies a matching code surface to both block and inline palettes", () => {
+		useUiStore.setState({ codeColorTheme: "solarized", themeStyle: "nord", resolvedTheme: "dark" });
+		const { container } = render(<ChatMarkdown text={'```js\nconst value = 1;\n```\n\n`const inline = 2`'} />);
+		const block = container.querySelector("pre")!;
+		const inline = container.querySelector("code.chat-code")!;
+		expect(block.style.getPropertyValue("--ao-code-background")).not.toBe("");
+		expect(block.style.getPropertyValue("--ao-code-background")).toBe(inline.style.getPropertyValue("--ao-code-background"));
 	});
 
 	it("updates palettes and inline highlighting when preferences change", async () => {

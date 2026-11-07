@@ -354,8 +354,8 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
 					<CopyButton text={code} label="Copy code" />
 				</div>
 			</div>
-			<pre ref={collapsible ? setBody : undefined} id={bodyId} className="scrollbar-none overflow-auto px-3 py-2.5">
-				<code className="font-mono text-xs leading-[1.6] text-foreground" style={codeStyle}>
+			<pre ref={collapsible ? setBody : undefined} id={bodyId} className="scrollbar-none overflow-auto px-3 py-2.5" style={codeStyle}>
+				<code className="font-mono text-xs leading-[1.6] text-foreground">
 					<HighlightedCode code={code} language={grammar} streaming={streaming} />
 				</code>
 			</pre>

@@ -3237,6 +3237,8 @@ html.sidebar-reordering * {
 }
 
 .chat-composer-code-body {
+	background: var(--ao-code-background, transparent);
+	color: var(--ao-code-foreground, var(--foreground));
 	display: block;
 	max-height: 160px;
 	overflow: auto;
@@ -3245,7 +3247,13 @@ html.sidebar-reordering * {
 	font-family: var(--font-mono);
 }
 
+.chat-composer-inline-code .chat-composer-markdown-code {
+	background: var(--ao-code-background, var(--surface));
+	color: var(--ao-code-foreground, var(--color-text-markdown-code));
+}
+
 .chat-composer-code-block .chat-composer-markdown-code {
+	color: var(--ao-code-foreground, var(--foreground));
 	padding: 0;
 	background: transparent;
 }
