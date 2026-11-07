@@ -143,3 +143,34 @@ it("bounds DOM highlight ranges for densely tokenized code", async () => {
 	await waitFor(() => expect(highlighted("number")).toContain("1"));
 	expect([...registry.values()].reduce((total, ranges) => total + ranges.size, 0)).toBeLessThanOrEqual(10_000);
 });
+
+
+it.each(["edit", "remove"])("clears existing ranges immediately on %s while worker replies are held", async (operation) => {
+	useUiStore.setState({ defaultCodeBlockLanguage: "typescript" });
+	const { ref, editor } = setup("```\nconst original = 79;\n```");
+	await waitFor(() => expect(highlighted("number")).toContain("79"));
+	holdReplies = true;
+	if (operation === "edit") {
+		act(() => editor.update(() => {
+			$getRoot().getAllTextNodes().find((node) => node.getTextContent().includes("const original"))!.selectEnd();
+		}, { discrete: true }));
+		await act(async () => { editor.dispatchCommand(CONTROLLED_TEXT_INSERTION_COMMAND, " // changed"); });
+		expect(registry.size).toBe(0);
+		await waitFor(() => expect(replies.length).toBeGreaterThan(0));
+	}
+	act(() => ref.current!.setText("No code remains"));
+	expect(registry.size).toBe(0);
+	await act(async () => { for (const reply of replies.splice(0)) reply(); });
+	await act(async () => { await new Promise((resolve) => setTimeout(resolve, 120)); });
+	expect(registry.size).toBe(0);
+	expect(ref.current!.getSnapshot().text).toBe("No code remains");
+});
+
+it("clears existing ranges immediately when the editor root detaches", async () => {
+	useUiStore.setState({ defaultInlineCodeLanguage: "typescript" });
+	const { editor, field } = setup("`const detached = 83;`");
+	await waitFor(() => expect(highlighted("number")).toContain("83"));
+	act(() => editor.setRootElement(null));
+	expect(registry.size).toBe(0);
+	act(() => editor.setRootElement(field));
+});

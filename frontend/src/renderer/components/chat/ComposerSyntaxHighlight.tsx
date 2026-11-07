@@ -138,11 +138,12 @@ export function ComposerSyntaxHighlight() {
 			}
 		};
 		const schedule = () => {
+			clear();
 			revision += 1;
 			clearTimeout(timer);
 			if (!running && !disposed && !composing) timer = setTimeout(() => { void paint(); }, DEBOUNCE_MS);
 		};
-		const compositionStart = () => { composing = true; clear(); schedule(); };
+		const compositionStart = () => { composing = true; schedule(); };
 		const compositionEnd = () => { composing = false; schedule(); };
 		const removeRoot = editor.registerRootListener((root, previous) => {
 			previous?.removeEventListener("compositionstart", compositionStart);
