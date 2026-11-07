@@ -40,7 +40,7 @@ describe("shared task and project delegation dialog", () => {
 		expect(screen.getByLabelText("Delegation preview")).toHaveTextContent("https://multica.example");
 		expect(screen.getByLabelText("Delegation preview")).toHaveTextContent("approved Bound runtime ID");
 		expect(screen.getByLabelText("Delegation preview")).toHaveTextContent("No files, roots, attachments or history.");
-		expect(screen.getByLabelText("Delegation preview")).toHaveTextContent("Personal selection (no managed policy)");
+		expect(screen.getByLabelText("Delegation preview")).toHaveTextContent("Personal selection (no AO delegation rule)");
 		const confirm = screen.getByRole("button", { name: "Confirm delegation" });
 		expect(confirm).toHaveAttribute("data-delegation-preview-id", "preview");
 		expect(confirm).toHaveAttribute("data-delegation-preview-hash", "hash");

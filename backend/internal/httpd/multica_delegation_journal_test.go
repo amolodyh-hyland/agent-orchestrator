@@ -15,6 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/delegationauth"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
@@ -147,5 +148,71 @@ func TestMulticaPolicyUsesExistingPrivateBoundary(t *testing.T) {
 				t.Fatal("unauthorized policy evaluation")
 			}
 		})
+	}
+}
+
+func TestMulticaJournalNativeTransportThroughCORS(t *testing.T) {
+	key := bytes.Repeat([]byte{7}, 32)
+	authority, err := delegationauth.New(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range []struct{ name, body, response string }{
+		{"find", `{"operation":"find","requestNonce":"test","projectId":"p","taskId":"t"}`, "{\"record\":null}\n"},
+		{"evaluatePolicy", `{"operation":"evaluatePolicy","requestNonce":"test","policyRequest":{"action":"delegate","runtimeClass":"local"}}`, "{\"record\":{\"code\":\"policy_absent\"}}\n"},
+	} {
+		for _, transport := range []struct {
+			name, origin, site, mode, dest string
+			signed                         bool
+			status                         int
+		}{
+			{"native", "", "", "cors", "", true, http.StatusOK},
+			{"electron 44.7 net.fetch", "", "none", "no-cors", "empty", true, http.StatusForbidden},
+			{"browser", "https://example.com", "cross-site", "cors", "empty", true, http.StatusForbidden},
+			{"renderer", "app://renderer", "cross-site", "cors", "empty", true, http.StatusForbidden},
+			{"unsigned native", "", "", "cors", "", false, http.StatusForbidden},
+		} {
+			t.Run(operation.name+"/"+transport.name, func(t *testing.T) {
+				journal := &fakeDelegationJournal{}
+				policyCalls := 0
+				router := NewRouterWithControl(config.Config{AllowedOrigins: []string{"app://renderer"}}, discardLogger(), nil, APIDeps{
+					MulticaDelegations: journal, DelegationAuth: authority,
+					MulticaDelegationPolicy: func(context.Context, agentcreds.DelegationPolicyRequest) agentcreds.DelegationPolicyDecision {
+						policyCalls++
+						return agentcreds.DelegationPolicyDecision{Code: "policy_absent"}
+					},
+				}, ControlDeps{})
+				req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:9999/internal/multica-delegation-journal", strings.NewReader(operation.body))
+				for name, value := range map[string]string{"Origin": transport.origin, "Sec-Fetch-Site": transport.site, "Sec-Fetch-Mode": transport.mode, "Sec-Fetch-Dest": transport.dest} {
+					if value != "" {
+						req.Header.Set(name, value)
+					}
+				}
+				if transport.signed {
+					mac := hmac.New(sha256.New, key)
+					_, _ = mac.Write([]byte("journal-v1:" + operation.body))
+					req.Header.Set("X-AO-Delegation-MAC", hex.EncodeToString(mac.Sum(nil)))
+				}
+				response := httptest.NewRecorder()
+				router.ServeHTTP(response, req)
+				if response.Code != transport.status {
+					t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+				}
+				calls := len(journal.calls) + policyCalls
+				if transport.status == http.StatusOK {
+					if calls != 1 || response.Body.String() != operation.response {
+						t.Fatalf("calls=%d body=%s", calls, response.Body.String())
+					}
+					if response.Header().Get("X-AO-Delegation-Response-MAC") != authority.ResponseMAC(response.Body.Bytes(), req.Header.Get("X-AO-Delegation-MAC")) {
+						t.Fatal("unauthenticated native response")
+					}
+				} else if calls != 0 {
+					t.Fatal("blocked transport reached journal or policy")
+				}
+				if transport.site == "none" && !strings.Contains(response.Body.String(), `"code":"ORIGIN_FORBIDDEN"`) {
+					t.Fatalf("Electron metadata did not reproduce CORS rejection: %s", response.Body.String())
+				}
+			})
+		}
 	}
 }

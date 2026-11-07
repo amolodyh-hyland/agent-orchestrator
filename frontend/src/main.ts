@@ -1310,6 +1310,7 @@ async function createWindowInternal(): Promise<void> {
 	});
 	multicaDelegation = registerDesktopDelegation({
 		ipcMain, shellWebContents, authority: delegationConfirmation.authority,
+		daemonFetch: globalThis.fetch,
 		credentials: multicaCredentials,
 		readEnabled: () => readMulticaDelegationEnabled(browserProfileStateDir()),
 		writeEnabled: (enabled) => writeMulticaDelegationEnabled(browserProfileStateDir(), enabled),
