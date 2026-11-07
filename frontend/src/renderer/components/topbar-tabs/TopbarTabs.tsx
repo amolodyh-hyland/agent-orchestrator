@@ -1,3 +1,4 @@
+import { useTabSelectionStore } from "../../stores/tab-selection-store";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { ChevronLeft, ChevronRight } from "lucide-react";
@@ -36,6 +37,11 @@ export function TopbarTabs({
 	tabAction,
 }: TopbarTabsProps): JSX.Element {
 	const { t } = useTranslation();
+	useEffect(() => {
+		const onKeyDown = (event: globalThis.KeyboardEvent) => { if (event.key === "Escape") useTabSelectionStore.getState().clear(); };
+		window.addEventListener("keydown", onKeyDown);
+		return () => window.removeEventListener("keydown", onKeyDown);
+	}, []);
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
 	const { data: workspaces } = useWorkspaceQuery();
@@ -189,6 +195,7 @@ export function TopbarTabs({
 	};
 
 	const tabListProps = {
+		"aria-multiselectable": true,
 		"aria-label": t("shell.tabs.aria"),
 		"data-density": density,
 		"data-overflow": overflow,
