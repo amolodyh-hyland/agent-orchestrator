@@ -18,7 +18,7 @@
  */
 
 import { Fragment, useMemo, useState, type FocusEvent, type ReactNode } from "react";
-import { Check, ChevronDown, Hand, ListTodo, PencilLine, ShieldAlert, ShieldCheck, Shuffle, SlidersHorizontal, TriangleAlert, Zap, type LucideIcon } from "lucide-react";
+import { Check, ChevronDown, Hand, ListTodo, PencilLine, ShieldAlert, ShieldCheck, SlidersHorizontal, TriangleAlert, Zap, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
 	OptionMenu,
@@ -35,6 +35,7 @@ import { cn } from "../../lib/utils";
 import { effortDisplayLabel, EffortMenuItems, EffortPicker, formatEffortLabel } from "../settings/EffortPicker";
 import { agentModelDisplayLabel, claudeChoiceModel, isDefaultPlaceholderLabel, splitClaudeModels } from "../../lib/agent-model-choices";
 import { Switch } from "../ui/switch";
+import { Button, GHOST_PILL_CLASS } from "../ui/button";
 import { agentLabel } from "../../lib/agent-options";
 import { AgentModelPicker, AutoCompactRow, compactsEarly, ToggleRow, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
 import { ModelMenuChoices } from "./ModelMenuChoices";
@@ -113,8 +114,10 @@ export interface ApprovalModeLimits {
 	requested?: ApprovalMode;
 }
 
-export const TRIGGER_CLASS =
-	"h-7 gap-1 bg-transparent rounded-lg px-3 text-xs! leading-none text-muted-foreground hover:bg-interactive-active hover:text-foreground data-[state=open]:bg-interactive-active data-[state=open]:text-foreground";
+export const TRIGGER_CLASS = cn(
+	"h-7 gap-1 bg-transparent rounded-lg px-3 text-[length:var(--font-size-base)]! leading-none text-muted-foreground hover:text-foreground data-[state=open]:text-foreground",
+	GHOST_PILL_CLASS,
+);
 export const CHAT_MENU_CLASS = "chat-settings-menu text-xs!";
 
 export function TurnSettingsBar({
@@ -499,7 +502,6 @@ export function TurnSettingsBar({
 								loadingModels={modelsLoading}
 								savedModel={settings.model || lastModel}
 								title={reroute ? `The provider answered with ${rerouted} instead of ${reroute.fromModel ?? chosenLabel}` : undefined}
-								mark={reroute ? <Shuffle className="size-3 shrink-0 text-warning" aria-hidden="true" /> : undefined}
 								extras={pickerExtras}
 								onCloseAutoFocus={restoreComposerFocus}
 							/>
@@ -560,6 +562,7 @@ export function TurnSettingsBar({
 								title={startsInNote ?? `Approval policy for ${pendingAgent}`}
 								disabled={optionDisabled}
 								leadIcon={permissionIcon(permissionLook(pending.harness, pendingMode))}
+								showCaret
 								alert={Boolean(startsInNote)}
 							>
 								{startsInNote ? (
@@ -588,6 +591,7 @@ export function TurnSettingsBar({
 								onChange={(value) => applyOption(shownModeOption.id, value)}
 								footer={rememberAction}
 								leadIcon={unified ? permissionIcon(shownModeOption.choices.find((choice) => choice.value === shownModeOption.currentValue)?.permissionMode) : undefined}
+								showCaret
 							/>
 						) : showApprovalMode && onChange ? (
 							<Picker
@@ -595,6 +599,7 @@ export function TurnSettingsBar({
 													title="Approval policy for the next turn"
 													disabled={optionDisabled}
 								leadIcon={unified ? permissionIcon(permissionLook(harness, settings.approvalMode ?? "default")) : undefined}
+								showCaret
 							>
 								{approvalNote ? (
 									<p role="note" className="px-3 py-2 text-[11px] leading-snug text-muted-foreground">{approvalNote}</p>
@@ -639,17 +644,20 @@ export function TurnSettingsBar({
 							</Picker>
 						) : null}
 						{unified && planOn ? (
-							<button
+							<Button
 								type="button"
+								variant="quiet"
+								size="sm"
+								aria-pressed
 								disabled={optionDisabled}
 								onClick={leavePlan}
 								aria-label="Plan mode is on. Turn it off"
 								title="Plan mode is on. Click to turn it off"
-								className={cn(TRIGGER_CLASS, "inline-flex items-center px-2 text-foreground")}
+								className="rounded-lg"
 							>
 								<ListTodo aria-hidden="true" className="size-3.5 shrink-0" />
 								<span>Plan</span>
-							</button>
+							</Button>
 						) : null}
 					</div>
 				) : null}
@@ -804,18 +812,9 @@ function ModelEffortPicker({
 					className={TRIGGER_CLASS}
 				>
 					<span className="min-w-0 max-w-[38ch] truncate">{groupLabel}</span>
-					{reroute ? (
-						// A mark, not a second name. Two truncated model names side by side is
-						// less legible than one readable name plus a flag that says it is not
-						// the one that was asked for; the tooltip and the menu spell out which.
-						<Shuffle
-							className="size-3 shrink-0 text-warning"
-							aria-label={`Substituted for ${reroute.fromModel ?? chosenLabel}`}
-						/>
-					) : null}
 				</OptionMenuTrigger>
 			<OptionMenuContent align="start" className={CHAT_MENU_CLASS} onCloseAutoFocus={restoreComposerFocus}>
-				<OptionMenuSub>
+				<OptionMenuSub closeOnSelect>
 					<OptionMenuSubTrigger label="Model" value={modelLabel} />
 					{/* Scroll on an inner strip: the surface utility caps height but wheel
 					    events do not reliably reach an outer overflow on nested submenus. */}
@@ -840,7 +839,7 @@ function ModelEffortPicker({
 				</OptionMenuSub>
 
 				{efforts.length > 0 || savedEffort ? (
-					<OptionMenuSub>
+					<OptionMenuSub closeOnSelect>
 						<OptionMenuSubTrigger
 							label={t("settings.models.effort")}
 							value={effortDisplayLabel({ value: savedEffort, choices: effortChoices, followLabel: t("settings.models.effort"), t, defaultEffort })}
@@ -1007,7 +1006,7 @@ function EffortOptionSubmenu({
 	const { t } = useTranslation();
 	const followLabel = t("settings.models.effort");
 	return (
-		<OptionMenuSub>
+		<OptionMenuSub closeOnSelect>
 			<OptionMenuSubTrigger label={followLabel} value={effortDisplayLabel({ ...acpEffortProps(option), followLabel, t })} />
 			<OptionMenuSubContent className={CHAT_MENU_CLASS}>
 				<EffortMenuItems {...acpEffortMenuProps(option)} compact onChange={(value) => onChange(option.id, { value })} />
@@ -1149,7 +1148,7 @@ function MoreOptionsSubmenu({
 	onChange: (optionId: string, value: ChatConfigOptionValue) => void;
 }) {
 	return (
-		<OptionMenuSub>
+		<OptionMenuSub closeOnSelect>
 			<OptionMenuSubTrigger label="More" />
 			<OptionMenuSubContent className={CHAT_MENU_CLASS}>
 				{options.map((option) => (
@@ -1176,7 +1175,7 @@ function OptionSubmenu({
 }) {
 	const current = optionCurrentLabel(option);
 	return (
-		<OptionMenuSub>
+		<OptionMenuSub closeOnSelect>
 			<OptionMenuSubTrigger label={label ?? option.name} value={current} />
 			<OptionMenuSubContent
 				scrollable={scrollable}
@@ -1204,6 +1203,7 @@ function ConfigOptionPicker({
 	disabled,
 	footer,
 	leadIcon,
+	showCaret,
 	groupClaude,
 	align,
 }: {
@@ -1214,6 +1214,8 @@ function ConfigOptionPicker({
 	disabled?: boolean;
 	footer?: ReactNode;
 	leadIcon?: LucideIcon;
+	/** Set on the permission control only. */
+	showCaret?: boolean;
 	groupClaude?: boolean;
 	align?: "start" | "end";
 }) {
@@ -1224,6 +1226,7 @@ function ConfigOptionPicker({
 			title={title || option.description || option.name}
 			disabled={disabled}
 			leadIcon={leadIcon}
+			showCaret={showCaret}
 			onFocus={isModelOption(option) ? focusModelSearch : undefined}
 		>
 			{isModelOption(option) ? (
@@ -1577,6 +1580,7 @@ function Picker({
 	children,
 	onFocus,
 	leadIcon: LeadIcon,
+	showCaret = false,
 	alert,
 	align = "end",
 }: {
@@ -1587,6 +1591,8 @@ function Picker({
 	alert?: boolean;
 	/** Set on the permission control: marked with this. */
 	leadIcon?: LucideIcon;
+	/** Show the menu caret. Only the permission control does: it reads as a select. */
+	showCaret?: boolean;
 	/** A note that belongs on the trigger, e.g. the model that was overridden. */
 	badge?: React.ReactNode;
 	children: React.ReactNode;
@@ -1597,14 +1603,16 @@ function Picker({
 	return (
 		<OptionMenu>
 				<OptionMenuTrigger
-					showCaret={false}
+					showCaret={showCaret}
 					aria-label={title}
 					title={title}
 					disabled={disabled}
 					className={cn(TRIGGER_CLASS, LeadIcon ? "px-2" : undefined, alert ? "text-destructive" : undefined)}
 				>
+					{/* Never-ask mode is a standing risk: its shield keeps a warning tint so it
+					    never reads as one more muted label, while the text stays neutral. */}
 					{alert ? <TriangleAlert aria-hidden="true" className="size-3.5 shrink-0 text-destructive" />
-						: LeadIcon ? <LeadIcon aria-hidden="true" className="size-3.5 shrink-0" /> : null}
+						: LeadIcon ? <LeadIcon aria-hidden="true" className={cn("size-3.5 shrink-0", LeadIcon === ShieldAlert && "text-status-needs-you")} /> : null}
 					<span className="min-w-0 max-w-[16ch] truncate">{label}</span>
 					{badge}
 				</OptionMenuTrigger>

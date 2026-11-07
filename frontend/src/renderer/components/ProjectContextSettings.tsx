@@ -1,8 +1,9 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useEffect, useId, useRef, useState, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { ProjectSettingsSection, ProjectSettingsRow } from "@aoagents/product-ui";
 import type { components } from "../../api/schema";
-import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
+import { apiErrorCode } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { aoBridge } from "../lib/bridge";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
@@ -40,7 +41,7 @@ export function ProjectContextSettings({ project, hostId, disabled, onSaved, onS
 			const selected = await aoBridge.app.chooseProjectContextLink({ kind, title: t(kind === "file" ? "projectContext.addFile" : "projectContext.addFolder") });
 			if (!selected) return;
 			const { data, error } = await clientForSessionHost().GET("/api/v1/identity");
-			if (error || !data?.hostId) throw new Error(apiErrorMessage(error));
+			if (error || !data?.hostId) throw apiErrorException(error);
 			const name = selected.name.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 80) || "link";
 			const bindingId = `${name}_${crypto.randomUUID().slice(0, 8)}`;
 			change({ ...draft, attachments: [...attachments, { id: bindingId, sourceKind: "machine_local_file", sourceRef: crypto.randomUUID(), localPath: selected.localPath, machineId: data.hostId, mediaType: selected.mediaType, required: false, enabled: true, position: Math.max(-1, ...attachments.map((item) => item.position)) + 1, roles: ["shared"] }] });
@@ -63,12 +64,12 @@ export function ProjectContextSettings({ project, hostId, disabled, onSaved, onS
 			if (error) {
 				if (apiErrorCode(error) === "PROJECT_REVISION_CONFLICT") {
 					const latest = await client.GET("/api/v1/projects/{id}", { params: { path: { id: project.id } } });
-					if (latest.error) throw new Error(apiErrorMessage(latest.error));
+					if (latest.error) throw apiErrorException(latest.error);
 					if (latest.data?.status !== "ok") throw new Error(t("settings.project.degraded"));
 					setConflict(latest.data.project as Project);
 					return false;
 				}
-				throw new Error(apiErrorMessage(error));
+				throw apiErrorException(error);
 			}
 			if (!data) throw new Error(t("settings.project.saveFailed"));
 			reload(data.project); setSaved(true); onSaved();

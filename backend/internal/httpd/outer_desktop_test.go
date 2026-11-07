@@ -132,7 +132,7 @@ func TestOuterDesktopNativeRouteCoverageAndAnchorHold(t *testing.T) {
 }
 
 func TestNewUpstreamMutationsStayHeldWithoutNativeCapability(t *testing.T) {
-	for _, key := range []string{"DELETE /api/v1/sessions/{sessionId}", "PATCH /api/v1/settings/session-retention"} {
+	for _, key := range []string{"DELETE /api/v1/sessions/{sessionId}", "PATCH /api/v1/settings/session-retention", "POST /api/v1/agents/{agent}/auth/operations", "DELETE /api/v1/agents/{agent}/auth/operations/{operationId}", "POST /api/v1/agents/{agent}/auth/operations/{operationId}/code"} {
 		route := outerDesktopRoutes[key]
 		if route.Mode != "held" || route.Operation != "native_only" || outerMutationManifest[key] != "native_only" {
 			t.Fatalf("new mutation is not held: %s: %+v", key, route)

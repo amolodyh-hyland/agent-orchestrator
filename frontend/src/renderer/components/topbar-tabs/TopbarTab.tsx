@@ -1,3 +1,5 @@
+import { beginPaneTabDrag } from "../../lib/pane-drag";
+import { SESSION_TAB_KEY } from "../../lib/pane-split";
 import { MoreVertical, X } from "lucide-react";
 import { memo, useLayoutEffect, useRef, useState, type CSSProperties, type JSX, type MouseEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -119,6 +121,11 @@ export const TopbarTab = memo(function TopbarTab({
 			data-mode={view.mode}
 			data-role={view.role}
 			data-testid="topbar-tab"
+			data-terminal-tab-key={view.isActive && view.session ? SESSION_TAB_KEY : undefined}
+			onPointerDown={(event) => {
+				if (!view.isActive || !view.session || (event.target as HTMLElement).closest("button:not([role=tab]),input,a")) return;
+				beginPaneTabDrag(event, SESSION_TAB_KEY, event.currentTarget);
+			}}
 			style={accentStyle}
 			onAuxClick={handleAuxClick}
 			onMouseDown={(event) => {
