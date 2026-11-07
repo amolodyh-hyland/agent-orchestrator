@@ -1026,6 +1026,21 @@ describe("chat code appearance preferences", () => {
 		expect(blocks[2].querySelector("[class^=hljs]")).toBeNull();
 	});
 
+	it.each([".env", "@config", "js/custom"])("preserves the explicit label %s in agent and user messages", async (label) => {
+		useUiStore.setState({ defaultCodeBlockLanguage: "typescript" });
+		const source = "```" + label + "\nconst explicit = 1;\n```";
+		const { container } = render(<>
+			<ChatMarkdown text={source} />
+			<ChatCodeText text={source} renderText={(text) => <span>{text}</span>} />
+			<ChatMarkdown text={'```\nconst defaulted = 2;\n```'} />
+		</>);
+		const blocks = container.querySelectorAll("pre");
+		await waitFor(() => expect(blocks[2].querySelector(".hljs-keyword")).toHaveTextContent("const"));
+		expect(screen.getAllByText(label)).toHaveLength(2);
+		expect(blocks[0].querySelector("[class^=hljs]")).toBeNull();
+		expect(blocks[1].querySelector("[class^=hljs]")).toBeNull();
+	});
+
 	it("applies a matching code surface to both block and inline palettes", () => {
 		useUiStore.setState({ codeColorTheme: "solarized", themeStyle: "nord", resolvedTheme: "dark" });
 		const { container } = render(<ChatMarkdown text={'```js\nconst value = 1;\n```\n\n`const inline = 2`'} />);
