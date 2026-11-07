@@ -1,6 +1,7 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "../ui/tooltip";
+import { useUiStore } from "../../stores/ui-store";
 import { useTopbarTabsStore } from "../../stores/topbar-tabs-store";
 import { EMPTY_TOPBAR_TABS } from "../../lib/topbar-tabs";
 import { TopbarTabGroup } from "./TopbarTabGroup";
@@ -70,6 +71,22 @@ describe("TopbarTabGroup", () => {
 		expect(tabs).toHaveLength(2);
 		expect(tabs[0]).toHaveTextContent("Project One");
 		expect(tabs[1]).toHaveTextContent("Task One");
+	});
+
+	it("starts a session in each button's own project, after its final visible tab", () => {
+		const request = vi.spyOn(useUiStore.getState(), "requestNewTask");
+		renderGroup(makeGroup());
+		renderGroup(makeGroup({ id: "project-2", name: "Project Two", collapsed: true }));
+		const buttons = screen.getAllByTestId("topbar-group-new-session");
+		for (const button of buttons) {
+			expect(button).toBe(button.parentElement?.lastElementChild);
+			expect(button).toHaveAttribute("title", button.getAttribute("aria-label"));
+		}
+		fireEvent.click(buttons[0]);
+		expect(request).toHaveBeenLastCalledWith("project-1");
+		fireEvent.click(buttons[1]);
+		expect(request).toHaveBeenLastCalledWith("project-2");
+		request.mockRestore();
 	});
 
 	it("passes one accent to every tab in the group", () => {

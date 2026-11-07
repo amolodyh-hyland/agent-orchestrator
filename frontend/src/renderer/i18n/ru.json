@@ -4250,5 +4250,6 @@
 	"outer.recordAcknowledged": "Запись подтверждена",
 	"outer.recordUnacknowledged": "Запись не подтверждена",
 	"outer.firstMailboxPage": "Первая страница",
-	"outer.nextMailboxPage": "Следующая страница"
+	"outer.nextMailboxPage": "Следующая страница",
+	"shell.tabs.newSessionInGroup": "Новая сессия в {{project}}"
 }

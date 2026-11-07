@@ -1,3 +1,7 @@
+import { Plus } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { useUiStore } from "../../stores/ui-store";
+import { topbarNoDragStyle } from "./topbar-drag-region";
 import type { JSX } from "react";
 import type { TabDensity } from "../../stores/topbar-tabs-store";
 import { TopbarTab, type SessionTabActions, type TopbarTabProps } from "./TopbarTab";
@@ -32,6 +36,7 @@ export function TopbarTabGroup({
 	renderMenu,
 	tabAction,
 }: TopbarTabGroupProps): JSX.Element {
+	const { t } = useTranslation();
 	const views = [
 		...(group.head ? [group.head] : []),
 		...(!group.collapsed ? group.tabs : []),
@@ -77,6 +82,17 @@ export function TopbarTabGroup({
 					view={view}
 				/>
 			)) : null}
+			<button
+				aria-label={t("shell.tabs.newSessionInGroup", { project: group.name })}
+				title={t("shell.tabs.newSessionInGroup", { project: group.name })}
+				className="mx-1 inline-flex size-6 shrink-0 self-center items-center justify-center rounded-sm border border-border text-passive hover:bg-interactive-hover hover:text-foreground"
+				data-testid="topbar-group-new-session"
+				onClick={() => useUiStore.getState().requestNewTask(group.id)}
+				style={topbarNoDragStyle()}
+				type="button"
+			>
+				<Plus aria-hidden="true" className="size-3.5" />
+			</button>
 		</div>
 	);
 	return content;
