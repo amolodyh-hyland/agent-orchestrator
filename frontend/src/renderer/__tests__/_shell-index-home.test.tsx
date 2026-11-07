@@ -440,7 +440,7 @@ describe("shell index route", () => {
 
 describe("shell center route tabs", () => {
 	it("renders the flat tab row above the outlet on board routes", () => {
-		render(<ShellCenter isHomeRoute={false} isSessionRoute={false} selfFramedCenterPanel={false} startingOrchestrator={false} startingCloudOrchestrator={false} />);
+		render(<ShellCenter isNewChatRoute={false} isHomeRoute={false} isSessionRoute={false} selfFramedCenterPanel={false} startingOrchestrator={false} startingCloudOrchestrator={false} />);
 
 		const row = screen.getByTestId("topbar-tabs-row");
 		const shellTopbar = screen.getByTestId("route-outlet");
@@ -448,14 +448,14 @@ describe("shell center route tabs", () => {
 	});
 
 	it("omits the shell tab row on session routes", () => {
-		render(<ShellCenter isHomeRoute={false} isSessionRoute={true} selfFramedCenterPanel={false} startingOrchestrator={false} startingCloudOrchestrator={false} />);
+		render(<ShellCenter isNewChatRoute={false} isHomeRoute={false} isSessionRoute={true} selfFramedCenterPanel={false} startingOrchestrator={false} startingCloudOrchestrator={false} />);
 
 		expect(screen.queryByTestId("topbar-tabs-row")).not.toBeInTheDocument();
 		expect(screen.getByTestId("route-outlet")).toBeInTheDocument();
 	});
 
 	it("omits the shell tab row while a project orchestrator is starting", async () => {
-		render(<ShellCenter isHomeRoute={false} isSessionRoute={false} selfFramedCenterPanel={false} startingOrchestrator={true} startingCloudOrchestrator={false} />);
+		render(<ShellCenter isNewChatRoute={false} isHomeRoute={false} isSessionRoute={false} selfFramedCenterPanel={false} startingOrchestrator={true} startingCloudOrchestrator={false} />);
 
 		expect(screen.queryByTestId("topbar-tabs-row")).not.toBeInTheDocument();
 		expect(await screen.findByTestId("orchestrator-starting-chat")).toBeInTheDocument();

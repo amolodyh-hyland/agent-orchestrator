@@ -4,6 +4,7 @@ import { Loader2, MessageSquare, Play, Plus, TerminalSquare } from "lucide-react
 import { useQueryClient } from "@tanstack/react-query";
 import { useUiStore } from "../../stores/ui-store";
 import { useTopbarTabsStore } from "../../stores/topbar-tabs-store";
+import { useSimplifiedTopbar } from "../../hooks/useSimplifiedTopbar";
 import { apiErrorMessage } from "../../lib/api-client";
 import { useCueHost, useInvokeCueMutation, useProjectCuesQuery } from "../../hooks/useCuesQuery";
 import { fetchProjectCues, invokeCloudCue, projectCuesQueryKey, type CueDTO } from "../../lib/cues";
@@ -33,12 +34,15 @@ export function CueRunMenu({
 	sessionId,
 	cloudOrgId,
 	disabled = false,
+	onRun,
 }: {
 	projectId: string;
 	sessionId: string;
 	/** A Cloud session's organization: its project's cues live on the control plane. */
 	cloudOrgId?: string;
 	disabled?: boolean;
+	/** Called once per cue dispatch, from the trigger or the menu. */
+	onRun?: () => void;
 }) {
 	return (
 		<CueRunMenuTrigger
@@ -47,6 +51,7 @@ export function CueRunMenu({
 			sessionId={sessionId}
 			cloudOrgId={cloudOrgId}
 			disabled={disabled}
+			onRun={onRun}
 		/>
 	);
 }
@@ -56,13 +61,18 @@ function CueRunMenuTrigger({
 	sessionId,
 	cloudOrgId,
 	disabled,
+	onRun,
 }: {
 	projectId: string;
 	sessionId: string;
 	cloudOrgId?: string;
 	disabled: boolean;
+	onRun?: () => void;
 }) {
 	const { t } = useTranslation();
+	// The hover-highlight and focus handling below belong to the simplified top
+	// bar; the previous one keeps the menu exactly as it was.
+	const simplifiedTopbar = useSimplifiedTopbar();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const queryClient = useQueryClient();
 	const setActiveShellTerminal = useUiStore((state) => state.setActiveShellTerminal);
@@ -78,6 +88,10 @@ function CueRunMenuTrigger({
 	// pointer is still inside. Escape is the keyboard escape hatch.
 	const pointerInsideControl = useRef(false);
 	const escapeRequested = useRef(false);
+	// A menu the pointer opened must not hand focus back to the trigger when it
+	// closes: Chromium can mark that returned focus :focus-visible, which keeps
+	// the hover highlight lit after the pointer has left.
+	const openedByPointer = useRef(false);
 	const invokeMutation = useInvokeCueMutation();
 	const cloud = useCueHost(cloudOrgId);
 	const openShellTerminal = useOpenShellTerminal();
@@ -106,7 +120,10 @@ function CueRunMenuTrigger({
 		pointerInsideControl.current = true;
 		cancelHoverClose();
 		if (disabled || spinner || creating) return;
-		if (!open) openMenu();
+		if (!open) {
+			openedByPointer.current = true;
+			openMenu();
+		}
 	};
 
 	const handlePointerLeave = () => {
@@ -128,6 +145,7 @@ function CueRunMenuTrigger({
 	const handleOpenChange = (next: boolean) => {
 		if (next) {
 			if (creating) return;
+			openedByPointer.current = false;
 			openMenu();
 			return;
 		}
@@ -140,6 +158,7 @@ function CueRunMenuTrigger({
 	const handleInvoke = async (cue: CueDTO) => {
 		if (pending.current) return;
 		pending.current = true;
+		onRun?.();
 		const origin = generation.current;
 		setInvokingId(cue.id);
 		try {
@@ -207,6 +226,7 @@ function CueRunMenuTrigger({
 			// Nothing to run: leave the hover menu up so its empty state can
 			// offer creating the first cue.
 			if (!lastCue) {
+				openedByPointer.current = true;
 				openMenu();
 				return;
 			}
@@ -227,10 +247,11 @@ function CueRunMenuTrigger({
 						ref={buttonRef}
 						type="button"
 						aria-label={t("cues.run")}
-						// The menu is anchored to this button: pressing must not scale it,
-						// or the open menu shifts with the trigger.
-						className="topbar-control--static-press"
+						className={simplifiedTopbar ? "aria-expanded:text-muted-foreground aria-expanded:hover:text-foreground" : undefined}
 						data-priority="secondary"
+						// The menu opens on hover, so "open" just means "hovered": keep
+						// the same hover highlight as the other top bar icons.
+						highlightActive={simplifiedTopbar ? false : undefined}
 						disabled={disabled || spinner}
 						variant="icon"
 						onPointerEnter={handlePointerEnter}
@@ -267,6 +288,9 @@ function CueRunMenuTrigger({
 						onEscapeKeyDown={() => {
 							escapeRequested.current = true;
 						}}
+						onCloseAutoFocus={(event) => {
+							if (simplifiedTopbar && openedByPointer.current) event.preventDefault();
+						}}
 					/>
 				) : null}
 			</DropdownMenu>
@@ -285,6 +309,7 @@ function CueMenuItems({
 	onPointerEnter,
 	onPointerLeave,
 	onEscapeKeyDown,
+	onCloseAutoFocus,
 }: {
 	projectId: string;
 	cloudOrgId?: string;
@@ -294,6 +319,7 @@ function CueMenuItems({
 	onPointerEnter: () => void;
 	onPointerLeave: () => void;
 	onEscapeKeyDown: () => void;
+	onCloseAutoFocus: (event: Event) => void;
 }) {
 	const { t } = useTranslation();
 	const query = useProjectCuesQuery(projectId, true, cloudOrgId);
@@ -315,6 +341,7 @@ function CueMenuItems({
 			onPointerEnter={onPointerEnter}
 			onPointerLeave={onPointerLeave}
 			onEscapeKeyDown={onEscapeKeyDown}
+			onCloseAutoFocus={onCloseAutoFocus}
 		>
 			{query.isError && !query.isFetching ? (
 				<>

@@ -1,8 +1,8 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { sessionProjectContextQueryKey } from "../lib/session-project-context";
-import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 
 export function SessionProjectContext({ sessionId, hostId, startupPending = false }: { sessionId: string; hostId?: string; startupPending?: boolean }) {
@@ -16,7 +16,7 @@ export function SessionProjectContext({ sessionId, hostId, startupPending = fals
 		retry: false,
 		queryFn: async () => {
 			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/project-context", { params: { path: { sessionId } } });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			return data?.manifest ?? null;
 		},
 	});

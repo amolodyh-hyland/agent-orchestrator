@@ -126,4 +126,18 @@ describe("TitlebarNav", () => {
 		expect(onResize).toHaveBeenCalledTimes(3);
 		window.removeEventListener("resize", onResize);
 	});
+
+	it("enables Settings Back even on home without route history", () => {
+		useUiStore.setState({ isSidebarOpen: false });
+		const onBack = vi.fn();
+		history.back.mockClear();
+		const { rerender } = render(<TitlebarNav historyLocked onBack={onBack} />);
+		const back = screen.getByRole("button", { name: "Go back" });
+		expect(back).toBeEnabled();
+		fireEvent.click(back);
+		expect(onBack).toHaveBeenCalledTimes(1);
+		expect(history.back).not.toHaveBeenCalled();
+		rerender(<TooltipProvider><TitlebarNav historyLocked /></TooltipProvider>);
+		expect(back).toBeDisabled();
+	});
 });
