@@ -3075,7 +3075,8 @@ async function shutdownDaemonForDesktopQuit(): Promise<void> {
 		keepAlive: keepDaemonAlive(process.env),
 		appRunId,
 		status: daemonStatus,
-		preserveAgents: () => preserveAgentsOnQuit || isUpdateRestartRequested(),
+		// The authenticated external updater also replaces the desktop without stopping agents.
+		preserveAgents: () => updateShutdownRequested || preserveAgentsOnQuit || isUpdateRestartRequested(),
 		readRunInfo: async () => {
 			const handshakePath = runFilePath();
 			if (!handshakePath) throw new Error("Daemon ownership record is unavailable");
