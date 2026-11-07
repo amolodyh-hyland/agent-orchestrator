@@ -1,3 +1,5 @@
+import { TabSplitMenuContext } from "../TabContextMenu";
+import { SESSION_TAB_KEY } from "../../lib/pane-split";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -527,3 +529,16 @@ function renderTopbarTabs() {
 		</QueryClientProvider>,
 	);
 }
+
+it("keeps grouped tab actions and routes active session splits through the session view", async () => {
+	const right = vi.fn();
+	const split = vi.fn(() => ({ right }));
+	const view = makeView("task");
+	setTabs(view);
+	render(<TabSplitMenuContext.Provider value={split}><MenuHarness view={view} /></TabSplitMenuContext.Provider>);
+	const menu = await openMenu("context");
+	expect(split).toHaveBeenCalledWith(SESSION_TAB_KEY);
+	expect(within(menu).getByRole("menuitem", { name: "Close" })).toBeInTheDocument();
+	await userEvent.click(within(menu).getByRole("menuitem", { name: "Split right" }));
+	expect(right).toHaveBeenCalledOnce();
+});

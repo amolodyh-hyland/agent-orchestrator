@@ -7,6 +7,7 @@ import { MAX_FILE_DRAFTS, resetFileDraftsForTests, setFileDraft } from "../lib/f
 import { useUiStore } from "../stores/ui-store";
 import { findSession } from "../lib/topbar-tabs";
 import { resetTopbarTabsStoreForTests, useTopbarTabsStore } from "../stores/topbar-tabs-store";
+import { AppBrowserLinkContext } from "./AppLink";
 import { FileContentPane } from "./FileContentPane";
 import type { FileViewMode } from "./FileContentPane";
 import type { FileAnnotationModel } from "./WorkspaceDiffView";
@@ -98,6 +99,36 @@ describe("FileContentPane", () => {
 		view.rerender(pane(true));
 		fireEvent.keyDown(window, { key: "s", metaKey: true });
 		await waitFor(() => expect(putMock).toHaveBeenCalledOnce());
+	});
+
+	it("renders the feedback Send bar in the host's footer instead of sticking it to scaled content", async () => {
+		getMock.mockResolvedValue({
+			data: {
+				sessionId: "sess-1",
+				path: "src/App.tsx",
+				status: "unmodified",
+				content: "complete source",
+				size: 15,
+				binary: false,
+				deleted: false,
+				contentTruncated: false,
+				diff: "",
+				diffTruncated: false,
+			},
+		});
+		// Two written comments bring the bar up.
+		const targets = [
+			{ path: "src/App.tsx", side: "file", surface: "focused", line: 1 },
+			{ path: "src/App.tsx", side: "file", surface: "focused", line: 2 },
+		];
+		const annotation = { ...noopAnnotation(), targets, draftFor: () => "tighten this" } as unknown as FileAnnotationModel;
+		const footer = document.createElement("div");
+		document.body.append(footer);
+		renderWithQuery(<FileContentPane annotation={annotation} footerHost={footer} initialMode="file" path="src/App.tsx" sessionId="sess-1" split={false} toolbarHost={null} />);
+		const bar = await screen.findByTestId("file-feedback-bar");
+		expect(footer).toContainElement(bar);
+		expect(bar).not.toHaveClass("sticky");
+		footer.remove();
 	});
 
 	it("offers center navigation from a full-file preview", async () => {
@@ -396,6 +427,35 @@ describe("FileContentPane", () => {
 		renderWithQuery(<FileContentPane annotation={noopAnnotation()} path="README.md" sessionId="sess-1" split={false} />);
 
 		expect(await screen.findByText("hello")).toBeInTheDocument();
+	});
+
+	it("opens a workspace HTML file in the session Browser from its toolbar", async () => {
+		getMock.mockResolvedValue({
+			data: {
+				sessionId: "sess-1",
+				path: "reports/index.html",
+				status: "unmodified",
+				additions: 0,
+				deletions: 0,
+				size: 20,
+				binary: false,
+				deleted: false,
+				content: "<h1>Report</h1>\n",
+				contentTruncated: false,
+				diff: "",
+				diffTruncated: false,
+			},
+		});
+		const openInBrowser = vi.fn();
+
+		renderWithQuery(
+			<AppBrowserLinkContext.Provider value={openInBrowser}>
+				<FileContentPane annotation={noopAnnotation()} path="reports/index.html" sessionId="sess-1" split={false} />
+			</AppBrowserLinkContext.Provider>,
+		);
+
+		await userEvent.click(await screen.findByRole("button", { name: "Open in AO Browser" }));
+		expect(openInBrowser).toHaveBeenCalledExactlyOnceWith("reports/index.html");
 	});
 
 	it("renders an image without waiting for syntax highlighting", async () => {
