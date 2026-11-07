@@ -46,6 +46,31 @@ export function SessionTabsView({ sessionId, projectId, cloudOrgId, View }: Sess
 		setAutoFocusKey(requestAutoFocus ? sessionTabKey(tab) : null);
 		if (!requestAutoFocus && key !== routeKey) void navigate(sessionNavigateTarget(tab.projectId, tab.sessionId));
 	}, [navigate, routeKey]);
+	useEffect(() => {
+		const screen = screenRef.current;
+		if (!screen) return;
+		// Cached terminals are portals outside this React tree, but their DOM is inside the pane.
+		const focusFromDOM = (event: Event) => {
+			if (!(event.target instanceof Element)) return;
+			if (event instanceof KeyboardEvent && !event.target.closest("[data-terminal-cache-key]")) return;
+			if (event instanceof PointerEvent && (event.metaKey || event.ctrlKey) && event.target.closest('[role="tab"]')) {
+				event.preventDefault();
+				return;
+			}
+			const pane = event.target.closest<HTMLElement>("[data-session-pane]");
+			if (!pane || pane.hidden || pane.inert) return;
+			const tab = sessionTabFromKey(pane.dataset.sessionPane!);
+			if (tab) activate(tab, false);
+		};
+		screen.addEventListener("pointerdown", focusFromDOM, true);
+		screen.addEventListener("focusin", focusFromDOM, true);
+		screen.addEventListener("keydown", focusFromDOM, true);
+		return () => {
+			screen.removeEventListener("pointerdown", focusFromDOM, true);
+			screen.removeEventListener("focusin", focusFromDOM, true);
+			screen.removeEventListener("keydown", focusFromDOM, true);
+		};
+	}, [activate]);
 	const close = async (key: string) => {
 		if (!group || !await confirmPaneRemoval(new Set(keys.filter((candidate) => candidate !== key)))) return;
 		const target = sessionTabFromKey(focused === key ? keys.find((candidate) => candidate !== key)! : focused);
@@ -61,10 +86,6 @@ export function SessionTabsView({ sessionId, projectId, cloudOrgId, View }: Sess
 				return <SessionPaneContext.Provider key={key} value={{ id: key, ...tab, focused: key === focused, autoFocus: key === autoFocusKey, visible: Boolean(group) || key === routeKey, split: Boolean(group), focus: () => { if (group || key === routeKey) activate(tab, false); }, activate, close: group ? () => void close(key) : undefined }}>
 					<section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden" data-session-pane={key} data-session-id={tab.sessionId} data-project-id={tab.projectId} data-focused={key === focused}
 						hidden={!group && key !== routeKey} inert={!group && key !== routeKey ? true : undefined}
-						onPointerDownCapture={(event) => {
-							if ((event.metaKey || event.ctrlKey) && (event.target as HTMLElement).closest('[role="tab"]')) { event.preventDefault(); return; }
-							activate(tab, false);
-						}} onFocusCapture={() => activate(tab, false)}
 						style={layout ? { position: "absolute", ...layout.leaves.get(key) } : { height: "100%" }}>
 						{group ? <div className="flex h-toolbar shrink-0 items-center justify-between border-b-2 px-2 text-xs text-passive" style={{ borderColor: key === focused ? "var(--color-primary)" : "transparent", paddingRight: index === keys.length - 1 ? "max(8px, var(--topbar-trailing-width, 8px))" : undefined }}>
 							<span className="truncate">{tab.sessionId}</span>
