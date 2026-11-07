@@ -1045,7 +1045,7 @@ describe("chat code appearance preferences", () => {
 		useUiStore.setState({ codeColorTheme: "solarized", themeStyle: "nord", resolvedTheme: "dark" });
 		const { container } = render(<ChatMarkdown text={'```js\nconst value = 1;\n```\n\n`const inline = 2`'} />);
 		const block = container.querySelector("pre")!;
-		const inline = container.querySelector("code.chat-code")!;
+		const inline = container.querySelector<HTMLElement>("code.chat-code")!;
 		expect(block.style.getPropertyValue("--ao-code-background")).not.toBe("");
 		expect(block.style.getPropertyValue("--ao-code-background")).toBe(inline.style.getPropertyValue("--ao-code-background"));
 	});
