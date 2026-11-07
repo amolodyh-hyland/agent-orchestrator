@@ -1,3 +1,4 @@
+import { useTabSelectionStore } from "../../stores/tab-selection-store";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -189,6 +190,17 @@ afterEach(() => {
 });
 
 describe("TopbarTabs", () => {
+	it("clears tab selection with Escape without changing the active session", () => {
+		useTabSelectionStore.getState().clear();
+		renderTabs();
+		const tab = screen.getAllByRole("tab")[0];
+		fireEvent.click(tab);
+		expect(tab).toHaveAttribute("aria-selected", "true");
+		fireEvent.keyDown(window, { key: "Escape" });
+		expect(useTabSelectionStore.getState().selected).toEqual([]);
+		expect(tab).toHaveAttribute("aria-selected", "false");
+	});
+
 	it("renders one options trigger per tab and routes session actions only to the active tab", async () => {
 		const actions = {
 			menuItems: <><DropdownMenuItem>Switch to chat UI</DropdownMenuItem><DropdownMenuItem>Switch agent</DropdownMenuItem></>,

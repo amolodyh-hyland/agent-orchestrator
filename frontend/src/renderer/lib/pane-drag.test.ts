@@ -86,4 +86,26 @@ describe("pane tab drag completion", () => {
 		expect(commit).toHaveBeenCalledTimes(1);
 		expect(select).not.toHaveBeenCalled();
 	});
+	it("keeps identical tab keys scoped to their source workspace throughout a drag", () => {
+		unregister();
+		const otherSource = document.createElement("button");
+		document.body.appendChild(otherSource);
+		const otherResolve = vi.fn(() => ({ rect: { left: 0, top: 40, width: 400, height: 300 }, commit: vi.fn() }));
+		const first = registerPaneDropTarget({ containsSource: (element) => element === source, canDrag: () => true, resolve });
+		const second = registerPaneDropTarget({ containsSource: (element) => element === otherSource, canDrag: () => true, resolve: otherResolve });
+		unregister = () => { first(); second(); otherSource.remove(); };
+		holdTab();
+		second();
+		window.dispatchEvent(new PointerEvent("pointerup", { pointerId: 1, clientX: 300, clientY: 200 }));
+		vi.runAllTimers();
+		expect(resolve).toHaveBeenLastCalledWith("terminal", 300, 200);
+		expect(commit).toHaveBeenCalledOnce();
+		expect(otherResolve).not.toHaveBeenCalled();
+	});
+	it("cancels an active drag when its owning workspace is removed", () => {
+		holdTab(); unregister(); vi.runAllTimers();
+		expect(isPaneTabDragging()).toBe(false);
+		expect(commit).not.toHaveBeenCalled();
+	});
+
 });

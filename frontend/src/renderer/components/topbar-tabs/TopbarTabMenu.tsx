@@ -1,3 +1,11 @@
+import { useNavigate } from "@tanstack/react-router";
+import { useSplitPanesEnabled } from "../../lib/split-panes";
+import { groupContaining, leafKeys } from "../../lib/pane-split";
+import { canSplitSessionTab, MAX_SESSION_TAB_PANES, selectedSessionTabsGroup, sessionTabKey, sessionTabPaneScope, splitSessionTabRight } from "../../lib/session-tab-panes";
+import { useSplitPanesStore } from "../../stores/split-panes-store";
+import { useTabSelectionStore, type SessionTabSelection } from "../../stores/tab-selection-store";
+import { confirmPaneRemoval, SessionPaneContext } from "../session-pane-context";
+import { sessionNavigateTarget } from "../../lib/navigate-to-session";
 import { TabSplitItems, TabSplitMenuContext } from "../TabContextMenu";
 import { SESSION_TAB_KEY } from "../../lib/pane-split";
 import { useParams } from "@tanstack/react-router";
@@ -54,8 +62,14 @@ function OpenOrchestratorItem({
 }
 
 export function useTopbarTabMenu(canRename = true): RenderMenu {
+	const { t } = useTranslation();
 	const actions = useTopbarTabsActions();
 	const split = useContext(TabSplitMenuContext);
+	const pane = useContext(SessionPaneContext);
+	const enabled = useSplitPanesEnabled();
+	const selected = useTabSelectionStore((state) => state.selected);
+	const navigate = useNavigate();
+	const params = useParams({ strict: false }) as { sessionId?: string; projectId?: string };
 	return ({ kind, view, startRename, sessionMenuItems }): ReactNode => {
 		const state = useTopbarTabsStore.getState().tabs;
 		const group = state.groups.find((candidate) => candidate.id === view.groupId);
@@ -68,6 +82,29 @@ export function useTopbarTabMenu(canRename = true): RenderMenu {
 			canRename,
 			canCloseToRight: view.role === "head" ? groupTabCount > 0 : tabIndex >= 0 && tabIndex < groupTabCount - 1,
 		});
+		const current = pane?.sessionId ? { sessionId: pane.sessionId, projectId: pane.projectId } : params.sessionId ? { sessionId: params.sessionId, projectId: params.projectId } : undefined;
+		const tab = view.sessionId ? { sessionId: view.sessionId, projectId: view.groupId === STANDALONE_WORKSPACE_ID ? undefined : view.groupId } : undefined;
+		const activate = (target: SessionTabSelection) => {
+			pane?.activate?.(target);
+			void navigate(sessionNavigateTarget(target.projectId, target.sessionId));
+		};
+		const availableSelected = selected.filter((tab) => state.groups.some((group) => (group.id === STANDALONE_WORKSPACE_ID ? undefined : group.id) === tab.projectId && (group.head.sessionId === tab.sessionId || group.tabs.some((item) => item.sessionId === tab.sessionId))));
+		const viewSelected = async () => {
+			if (availableSelected.length < 2 || availableSelected.length > MAX_SESSION_TAB_PANES || !await confirmPaneRemoval(new Set(availableSelected.map(sessionTabKey)))) return;
+			selectedSessionTabsGroup(availableSelected);
+			activate(availableSelected[0]);
+		};
+		const openRight = async () => {
+			if (!tab || !current) return;
+			const groups = useSplitPanesStore.getState().groupsBySession[sessionTabPaneScope()] ?? [];
+			const existing = groupContaining(groups, sessionTabKey(tab));
+			const anchor = groupContaining(groups, sessionTabKey(current));
+			const keep = existing ? leafKeys(existing.root) : [...(anchor ? leafKeys(anchor.root) : [sessionTabKey(current)]), sessionTabKey(tab)];
+			if (!await confirmPaneRemoval(new Set(keep))) return;
+			splitSessionTabRight(tab, current);
+			activate(tab);
+		};
+		const Item = kind === "dropdown" ? DropdownMenuItem : ContextMenuItem;
 		return (
 			<>
 				{/* These are Radix DropdownMenu items and cannot be rendered in a ContextMenu. */}
@@ -77,7 +114,11 @@ export function useTopbarTabMenu(canRename = true): RenderMenu {
 						<DropdownMenuSeparator />
 					</>
 				) : null}
-				{kind === "context" && view.isActive && view.session && split ? <TabSplitItems actions={split(SESSION_TAB_KEY)} /> : null}
+				{enabled && tab ? <>
+					<Item disabled={availableSelected.length < 2 || availableSelected.length > MAX_SESSION_TAB_PANES} onSelect={() => window.setTimeout(() => void viewSelected(), 0)}>{t("shell.tabs.menu.viewSplitPanes")}</Item>
+					<Item disabled={!current || !canSplitSessionTab(tab, current)} onSelect={() => window.setTimeout(() => void openRight(), 0)}>{t("shell.tabs.menu.newPaneRight")}</Item>
+				</> : null}
+				{view.isActive && view.session && split ? <TabSplitItems actions={split(SESSION_TAB_KEY)} kind={kind} /> : null}
 				{entries.map((entry) => (
 					<MenuEntry
 						key={entry.id}

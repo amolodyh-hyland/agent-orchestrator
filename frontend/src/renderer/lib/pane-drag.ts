@@ -20,18 +20,20 @@ export type PaneDropResolution = {
 };
 
 export type PaneDropTarget = {
+	containsSource?: (source: HTMLElement) => boolean;
 	/** Whether this tab can leave its strip at all. */
 	canDrag: (key: string) => boolean;
 	resolve: (key: string, x: number, y: number) => PaneDropResolution | null;
 };
 
-let dropTarget: PaneDropTarget | null = null;
+const dropTargets = new Set<PaneDropTarget>();
 
 /** The session view registers itself while it can take dropped tabs. */
 export function registerPaneDropTarget(target: PaneDropTarget): () => void {
-	dropTarget = target;
+	dropTargets.add(target);
 	return () => {
-		if (dropTarget === target) dropTarget = null;
+		dropTargets.delete(target);
+		if (active?.target === target) finish(active, false);
 	};
 }
 
@@ -45,6 +47,7 @@ const HOLD_SLOP_PX = 5;
 const FADE_MS = 150;
 
 type ActiveDrag = {
+	target: PaneDropTarget;
 	key: string;
 	pointerId: number;
 	source: HTMLElement;
@@ -85,9 +88,11 @@ export function beginPaneTabDrag(
 	onDetach?: () => void,
 ): void {
 	if (event.button !== 0 || active) return;
-	if (!dropTarget?.canDrag(key)) return;
+	const target = [...dropTargets].reverse().find((candidate) => !candidate.containsSource || candidate.containsSource(source));
+	if (!target?.canDrag(key)) return;
 	const strip = (source.closest("[role=tablist]") ?? source).getBoundingClientRect();
 	const drag: ActiveDrag = {
+		target,
 		key,
 		pointerId: event.pointerId,
 		source,
@@ -223,7 +228,7 @@ function schedule(drag: ActiveDrag): void {
 
 function paint(drag: ActiveDrag): void {
 	if (drag.ghost) drag.ghost.style.transform = ghostTransform(drag);
-	const resolution = dropTarget?.resolve(drag.key, drag.x, drag.y) ?? null;
+	const resolution = drag.target.resolve(drag.key, drag.x, drag.y) ?? null;
 	drag.resolution = resolution;
 	const preview = drag.preview;
 	if (!preview) return;
@@ -282,7 +287,7 @@ function finish(drag: ActiveDrag, commit: boolean): void {
 		if (commit && stayedPut && drag.pressTarget instanceof HTMLElement && drag.pressTarget.isConnected) drag.pressTarget.click();
 	}, 0);
 	// Resolve against the final pointer position, not the last painted frame.
-	const resolution = commit && !stayedPut ? (dropTarget?.resolve(drag.key, drag.x, drag.y) ?? null) : null;
+	const resolution = commit && !stayedPut ? (drag.target.resolve(drag.key, drag.x, drag.y) ?? null) : null;
 	drag.source.removeAttribute("data-pane-drag-source");
 	document.body.classList.remove("is-pane-dragging");
 	const { ghost, preview } = drag;

@@ -4832,5 +4832,8 @@
 	"outer.recordAcknowledged": "Record acknowledged",
 	"outer.recordUnacknowledged": "Record unacknowledged",
 	"outer.firstMailboxPage": "First page",
-	"outer.nextMailboxPage": "Next page"
+	"outer.nextMailboxPage": "Next page",
+	"shell.tabs.newSessionInGroup": "Nueva sesión en {{project}}",
+	"shell.tabs.menu.viewSplitPanes": "Ver paneles divididos",
+	"shell.tabs.menu.newPaneRight": "Nuevo panel a la derecha"
 }

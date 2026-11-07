@@ -1,3 +1,5 @@
+import { useContext } from "react";
+import { SessionPaneContext } from "../session-pane-context";
 import { useQueries } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { useMemo, useRef } from "react";
@@ -132,7 +134,8 @@ export function useTopbarTabsView(): {
 			];
 		});
 	}, [stableDirectSessionQueries, missingSessionIds, orgId, ready, viewWorkspaces]);
-	const { sessionId } = useParams({ strict: false }) as { sessionId?: string };
+	const params = useParams({ strict: false }) as { sessionId?: string };
+	const sessionId = useContext(SessionPaneContext)?.sessionId ?? params.sessionId;
 	const { t } = useTranslation();
 	const scratchpadName = t("shell.tabs.scratchpad");
 	const groups = useMemo(

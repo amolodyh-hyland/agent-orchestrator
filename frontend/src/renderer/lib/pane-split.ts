@@ -165,6 +165,15 @@ export function splitBeside(groups: TabGroup[], anchor: string, key: string, sid
 	return [...withoutTab(groups, key), { id: newGroupId(), root: insertBeside({ type: "leaf", key: anchor }, anchor, key, side), focus: key }];
 }
 
+export function groupSelectedTabs(groups: TabGroup[], keys: readonly string[]): TabGroup[] {
+	const unique = [...new Set(keys)];
+	if (unique.length < 2) return groups;
+	const row = (index: number): SplitNode => index === unique.length - 1
+		? { type: "leaf", key: unique[index] }
+		: { type: "split", dir: "row", ratio: 1 / (unique.length - index), a: { type: "leaf", key: unique[index] }, b: row(index + 1) };
+	return [...unique.reduce((current, key) => withoutTab(current, key), groups), { id: newGroupId(), root: row(0), focus: unique[0] }];
+}
+
 /** Every tab of the group becomes a tab of its own again. */
 export function ungroupById(groups: TabGroup[], groupId: string): TabGroup[] {
 	const next = groups.filter((group) => group.id !== groupId);

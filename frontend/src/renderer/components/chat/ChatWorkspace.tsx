@@ -1,3 +1,4 @@
+import { useSessionPaneFocused, useSessionPaneAutoFocus } from "../session-pane-context";
 import type { ComposerSkillSelection } from "../../lib/chat-skill-selection";
 import type { ChatSkillSelection, ChatSkillCatalog } from "../../types/conversation";
 import { FileAnnotationContext } from "./FileAnnotationPreview";
@@ -863,6 +864,8 @@ function ChatWorkspaceContent({
 	draftPersistenceAvailable: boolean;
 	onRetryDraftPersistence?: () => void;
 }) {
+	const paneFocused = useSessionPaneFocused();
+	const paneAutoFocus = useSessionPaneAutoFocus();
 	const draftScopeKey = chatDraftScopeKey(draftScope);
 	const uiSessionId = draftScope.sessionId;
 	const outerView = useOuterView();
@@ -1483,30 +1486,32 @@ function ChatWorkspaceContent({
 	useEffect(
 		() =>
 			!hideHeader ? aoBridge.app.onCloseShellTerminalShortcut(() => {
+				if (!paneFocused || isSettingsPageOpen()) return;
 				if (closeFocusedSplitPane) closeFocusedSplitPane();
 				else if (activeWorkspaceTab?.onClose) activeWorkspaceTab.onClose();
 				else if (shellTarget) onCloseShellTerminal?.(shellTarget.handleId);
 			}) : undefined,
-		[activeWorkspaceTab, closeFocusedSplitPane, hideHeader, onCloseShellTerminal, shellTarget],
+		[activeWorkspaceTab, closeFocusedSplitPane, hideHeader, onCloseShellTerminal, shellTarget, paneFocused],
 	);
 
 	useEffect(() => {
 		if (hideHeader) return;
-		const disposePrevious = aoBridge.app.onPreviousTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(-1));
-		const disposeNext = aoBridge.app.onNextTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(1));
+		const disposePrevious = aoBridge.app.onPreviousTabShortcut(() => paneFocused && !isSettingsPageOpen() && selectAdjacentTab(-1));
+		const disposeNext = aoBridge.app.onNextTabShortcut(() => paneFocused && !isSettingsPageOpen() && selectAdjacentTab(1));
 		return () => {
 			disposePrevious();
 			disposeNext();
 		};
-	}, [hideHeader, selectAdjacentTab]);
+	}, [hideHeader, paneFocused, selectAdjacentTab]);
 
 	useEffect(() => {
 		if (hideHeader) return;
+		if (!paneFocused) return;
 		aoBridge.app.setCloseShellTerminalShortcutEnabled(
 			Boolean(closeFocusedSplitPane) || Boolean(activeWorkspaceTab?.onClose) || Boolean(shellTarget && onCloseShellTerminal),
 		);
 		return () => aoBridge.app.setCloseShellTerminalShortcutEnabled(false);
-	}, [activeWorkspaceTab, closeFocusedSplitPane, hideHeader, onCloseShellTerminal, shellTarget]);
+	}, [activeWorkspaceTab, closeFocusedSplitPane, hideHeader, onCloseShellTerminal, shellTarget, paneFocused]);
 
 	// Keep the rollback affordance mounted while a new turn runs; disable it until
 	// the daemon can safely accept it so the action row never shifts.
@@ -2162,7 +2167,7 @@ function ChatWorkspaceContent({
 										cloudAttachments={cloudAttachments}
 										onHeldAttachmentsChange={onHeldAttachmentsChange}
 										nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
-										autoFocus={!reviewerActive}
+										autoFocus={paneAutoFocus && !reviewerActive}
 										autoFocusKey={draftScope.sessionId}
 										// Steering is only meaningful into a turn that is running. A queued turn
 										// has not reached the provider, so there is nothing to steer.

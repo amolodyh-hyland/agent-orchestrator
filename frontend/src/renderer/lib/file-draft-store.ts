@@ -89,6 +89,12 @@ export function unstoredFileDraftReasonFor(sessionKey: string, path: string | nu
 	return getFileDraft(sessionKey, path)?.reason ?? null;
 }
 
+export function hasUnstoredFileDrafts(sessionKey: string, path?: string): boolean {
+	return [...records].some(([key, record]) => record.reason !== null &&
+		(key.startsWith(`${sessionKey}${SEPARATOR}`) || key.startsWith(`${sessionKey}:`)) &&
+		(path === undefined || key.slice(key.indexOf(SEPARATOR) + 1) === path));
+}
+
 /** Clears the record only if no edit has been written since `revision` (a finished save's). */
 export function clearFileDraftIfRevision(sessionKey: string, path: string | null | undefined, revision: number | undefined): void {
 	if (!path || revision === undefined) return;

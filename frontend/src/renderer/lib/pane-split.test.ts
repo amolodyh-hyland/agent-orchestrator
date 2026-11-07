@@ -13,6 +13,7 @@ import {
 	reconcileGroups,
 	removeLeaf,
 	splitBeside,
+	groupSelectedTabs,
 	ungroupById,
 	trimStoredGroups,
 	setRatioAt,
@@ -176,5 +177,24 @@ describe("splitBeside", () => {
 		const groups = splitBeside([], "session", "sh-1", "right");
 		expect(ungroupById(groups, groups[0]!.id)).toEqual([]);
 		expect(ungroupById(groups, "missing")).toBe(groups);
+	});
+});
+
+
+describe("groupSelectedTabs", () => {
+	it("uses an equal-width upstream row and one owner per selected key", () => {
+		const [group] = groupSelectedTabs([], ["a", "b", "c", "a"]);
+		expect(leafKeys(group.root)).toEqual(["a", "b", "c"]);
+		expect(group.focus).toBe("a");
+		const boxes = layoutBoxes(group.root).leaves;
+		for (const key of ["a", "b", "c"]) expect(boxes.get(key)?.w).toBeCloseTo(1 / 3);
+	});
+	it("moves selected leaves from existing groups and preserves unrelated groups", () => {
+		const original = splitBeside(splitBeside([], "a", "b", "right"), "x", "y", "bottom");
+		const next = groupSelectedTabs(original, ["a", "c"]);
+		expect(next).toHaveLength(2);
+		expect(next[0]).toBe(original[1]);
+		expect(next.flatMap(group => leafKeys(group.root))).toEqual(["x", "y", "a", "c"]);
+		expect(groupSelectedTabs(original, ["a", "a"])).toBe(original);
 	});
 });

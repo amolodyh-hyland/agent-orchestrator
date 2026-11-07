@@ -4749,5 +4749,8 @@
 	"outer.recordAcknowledged": "Record acknowledged",
 	"outer.recordUnacknowledged": "Record unacknowledged",
 	"outer.firstMailboxPage": "First page",
-	"outer.nextMailboxPage": "Next page"
+	"outer.nextMailboxPage": "Next page",
+	"shell.tabs.newSessionInGroup": "Neue Sitzung in {{project}}",
+	"shell.tabs.menu.viewSplitPanes": "Geteilte Bereiche anzeigen",
+	"shell.tabs.menu.newPaneRight": "Neuer Bereich rechts"
 }

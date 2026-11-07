@@ -1,3 +1,11 @@
+import { SessionTabsView } from "./SessionTabsView";
+import { SessionPaneContext } from "./session-pane-context";
+import { ChatComposer } from "./chat/ChatComposer";
+import { useSplitPanesStore } from "../stores/split-panes-store";
+import { selectedSessionTabsGroup, sessionTabKey, sessionTabPaneScope } from "../lib/session-tab-panes";
+import { useSessionShortcut, runAppShortcut } from "../hooks/useAppShortcut";
+import { useContext } from "react";
+import type { LexicalEditor } from "lexical";
 import { act, fireEvent, render as rtlRender, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
@@ -85,10 +93,10 @@ vi.mock("../hooks/useBrowserRuntimeState", () => ({
 }));
 
 vi.mock("../hooks/useBrowserView", () => ({
-	useBrowserView: (options: { previewUrl?: string }) => {
+	useBrowserView: (options: { previewUrl?: string; sessionId?: string }) => {
 		hookState.previewUrl = options.previewUrl;
 		return {
-			viewId: "42:sess-1",
+			viewId: `42:${options.sessionId ?? "sess-1"}`,
 			navState: hookState.navState,
 			slotRef: vi.fn(),
 			navigate: hookState.navigate,
@@ -122,6 +130,21 @@ vi.mock("../hooks/useBrowserView", () => ({
 		};
 	},
 }));
+
+vi.mock("@tanstack/react-router", async (load) => ({
+	...await load<typeof import("@tanstack/react-router")>(),
+	useNavigate: () => vi.fn(),
+}));
+const paneShortcutActions = { first: vi.fn(), second: vi.fn() };
+function NativeFocusSession({ sessionId }: { sessionId: string }) {
+	const pane = useContext(SessionPaneContext);
+	useSessionShortcut("copy-session-path", paneShortcutActions[sessionId as "first" | "second"]);
+	return <>
+		<button onClick={() => pane?.activate?.({ sessionId })}>Activate {sessionId}</button>
+		<ChatComposer onSend={vi.fn()} autoFocusKey={sessionId} />
+		<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={{ ...session, id: sessionId }} />
+	</>;
+}
 
 const session: WorkspaceSession = {
 	id: "sess-1",
@@ -658,6 +681,42 @@ describe("BrowserPanel", () => {
 		expect(screen.getByRole("textbox", { name: /browser url/i })).toHaveValue(
 			"file:///tmp/preview/index.html",
 		);
+	});
+
+	it("selects the native Browser's session pane without calling either composer's focus handle", () => {
+		useUiStore.setState({ developerMode: true, splitPanes: true });
+		useSplitPanesStore.setState({ groupsBySession: {} });
+		paneShortcutActions.first.mockClear(); paneShortcutActions.second.mockClear();
+		selectedSessionTabsGroup([{ sessionId: "first" }, { sessionId: "second" }]);
+		const view = render(<><button>Native page focus placeholder</button><SessionTabsView View={NativeFocusSession} sessionId="first" /></>);
+		const fields = screen.getAllByLabelText("Message the agent") as (HTMLElement & { __lexicalEditor: LexicalEditor })[];
+		const calls = fields.flatMap(field => [vi.spyOn(field, "focus"), vi.spyOn(field.__lexicalEditor, "focus")]);
+		const native = screen.getByRole("button", { name: "Native page focus placeholder" });
+		native.focus(); window.getSelection()?.removeAllRanges();
+		const pageFocus = (id: string) => act(() => { for (const listener of [...pageFocusListeners]) listener(`42:${id}`); });
+		pageFocus("unrelated");
+		expect(useSplitPanesStore.getState().groupsBySession[sessionTabPaneScope()][0].focus).toBe(sessionTabKey({ sessionId: "first" }));
+		pageFocus("second");
+		expect(useSplitPanesStore.getState().groupsBySession[sessionTabPaneScope()][0].focus).toBe(sessionTabKey({ sessionId: "second" }));
+		act(() => window.dispatchEvent(new Event("focus")));
+		expect(native).toHaveFocus();
+		for (const call of calls) expect(call).not.toHaveBeenCalled();
+		act(() => runAppShortcut({ id: "copy-session-path" }));
+		expect(paneShortcutActions.second).toHaveBeenCalledOnce(); expect(paneShortcutActions.first).not.toHaveBeenCalled();
+		const firstUrl = screen.getAllByRole("textbox", { name: /browser url/i })[0];
+		act(() => firstUrl.focus());
+		expect(firstUrl).toHaveFocus();
+		for (const call of calls) expect(call).not.toHaveBeenCalled();
+		act(() => runAppShortcut({ id: "copy-session-path" }));
+		expect(paneShortcutActions.first).toHaveBeenCalledOnce();
+		fireEvent.click(screen.getByRole("button", { name: "Activate second" }));
+		expect(fields[1]).toHaveFocus(); expect(calls[3]).toHaveBeenCalled();
+		for (const call of calls) call.mockClear();
+		native.focus(); pageFocus("second");
+		expect(native).toHaveFocus();
+		for (const call of calls) expect(call).not.toHaveBeenCalled();
+		view.unmount(); expect(pageFocusListeners.size).toBe(0);
+		useUiStore.setState({ developerMode: false, splitPanes: false });
 	});
 
 	it("reveals the full URL on focus, reverts to domain when the page takes focus", async () => {

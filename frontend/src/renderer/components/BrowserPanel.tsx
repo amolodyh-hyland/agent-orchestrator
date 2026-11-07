@@ -1,8 +1,10 @@
+import { SessionPaneContext } from "./session-pane-context";
 import { sessionBrowserUnavailable } from "../lib/artifact-preview";
 import { BrowserIcon } from "./icons";
 import {
 	memo,
 	useCallback,
+	useContext,
 	useEffect,
 	useId,
 	useLayoutEffect,
@@ -419,6 +421,7 @@ export function BrowserPanelView({
 	topbarHost,
 }: BrowserPanelProps & { annotationQueue: BrowserAnnotationQueueModel; browserView: BrowserViewModel }) {
 	const { t } = useTranslation();
+	const focusPane = useContext(SessionPaneContext)?.focus;
 	const prefersReducedMotion = useReducedMotion();
 	const browserUnavailable = sessionBrowserUnavailable(session);
 	const {
@@ -773,6 +776,7 @@ export function BrowserPanelView({
 		if (!onPageFocus) return;
 		return onPageFocus((focusedViewId) => {
 			if (focusedViewId !== viewId) return;
+			focusPane?.();
 			historyRequestGenerationRef.current += 1;
 			urlInputRef.current?.blur();
 			setUrlEditing(false);
@@ -780,7 +784,7 @@ export function BrowserPanelView({
 			setHistorySuggestions([]);
 			setActiveHistorySuggestion(-1);
 		});
-	}, [navState.url, viewId]);
+	}, [focusPane, navState.url, viewId]);
 
 	useEffect(() => {
 		const offSubmit = window.ao?.browser.onAnnotationSubmit((payload) => {

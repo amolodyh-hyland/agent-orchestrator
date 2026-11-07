@@ -4,11 +4,12 @@ import { act, fireEvent, render as rtlRender, screen, waitFor, within } from "@t
 import { appShortcutBus } from "../../test/app-shortcut-bus";
 import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
-import { Activity, Profiler } from "react";
+import { Activity, Profiler, createRef } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../../stores/ui-store";
 import { $getRoot, $isElementNode, $isTextNode, UNDO_COMMAND, REDO_COMMAND, type LexicalEditor } from "lexical";
-import { ChatComposer } from "./ChatComposer";
+import { ChatComposer, type ChatComposerHandle } from "./ChatComposer";
+import { SessionPaneContext } from "../session-pane-context";
 import { captureFileReference } from "../../../shared/chat-file-reference";
 import { sendReferenceToChat } from "../../lib/chat-context-bus";
 import { attachmentURL } from "./messageAttachments";
@@ -471,6 +472,17 @@ describe("send keys", () => {
 	it("does not focus the hidden or inactive chat composer", () => {
 		const { field } = renderComposer({ autoFocus: false, autoFocusKey: "session-1" });
 		expect(document.activeElement).not.toBe(field);
+	});
+
+	it("honors an explicit composer focus command after passive pane selection", () => {
+		const focusRef = createRef<ChatComposerHandle>();
+		render(<SessionPaneContext.Provider value={{ id: "pane", focused: true, autoFocus: false }}>
+			<ChatComposer onSend={vi.fn()} focusRef={focusRef} />
+		</SessionPaneContext.Provider>);
+		const field = screen.getByLabelText("Message the agent");
+		expect(field).not.toHaveFocus();
+		act(() => focusRef.current?.focus());
+		expect(field).toHaveFocus();
 	});
 
 	it("applies the natural-growth and seven-line scroll-cap styles", () => {
