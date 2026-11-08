@@ -1,4 +1,12 @@
 {
+	"settings.code.blockLanguage": "默认代码块语言",
+	"settings.code.blockLanguageHint": "用于聊天和输入框中未指定语言的代码块。显式指定的语言始终优先。",
+	"settings.code.inlineLanguage": "默认行内代码语言",
+	"settings.code.colorTheme": "代码配色主题",
+	"settings.code.colorThemeHint": "聊天和输入框中的代码颜色。自动使用浅色或深色配色。",
+	"settings.code.none": "无（纯文本）",
+	"settings.code.followApp": "跟随应用",
+	"settings.code.defaultLanguage": "默认",
 	"settings.project.todoPlacement": "待办事项位置",
 	"settings.project.todoPlacementDescription": "在每个会话窗格的右上角显示最新计划。较窄的窗格使用默认位置。",
 	"settings.project.todoPlacementDefault": "默认",

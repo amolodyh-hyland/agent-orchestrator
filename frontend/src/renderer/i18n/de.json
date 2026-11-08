@@ -1,4 +1,12 @@
 {
+	"settings.code.blockLanguage": "Standardsprache für Codeblöcke",
+	"settings.code.blockLanguageHint": "Wird im Chat und Eingabefeld für Codeblöcke ohne Sprachangabe verwendet. Eine explizite Sprache hat immer Vorrang.",
+	"settings.code.inlineLanguage": "Standardsprache für Inline-Code",
+	"settings.code.colorTheme": "Code-Farbthema",
+	"settings.code.colorThemeHint": "Codefarben im Chat und Eingabefeld. Verwendet automatisch die helle oder dunkle Palette.",
+	"settings.code.none": "Keine (Klartext)",
+	"settings.code.followApp": "App-Einstellung folgen",
+	"settings.code.defaultLanguage": "Standard",
 	"settings.project.todoPlacement": "Position der Aufgabenliste",
 	"settings.project.todoPlacementDescription": "Den neuesten Plan oben rechts in jedem Sitzungsbereich anzeigen. Schmale Bereiche verwenden die Standardposition.",
 	"settings.project.todoPlacementDefault": "Standard",

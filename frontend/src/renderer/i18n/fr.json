@@ -1,4 +1,12 @@
 {
+	"settings.code.blockLanguage": "Langage par défaut des blocs de code",
+	"settings.code.blockLanguageHint": "Utilisé dans le chat et la zone de saisie si aucun langage n’est indiqué. Un langage explicite est toujours prioritaire.",
+	"settings.code.inlineLanguage": "Langage par défaut du code en ligne",
+	"settings.code.colorTheme": "Thème de couleur du code",
+	"settings.code.colorThemeHint": "Couleurs du code dans le chat et la zone de saisie. Utilise automatiquement la palette claire ou sombre.",
+	"settings.code.none": "Aucun (texte brut)",
+	"settings.code.followApp": "Suivre l’application",
+	"settings.code.defaultLanguage": "Par défaut",
 	"settings.project.todoPlacement": "Position des tâches",
 	"settings.project.todoPlacementDescription": "Afficher le dernier plan en haut à droite de chaque volet de session. Les volets étroits utilisent la position par défaut.",
 	"settings.project.todoPlacementDefault": "Par défaut",

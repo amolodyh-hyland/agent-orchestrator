@@ -117,6 +117,7 @@ export class ComposerCodeNode extends ElementNode {
 }
 
 const languages = [
+	"__default__",
 	"text",
 	"bash",
 	"c",
@@ -129,6 +130,7 @@ const languages = [
 	"java",
 	"javascript",
 	"json",
+	"jsonc",
 	"jsx",
 	"kotlin",
 	"markdown",
@@ -149,7 +151,7 @@ function CodeControls({ nodeKey, dom, source }: { nodeKey: string; dom: HTMLElem
 	const [editor] = useLexicalComposerContext();
 	const { t } = useTranslation();
 	const region = composerCodeRegions(source)[0];
-	const language = region?.language || "text";
+	const language = region?.language || "__default__";
 	const code = region ? source.slice(region.contentStart, region.contentEnd) : "";
 	const [copied, setCopied] = useState(false);
 	const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -187,7 +189,7 @@ function CodeControls({ nodeKey, dom, source }: { nodeKey: string; dom: HTMLElem
 										marker.setTextContent(
 											opening.replace(
 												/^( {0,3}`{3,})[^\r\n]*/,
-												(_, fence: string) => fence + (value === "text" ? "" : value),
+												(_, fence: string) => fence + (value === "__default__" ? "" : value),
 											),
 										);
 									}
@@ -206,7 +208,7 @@ function CodeControls({ nodeKey, dom, source }: { nodeKey: string; dom: HTMLElem
 						<SelectContent>
 							{(languages.includes(language) ? languages : [language, ...languages]).map((value) => (
 								<SelectItem key={value} value={value}>
-									{value === "text" ? t("chat.composer.plainText") : value}
+									{value === "__default__" ? t("settings.code.defaultLanguage") : value === "text" ? t("chat.composer.plainText") : value}
 								</SelectItem>
 							))}
 						</SelectContent>

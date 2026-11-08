@@ -25,6 +25,7 @@ import { MulticaAwarenessSettings } from "./MulticaAwarenessSettings";
 import { MulticaSettingsSection } from "./MulticaSettingsSection";
 import { SettingsInlineInput, SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
+import { CodeSettingsRows } from "./CodeSettingsRows";
 import { ThemePaletteSwatch } from "./ThemePaletteSwatch";
 import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
@@ -433,6 +434,7 @@ export function GeneralSettingsSection({
 						/>
 					</div>
 				</SettingsRow>
+				<CodeSettingsRows />
 				{isMacPlatform() && <WindowTranslucencyRow />}
 				{newSidebarDesign && (
 					<SettingsRow label={t("settings.projectAvatars")} description={t("settings.projectAvatars.description")}>

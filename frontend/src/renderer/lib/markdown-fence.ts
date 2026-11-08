@@ -20,7 +20,7 @@ export function textOf(children: ReactNode): string {
 	return "";
 }
 
-const LANGUAGE_CLASS = /language-([\w+#-]+)/;
+const LANGUAGE_CLASS = /(?:^|\s)language-([^\s]+)/;
 
 /** The fence inside a `pre`, or undefined if this is not a fenced block. */
 export function fenceOf(children: ReactNode): { code: string; language?: string } | undefined {

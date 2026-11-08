@@ -487,6 +487,18 @@ describe("composer code editing", () => {
 		copy.mockRestore();
 	});
 
+	it("distinguishes the default language from an explicit plain fence", async () => {
+		const { ref } = setup("```\nconst plain = 1;\n```");
+		const dropdown = await screen.findByRole("combobox", { name: "Code language" });
+		expect(dropdown).toHaveTextContent("Default");
+		await userEvent.click(dropdown);
+		await userEvent.click(screen.getByRole("option", { name: /^Plain text$/ }));
+		await waitFor(() => expect(ref.current!.getSnapshot().text).toBe("```text\nconst plain = 1;\n```"));
+		await userEvent.click(dropdown);
+		await userEvent.click(screen.getByRole("option", { name: /^Default$/ }));
+		await waitFor(() => expect(ref.current!.getSnapshot().text).toBe("```\nconst plain = 1;\n```"));
+	});
+
 	it("does not claim copy succeeded when the clipboard rejects it", async () => {
 		const copy = vi.spyOn(aoBridge.clipboard, "writeText").mockRejectedValue(new Error("denied"));
 		setup("```\nhello\n```");

@@ -1,4 +1,12 @@
 {
+	"settings.code.blockLanguage": "Lenguaje predeterminado de bloques de código",
+	"settings.code.blockLanguageHint": "Se usa en el chat y el editor cuando un bloque no indica lenguaje. El lenguaje explícito siempre tiene prioridad.",
+	"settings.code.inlineLanguage": "Lenguaje predeterminado de código en línea",
+	"settings.code.colorTheme": "Tema de color del código",
+	"settings.code.colorThemeHint": "Colores del código en el chat y el editor. Usa automáticamente la paleta clara u oscura.",
+	"settings.code.none": "Ninguno (texto plano)",
+	"settings.code.followApp": "Seguir la aplicación",
+	"settings.code.defaultLanguage": "Predeterminado",
 	"settings.project.todoPlacement": "Ubicación de las tareas",
 	"settings.project.todoPlacementDescription": "Mostrar el último plan en la esquina superior derecha de cada panel de sesión. Los paneles estrechos usan la ubicación predeterminada.",
 	"settings.project.todoPlacementDefault": "Predeterminada",

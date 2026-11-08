@@ -1,4 +1,12 @@
 {
+	"settings.code.blockLanguage": "Default code block language",
+	"settings.code.blockLanguageHint": "Used in chat and the composer when a code fence has no language. An explicit language always wins.",
+	"settings.code.inlineLanguage": "Default inline code language",
+	"settings.code.colorTheme": "Code color theme",
+	"settings.code.colorThemeHint": "Colors for chat code and the composer. Automatically uses the light or dark palette.",
+	"settings.code.none": "None (plain)",
+	"settings.code.followApp": "Follow app",
+	"settings.code.defaultLanguage": "Default",
 	"settings.project.todoPlacement": "Todo placement",
 	"settings.project.todoPlacementDescription": "Show the latest plan in the top-right of each session pane. Narrow panes use the default placement.",
 	"settings.project.todoPlacementDefault": "Default",
