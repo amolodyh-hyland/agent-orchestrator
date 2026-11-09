@@ -1,0 +1,66 @@
+name: Noetaxis Windows desktop
+
+on:
+  push:
+    branches: [main]
+    paths: ['frontend/scripts/noetaxis*', 'frontend/scripts/noetaxis-windows/**', 'package.json', '.github/workflows/noetaxis-windows.yml']
+  pull_request:
+    paths: ['frontend/scripts/noetaxis*', 'frontend/scripts/noetaxis-windows/**', 'package.json', '.github/workflows/noetaxis-windows.yml']
+  workflow_dispatch:
+    inputs:
+      build_desktop:
+        description: Build integrated Windows x64 artifacts from this workflow revision
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Manifest, transaction and native process regressions
+        run: node --test frontend/scripts/noetaxis-windows.node-test.mjs
+      - name: Parse Windows process bridge
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$pwd/frontend/scripts/noetaxis-windows/native.ps1", [ref]$tokens, [ref]$errors) > $null
+          if ($errors.Count) { $errors; exit 1 }
+  build:
+    if: github.event_name == 'workflow_dispatch' && inputs.build_desktop
+    needs: regression
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+      - name: Prepare package manager launcher
+        run: npm install --global corepack@0.34.1 --ignore-scripts --registry=https://registry.npmjs.org/
+      - name: Build integrated fork with isolated public npm
+        shell: pwsh
+        env:
+          VITE_WORKOS_CLIENT_ID: ${{ vars.VITE_WORKOS_CLIENT_ID }}
+        run: npm run app:build:public -- --ref $env:GITHUB_SHA --output "$env:RUNNER_TEMP/ao-windows-output"
+      - name: Verify full source and artifact inventory
+        shell: pwsh
+        run: node frontend/scripts/noetaxis-windows/verify.mjs "$env:RUNNER_TEMP/ao-windows-output" --source $env:GITHUB_SHA
+      - uses: actions/upload-artifact@v4
+        with:
+          name: noetaxis-win32-x64
+          path: ${{ runner.temp }}/ao-windows-output
+          retention-days: 7
