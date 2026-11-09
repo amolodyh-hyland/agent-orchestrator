@@ -189,9 +189,9 @@ async function commandBuild(directory, modified = 1000) {
 
 test("root app scripts are explicit commands without npm install lifecycle hooks", async () => {
 	const { scripts } = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
-	assert.equal(scripts["app:build"], "node frontend/scripts/noetaxis-macos/build.mjs");
+	assert.equal(scripts["app:build"], "node frontend/scripts/noetaxis.mjs build");
 	assert.equal(scripts["app:build:public"], `${scripts["app:build"]} --public-registry`);
-	for (const action of ["install", "update"]) assert.equal(scripts[`app:${action}`], `node frontend/scripts/noetaxis-macos/app.mjs ${action}`);
+	for (const action of ["install", "update"]) assert.equal(scripts[`app:${action}`], `node frontend/scripts/noetaxis.mjs ${action}`);
 	for (const name of ["install", "preinstall", "postinstall", "prepare", "build"]) assert.equal(scripts[name], undefined);
 });
 

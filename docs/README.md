@@ -23,6 +23,8 @@ See [confirmed Multica delegation](multica-delegation-coordinator.md), its
 
 ## Reference docs
 
+[Custom Windows desktop](../frontend/scripts/noetaxis-windows/README.md) documents native x64 fork builds, source manifests, managed installation/update and validation limits.
+
 [Extra agent asset sources](agent-asset-sources.md) covers native launch-time asset discovery, precedence, configuration, and harness limits.
 
 [Claude Code authentication](claude-authentication.md) covers native login status, enterprise credentials, provider model listing and the labelled alias fallback.
