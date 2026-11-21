@@ -21,6 +21,7 @@ import (
 // produces exactly that class of failure, so this list is append-only.
 var shippedMigrations = map[int64]string{
 	20261120041743565: "20261120041743565_fork_project_context_schema_repair.sql",
+	20261121051234194: "20261121051234194_index_outer_mailbox_session_delete_lookups.sql",
 	234:               "0234_outer_mailbox.sql",
 	233:               "0233_outer_action_plans.sql",
 	232:               "0232_outer_session_generations.sql",

@@ -50,7 +50,7 @@ func (s *Store) ReserveMulticaDelegation(ctx context.Context, record domain.Mult
 		return record, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	q := s.qw.WithTx(tx)
+	q := s.txQueries(tx)
 	confirmed, err := decodeDelegation(q.FindMulticaDelegationConfirmation(ctx, record.ConfirmationID))
 	if err == nil {
 		candidate := record
@@ -115,7 +115,7 @@ func (s *Store) SaveMulticaDelegation(ctx context.Context, record domain.Multica
 		return record, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	q := s.qw.WithTx(tx)
+	q := s.txQueries(tx)
 	old, err := decodeDelegation(q.GetMulticaDelegation(ctx, record.RequestID))
 	if err != nil {
 		return record, err
