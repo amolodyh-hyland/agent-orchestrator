@@ -4,11 +4,13 @@ import { aoBridge } from "../lib/bridge";
 
 type Phase = "idle" | "starting" | "recording" | "stopping" | "finishing";
 
-export function useDictation({ disabled, scope, locale, onTranscript, bridge = aoBridge.dictation }: {
+export function useDictation({ disabled, scope, locale, onTranscript, onPartialTranscript, onTranscriptEnd, bridge = aoBridge.dictation }: {
 	disabled: boolean;
 	scope: string | undefined;
 	locale: string;
 	onTranscript: (text: string) => void;
+	onPartialTranscript?: (text: string) => void;
+	onTranscriptEnd?: (keep: boolean) => void;
 	bridge?: DictationBridge;
 }) {
 	const [availability, setAvailability] = useState<DictationAvailability>({ available: false, error: "unavailable" });
@@ -20,14 +22,21 @@ export function useDictation({ disabled, scope, locale, onTranscript, bridge = a
 	context.current = { scope, locale };
 	const insert = useRef(onTranscript);
 	insert.current = onTranscript;
+	const partial = useRef(onPartialTranscript);
+	partial.current = onPartialTranscript;
+	const finish = useRef(onTranscriptEnd);
+	finish.current = onTranscriptEnd;
 	const blocked = useRef(disabled);
 	blocked.current = disabled;
-	const cancel = useCallback(() => {
+	const end = useCallback((keep: boolean) => {
 		const recording = current.current;
 		current.current = undefined;
 		setPhase("idle");
+		if (recording) finish.current?.(keep);
 		if (recording) void bridge?.cancel(recording.id).catch(() => undefined);
 	}, [bridge]);
+	const cancel = useCallback(() => end(false), [end]);
+	const detach = useCallback(() => end(true), [end]);
 
 	useEffect(() => {
 		let disposed = false;
@@ -72,10 +81,16 @@ export function useDictation({ disabled, scope, locale, onTranscript, bridge = a
 				setPhase("finishing");
 				return;
 			}
+			if (event.type === "levels") return;
+			if (event.type === "text") {
+				if (!blocked.current) partial.current?.(event.text);
+				return;
+			}
 			current.current = undefined;
 			setPhase("idle");
 			if (event.type === "error") setError(event.error);
 			if (event.type === "result" && !blocked.current && event.text) insert.current(event.text);
+			finish.current?.(event.type === "result" && !blocked.current);
 		});
 		return () => { document.removeEventListener("visibilitychange", hidden); unsubscribe?.(); cancel(); };
 	}, [bridge, cancel]);
@@ -114,5 +129,5 @@ export function useDictation({ disabled, scope, locale, onTranscript, bridge = a
 		}
 	}, [bridge, cancel]);
 
-	return { availability, availabilityChecked, phase, active: phase !== "idle", error, start, stop, cancel, isActive: () => current.current !== undefined };
+	return { availability, availabilityChecked, phase, active: phase !== "idle", error, start, stop, cancel, detach, requestId: current.current?.id, isActive: () => current.current !== undefined };
 }

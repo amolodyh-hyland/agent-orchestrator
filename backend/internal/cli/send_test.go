@@ -639,3 +639,22 @@ func TestSendCarriesCooperativeSessionIdentity(t *testing.T) {
 		})
 	}
 }
+
+func TestSend_SteerQueuedAcknowledgementDoesNotClaimIdleOrProviderDelivery(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "worker")
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = io.WriteString(w, `{"outcome":"sent","turnId":"queued-1","state":"queued"}`)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "send", "--session", "demo-1", "--steer", "--message", "worker report")
+	if err != nil {
+		t.Fatalf("send=%v stderr=%s", err, errOut)
+	}
+	if !strings.Contains(out, "Message queued") || !strings.Contains(out, "not confirmed") || strings.Contains(out, "No active turn") {
+		t.Fatalf("ack=%q", out)
+	}
+}

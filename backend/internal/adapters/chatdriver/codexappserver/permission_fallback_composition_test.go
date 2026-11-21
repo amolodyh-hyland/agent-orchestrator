@@ -273,6 +273,22 @@ func TestUnrelatedProviderFailureDoesNotStepDown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
+	c.mu.Lock()
+	reportedAtStart := append([]domain.PermissionMode(nil), c.reported...)
+	c.mu.Unlock()
+	if len(reportedAtStart) == 0 || reportedAtStart[len(reportedAtStart)-1] != ports.PermissionModeBypassPermissions {
+		t.Fatalf("accepted startup permissions = %v, want bypass-permissions", reportedAtStart)
+	}
+	if got := c.sessionPermissions(t); got != ports.PermissionModeBypassPermissions {
+		t.Fatalf("initial session permissions = %q, want bypass-permissions", got)
+	}
+	initialController, err := c.svc.Controller(composedSession)
+	if err != nil {
+		t.Fatalf("initial Controller: %v", err)
+	}
+	if got := initialController.Settings().ApprovalMode; got != ports.PermissionModeBypassPermissions {
+		t.Fatalf("initial conversation approval mode = %q, want bypass-permissions", got)
+	}
 	c.server.mu.Lock()
 	c.server.failTo = "Usage limit reached. Resets tomorrow."
 	c.server.mu.Unlock()
@@ -284,10 +300,20 @@ func TestUnrelatedProviderFailureDoesNotStepDown(t *testing.T) {
 	if got := len(c.server.turnPostures()); got != 1 {
 		t.Fatalf("provider saw %d turn/start requests, want 1: an unrelated failure must not step down", got)
 	}
+	if got := c.sessionPermissions(t); got != ports.PermissionModeBypassPermissions {
+		t.Fatalf("session permissions = %q after an unrelated failure, want bypass-permissions", got)
+	}
+	controller, err := c.svc.Controller(composedSession)
+	if err != nil {
+		t.Fatalf("Controller: %v", err)
+	}
+	if got := controller.Settings().ApprovalMode; got != ports.PermissionModeBypassPermissions {
+		t.Fatalf("conversation approval mode = %q after an unrelated failure, want bypass-permissions", got)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(c.reported) != 0 {
-		t.Fatalf("session permissions reported %v after an unrelated failure", c.reported)
+	if len(c.reported) != len(reportedAtStart) {
+		t.Fatalf("session permissions reported %v after an unrelated failure (startup callbacks: %d)", c.reported, len(reportedAtStart))
 	}
 }
 

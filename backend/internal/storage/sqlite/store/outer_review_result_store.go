@@ -98,7 +98,7 @@ func (s *Store) BindOuterReviewResult(ctx context.Context, reviewID, generation 
 	}
 	var runID string
 	for _, run := range runs {
-		if run.ReviewID == reviewID && run.BatchID == e.ActionID && run.Status == domain.ReviewRunRunning && run.PRURL == spec.Review.PRURL && run.TargetSHA == spec.Review.HeadSHA {
+		if run.ReviewID == reviewID && run.BatchID == e.ActionID && (run.Status == domain.ReviewRunLaunching || run.Status == domain.ReviewRunRunning) && run.PRURL == spec.Review.PRURL && run.TargetSHA == spec.Review.HeadSHA {
 			if runID != "" {
 				return domain.ErrOuterHeld
 			}
@@ -157,7 +157,7 @@ func (s *Store) checkOuterReviewResult(ctx context.Context, caller domain.OuterC
 		return domain.ErrOuterHeld
 	}
 	run, found, err := s.GetReviewRun(ctx, runID)
-	if err != nil || !found || run.SessionID != workerID || run.ReviewID != scope.ReviewID || run.TargetSHA != scope.HeadSHA || run.Harness != domain.ReviewerCodex || (run.Status != domain.ReviewRunRunning && run.Status != domain.ReviewRunComplete) {
+	if err != nil || !found || run.SessionID != workerID || run.ReviewID != scope.ReviewID || run.TargetSHA != scope.HeadSHA || run.Harness != domain.ReviewerCodex || (run.Status != domain.ReviewRunLaunching && run.Status != domain.ReviewRunRunning && run.Status != domain.ReviewRunCompleted) {
 		return domain.ErrOuterHeld
 	}
 	reviewer, found, err := s.GetReviewByID(ctx, scope.ReviewID)

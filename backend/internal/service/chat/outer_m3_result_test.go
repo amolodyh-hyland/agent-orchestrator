@@ -35,11 +35,16 @@ type m3ResultStore struct {
 	before func()
 }
 
-func (s *m3ResultStore) UpdateReviewRunResult(ctx context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, providerID string, inject bool) (bool, error) {
+func (s *m3ResultStore) TransitionReviewRun(ctx context.Context, id string, from []domain.ReviewRunStatus, to domain.ReviewRunStatus, patch domain.ReviewRunPatch) (bool, error) {
 	if s.before != nil {
 		s.before()
 	}
-	return s.Store.UpdateReviewRunResult(ctx, id, status, verdict, body, providerID, inject)
+	return s.Store.TransitionReviewRun(ctx, id, from, to, patch)
+}
+
+func recordM3Result(ctx context.Context, st *sqlite.Store, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, providerID string, inject bool) (bool, error) {
+	now := time.Now()
+	return st.TransitionReviewRun(ctx, id, []domain.ReviewRunStatus{domain.ReviewRunLaunching, domain.ReviewRunRunning}, status, domain.ReviewRunPatch{Verdict: verdict, Body: &body, GithubReviewID: &providerID, AutoInjectReview: &inject, EndedAt: &now})
 }
 
 type m3ResultReader struct{ facts domain.RunRepoFacts }
@@ -176,7 +181,7 @@ func TestOuterM3ReviewResultTransportSatisfiesNativeFactoryGate(t *testing.T) {
 	if _, err := svc.Submit(ctx, worker.ID, run.ID, domain.VerdictApproved, "forged", ""); !errors.Is(err, domain.ErrOuterHeld) {
 		t.Fatal("service omitted reviewer authority", err)
 	}
-	if _, err := f.st.UpdateReviewRunResult(ctx, run.ID, domain.ReviewRunComplete, domain.VerdictApproved, "forged", "", true); !errors.Is(err, domain.ErrOuterHeld) {
+	if _, err := recordM3Result(ctx, f.st, run.ID, domain.ReviewRunCompleted, domain.VerdictApproved, "forged", "", true); !errors.Is(err, domain.ErrOuterHeld) {
 		t.Fatal("store omitted reviewer authority", err)
 	}
 	factory := m3ResultFactory(t, f, worker, run)
@@ -202,7 +207,7 @@ func TestOuterM3ReviewResultTransportSatisfiesNativeFactoryGate(t *testing.T) {
 		}
 	}
 	recorded, _, _ := f.st.GetReviewRun(ctx, run.ID)
-	if recorded.Status != domain.ReviewRunComplete || recorded.Verdict != domain.VerdictApproved || recorded.AutoInjectReview || recorded.DeliveredAt != nil {
+	if recorded.Status != domain.ReviewRunCompleted || recorded.Verdict != domain.VerdictApproved || recorded.AutoInjectReview || recorded.DeliveredAt != nil {
 		t.Fatal("result did not remain receipt-only", recorded)
 	}
 	after, err := factory.Get(ctx, "result-factory")

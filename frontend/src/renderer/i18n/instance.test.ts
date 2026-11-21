@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RUSSIAN_FORK_ENGLISH_FALLBACK_KEYS, RUSSIAN_FORK_PLURAL_FALLBACK_KEYS } from "./russian-fork-fallback-keys";
+import { TURKISH_FORK_ENGLISH_FALLBACK_KEYS } from "./turkish-fork-fallback-keys";
 import { APP_LOCALES, coerceLocale, DEFAULT_LOCALE } from "./locales";
 import { createAppI18n as createBaseAppI18n, createLazyAppI18n, loadLocaleCatalog, type TranslationCatalogs } from "./instance";
 import { createFullAppI18n as createAppI18n } from "./all-messages";
@@ -12,6 +13,7 @@ import {
 	koMessages,
 	ptBRMessages,
 	ruMessages,
+	trMessages,
 	zhCNMessages,
 } from "./all-messages";
 
@@ -25,15 +27,26 @@ const allCatalogs = {
 	de: deMessages,
 	"pt-BR": ptBRMessages,
 	ru: ruMessages,
+	tr: trMessages,
 } as const;
 
 const russianFallbackKeys = new Set<string>(RUSSIAN_FORK_ENGLISH_FALLBACK_KEYS);
+const turkishFallbackKeys = new Set<string>(TURKISH_FORK_ENGLISH_FALLBACK_KEYS);
 const russianPluralFallbackKeys = new Set<string>(RUSSIAN_FORK_PLURAL_FALLBACK_KEYS);
 function catalogValue(locale: typeof APP_LOCALES[number], key: string): string | string[] | undefined {
 	const catalog = allCatalogs[locale] as Record<string, string | string[]>;
-	return catalog[key] ?? (locale === "ru" && russianFallbackKeys.has(key)
+	return catalog[key] ?? ((locale === "ru" && russianFallbackKeys.has(key) || locale === "tr" && turkishFallbackKeys.has(key))
 		? (enMessages as Record<string, string | string[]>)[key] : undefined);
 }
+
+it("limits Turkish English fallback to explicit older fork keys", () => {
+	const missing = Object.keys(enMessages).filter((key) => !(key in trMessages)).sort();
+	expect([...turkishFallbackKeys].sort()).toEqual(missing);
+	expect(turkishFallbackKeys.size).toBe(TURKISH_FORK_ENGLISH_FALLBACK_KEYS.length);
+	for (const key of Object.keys(enMessages).filter((key) => /^(chat\.(address|prompts)\.|sessionPane\.|settings\.(address|code)\.)/.test(key))) {
+		expect(key in trMessages, key).toBe(true);
+	}
+});
 
 it("limits Russian English fallback to the reviewed fork-only key list", () => {
 	const missing = Object.keys(enMessages).filter((key) => !(key in ruMessages)).sort();
@@ -62,6 +75,7 @@ describe("coerceLocale", () => {
 		expect(coerceLocale("de")).toBe("de");
 		expect(coerceLocale("pt-BR")).toBe("pt-BR");
 		expect(coerceLocale("ru")).toBe("ru");
+		expect(coerceLocale("tr")).toBe("tr");
 	});
 
 	it("defaults unknown values to en", () => {
@@ -108,6 +122,7 @@ describe("app i18next instance", () => {
 			de: "settings.language.de",
 			"pt-BR": "settings.language.ptBR",
 			ru: "settings.language.ru",
+			tr: "settings.language.tr",
 		} as const;
 		const expected = {
 			en: "English",
@@ -119,6 +134,7 @@ describe("app i18next instance", () => {
 			de: "Deutsch",
 			"pt-BR": "Português (Brasil)",
 			ru: "Русский",
+			tr: "Türkçe",
 		} as const;
 		for (const locale of APP_LOCALES) {
 			expect(createAppI18n(locale).t(labels[locale])).toBe(expected[locale]);
@@ -178,6 +194,19 @@ describe("app i18next instance", () => {
 		]);
 	});
 
+	it("localizes Cloud project setup and settings copy that only had inline English defaults", () => {
+		const german = createAppI18n("de");
+		// The call sites pass an English defaultValue, which must not win over the catalog.
+		expect(german.t("settings.cloudProject.agentStartsIn", { defaultValue: "Agent starts in" })).toBe("Agent startet in");
+		expect(german.t("cloudRepos.problemLimit", { defaultValue: "A project can have at most {{count}} additional repositories.", count: 5 }))
+			.toBe("Ein Projekt kann höchstens 5 zusätzliche Repositorys haben.");
+		const japanese = createAppI18n("ja");
+		expect(japanese.t("coder.template.label", { defaultValue: "Template" })).toBe("テンプレート");
+		expect(japanese.t("cloudRepos.remove", { defaultValue: "Remove {{name}}", name: "acme/web" })).toBe("acme/web を削除");
+		const russian = createAppI18n("ru");
+		expect(russian.t("cloudRepos.problemLimit", { count: 21 })).toBe("У проекта может быть не больше 21 дополнительных репозиториев.");
+	});
+
 	it("provides Chinese copy for the remaining audited shell surfaces", () => {
 		const chinese = createAppI18n("zh-CN");
 		expect(chinese.t("terminal.loadingOutput")).toBe("正在加载最新输出…");
@@ -185,7 +214,7 @@ describe("app i18next instance", () => {
 		expect(chinese.t("inspector.open")).toBe("打开");
 		expect(chinese.t("inspector.openTerminal")).toBe("打开终端");
 		expect(chinese.t("createProject.gitSetupNotice")).toBe(
-			"如果此文件夹需要设置 Git，AO 会先初始化仓库并创建首次提交，然后再启动。",
+			"如果此文件夹需要设置 Git，Orchestrator 会先初始化仓库并创建首次提交，然后再启动。",
 		);
 		expect(chinese.t("settings.updates.currentVersion", { version: "v1.2.3" })).toBe("当前版本 - v1.2.3");
 		expect(chinese.t("settings.updates.updateTo", { version: "v1.2.3" })).toBe("更新至 v1.2.3");
@@ -201,7 +230,7 @@ describe("app i18next instance", () => {
 		expect(chinese.t("notify.earlierLoadFailed")).toBe("无法加载更早的通知。");
 		expect(chinese.t("notify.loadingEarlier")).toBe("正在加载更早的通知…");
 		expect(chinese.t("notify.retry")).toBe("重试");
-		expect(chinese.t("report.cancel")).toBe("取消");
+		expect(chinese.t("report.github")).toBe("GitHub");
 		expect(chinese.t("shell.openProjectDashboard", { name: "AO" })).toBe("打开 AO 看板");
 		expect(chinese.t("shell.renameSession", { title: "任务" })).toBe("重命名任务");
 		expect(chinese.t("shell.versionReady", { version: "9.9.9" })).toBe("v9.9.9 已就绪");
@@ -256,7 +285,9 @@ describe("app i18next instance", () => {
 			for (const base of pluralBases) {
 				for (const category of requiredCategories) {
 					expect(
-						`${base}_${category}` in allCatalogs[locale] || (locale === "ru" && (russianFallbackKeys.has(`${base}_${category}`) || russianPluralFallbackKeys.has(`${base}_${category}`))),
+						`${base}_${category}` in allCatalogs[locale]
+							|| (locale === "ru" && (russianFallbackKeys.has(`${base}_${category}`) || russianPluralFallbackKeys.has(`${base}_${category}`)))
+							|| (locale === "tr" && turkishFallbackKeys.has(`${base}_${category}`)),
 						`${locale} is missing ${base}_${category}`,
 					).toBe(true);
 				}
@@ -284,6 +315,20 @@ describe("app i18next instance", () => {
 });
 
 describe("lazy locale catalogs", () => {
+	it("loads Turkish on demand with explicit fork fallback and Turkish plural forms", async () => {
+		expect([...Object.keys(trMessages), ...turkishFallbackKeys].sort()).toEqual(Object.keys(enMessages).sort());
+		const instance = createLazyAppI18n();
+		expect(instance.getResource("tr", "translation", "settings.general")).toBeUndefined();
+		await instance.changeLanguage("tr");
+		expect(instance.language).toBe("tr");
+		expect(instance.t("settings.general")).toBe("Genel");
+		expect(instance.t("settings.language.tr")).toBe("Türkçe");
+		for (const count of [0, 1, 2, 21]) {
+			expect(instance.t("firstRun.importFound", { count, agents: "Codex" }))
+				.toBe(`Bu bilgisayarda Codex ile yapılmış ${count} sohbet bulundu.`);
+		}
+	});
+
 	it("loads a locale's catalog when the app instance changes language", async () => {
 		const instance = createLazyAppI18n();
 		expect(instance.getResource("ja", "translation", "settings.general")).toBeUndefined();

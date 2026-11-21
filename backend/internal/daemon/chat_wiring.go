@@ -31,6 +31,7 @@ type chatServiceDeps struct {
 	Activity           *lifecycle.Manager
 	Log                *slog.Logger
 	OnAccountChanged   func(domain.SessionID, domain.AgentHarness)
+	PRChanged          func(domain.SessionID)
 }
 
 // chatAgentService is what the Codex account hooks need from the agent service.
@@ -89,6 +90,7 @@ func newChatServiceOptions(ctx context.Context, deps chatServiceDeps) (chatsvc.O
 	}
 	return chatsvc.Options{
 		Store:               deps.Store,
+		PRChanged:           deps.PRChanged,
 		Sessions:            deps.Store,
 		Renders:             attachmentstore.New(deps.DataDir),
 		DataDir:             deps.DataDir,
@@ -116,10 +118,11 @@ func newChatServiceOptions(ctx context.Context, deps chatServiceDeps) (chatsvc.O
 				Activities:                       rows.Activities,
 				BranchPoints:                     rows.BranchPoints,
 				BranchedFromEarlierMessage:       rows.BranchedFromEarlierMessage,
+				BatchedDeliveries:                rows.BatchedDeliveries,
 			}, nil
 		}),
-		PageReader: chatsvc.SnapshotPageReaderFunc(func(ctx context.Context, conversationID string, beforeSequence, limit int64) (chatsvc.ConversationRows, error) {
-			rows, err := deps.Store.LoadConversationSnapshotPage(ctx, conversationID, beforeSequence, limit)
+		PageReader: chatsvc.SnapshotPageReaderFunc(func(ctx context.Context, conversationID string, beforeSequence, afterSequence, limit int64) (chatsvc.ConversationRows, error) {
+			rows, err := deps.Store.LoadConversationSnapshotRange(ctx, conversationID, beforeSequence, afterSequence, limit)
 			if err != nil {
 				return chatsvc.ConversationRows{}, err
 			}
@@ -133,8 +136,10 @@ func newChatServiceOptions(ctx context.Context, deps chatServiceDeps) (chatsvc.O
 				Activities:                       rows.Activities,
 				BranchPoints:                     rows.BranchPoints,
 				BranchedFromEarlierMessage:       rows.BranchedFromEarlierMessage,
+				BatchedDeliveries:                rows.BatchedDeliveries,
 				OldestSequence:                   rows.OldestSequence,
 				HasMoreBefore:                    rows.HasMoreBefore,
+				AfterSequence:                    rows.AfterSequence,
 			}, nil
 		}),
 		Drivers: deps.Drivers,

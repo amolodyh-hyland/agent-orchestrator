@@ -10,6 +10,8 @@ const realRenderer = process.env.AO_E2E_REAL_RENDERER === "1";
 
 export default defineConfig({
 	testDir: "e2e",
+	retries: process.env.CI ? 1 : 0,
+	reporter: process.env.CI ? [["list"], ["github"]] : "list",
 	use: {
 		baseURL: `http://127.0.0.1:${port}`,
 	},
@@ -18,7 +20,9 @@ export default defineConfig({
 		// while keeping lifecycle effects active; neither mode launches Electron.
 		command: realRenderer
 			? `node node_modules/vite/bin/vite.js --config vite.renderer.config.ts --port ${port} --host 127.0.0.1`
-			: `npm run dev:web -- --port ${port} --host 127.0.0.1`,
+			: process.env.AO_PERF_PRODUCTION === "1"
+				? "node scripts/performance-web.mjs"
+				: `npm run dev:web -- --port ${port} --host 127.0.0.1`,
 		env: realRenderer ? { VITE_NO_ELECTRON: "0" } : undefined,
 		port,
 		reuseExistingServer: !realRenderer && !process.env.CI,

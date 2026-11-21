@@ -1,5 +1,6 @@
 import { createContext, useContext, type ReactElement } from "react";
-import { Copy, FolderOpen, PanelRight } from "lucide-react";
+import { Copy, FolderOpen, PanelRight, X } from "@/components/app-icons";
+import { Button } from "../ui/button";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
 import { isMacPlatform, isWindowsPlatform } from "../../lib/platform";
@@ -66,13 +67,15 @@ export function AttachmentPathMenu({ path, folder, children, actions }: {
 	);
 }
 
-export function AttachmentPathChip({ path, display, folder, actions, composer = false }: {
+export function AttachmentPathChip({ path, display, folder, actions, composer = false, onRemove }: {
 	path: string;
 	display?: string;
 	folder?: boolean;
 	actions?: AttachmentPathActions;
 	composer?: boolean;
+	onRemove?: () => void;
 }) {
+	const { t } = useTranslation();
 	const Icon = folder ? FolderOpen : composerFileIcon(path);
 	return (
 		<AttachmentPathMenu path={path} folder={folder} actions={actions}>
@@ -84,9 +87,12 @@ export function AttachmentPathChip({ path, display, folder, actions, composer = 
 				data-value={path}
 				contentEditable={false}
 				title={path}
-				className="mx-0.5 inline-flex max-w-full items-center gap-1 rounded-md border border-border-strong bg-interactive-hover px-1.5 py-0.5 align-middle text-[0.9em] leading-none text-foreground select-none focus-visible:outline focus-visible:outline-ring"
+				className="group/attachment mx-0.5 inline-flex max-w-full items-center gap-1 rounded-md border border-border-strong bg-interactive-hover px-1.5 py-0.5 align-middle text-[0.9em] leading-none text-foreground select-none focus-visible:outline focus-visible:outline-ring"
 			>
-				<Icon aria-hidden="true" className="size-3 shrink-0" />
+				<span className="relative flex size-3 shrink-0">
+					<Icon aria-hidden="true" className={onRemove ? "size-3 group-focus-within/attachment:opacity-0 group-hover/attachment:opacity-0" : "size-3"} />
+					{onRemove ? <span className="absolute -inset-[5px] flex opacity-0 group-focus-within/attachment:opacity-100 group-hover/attachment:opacity-100"><Button type="button" variant="destructive-ghost" size="icon-xs" onClick={(event) => { event.stopPropagation(); onRemove(); }} aria-label={t("chat.attachment.remove", { name: attachmentName(path) })}><X aria-hidden="true" className="size-3" /></Button></span> : null}
+				</span>
 				<span className="truncate">{display ?? attachmentName(path)}</span>
 			</span>
 		</AttachmentPathMenu>

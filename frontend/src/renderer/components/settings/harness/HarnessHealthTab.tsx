@@ -1,4 +1,4 @@
-import { Check, Copy, LoaderCircle, RefreshCw } from "lucide-react";
+import { Check, Copy, LoaderCircle, RefreshCw } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { versionLabel } from "../../../hooks/useHarnessUpdates";
 import { MiddleTruncatedText } from "../../MiddleTruncatedText";
@@ -24,12 +24,9 @@ export function HarnessHealthTab({ details, checking, authCheckFailed, updateErr
 	const installState: { tone: HarnessTone; label: string } = installation?.state === "installed" ? { tone: "ok", label: t("settings.harness.installed") }
 		: installation?.state === "not_installed" ? { tone: "off", label: t("settings.harness.notInstalled") }
 		: { tone: "off", label: t("settings.harness.installationUnknown") };
-	// An expired login token the harness renews by itself is signed in, not a problem to fix.
+	const { authTone } = details;
 	const renewsOnRun = details.authStatus === "configured" && Boolean(readinessAgent?.authentication.diagnostics?.some((step) => step.code === "token_renewal_pending"));
 	const nativeSignIn = details.authStatus === "configured" && Boolean(readinessAgent?.authentication.diagnostics?.some((step) => step.code === "cli_managed_credential"));
-	const authTone: HarnessTone = authCheckFailed || readinessAgent?.authentication.freshness !== "fresh" ? "off"
-		: renewsOnRun || details.authStatus === "authorized" || details.authStatus === "not_applicable" ? "ok"
-		: details.authStatus === "unauthorized" ? "error" : "off";
 	const authLabel = renewsOnRun ? t("settings.harness.health.authRenewsOnRun")
 		: nativeSignIn ? `${details.authSummary} · ${t("settings.harness.health.authUnverified")}`
 		: details.authStatus === "configured" && !details.unverifiedProvider ? t("settings.harness.health.connectionNotChecked")
@@ -73,7 +70,7 @@ export function HarnessHealthTab({ details, checking, authCheckFailed, updateErr
 			</HarnessDetailRow> : null}
 		</HarnessDetailGroup> : null}
 		<div className="flex flex-wrap gap-2">
-			<Button type="button" size="sm" variant="outline" disabled={checking || details.busy} onClick={onCheckAgain}>
+			<Button type="button" size="sm" variant="secondary" disabled={checking || details.busy} onClick={onCheckAgain}>
 				{checking ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
 				{t(checking ? "settings.harness.health.checking" : "settings.harness.health.checkAgain")}
 			</Button>

@@ -71,14 +71,21 @@ func (d *checkpointDriver) VerifyNativeCheckpoint(ctx context.Context, request p
 	return verifyCheckpointTranscript(ctx, file, request)
 }
 
+// The checkpoint holds at most checkpointRetainedBytes of records after the
+// latest compaction, and reads at most checkpointTranscriptBytes in all.
+var checkpointRetainedBytes, checkpointTranscriptBytes int64 = 64 << 20, 1 << 30
+
 func checkpointUnsettled(reason string) error {
 	return fmt.Errorf("claude native checkpoint: %s: %w", reason,
 		&ports.ChatHistoryUnsettledError{Dimensions: []ports.ChatHistoryMismatchDimension{ports.ChatHistoryMismatchUnsettledBoundary}})
 }
 
 type checkpointRecord struct {
+	// Captured before replay relinking can move a summary to another anchor.
+	compactionBoundaryID  string
 	UUID                  string `json:"uuid"`
 	ParentUUID            string `json:"parentUuid"`
+	LogicalParentUUID     string `json:"logicalParentUuid"`
 	SessionID             string `json:"sessionId"`
 	PromptID              string `json:"promptId"`
 	Type                  string `json:"type"`
@@ -98,6 +105,95 @@ type checkpointRecord struct {
 		StopReason string          `json:"stop_reason"`
 		Model      string          `json:"model"`
 	} `json:"message"`
+	CompactMetadata struct {
+		PreservedMessages *struct {
+			AnchorUUID string   `json:"anchorUuid"`
+			UUIDs      []string `json:"uuids"`
+		} `json:"preservedMessages"`
+		PreservedSegment *struct {
+			HeadUUID   string `json:"headUuid"`
+			AnchorUUID string `json:"anchorUuid"`
+			TailUUID   string `json:"tailUuid"`
+		} `json:"preservedSegment"`
+	} `json:"compactMetadata"`
+}
+
+func (r checkpointRecord) compactBoundary() bool {
+	return r.Type == "system" && r.Subtype == "compact_boundary"
+}
+
+// followsCompaction reports a record whose parent is a compact_boundary, or
+// reaches one only through attachments. Compacting between turns puts the
+// summary right under the boundary. Compacting mid-turn first writes the
+// instructions, session_context and date attachments (Claude Code 2.1.306 to
+// 2.1.318), and the summary hangs under the last of them.
+func followsCompaction(records map[string]checkpointRecord, parent string) bool {
+	return compactionParent(records, parent) != ""
+}
+
+func compactionParent(records map[string]checkpointRecord, parent string) string {
+	for steps := 0; parent != "" && steps <= len(records); steps++ {
+		record, found := records[parent]
+		switch {
+		case !found:
+			return ""
+		case record.compactBoundary():
+			return record.UUID
+		case record.Type != "attachment":
+			return ""
+		}
+		parent = record.ParentUUID
+	}
+	return ""
+}
+
+// relinkCompactedTranscript re-parents the messages a compaction kept, the
+// way the Agent SDK's getSessionMessages does before Chat replays the session.
+// A compact_boundary has no parent, and the summary after it (the anchor)
+// starts the visible history. Claude Code keeps the newest messages before the
+// boundary and hangs them after the summary at load time. They are never
+// rewritten in the append-only log. The walk from the leaf then crosses the
+// summary, those messages and the boundary, and ends there, as replay does.
+// Boundaries apply in file order, as in the SDK. It returns the last kept
+// message for each summary, which ends the chain while nothing follows it.
+func relinkCompactedTranscript(records map[string]checkpointRecord, boundaries []string) map[string]string {
+	ends := make(map[string]string)
+	reparent := func(id, parent string) {
+		record := records[id]
+		record.ParentUUID = parent
+		records[id] = record
+	}
+	for _, id := range boundaries {
+		metadata := records[id].CompactMetadata
+		if kept := metadata.PreservedMessages; kept != nil {
+			if len(kept.UUIDs) == 0 || slices.ContainsFunc(kept.UUIDs, func(id string) bool { _, found := records[id]; return !found }) {
+				continue
+			}
+			parent := kept.AnchorUUID
+			for _, keptID := range kept.UUIDs {
+				reparent(keptID, parent)
+				parent = keptID
+			}
+			first, last := kept.UUIDs[0], kept.UUIDs[len(kept.UUIDs)-1]
+			ends[kept.AnchorUUID] = last
+			for recordID, record := range records {
+				if record.ParentUUID == kept.AnchorUUID && recordID != first {
+					reparent(recordID, last)
+				}
+			}
+		} else if segment := metadata.PreservedSegment; segment != nil {
+			if _, found := records[segment.HeadUUID]; found {
+				reparent(segment.HeadUUID, segment.AnchorUUID)
+				ends[segment.AnchorUUID] = segment.TailUUID
+			}
+			for recordID, record := range records {
+				if record.ParentUUID == segment.AnchorUUID && recordID != segment.HeadUUID {
+					reparent(recordID, segment.TailUUID)
+				}
+			}
+		}
+	}
+	return ends
 }
 
 type checkpointTurn struct {
@@ -107,6 +203,21 @@ type checkpointTurn struct {
 	// the prompt's own cycle and fires no Stop, so the turn never gets an
 	// end_turn reply. The marker is its settled boundary.
 	interrupted bool
+	// carried is the turn a compaction summary starts. The summary keeps the
+	// prompt ID of the turn that was running or had just ended. resumed means
+	// Claude answered in it after the boundary, so that turn ran on through the
+	// compaction. Otherwise it ended before it, and replay cannot show it.
+	carried, resumed     bool
+	compactionBoundaryID string
+}
+
+type checkpointPreservation struct {
+	anchorUUID string
+	users      map[string]bool
+}
+
+func (p checkpointPreservation) contains(summary, user checkpointTurn) bool {
+	return p.anchorUUID != "" && p.anchorUUID == summary.userID && p.users[user.userID]
 }
 
 // claudeSyntheticModel names the assistant records Claude Code writes itself
@@ -133,10 +244,47 @@ func claudeTranscriptNotice(text string) bool {
 		strings.HasPrefix(text, "[Request interrupted by user") && strings.HasSuffix(text, "]")
 }
 
+// claudeLocalCommandMarkers wrap what Claude Code writes for a local slash
+// command such as /compact: its name, arguments and output. claude-agent-acp
+// strips them on replay and skips a message with nothing left.
+var claudeLocalCommandMarkers = []string{"command-name", "command-message", "command-args", "local-command-stdout", "local-command-stderr"}
+
+// claudeLocalCommandMetadata reports text that replay skips because it holds
+// only local command markers. Like the adapter, a marker ends at the nearest
+// closing tag of the same name, and an unclosed one is kept as prose.
+func claudeLocalCommandMetadata(text string) bool {
+	var rest strings.Builder
+	stripped := false
+	for i := 0; i < len(text); {
+		matched := false
+		if text[i] == '<' {
+			for _, marker := range claudeLocalCommandMarkers {
+				open, closing := "<"+marker+">", "</"+marker+">"
+				if !strings.HasPrefix(text[i:], open) {
+					continue
+				}
+				if end := strings.Index(text[i+len(open):], closing); end >= 0 {
+					i += len(open) + end + len(closing)
+					matched, stripped = true, true
+				}
+				break
+			}
+		}
+		if !matched {
+			rest.WriteByte(text[i])
+			i++
+		}
+	}
+	return stripped && strings.TrimSpace(rest.String()) == ""
+}
+
 // Native logs are append-only graphs, not a list of alternating text messages.
 // Follow the last main-chain leaf's parent UUIDs; never use a matching sidechain,
 // an earlier repeated answer, or file stability to discharge a hook witness.
 func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request ports.NativeCheckpointRequest) (ports.NativeCheckpointBoundary, error) {
+	if err := ctx.Err(); err != nil {
+		return ports.NativeCheckpointBoundary{}, err
+	}
 	var evidence domain.NativeCheckpointEvidence
 	if json.Unmarshal([]byte(request.Evidence), &evidence) != nil || evidence.Invalid ||
 		evidence.NativeID != request.ProviderConversationID || len(evidence.Events) == 0 {
@@ -150,8 +298,19 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 		}
 	}
 	leaf := ""
-	const maxTranscriptBytes = 64 << 20
-	limited := &io.LimitedReader{R: input, N: maxTranscriptBytes + 1}
+	// position orders main-chain records in the file. Records before the
+	// latest compaction boundary are flushed but hidden from replay, so at each
+	// boundary they are folded into compacted and dropped, except the messages
+	// the compaction kept. Long sessions are the ones that compact, so only the
+	// records still held count toward the size bound.
+	position := make(map[string]int)
+	recordBytes := make(map[string]int64)
+	uuids := make(map[string]bool)
+	var retainedBytes int64
+	var boundaries []string
+	preserved := make(map[string]checkpointPreservation)
+	compacted := compactedWitnesses{prompts: make(map[string]bool), submissions: make(map[string]bool), boundary: -1}
+	limited := &io.LimitedReader{R: input, N: checkpointTranscriptBytes + 1}
 	scanner := bufio.NewScanner(limited)
 	scanner.Buffer(make([]byte, 4096), 4<<20)
 	for scanner.Scan() {
@@ -160,10 +319,10 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 		}
 		var record checkpointRecord
 		if json.Unmarshal(scanner.Bytes(), &record) != nil {
+			if limited.N == 0 {
+				break // Cut by the read bound, reported below.
+			}
 			return ports.NativeCheckpointBoundary{}, checkpointUnsettled("incomplete native record")
-		}
-		if record.Type == "system" && record.Subtype == "compact_boundary" {
-			return ports.NativeCheckpointBoundary{}, checkpointUnsettled("compacted native ancestry requires reconciliation")
 		}
 		if record.UUID == "" || record.Sidechain {
 			continue
@@ -171,14 +330,41 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 		if record.SessionID != request.ProviderConversationID {
 			return ports.NativeCheckpointBoundary{}, checkpointUnsettled("native record identity mismatch")
 		}
-		if _, exists := records[record.UUID]; exists {
+		if uuids[record.UUID] {
 			return ports.NativeCheckpointBoundary{}, checkpointUnsettled("ambiguous native UUID")
 		}
+		uuids[record.UUID] = true
+		if record.compactBoundary() {
+			relinkCompactedTranscript(records, boundaries)
+			boundaries = nil
+			var err error
+			retainedBytes, err = compactNativeRecords(ctx, records, recordBytes, wantedSubmissions, &compacted, preserved, record)
+			if err != nil {
+				return ports.NativeCheckpointBoundary{}, err
+			}
+			compacted.boundary = len(uuids)
+			boundaries = append(boundaries, record.UUID)
+		}
+		if record.Type == "user" {
+			record.compactionBoundaryID = compactionParent(records, record.ParentUUID)
+		}
 		records[record.UUID] = record
+		position[record.UUID] = len(uuids)
+		recordBytes[record.UUID] = int64(len(scanner.Bytes()))
+		retainedBytes += int64(len(scanner.Bytes()))
+		if retainedBytes > checkpointRetainedBytes {
+			return ports.NativeCheckpointBoundary{}, checkpointUnsettled("native transcript exceeds readable bounds")
+		}
 		leaf = record.UUID
+	}
+	if err := ctx.Err(); err != nil {
+		return ports.NativeCheckpointBoundary{}, err
 	}
 	if scanner.Err() != nil || limited.N == 0 {
 		return ports.NativeCheckpointBoundary{}, checkpointUnsettled("native transcript exceeds readable bounds")
+	}
+	if end, found := relinkCompactedTranscript(records, boundaries)[leaf]; found {
+		leaf = end
 	}
 	var chain []checkpointRecord
 	seen := make(map[string]bool)
@@ -224,7 +410,7 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 			// record, which getSessionMessages drops. A note inside its prompt's
 			// cycle, such as an interrupt marker, adds no turn. One that starts a
 			// cycle keeps its prompt for Stop evidence; the boundary skips it.
-			notice := record.Meta || claudeTranscriptNotice(text)
+			notice := record.Meta || claudeTranscriptNotice(text) || claudeLocalCommandMetadata(text)
 			if notice && len(turns) > 0 && turns[len(turns)-1].promptID == record.PromptID {
 				// Esc settles the turn it interrupts, whether Claude was replying
 				// or running a tool (its tool_use may have no result). Only the
@@ -236,7 +422,8 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 				}
 				continue
 			}
-			turns = append(turns, checkpointTurn{promptID: record.PromptID, userID: record.UUID, user: text, notice: notice})
+			turns = append(turns, checkpointTurn{promptID: record.PromptID, userID: record.UUID, user: text, notice: notice,
+				carried: notice && record.compactionBoundaryID != "", compactionBoundaryID: record.compactionBoundaryID})
 			continue
 		}
 		if len(turns) == 0 {
@@ -272,6 +459,9 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 				}
 			}
 		case "assistant":
+			if turn.carried && position[record.UUID] > compacted.boundary {
+				turn.resumed = true
+			}
 			if turn.interrupted && record.Message.Model == claudeSyntheticModel {
 				// Claude's own filler after the marker does not reopen the turn.
 				break
@@ -296,11 +486,23 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 	}
 	byPrompt := make(map[string]int)
 	for i, turn := range turns {
-		if _, duplicate := byPrompt[turn.promptID]; duplicate {
+		if previous, duplicate := byPrompt[turn.promptID]; duplicate {
+			// A summary carries the compacted prompt ID even when replay also
+			// retains that prompt's original user record. Only the real turn owns it.
+			if turns[previous].carried && !turns[previous].resumed && !turn.notice &&
+				preserved[turns[previous].compactionBoundaryID].contains(turns[previous], turn) {
+				byPrompt[turn.promptID] = i
+				continue
+			}
+			if turn.carried && !turn.resumed && !turns[previous].notice &&
+				preserved[turn.compactionBoundaryID].contains(turn, turns[previous]) {
+				continue
+			}
 			return ports.NativeCheckpointBoundary{}, checkpointUnsettled("ambiguous native prompt ID")
 		}
 		byPrompt[turn.promptID] = i
 	}
+	var unresolvedSubmissions []string
 	for _, observation := range evidence.Events {
 		if observation.Generation == "" {
 			return ports.NativeCheckpointBoundary{}, checkpointUnsettled("unowned native observation")
@@ -309,6 +511,11 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 		if observation.Submission {
 			submission := domain.NativeSubmissionContext(observation.SubmissionID)
 			index, found = submissions[submission]
+			if !found && observation.SubmissionID != "" && compacted.submissions[submission] {
+				// Claude flushed this prompt before it compacted, so replay can
+				// no longer show it. Nothing about it is still pending.
+				continue
+			}
 			submitted := ""
 			if found {
 				submitted = turns[index].user
@@ -318,8 +525,14 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 			}
 			if observation.SubmissionID == "" || !found ||
 				(!observation.Coordination && !domain.NativeCheckpointTextMatches(observation.Text, submitted)) {
-				return ports.NativeCheckpointBoundary{}, checkpointUnsettled("native submission attachment not flushed")
+				unresolvedSubmissions = append(unresolvedSubmissions, observation.SubmissionID)
+				continue
 			}
+		} else if compacted.prompts[observation.PromptID] && (!found || turns[index].carried && !turns[index].resumed) {
+			// Claude flushed this turn before it compacted, and replay cannot show
+			// it. A turn that ran on through the compaction is resumed: it is
+			// checked below like any other and must still complete.
+			continue
 		} else if !found {
 			return ports.NativeCheckpointBoundary{}, checkpointUnsettled("observed native prompt not flushed")
 		} else if observation.Text != "" && !domain.NativeCheckpointTextMatches(observation.Text, turns[index].assistant) {
@@ -328,6 +541,10 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 		if !turns[index].complete {
 			return ports.NativeCheckpointBoundary{}, checkpointUnsettled("observed native turn not completed")
 		}
+	}
+	if len(unresolvedSubmissions) > 0 {
+		slices.Sort(unresolvedSubmissions)
+		return ports.NativeCheckpointBoundary{}, checkpointUnsettled(fmt.Sprintf("native submission attachment not flushed; unresolved submission IDs: %q", slices.Compact(unresolvedSubmissions)))
 	}
 	latest := turns[len(turns)-1]
 	if !latest.complete {
@@ -339,12 +556,122 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 		owner--
 	}
 	if owner < 0 {
+		if len(boundaries) > 0 {
+			// Replay starts at the compaction summary, which Chat skips, so it
+			// has no user turn to match until the next prompt.
+			return ports.NativeCheckpointBoundary{}, checkpointUnsettled("no native user prompt since compaction")
+		}
 		return ports.NativeCheckpointBoundary{}, checkpointUnsettled("no native user boundary")
 	}
 	return ports.NativeCheckpointBoundary{
 		UserMessageID: turns[owner].userID, UserText: turns[owner].user,
 		AssistantText: latest.assistant, Interrupted: latest.interrupted,
 	}, nil
+}
+
+// compactedWitnesses names the prompts and AO submissions Claude flushed
+// before its latest compaction. Replay cannot show them, so an observation of
+// one is settled by the boundary that follows it rather than by a turn.
+type compactedWitnesses struct {
+	prompts, submissions map[string]bool
+	// boundary is the latest compaction's file position, or -1.
+	boundary int
+}
+
+// compactNativeRecords folds only the ancestry selected by the compaction
+// into compacted. It then drops old records except the preserved replay segment.
+// An abandoned branch cannot settle an owned observation.
+func compactNativeRecords(ctx context.Context, records map[string]checkpointRecord, recordBytes map[string]int64, wanted map[string]bool, compacted *compactedWitnesses, preserved map[string]checkpointPreservation, boundary checkpointRecord) (int64, error) {
+	ancestry := make(map[string]bool)
+	for id := boundary.LogicalParentUUID; id != ""; {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		record, found := records[id]
+		if !found || ancestry[id] {
+			return 0, checkpointUnsettled("incomplete compaction ancestry")
+		}
+		ancestry[id] = true
+		id = record.ParentUUID
+	}
+	if len(records) > 0 && len(ancestry) == 0 {
+		return 0, checkpointUnsettled("missing compaction ancestry")
+	}
+	for id := range ancestry {
+		record := records[id]
+		switch {
+		case record.Type == "user" && record.PromptID != "":
+			compacted.prompts[record.PromptID] = true
+		case record.Type == "attachment" && record.Attachment.Type == "hook_additional_context" &&
+			record.Attachment.HookEvent == "UserPromptSubmit":
+			var contents []string
+			if json.Unmarshal(record.Attachment.Content, &contents) != nil {
+				continue // Unreadable: an observation of it stays unproven.
+			}
+			for _, content := range contents {
+				if wanted[content] {
+					compacted.submissions[content] = true
+				}
+			}
+		}
+	}
+	// This graph includes prior relinks, but not this boundary's reparenting.
+	keep := make(map[string]bool)
+	anchor, complete := "", false
+	if kept := boundary.CompactMetadata.PreservedMessages; kept != nil {
+		anchor, complete = kept.AnchorUUID, len(kept.UUIDs) > 0 && boundary.CompactMetadata.PreservedSegment == nil
+		for _, id := range kept.UUIDs {
+			if _, found := records[id]; !found || id == "" || keep[id] {
+				complete = false
+			}
+			keep[id] = true
+		}
+	} else if segment := boundary.CompactMetadata.PreservedSegment; segment != nil {
+		anchor = segment.AnchorUUID
+		// The segment is the original chain from its head to its tail.
+		for id := segment.TailUUID; id != "" && !keep[id]; id = records[id].ParentUUID {
+			if _, found := records[id]; !found {
+				break
+			}
+			keep[id] = true
+			if id == segment.HeadUUID {
+				complete = true
+				break
+			}
+		}
+	}
+	if complete && anchor != "" {
+		users := make(map[string]bool)
+		for id := range keep {
+			if records[id].Type == "user" {
+				users[id] = true
+			}
+		}
+		preserved[boundary.UUID] = checkpointPreservation{anchorUUID: anchor, users: users}
+	}
+	var retained int64
+	for id := range records {
+		if keep[id] {
+			retained += recordBytes[id]
+			continue
+		}
+		delete(records, id)
+		delete(recordBytes, id)
+	}
+	// A preserved summary still needs its original proof after that boundary
+	// object is discarded. Keep the captured proof, never reconstruct it.
+	needed := map[string]bool{boundary.UUID: true}
+	for _, record := range records {
+		if record.compactionBoundaryID != "" {
+			needed[record.compactionBoundaryID] = true
+		}
+	}
+	for id := range preserved {
+		if !needed[id] {
+			delete(preserved, id)
+		}
+	}
+	return retained, nil
 }
 
 func checkpointToolResults(raw json.RawMessage) bool {

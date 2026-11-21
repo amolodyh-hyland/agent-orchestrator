@@ -17,7 +17,7 @@ export function AgentAssetSourcesEditor({ value, onChange, project = false, disa
 			<Switch id={`${id}-inherit`} checked={value === null} disabled={disabled} onCheckedChange={(inherit) => onChange(inherit ? null : [])} />
 		</div>}
 		<Label htmlFor={id}>{t("settings.agentAssetSources.directories")}</Label>
-		<textarea id={id} className="settings-field-control min-h-24 w-full px-4 py-3 text-sm" disabled={disabled || value === null} value={(value ?? []).join("\n")} placeholder="/path/to/workspace" onChange={(event) => onChange(event.target.value.split("\n"))} onBlur={(event) => onChange(event.target.value.split("\n").map((line) => line.trim()).filter(Boolean))} />
+		<textarea id={id} className="settings-field-control min-h-24 w-full px-4 py-3 text-sm" disabled={disabled || value === null} value={(value ?? []).join("\n")} placeholder={t("settings.agentAssetSources.pathPlaceholder")} onChange={(event) => onChange(event.target.value.split("\n"))} onBlur={(event) => onChange(event.target.value.split("\n").map((line) => line.trim()).filter(Boolean))} />
 		<p className="text-sm text-settings-muted">{t("settings.agentAssetSources.description")}</p>
 		<p className="text-sm text-settings-muted">{t("settings.agentAssetSources.support")}</p>
 		<p className="text-sm text-settings-muted">{t("settings.agentAssetSources.liveEdits")}</p>

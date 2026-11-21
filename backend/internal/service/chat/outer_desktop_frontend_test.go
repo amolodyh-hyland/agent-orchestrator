@@ -116,7 +116,7 @@ func (f *outerDesktopFixture) wire() {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	sessions := sessionsvc.NewWithDeps(sessionsvc.Deps{Manager: outerDesktopCommander{st: f.st}, Store: f.st, Logger: log, DataDir: f.dir})
+	sessions := sessionsvc.NewWithDeps(sessionsvc.Deps{Manager: outerDesktopCommander{Manager: &sessionmanager.Manager{}, st: f.st}, Store: f.st, Logger: log, DataDir: f.dir})
 	f.router = httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{Outer: f.outer, DelegationAuth: authority, Conversations: f.chat, Projects: projectsvc.New(f.st), Sessions: sessions}, httpd.ControlDeps{})
 }
 

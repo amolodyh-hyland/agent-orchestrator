@@ -567,7 +567,7 @@ func (s *Service) reviewBlockers(ctx context.Context, run domain.FactoryRun, ses
 	}
 	if receipt.ReviewRunID != "" {
 		native, ok, err := s.store.GetReviewRun(ctx, receipt.ReviewRunID)
-		if err != nil || !ok || native.SessionID != run.SessionID || native.TargetSHA != facts.HeadSHA || (native.Status != domain.ReviewRunComplete && native.Status != domain.ReviewRunDelivered) || native.Verdict != domain.VerdictApproved {
+		if err != nil || !ok || native.SessionID != run.SessionID || native.TargetSHA != facts.HeadSHA || native.Status != domain.ReviewRunCompleted || native.Verdict != domain.VerdictApproved {
 			valid = false
 		}
 		reviewer, reviewerOK, reviewerErr := s.store.GetReviewByID(ctx, native.ReviewID)

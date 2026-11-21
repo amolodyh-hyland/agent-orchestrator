@@ -93,16 +93,17 @@ func TestTelemetryIncrementalVacuumUpgrade(t *testing.T) {
 	if err := s.IncrementalVacuum(ctx, 256); err != nil {
 		t.Fatal(err)
 	}
-	after := pages()
-	// SQLite may also remove a pointer-map page when reclaiming the requested
-	// freelist pages. Bound the work by freelist pages, not total file pages.
+	// The 256-page limit applies to free pages. Truncating them can also drop
+	// the pointer-map page that mapped only the truncated tail, so the file
+	// may shrink by one page more than the free pages it reclaimed.
 	freeAfter, err := s.FreelistCount(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if reclaimed := free - freeAfter; reclaimed <= 0 || reclaimed > 256 {
-		t.Fatalf("reclaimed %d pages, want 1..256", reclaimed)
+		t.Fatalf("reclaimed %d free pages, want 1..256", reclaimed)
 	}
+	after := pages()
 	if after >= before {
 		t.Fatalf("incremental vacuum did not shrink page count: %d -> %d", before, after)
 	}

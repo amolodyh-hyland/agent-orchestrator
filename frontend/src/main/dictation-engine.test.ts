@@ -55,6 +55,44 @@ describe("native dictation engine", () => {
 		expect(s.emit).not.toHaveBeenCalled();
 	});
 
+	it("adapts latest macOS streaming output without treating meter or text as completion", () => {
+		const s = setup();
+		s.engine.start("fr-FR", s.emit);
+		s.line({ type: "listening" });
+		s.line({ type: "levels", values: [0, 0.25, 1] });
+		s.line({ type: "text", text: "bonjour" });
+		expect(s.child.kill).not.toHaveBeenCalled();
+		expect(s.emit.mock.calls.map(([event]) => event.type)).toEqual(["recording", "levels", "text"]);
+		s.engine.stop();
+		s.line({ type: "finishing" });
+		s.line({ type: "levels", values: [0.5] });
+		s.line({ type: "text", text: "bonjour révisé" });
+		s.line({ type: "end", text: "bonjour révisé" });
+		s.child.emit("close", 0);
+		expect(s.emit.mock.calls.map(([event]) => event.type)).toEqual(["recording", "levels", "text", "capture-stopped", "text", "result"]);
+		expect(s.emit).toHaveBeenLastCalledWith({ type: "result", text: "bonjour révisé" });
+		expect(s.child.kill).toHaveBeenCalledOnce();
+	});
+
+	it("retains permission errors from the latest helper without exposing native messages", () => {
+		const s = setup();
+		s.engine.start("en", s.emit);
+		s.line({ type: "error", error: "permission", message: "private native diagnostic" });
+		expect(s.emit).toHaveBeenCalledWith({ type: "error", error: "permission" });
+	});
+
+	it.each([
+		{ type: "levels", values: [2] },
+		{ type: "levels", values: Array(1025).fill(0) },
+		{ type: "text", text: "x".repeat(32_769) },
+	])("rejects malformed latest streaming payloads", (event) => {
+		const s = setup();
+		s.engine.start("en", s.emit);
+		s.line(event);
+		expect(s.emit).toHaveBeenCalledWith({ type: "error", error: "failed" });
+		expect(s.child.kill).toHaveBeenCalledOnce();
+	});
+
 	it.each(["not json\n", '{"type":"unknown"}\n', "x".repeat(65_537)])("rejects invalid or oversized output", (output) => {
 		const s = setup();
 		s.engine.start("en", s.emit);
@@ -87,5 +125,6 @@ describe("native dictation engine", () => {
 		expect(s.emit).toHaveBeenCalledWith({ type: "error", error: "unavailable" });
 		expect(dictationHelperPath("linux", "/resources")).toBeUndefined();
 		expect(dictationHelperPath("win32", "/resources")).toMatch(/ao-dictation.exe$/);
+		expect(dictationHelperPath("darwin", "/resources")).toBe("/resources/dictation-helper/Orchestrator.app/Contents/MacOS/Orchestrator");
 	});
 });

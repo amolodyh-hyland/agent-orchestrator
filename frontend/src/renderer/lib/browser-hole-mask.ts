@@ -21,4 +21,3 @@ export function publishBrowserHole(viewId: string, rect: BrowserRect | null): vo
 		`linear-gradient(#000 0 0) ${x}px ${y}px / ${width}px ${height}px no-repeat add`);
 	shell.style.setProperty("--browser-hole-mask", ["linear-gradient(#000 0 0) 0 0 / 100% 100% no-repeat exclude", ...holes].join(", "));
 }
-

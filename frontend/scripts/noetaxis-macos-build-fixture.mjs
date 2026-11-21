@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { execFileSync } from "node:child_process";
 import { PassThrough } from "node:stream";
 import { cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -33,6 +34,7 @@ export function fakeSpawnSync(command, args, options = {}) {
 	else if (command === "uname") stdout = "arm64";
 	else if (command === "git" && args[0] === "rev-parse") stdout = fixtureRevision;
 	else if (command === "git" && args[0] === "worktree" && args[1] === "add") cpSync(state.source, args[3], { recursive: true });
+	else if (command === "git" && ["apply", "write-tree"].includes(args[0])) stdout = execFileSync("git", args, { cwd: options.cwd, encoding: "utf8" });
 	else if (command === "git" && args[0] === "clone") cpSync(state.multica, args.at(-1), { recursive: true });
 	else if (command === "git" && args.includes("rev-parse")) stdout = fixtureMulticaRevision;
 	else if (command === "git" && (args.includes("checkout") || args[0] === "worktree")) {}
@@ -50,15 +52,20 @@ export function fakeSpawnSync(command, args, options = {}) {
 		}
 	}
 	else if (command.endsWith("/electron-forge")) {
+		state.currentVersion = JSON.parse(readFileSync(path.join(options.cwd, "package.json"), "utf8")).version;
+		if (state.mutateMatchedDesktop) writeFileSync(path.join(env.AO_MULTICA_DESKTOP_OUT, "content"), "unexpected build mutation");
 		const resources = path.join(options.cwd, "out/Agent Orchestrator.app/Contents/Resources");
 		mkdirSync(resources, { recursive: true });
 		writeFileSync(path.join(resources, "ao-updates-disabled"), "disabled");
+		const dictation = path.join(resources, "dictation-helper/Orchestrator.app/Contents/MacOS");
+		mkdirSync(dictation, { recursive: true });
+		writeFileSync(path.join(dictation, "Orchestrator"), "fixture helper");
 		for (const resource of ["browser-extension", "cloudflared"].filter((name) => name !== state.omitPackagedResource)) {
 			cpSync(path.join(options.cwd, resource), path.join(resources, resource), { recursive: true });
 		}
 	}
 	else if (command === "/usr/libexec/PlistBuddy") {
-		if (args[1].startsWith("Print :CFBundle")) stdout = `0.13.4-noetaxis.${fixtureRevision.slice(0, 7)}`;
+		if (args[1].startsWith("Print :CFBundle")) stdout = state.currentVersion;
 	}
 	else if (command !== "/usr/bin/codesign" && command !== "/usr/bin/xattr") assert.fail(`Unexpected build command: ${command} ${args.join(" ")}`);
 	return { status: 0, stdout: options.encoding ? stdout : Buffer.from(stdout), stderr: "" };
@@ -122,7 +129,7 @@ export async function makeBuildFixture(t, options = {}) {
 	const file = path.join(root, "build.mjs");
 	await writeFile(file, contents);
 	const build = await import(pathToFileURL(file));
-	const state = { root, source, multica, calls: [], failInstall: options.failInstall, failStep: options.failStep, missingResource: options.missingResource, omitPackagedResource: options.omitPackagedResource };
+	const state = { root, source, multica, calls: [], failInstall: options.failInstall, failStep: options.failStep, missingResource: options.missingResource, omitPackagedResource: options.omitPackagedResource, mutateMatchedDesktop: options.mutateMatchedDesktop };
 	states.set(root, state);
 	t.after(() => states.delete(root));
 	return {

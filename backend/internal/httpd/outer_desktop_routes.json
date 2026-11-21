@@ -7,6 +7,14 @@
     "operation": "native_only",
     "mode": "confirm"
   },
+  "DELETE /api/v1/agents/provider-keys/{name}": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "DELETE /api/v1/agents/{agent}/auth/operations/{operationId}": {
+    "operation": "native_only",
+    "mode": "held"
+  },
   "DELETE /api/v1/automations/{automationId}": {
     "operation": "native_only",
     "mode": "confirm"
@@ -26,6 +34,10 @@
   "DELETE /api/v1/github/pat": {
     "operation": "native_only",
     "mode": "confirm"
+  },
+  "DELETE /api/v1/mobile/devices/{id}": {
+    "operation": "native_only",
+    "mode": "held"
   },
   "DELETE /api/v1/mobile/devices/{installId}": {
     "operation": "native_only",
@@ -163,6 +175,10 @@
     "operation": "session.scoped",
     "mode": "held"
   },
+  "PATCH /api/v1/settings/account-handoff": {
+    "operation": "native_only",
+    "mode": "held"
+  },
   "PATCH /api/v1/settings/agent-asset-sources": {
     "operation": "native_only",
     "mode": "confirm"
@@ -192,6 +208,10 @@
     "mode": "confirm"
   },
   "PATCH /api/v1/shell-terminals/{handleId}": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "POST /api/v1/agents/accounts/api-keys": {
     "operation": "native_only",
     "mode": "held"
   },
@@ -251,6 +271,10 @@
     "operation": "native_only",
     "mode": "confirm"
   },
+  "POST /api/v1/agents/provider-keys/{name}/check": {
+    "operation": "native_only",
+    "mode": "held"
+  },
   "POST /api/v1/agents/readiness/ensure": {
     "operation": "native_only",
     "mode": "held"
@@ -262,6 +286,22 @@
   "POST /api/v1/agents/{agent}/auth": {
     "operation": "native_only",
     "mode": "confirm"
+  },
+  "POST /api/v1/agents/{agent}/auth/operations": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "POST /api/v1/agents/{agent}/auth/operations/{operationId}/actions": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "POST /api/v1/agents/{agent}/auth/operations/{operationId}/code": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "POST /api/v1/agents/{agent}/auth/signed-in": {
+    "operation": "native_only",
+    "mode": "held"
   },
   "POST /api/v1/agents/{agent}/chat/prewarm": {
     "operation": "native_only",
@@ -290,6 +330,10 @@
   "POST /api/v1/agents/{agent}/verify": {
     "operation": "native_only",
     "mode": "confirm"
+  },
+  "POST /api/v1/attachment-uploads": {
+    "operation": "native_only",
+    "mode": "held"
   },
   "POST /api/v1/automations": {
     "operation": "native_only",
@@ -427,6 +471,10 @@
     "operation": "project.scoped",
     "mode": "confirm"
   },
+  "POST /api/v1/projects/clone/prepare/stream": {
+    "operation": "native_only",
+    "mode": "held"
+  },
   "POST /api/v1/projects/containers": {
     "operation": "project.scoped",
     "mode": "confirm"
@@ -443,6 +491,14 @@
     "operation": "project.scoped",
     "mode": "confirm"
   },
+  "POST /api/v1/prs/{id}/comments": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "POST /api/v1/prs/{id}/details": {
+    "operation": "native_only",
+    "mode": "held"
+  },
   "POST /api/v1/prs/{id}/merge": {
     "operation": "pr.merge",
     "mode": "confirm"
@@ -450,6 +506,18 @@
   "POST /api/v1/prs/{id}/resolve-comments": {
     "operation": "pr.resolve",
     "mode": "confirm"
+  },
+  "POST /api/v1/prs/{id}/stack": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "POST /api/v1/prs/{id}/stack/merge": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "POST /api/v1/prs/{id}/state": {
+    "operation": "native_only",
+    "mode": "held"
   },
   "POST /api/v1/push/devices": {
     "operation": "native_only",
@@ -503,6 +571,14 @@
     "operation": "run.scoped",
     "mode": "confirm"
   },
+  "POST /api/v1/search/reindex": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "POST /api/v1/session-import": {
+    "operation": "native_only",
+    "mode": "held"
+  },
   "POST /api/v1/sessions": {
     "operation": "spawn",
     "mode": "confirm"
@@ -530,6 +606,10 @@
   "POST /api/v1/sessions/{sessionId}/agent-switches/{switchId}/recover": {
     "operation": "switch.recover",
     "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/artifact-registrations": {
+    "operation": "native_only",
+    "mode": "held"
   },
   "POST /api/v1/sessions/{sessionId}/artifact-versions/restore": {
     "operation": "session.scoped",
@@ -663,6 +743,10 @@
     "operation": "exit",
     "mode": "confirm"
   },
+  "POST /api/v1/sessions/{sessionId}/fork": {
+    "operation": "native_only",
+    "mode": "held"
+  },
   "POST /api/v1/sessions/{sessionId}/interface-transition": {
     "operation": "switch",
     "mode": "confirm"
@@ -677,6 +761,14 @@
   },
   "POST /api/v1/sessions/{sessionId}/mailbox/{messageId}/receipt": {
     "operation": "mailbox.scoped",
+    "mode": "held"
+  },
+  "POST /api/v1/sessions/{sessionId}/panes": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "POST /api/v1/sessions/{sessionId}/panes/input": {
+    "operation": "native_only",
     "mode": "held"
   },
   "POST /api/v1/sessions/{sessionId}/pin": {
@@ -763,6 +855,10 @@
     "operation": "send",
     "mode": "confirm"
   },
+  "POST /api/v1/sessions/{sessionId}/stop-turn": {
+    "operation": "native_only",
+    "mode": "held"
+  },
   "POST /api/v1/sessions/{sessionId}/switch-agent": {
     "operation": "switch",
     "mode": "confirm"
@@ -776,6 +872,10 @@
     "mode": "confirm"
   },
   "POST /api/v1/shell-terminals": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "POST /api/v1/shell-terminals/{handleId}/reopen": {
     "operation": "native_only",
     "mode": "held"
   },
@@ -802,6 +902,14 @@
   "PUT /api/v1/agents/accounts/sessions/{sessionId}": {
     "operation": "session.scoped",
     "mode": "confirm"
+  },
+  "PUT /api/v1/agents/accounts/{accountId}/api-key": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "PUT /api/v1/agents/provider-keys/{name}": {
+    "operation": "native_only",
+    "mode": "held"
   },
   "PUT /api/v1/awake/rules": {
     "operation": "native_only",
@@ -855,15 +963,11 @@
     "operation": "session.scoped",
     "mode": "confirm"
   },
-  "DELETE /api/v1/agents/{agent}/auth/operations/{operationId}": {
+  "PUT /api/v1/usage/limit-history": {
     "operation": "native_only",
     "mode": "held"
   },
-  "POST /api/v1/agents/{agent}/auth/operations": {
-    "operation": "native_only",
-    "mode": "held"
-  },
-  "POST /api/v1/agents/{agent}/auth/operations/{operationId}/code": {
+  "PUT /api/v1/usage/prices": {
     "operation": "native_only",
     "mode": "held"
   }

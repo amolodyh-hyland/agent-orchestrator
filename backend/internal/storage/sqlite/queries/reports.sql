@@ -42,6 +42,13 @@ WHERE project_id = ? AND delivery_state = 'pending'
 ORDER BY available_at, created_at, id
 LIMIT ?;
 
+-- name: ListPendingReportsOfDoneProjects :many
+SELECT * FROM reports
+WHERE delivery_state = 'pending' AND project_id IN (
+  SELECT project_id FROM reports WHERE delivery_state = 'pending' AND state = 'done'
+)
+ORDER BY project_id, available_at, created_at, id;
+
 -- name: AssignPendingReportsToBatch :exec
 UPDATE reports
 SET delivery_batch_id = sqlc.arg(delivery_batch_id)
@@ -80,6 +87,13 @@ SET delivery_state = 'pending', available_at = CASE
         WHEN EXISTS (SELECT 1 FROM report_chat_deliveries d WHERE d.batch_id = reports.delivery_batch_id)
         THEN sqlc.arg(available_at) ELSE max(available_at, sqlc.arg(available_at)) END,
     claim_token = '', claimed_at = NULL, last_error = sqlc.arg(last_error)
+WHERE project_id = sqlc.arg(project_id) AND delivery_state = 'claimed'
+  AND claim_token = sqlc.arg(claim_token)
+RETURNING *;
+
+-- name: FailReportBatch :many
+UPDATE reports
+SET delivery_state = 'failed', claim_token = '', claimed_at = NULL, last_error = sqlc.arg(last_error)
 WHERE project_id = sqlc.arg(project_id) AND delivery_state = 'claimed'
   AND claim_token = sqlc.arg(claim_token)
 RETURNING *;
@@ -127,6 +141,12 @@ SET delivery_state = 'pending', claim_token = '', claimed_at = NULL,
     last_error = 'delivery claim recovered after daemon restart'
 WHERE delivery_state = 'claimed';
 
+-- name: IncrementUnacknowledgedReportBatch :many
+UPDATE reports
+SET unacknowledged_attempts = unacknowledged_attempts + 1
+WHERE project_id = sqlc.arg(project_id) AND delivery_state = 'claimed'
+  AND claim_token = sqlc.arg(claim_token)
+RETURNING unacknowledged_attempts;
 -- name: LinkReportChatDelivery :execrows
 INSERT INTO report_chat_deliveries(batch_id, message_id, client_message_id, conversation_id, turn_id)
 SELECT sqlc.arg(batch_id), sqlc.arg(message_id), sqlc.arg(client_message_id), sqlc.arg(conversation_id), sqlc.arg(turn_id)

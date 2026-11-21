@@ -2,7 +2,7 @@ import { useSessionPaneFocused } from "../session-pane-context";
 import { Editor, type EditorFactory } from "@pierre/diffs/edit";
 import { EditProvider } from "@pierre/diffs/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { LoaderCircle, MessageSquarePlus, Pencil, Save, X } from "lucide-react";
+import { LoaderCircle, MessageSquarePlus, Pencil, Save, X } from "@/components/app-icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cloudWorkspaceReviewFileQueryOptions, cloudWorkspaceReviewQueryKey, cloudWorkspaceReviewRevisionQueryOptions } from "../../hooks/useCloudWorkspaceReview";
@@ -25,9 +25,11 @@ function localDetail(detail: CloudCpWorkspaceReviewFileResponse): WorkspaceFileD
 }
 
 export function CloudFileContentPane({
-	annotation, baseUrl, client, commitSha, initialEditing = false, initialLine, initialMode = "diff", initialRequestKey = 0,
+	active = true, annotation, baseUrl, client, commitSha, initialEditing = false, initialLine, initialMode = "diff", initialRequestKey = 0,
 	onDirtyChange, onModeChange, orgId, path, scope = "combined", sessionId, split,
 }: {
+	/** False while the view is kept mounted behind another tab: its save shortcut stays off. */
+	active?: boolean;
 	annotation: FileAnnotationModel;
 	baseUrl: string;
 	client: CloudCpClient;
@@ -130,10 +132,10 @@ export function CloudFileContentPane({
 		finally { setSaving(false); }
 	}, [baseUrl, client, commitSha, detail, draft, draftSessionKey, orgId, path, queryClient, saving, scope, sessionId, t]);
 	useEffect(() => {
-		if (!editing || !paneFocused) return;
+		if (!active || !editing || !paneFocused) return;
 		const shortcut = (event: KeyboardEvent) => { if (event.key.toLowerCase() === "s" && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) { event.preventDefault(); if (hasUnsavedChanges) void save(); } };
 		window.addEventListener("keydown", shortcut, true); return () => window.removeEventListener("keydown", shortcut, true);
-	}, [editing, hasUnsavedChanges, paneFocused, save]);
+	}, [active, editing, hasUnsavedChanges, paneFocused, save]);
 
 	if (!path) return <PanelMessage>{t("files.explorer.selectFile")}</PanelMessage>;
 	if (query.isPending) return <PanelMessage>{t("files.loading")}</PanelMessage>;

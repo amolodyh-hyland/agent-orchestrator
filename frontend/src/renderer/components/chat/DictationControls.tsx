@@ -1,11 +1,12 @@
 import { forwardRef, useImperativeHandle, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { Loader2, Mic, Square, X } from "lucide-react";
+import { Loader2, Mic, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useDictation } from "../../hooks/useDictation";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "../../lib/utils";
+import { DictationMeter } from "./DictationMeter";
 
 // Chat tabs keep composers mounted under hidden/inert ancestors to preserve drafts.
 // Observe those boundaries only during capture, and check again before inserting.
@@ -19,24 +20,28 @@ function controlsVisible(node: HTMLElement | null): boolean {
 	return true;
 }
 
-export type DictationControlHandle = { isActive(): boolean; cancel(): void };
+export type DictationControlHandle = { isActive(): boolean; cancel(): void; detach(): void };
 
 export const DictationControls = forwardRef<DictationControlHandle, {
 	disabled: boolean;
 	scope: string;
 	locale: string;
 	onTranscript: (text: string) => void;
+	onPartialTranscript?: (text: string) => void;
+	onTranscriptEnd?: (keep: boolean) => void;
 	onActiveChange: (active: boolean) => void;
 	statusRef: RefObject<HTMLDivElement | null>;
-}>(function DictationControls({ disabled, scope, locale, onTranscript, onActiveChange, statusRef }, ref) {
+}>(function DictationControls({ disabled, scope, locale, onTranscript, onPartialTranscript, onTranscriptEnd, onActiveChange, statusRef }, ref) {
 	const { t } = useTranslation();
 	const control = useRef<HTMLSpanElement>(null);
 	const [statusTarget, setStatusTarget] = useState<HTMLDivElement | null>(null);
 	const dictation = useDictation({ disabled, scope, locale, onTranscript: (text) => {
 		if (controlsVisible(control.current)) onTranscript(text);
-	} });
+	}, onPartialTranscript: (text) => {
+		if (controlsVisible(control.current)) onPartialTranscript?.(text);
+	}, onTranscriptEnd });
 	useLayoutEffect(() => { setStatusTarget(statusRef.current); }, [statusRef]);
-	useImperativeHandle(ref, () => ({ isActive: dictation.isActive, cancel: dictation.cancel }));
+	useImperativeHandle(ref, () => ({ isActive: dictation.isActive, cancel: dictation.cancel, detach: dictation.detach }));
 	useLayoutEffect(() => { onActiveChange(dictation.active); }, [dictation.active, onActiveChange]);
 	useLayoutEffect(() => () => { dictation.cancel(); onActiveChange(false); }, [dictation.cancel, onActiveChange]);
 	useLayoutEffect(() => {
@@ -67,7 +72,7 @@ export const DictationControls = forwardRef<DictationControlHandle, {
 						onClick={() => { if (controlsVisible(control.current)) void (phase === "recording" ? dictation.stop() : dictation.start()); }}
 						className={cn("size-7 shrink-0 rounded-full p-0 text-muted-foreground hover:bg-interactive-active! hover:text-foreground", active && "text-destructive")}
 					>
-						{phase === "starting" || phase === "stopping" || phase === "finishing" ? <Loader2 aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" /> : phase === "recording" ? <Square aria-hidden="true" className="size-3 fill-current" /> : <Mic aria-hidden="true" className="size-3.5" />}
+						{phase === "starting" || phase === "stopping" || phase === "finishing" ? <Loader2 aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" /> : phase === "recording" ? <DictationMeter listening requestId={dictation.requestId} /> : <Mic aria-hidden="true" className="size-3.5" />}
 					</Button>
 				</span>
 			</TooltipTrigger>

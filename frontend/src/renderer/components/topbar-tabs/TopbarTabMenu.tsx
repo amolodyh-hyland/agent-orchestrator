@@ -107,11 +107,10 @@ export function useTopbarTabMenu(canRename = true): RenderMenu {
 		const Item = kind === "dropdown" ? DropdownMenuItem : ContextMenuItem;
 		return (
 			<>
-				{/* These are Radix DropdownMenu items and cannot be rendered in a ContextMenu. */}
-				{kind === "dropdown" && sessionMenuItems ? (
+				{sessionMenuItems ? (
 					<>
 						{sessionMenuItems}
-						<DropdownMenuSeparator />
+						{kind === "dropdown" ? <DropdownMenuSeparator /> : <ContextMenuSeparator />}
 					</>
 				) : null}
 				{enabled && tab ? <>

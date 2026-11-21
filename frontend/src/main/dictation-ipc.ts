@@ -5,7 +5,7 @@ export function registerDictationIpc({ ipcMain, isTrustedSender, createEngine }:
 	ipcMain: Pick<IpcMain, "handle">;
 	isTrustedSender: (senderId: number) => boolean;
 	createEngine: () => DictationEngine;
-}): () => void {
+}): (() => void) & { stop(): void } {
 	let active: { id: string; owner: WebContents; engine: DictationEngine; cleanup: () => void } | undefined;
 	const cancel = () => {
 		const previous = active;
@@ -19,6 +19,7 @@ export function registerDictationIpc({ ipcMain, isTrustedSender, createEngine }:
 			const locale = dictationLocale(inputLocale);
 			return locale ? createEngine().availability(locale) : { available: false, error: "unavailable" };
 		}
+		if (command !== "start" && command !== "stop" && command !== "cancel") throw new Error("Invalid dictation command");
 		if (typeof id !== "string" || !/^[a-zA-Z0-9-]{1,100}$/.test(id)) throw new Error("Invalid dictation request");
 		if (command === "start") {
 			const locale = dictationLocale(inputLocale);
@@ -40,7 +41,7 @@ export function registerDictationIpc({ ipcMain, isTrustedSender, createEngine }:
 			try {
 				engine.start(locale, (update) => {
 					if (active !== recording) return;
-					if (update.type !== "recording" && update.type !== "capture-stopped") cancel();
+					if (update.type === "result" || update.type === "cancelled" || update.type === "error") cancel();
 					if (!owner.isDestroyed()) owner.send(DICTATION_EVENT_CHANNEL, { ...update, id });
 				});
 			} catch {
@@ -52,8 +53,7 @@ export function registerDictationIpc({ ipcMain, isTrustedSender, createEngine }:
 		if (active?.id !== id || active.owner !== event.sender) return undefined;
 		if (command === "stop") active.engine.stop();
 		else if (command === "cancel") cancel();
-		else throw new Error("Invalid dictation command");
 		return undefined;
 	});
-	return cancel;
+	return Object.assign(cancel, { stop: () => active?.engine.stop() });
 }

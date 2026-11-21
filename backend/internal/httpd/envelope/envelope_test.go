@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -230,5 +231,23 @@ func TestWriteError_TypedKindsUnchanged(t *testing.T) {
 		if status != tc.status {
 			t.Fatalf("%v: status = %d, want %d", tc.err, status, tc.status)
 		}
+	}
+}
+
+func TestOuterHeldUsesTheSameEnvelopeForJSONAndStreams(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/clone/prepare/stream", nil)
+	err := fmt.Errorf("held action: %w", domain.ErrOuterHeld)
+	rec := httptest.NewRecorder()
+	WriteError(rec, req, err)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", rec.Code)
+	}
+	var body APIError
+	if decodeErr := json.Unmarshal(rec.Body.Bytes(), &body); decodeErr != nil {
+		t.Fatal(decodeErr)
+	}
+	stream := StreamError(req, err)
+	if body.Code != "OUTER_HELD" || stream.Code != body.Code || stream.Message != body.Message {
+		t.Fatalf("JSON = %+v, stream = %+v", body, stream)
 	}
 }

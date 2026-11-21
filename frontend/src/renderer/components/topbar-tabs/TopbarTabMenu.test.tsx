@@ -3,7 +3,7 @@ import { leafKeys } from "../../lib/pane-split";
 import { useSplitPanesStore } from "../../stores/split-panes-store";
 import { useTabSelectionStore } from "../../stores/tab-selection-store";
 import { registerPaneCloseGuard } from "../session-pane-context";
-import { TabSplitMenuContext } from "../TabContextMenu";
+import { SessionTabAgentItems, SessionTabAgentMenuContext, TabSplitMenuContext } from "../TabContextMenu";
 import { SESSION_TAB_KEY } from "../../lib/pane-split";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -16,7 +16,7 @@ import { TopbarTab, type SessionTabActions } from "./TopbarTab";
 import { useTopbarTabMenu } from "./TopbarTabMenu";
 import { TopbarTabs } from "./TopbarTabs";
 import type { TopbarTabView } from "./topbar-tabs-view";
-import { DropdownMenuItem } from "../ui/dropdown-menu";
+import { MenuEntries } from "../menu-model";
 
 const routerMocks = vi.hoisted(() => ({
 	navigate: vi.fn(),
@@ -231,10 +231,10 @@ afterEach(() => {
 
 describe("TopbarTabMenu", () => {
 
-	it("puts active session actions before the tab entries in dropdowns only", async () => {
+	it("puts active session actions before tab entries in both menus", async () => {
 		const view = makeView("task", { mode: "preview" });
 		const tabAction = {
-			menuItems: <><DropdownMenuItem>Switch to chat UI</DropdownMenuItem><DropdownMenuItem>Switch agent</DropdownMenuItem></>,
+			menuItems: <MenuEntries entries={[{ kind: "item", id: "switch", label: "Switch to chat UI" }, { kind: "item", id: "agent", label: "Switch agent" }]} />,
 		};
 		renderTab(view, tabAction);
 		const tab = screen.getByTestId("topbar-tab");
@@ -258,14 +258,14 @@ describe("TopbarTabMenu", () => {
 		await userEvent.keyboard("{Escape}");
 		await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
 		const context = await openMenu("context");
-		expect(within(context).queryByRole("menuitem", { name: "Switch to chat UI" })).not.toBeInTheDocument();
-		expect(within(context).queryByRole("menuitem", { name: "Switch agent" })).not.toBeInTheDocument();
+		expect(within(context).getByRole("menuitem", { name: "Switch to chat UI" })).toBeInTheDocument();
+		expect(within(context).getByRole("menuitem", { name: "Switch agent" })).toBeInTheDocument();
 		expect(within(context).getByRole("menuitem", { name: "Rename" })).toBeInTheDocument();
 	});
 
 	it("keeps session actions reachable from an active orchestrator head", async () => {
 		const tabAction = {
-			menuItems: <><DropdownMenuItem>Switch to terminal UI</DropdownMenuItem><DropdownMenuItem>Switch agent</DropdownMenuItem></>,
+			menuItems: <MenuEntries entries={[{ kind: "item", id: "switch", label: "Switch to terminal UI" }, { kind: "item", id: "agent", label: "Switch agent" }]} />,
 		};
 		renderTab(makeView("head"), tabAction);
 
@@ -592,4 +592,19 @@ it.each(["context", "dropdown"] as const)("opens another session right through t
 	await waitFor(() => expect(guard).toHaveBeenCalledOnce());
 	expect(useSplitPanesStore.getState().groupsBySession[sessionTabPaneScope()][0]).toBe(group);
 	dispose();
+});
+
+
+it.each(["context", "dropdown"] as const)("switches the active grouped session interface from its %s menu", async (kind) => {
+	const view = makeView("task");
+	const run = vi.fn();
+	setTabs(view);
+	render(<SessionTabAgentMenuContext.Provider value={{ session: view.session!, blocked: false, picksAgent: false, switchTarget: "tui", switchAction: { disabled: false, run } }}>
+		<MenuHarness view={view} tabAction={{ menuItems: <SessionTabAgentItems /> }} />
+	</SessionTabAgentMenuContext.Provider>);
+	const menu = await openMenu(kind);
+	expect(within(menu).getByRole("menuitem", { name: "Rename" })).toBeInTheDocument();
+	await userEvent.click(within(menu).getByRole("menuitem", { name: "Switch to terminal UI" }));
+	expect(run).toHaveBeenCalledOnce();
+	await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
 });

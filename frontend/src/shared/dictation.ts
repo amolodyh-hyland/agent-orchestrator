@@ -6,6 +6,8 @@ export type DictationAvailability = { available: true } | { available: false; er
 export type DictationEvent =
 	| { type: "recording" }
 	| { type: "capture-stopped" }
+	| { type: "text"; text: string }
+	| { type: "levels"; values: number[] }
 	| { type: "result"; text: string }
 	| { type: "cancelled" }
 	| { type: "error"; error: DictationError };
@@ -33,7 +35,11 @@ export function dictationLocale(value: unknown): string | undefined {
 export function parseDictationEvent(value: unknown): DictationEvent | undefined {
 	if (!value || typeof value !== "object" || !("type" in value)) return undefined;
 	if (value.type === "recording" || value.type === "capture-stopped" || value.type === "cancelled") return { type: value.type };
-	if (value.type === "result" && "text" in value && typeof value.text === "string" && value.text.length <= 32_768) return { type: "result", text: value.text };
+	if ((value.type === "result" || value.type === "text") && "text" in value && typeof value.text === "string" && value.text.length <= 32_768) return { type: value.type, text: value.text };
+	if (value.type === "levels" && "values" in value && Array.isArray(value.values) && value.values.length <= 1024
+		&& value.values.every((level) => typeof level === "number" && Number.isFinite(level) && level >= 0 && level <= 1)) {
+		return { type: "levels", values: value.values };
+	}
 	if (value.type === "error" && "error" in value && ["unsupported", "unavailable", "permission", "microphone", "busy", "timeout", "failed"].includes(String(value.error))) {
 		return { type: "error", error: value.error as DictationError };
 	}

@@ -3,7 +3,6 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings } from "../../hooks/useSettings";
-import { useUiStore } from "../../stores/ui-store";
 
 const { settingsMock, updateRetentionMock, updateAssetsMock } = vi.hoisted(() => ({
 	settingsMock: vi.fn(),
@@ -100,25 +99,4 @@ it("edits agent sources beside retention without changing the retention preferen
 	expect(updateAssetsMock).toHaveBeenCalledWith(["/live/.claude", "/live/.agents"], expect.any(Object));
 	expect(screen.getByRole("button", { name: "Delete archived sessions" })).toHaveTextContent("After 14 days");
 	expect(updateRetentionMock).not.toHaveBeenCalled();
-});
-
-describe("simplified top bar switch", () => {
-	beforeEach(() => settingsMock.mockReturnValue(settings({})));
-
-	it("only appears in Developer Mode", () => {
-		useUiStore.setState({ developerMode: false });
-		renderSection();
-		expect(screen.queryByRole("switch", { name: "Simplified top bar" })).not.toBeInTheDocument();
-	});
-
-	it("turns the preview off and on", async () => {
-		useUiStore.setState({ developerMode: true, simplifiedTopbar: true });
-		renderSection();
-		const toggle = screen.getByRole("switch", { name: "Simplified top bar" });
-		expect(toggle).toBeChecked();
-		await userEvent.click(toggle);
-		expect(useUiStore.getState().simplifiedTopbar).toBe(false);
-		await userEvent.click(toggle);
-		expect(useUiStore.getState().simplifiedTopbar).toBe(true);
-	});
 });

@@ -1,7 +1,6 @@
 import { useTabSelectionStore } from "../../stores/tab-selection-store";
 import { registerPaneDropTarget } from "../../lib/pane-drag";
 import { SESSION_TAB_KEY } from "../../lib/pane-split";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +8,7 @@ import type { WorkspaceSession } from "../../types/workspace";
 import { ContextMenuItem } from "../ui/context-menu";
 import { DropdownMenuItem, DropdownMenuSeparator } from "../ui/dropdown-menu";
 import { TooltipProvider } from "../ui/tooltip";
-import { SessionTabMenu } from "../TerminalAgentControls";
+import { MenuEntries } from "../menu-model";
 import { TopbarTab, type TopbarTabProps } from "./TopbarTab";
 import type { TopbarTabView } from "./topbar-tabs-view";
 
@@ -297,30 +296,17 @@ describe("TopbarTab", () => {
 		for (const isActive of [true, false]) {
 			for (const label of ["Build tabs", "A long session name that must truncate within the tab width".repeat(4)]) {
 				const view = makeView({ isActive, label });
-				const client = new QueryClient();
 				const rendered = renderTab({
 					density,
 					renderMenu: () => <DropdownMenuItem>Session action</DropdownMenuItem>,
 					tabAction: {
-						menuItems: null,
-						renderMenu: (entries) => (
-							<QueryClientProvider client={client}>
-								<SessionTabMenu
-									session={view.session!}
-									blocked={false}
-									switchTarget="tui"
-									switchAction={{ disabled: false, run: vi.fn() }}
-									tabMenuItems={entries}
-									menuLabel="Tab options"
-								/>
-							</QueryClientProvider>
-						),
+						menuItems: <MenuEntries entries={[{ kind: "item", id: "switch", label: "Switch to terminal UI", onSelect: vi.fn() }]} />,
 					},
 				}, view);
 				const wrapper = screen.getByTestId("topbar-tab");
 				const tab = screen.getByRole("tab");
 				const options = screen.getByRole("button", { name: "Tab options" });
-				expect(options.hasAttribute("data-session-actions-trigger")).toBe(isActive);
+				expect(options).toHaveAttribute("data-topbar-tab-options-trigger");
 				expect(options.parentElement).toBe(wrapper);
 				expect(wrapper).toHaveClass("h-full", "items-center");
 				expect(wrapper).not.toHaveClass("items-stretch");
@@ -334,7 +320,6 @@ describe("TopbarTab", () => {
 				expect(await screen.findByRole("menu")).toBeInTheDocument();
 				expect(wrapper).toHaveClass("items-center");
 				rendered.unmount();
-				client.clear();
 			}
 		}
 	});

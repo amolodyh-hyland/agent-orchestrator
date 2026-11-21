@@ -30,9 +30,13 @@ func (queueSkillDriver) Probe(context.Context) (ports.ChatCapabilities, error) {
 	return capabilities(), nil
 }
 
-func nativeSkillQueue(t *testing.T) (*chatsvc.Service, *sqlite.Store, *chatsvc.Controller, *scriptedServer, []ports.ChatSkill) {
+func nativeSkillQueue(t *testing.T, kinds ...domain.SessionKind) (*chatsvc.Service, *sqlite.Store, *chatsvc.Controller, *scriptedServer, []ports.ChatSkill) {
 	t.Helper()
 	ctx := context.Background()
+	kind := domain.KindWorker
+	if len(kinds) > 0 {
+		kind = kinds[0]
+	}
 	driver, server := newTestDriver(t)
 	server.reply("skills/list", `{"data":[{"cwd":"/tmp/ws","errors":[],"skills":[{"name":"review","enabled":true,"scope":"repo","path":"/first/SKILL.md"},{"name":"review","enabled":true,"scope":"user","path":"/second/SKILL.md"}]}]}`)
 	server.reply("turn/steer", `{"turnId":"turn-1"}`)
@@ -46,7 +50,7 @@ func nativeSkillQueue(t *testing.T) (*chatsvc.Service, *sqlite.Store, *chatsvc.C
 		t.Fatal(err)
 	}
 	if _, err := st.CreateSession(ctx, domain.SessionRecord{
-		ID: "p1-1", ProjectID: "p1", Kind: domain.KindOrchestrator, Harness: domain.HarnessCodex,
+		ID: "p1-1", ProjectID: "p1", Kind: kind, Harness: domain.HarnessCodex,
 		Mode: domain.SessionModeChat, CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
@@ -54,7 +58,7 @@ func nativeSkillQueue(t *testing.T) (*chatsvc.Service, *sqlite.Store, *chatsvc.C
 	var ids atomic.Int64
 	svc := chatsvc.New(chatsvc.Options{Store: st, Sessions: st, Drivers: queueSkillRegistry{queueSkillDriver{driver}},
 		NewID: func() string { return fmt.Sprintf("queue-skill-%d", ids.Add(1)) }})
-	ctrl, err := svc.Start(ctx, chatsvc.StartConfig{SessionID: "p1-1", ProjectID: "p1", Harness: domain.HarnessCodex, WorkspacePath: "/tmp/ws"})
+	ctrl, err := svc.Start(ctx, chatsvc.StartConfig{Kind: kind, SessionID: "p1-1", ProjectID: "p1", Harness: domain.HarnessCodex, WorkspacePath: "/tmp/ws"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,5 +194,37 @@ func TestCodexSteerRejectsNativeBindingsInsteadOfDroppingThem(t *testing.T) {
 	_, err := steerInput(ports.ChatUserMessage{Text: "$review args", NativeSkills: []ports.ChatNativeSkill{{Name: "review", Path: "/first/SKILL.md"}}})
 	if !errors.Is(err, ports.ErrChatSteerContentUnsupported) {
 		t.Fatalf("native skill silently dropped: %v", err)
+	}
+}
+
+func TestOrchestratorPrioritySendUsesCodexSteerWithoutClaimingQueuedSkill(t *testing.T) {
+	svc, st, ctrl, server, skills := nativeSkillQueue(t, domain.KindOrchestrator)
+	ctx := context.Background()
+	skill := queuedSkillMessage(skills[1], "automated-skill")
+	skill.Origin = domain.MessageOriginAutomation
+	skill.SenderSessionID = "worker"
+	queued, err := svc.Send(ctx, "p1-1", skill)
+	if err != nil {
+		t.Fatal(err)
+	}
+	human := ports.ChatUserMessage{Text: "human correction now", ClientMessageID: "human-native-steer", Origin: domain.MessageOriginHuman}
+	if _, err := svc.Send(ctx, "p1-1", human); err != nil {
+		t.Fatal(err)
+	}
+	frame := server.awaitFrame(func(f frame) bool { return f.Method == "turn/steer" })
+	var params struct {
+		ExpectedTurnID string `json:"expectedTurnId"`
+		ClientID       string `json:"clientUserMessageId"`
+		Input          []struct{ Type, Text, Path string }
+	}
+	if err := json.Unmarshal(frame.Params, &params); err != nil {
+		t.Fatal(err)
+	}
+	if params.ExpectedTurnID != "turn-1" || params.ClientID != human.ClientMessageID || len(params.Input) != 1 || params.Input[0].Text != human.Text {
+		t.Fatalf("priority steer=%+v", params)
+	}
+	pending, err := st.NextQueuedTurn(ctx, ctrl.ConversationID())
+	if err != nil || pending.TurnID != queued.ID || !strings.Contains(pending.DeliveryContentJSON, "skillSelection") {
+		t.Fatalf("automation skill lost: %+v err=%v", pending, err)
 	}
 }

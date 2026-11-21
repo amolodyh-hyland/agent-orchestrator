@@ -948,7 +948,13 @@ describe("CenterPane tab context menu", () => {
 		const onClose = vi.fn();
 		renderCenterPane({
 			session: worker,
-			workspaceTabs: [{ key: "file:a.ts", content: <button role="tab" type="button">a.ts</button>, onSelect: vi.fn(), onClose }],
+			workspaceTabs: [{
+				key: "file:a.ts",
+				content: <button role="tab" type="button">a.ts</button>,
+				onSelect: vi.fn(),
+				onClose,
+				menu: { kind: "file", tabKey: "file:a.ts", onClose, file: { path: "a.ts", sessionId: "sess-1", remote: false } },
+			}],
 		});
 
 		fireEvent.contextMenu(screen.getByRole("tab", { name: "a.ts" }));
@@ -989,9 +995,16 @@ describe("CenterPane tab context menu", () => {
 		expect(await screen.findByRole("menuitem", { name: /Archive session/ })).toBeInTheDocument();
 		unmount();
 
-		renderCenterPane({ session: { ...worker, cloud: { orgId: "org-1" } } as WorkspaceSession, hostId: "remote" });
+		// A Cloud worker archives like a local one.
+		const cloud = renderCenterPane({ session: { ...worker, cloud: { orgId: "org-1" } } as WorkspaceSession, hostId: "remote" });
 		fireEvent.contextMenu(screen.getByRole("tab", { name: /^do the thing/ }));
-		await screen.findByRole("menuitem", { name: "Close tab" });
+		expect(await screen.findByRole("menuitem", { name: /Archive session/ })).toBeInTheDocument();
+		cloud.unmount();
+
+		// A Cloud session shared from another organization is the sharer's to archive.
+		renderCenterPane({ session: { ...worker, cloud: { orgId: "org-1", shared: true } } as WorkspaceSession });
+		fireEvent.contextMenu(screen.getByRole("tab", { name: /^do the thing/ }));
+		await screen.findByRole("menu");
 		expect(screen.queryByRole("menuitem", { name: /Archive session/ })).not.toBeInTheDocument();
 	});
 
@@ -1000,6 +1013,7 @@ describe("CenterPane tab context menu", () => {
 
 		fireEvent.contextMenu(screen.getByRole("tab", { name: /^do the thing/ }));
 
-		expect(await screen.findByRole("menuitem", { name: "Close tab" })).toHaveAttribute("aria-disabled", "true");
+		expect(await screen.findByRole("menuitem", { name: /Archive session/ })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Close tab" })).not.toBeInTheDocument();
 	});
 });

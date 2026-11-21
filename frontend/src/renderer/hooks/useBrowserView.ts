@@ -19,6 +19,7 @@ import type { BrowserProfileViewState } from "../../shared/browser-profiles";
 import { aoBridge } from "../lib/bridge";
 import { publishBrowserHole } from "../lib/browser-hole-mask";
 import { subscribeBrowserOverlaySync } from "../lib/browser-overlay-sync";
+import { useBrowserPresentation } from "./useBrowserPresentation";
 
 export type { BrowserNavState };
 
@@ -92,6 +93,9 @@ type UseBrowserViewOptions = {
 };
 
 export type BrowserViewModel = {
+	presenting?: boolean;
+	isPresenter?: () => boolean;
+	claimPresentation?: () => void;
 	viewId: string;
 	navState: BrowserNavState;
 	slotRef: (node: HTMLDivElement | null) => void;
@@ -142,6 +146,9 @@ const EMPTY_TABS_STATE: BrowserTabsState = {
 	activeTabId: "",
 	tabs: [],
 };
+
+const EMPTY_TABS: BrowserTabState[] = [];
+const EMPTY_CLOSED_TABS: ClosedBrowserTab[] = [];
 
 const EMPTY_DEVTOOLS_STATE: BrowserDevToolsState = {
 	viewId: "",
@@ -213,6 +220,16 @@ const HIDDEN_RECT: BrowserRect = { x: 0, y: 0, width: 0, height: 0 };
 // newly loaded shell a newer range while staying below Number.MAX_SAFE_INTEGER.
 let nextLayoutRevision = Math.floor(globalThis.performance?.timeOrigin ?? Date.now()) * 1_000;
 
+function sameRect(a: BrowserRect, b: BrowserRect): boolean {
+	return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+}
+
+function scrollCanMoveSlot(target: EventTarget | null, slot: Element | null): boolean {
+	if (!slot || !(target instanceof Node)) return true;
+	if (target.nodeType === Node.DOCUMENT_NODE) return true;
+	return target.contains(slot);
+}
+
 function claimLayoutRevision(): number {
 	nextLayoutRevision += 1;
 	return nextLayoutRevision;
@@ -283,13 +300,16 @@ export function useBrowserView({
 	sessionId,
 	origin,
 	cloudAgentBrowser,
-	active,
+	active: requestedActive,
 	poppedOut,
 	terminated,
 	sessionEnded,
 	previewUrl,
 	previewRevision,
 }: UseBrowserViewOptions): BrowserViewModel {
+	const presentation = useBrowserPresentation(sessionId, requestedActive && !terminated);
+	const { canControl, isPresenter } = presentation;
+	const active = requestedActive && presentation.presenting;
 	const lifecycleRef = useRef({ sessionId, terminated });
 	lifecycleRef.current = { sessionId, terminated };
 	const [viewId, setViewId] = useState("");
@@ -319,6 +339,10 @@ export function useBrowserView({
 	const frameRef = useRef<number | null>(null);
 	const appliedLayoutRevisionRef = useRef(0);
 	const settleTimerRef = useRef<number | null>(null);
+	// What the last setBounds told main, so a scroll that moved nothing sends nothing.
+	const lastSentBoundsRef = useRef<{ viewId: string; rect: BrowserRect; visible: boolean } | null>(null);
+	// The queued measure came only from scrolling; any other trigger clears it.
+	const scrollOnlyMeasureRef = useRef(false);
 	const observerRef = useRef<ResizeObserver | null>(null);
 	const previewTriggerRef = useRef<PreviewTrigger | null>(null);
 	const tabNoticeTimerRef = useRef<number | null>(null);
@@ -360,17 +384,22 @@ export function useBrowserView({
 	);
 
 	const sendHiddenBounds = useCallback((id = viewIdRef.current) => {
-		if (!id) return;
+		const owner = Array.from(nativeViewBySession).find(([, value]) => value.viewId === id)?.[0] ?? sessionId;
+		if (!id || !canControl(owner)) return;
 		publishBrowserHole(id, null);
+		lastSentBoundsRef.current = { viewId: id, rect: HIDDEN_RECT, visible: false };
 		window.ao?.browser.setBounds({
 			viewId: id,
 			revision: claimLayoutRevision(),
 			rect: HIDDEN_RECT,
 			visible: false,
 		});
-	}, []);
+	}, [canControl, sessionId]);
 
-	const measureAndSend = useCallback(() => {
+	// onlyIfChanged is for scroll-driven measures alone. Main can hide a view on
+	// its own (clearing the page, closing the last tab), so every other trigger
+	// always re-sends the geometry.
+	const measureAndSend = useCallback((onlyIfChanged = false) => {
 		// measureAndSend runs both from the scheduleMeasure() rAF callback and as a
 		// direct synchronous call (parking on overlay open, the settle timer). A
 		// direct call may land while a scheduled frame is still queued, so cancel
@@ -384,21 +413,23 @@ export function useBrowserView({
 		frameRef.current = null;
 		const id = viewIdRef.current;
 		const node = slotNodeRef.current;
-		if (!id) return;
+		if (!id || !canControl()) return;
 		if (!activeRef.current || !node || !node.isConnected || hiddenByFullscreen(node)) {
+			// A hidden view stays hidden while the page scrolls: say so once.
+			const last = lastSentBoundsRef.current;
+			if (onlyIfChanged && last?.viewId === id && !last.visible) return;
 			sendHiddenBounds(id);
 			return;
 		}
 		const rect = visibleSlotRect(node);
-		const payload = {
-			viewId: id,
-			revision: claimLayoutRevision(),
-			rect,
-			visible: rect.width > 0 && rect.height > 0,
-		};
+		const visible = rect.width > 0 && rect.height > 0;
+		const last = lastSentBoundsRef.current;
+		if (onlyIfChanged && last?.viewId === id && last.visible === visible && sameRect(last.rect, rect)) return;
+		const payload = { viewId: id, revision: claimLayoutRevision(), rect, visible };
+		lastSentBoundsRef.current = { viewId: id, rect, visible };
 		publishBrowserHole(id, payload.visible ? rect : null);
 		window.ao?.browser.setBounds(payload);
-	}, [sendHiddenBounds]);
+	}, [canControl, sendHiddenBounds]);
 
 	const cancelScheduledMeasure = useCallback(() => {
 		if (frameRef.current === null) return;
@@ -410,10 +441,22 @@ export function useBrowserView({
 	}, []);
 
 	const scheduleMeasure = useCallback(() => {
+		scrollOnlyMeasureRef.current = false;
 		if (frameRef.current !== null) return;
 		frameRef.current = window.requestAnimationFrame
-			? window.requestAnimationFrame(() => measureAndSend())
-			: window.setTimeout(() => measureAndSend(), 16);
+			? window.requestAnimationFrame(() => measureAndSend(scrollOnlyMeasureRef.current))
+			: window.setTimeout(() => measureAndSend(scrollOnlyMeasureRef.current), 16);
+	}, [measureAndSend]);
+
+	// Scrolling only moves the slot when the document or an element containing
+	// it scrolls; chat, terminal and list scrolling beside it cannot.
+	const scheduleScrollMeasure = useCallback((event: Event) => {
+		if (!scrollCanMoveSlot(event.target, slotNodeRef.current)) return;
+		if (frameRef.current !== null) return;
+		scrollOnlyMeasureRef.current = true;
+		frameRef.current = window.requestAnimationFrame
+			? window.requestAnimationFrame(() => measureAndSend(scrollOnlyMeasureRef.current))
+			: window.setTimeout(() => measureAndSend(scrollOnlyMeasureRef.current), 16);
 	}, [measureAndSend]);
 
 	// A ResizeObserver only fires on size changes, so a position-only layout shift
@@ -535,7 +578,7 @@ export function useBrowserView({
 		}
 		window.ao?.browser.ensure(sessionId, false).then((state) => {
 			if (disposed) {
-				if (lifecycleRef.current.sessionId === sessionId && lifecycleRef.current.terminated) {
+				if (canControl() && lifecycleRef.current.sessionId === sessionId && lifecycleRef.current.terminated) {
 					window.ao?.browser.destroy(state.viewId);
 				}
 				return;
@@ -567,7 +610,7 @@ export function useBrowserView({
 		return () => {
 			disposed = true;
 			const id = ownViewId;
-			if (id) {
+			if (id && canControl()) {
 				if (annotationModeRef.current) {
 					void window.ao?.browser.setAnnotationMode({
 						viewId: id,
@@ -839,17 +882,17 @@ export function useBrowserView({
 		// leading edge, and the restore on exit waits for the final geometry.
 		const handleFullscreenChange = () => scheduleSettleMeasure();
 		window.addEventListener("resize", handle);
-		window.addEventListener("scroll", handle, true);
+		window.addEventListener("scroll", scheduleScrollMeasure, true);
 		document.addEventListener("fullscreenchange", handleFullscreenChange);
 		return () => {
 			window.removeEventListener("resize", handle);
-			window.removeEventListener("scroll", handle, true);
+			window.removeEventListener("scroll", scheduleScrollMeasure, true);
 			document.removeEventListener("fullscreenchange", handleFullscreenChange);
 			observerRef.current?.disconnect();
 			cancelScheduledMeasure();
 			if (settleTimerRef.current !== null) window.clearTimeout(settleTimerRef.current);
 		};
-	}, [cancelScheduledMeasure, scheduleMeasure, scheduleSettleMeasure]);
+	}, [cancelScheduledMeasure, scheduleMeasure, scheduleScrollMeasure, scheduleSettleMeasure]);
 
 	const withView = useCallback(async (fn: (id: string) => Promise<BrowserNavState | void>) => {
 		const id = viewIdRef.current;
@@ -1090,7 +1133,7 @@ export function useBrowserView({
 				setNavState((current) => ({
 					...current,
 					url: normalized,
-					title: normalized ? "AO preview" : "",
+					title: normalized ? "Orchestrator preview" : "",
 					isLoading: false,
 				}));
 				return Promise.resolve();
@@ -1213,11 +1256,11 @@ export function useBrowserView({
 		// During a session switch React still renders once with the prior
 		// viewId state, while the cleanup has already cleared viewIdRef. Do not
 		// consume the new session's preview revision against that stale view.
-		if (!viewId || viewIdRef.current !== viewId || terminated) return;
+		if (!viewId || viewIdRef.current !== viewId || terminated || !canControl()) return;
 		const target = previewUrl?.trim() ?? "";
 		const source = origin ? `${origin.hostId}:${origin.sessionId}:${origin.proxyBase}` : "local";
 		const revision = typeof previewRevision === "number" ? previewRevision : null;
-		const previous = previewTriggerRef.current;
+		const previous = hasNativeBrowser ? consumedPreviewTriggers.get(sessionId) ?? previewTriggerRef.current : previewTriggerRef.current;
 		// Reassert once after daemon teardown, but preserve manual navigation when
 		// revisiting an already-ended artifact session.
 		const sameLifecycle = previous?.sessionEnded === Boolean(sessionEnded);
@@ -1239,11 +1282,11 @@ export function useBrowserView({
 			void clear();
 		}
 		return undefined;
-	}, [clear, hasNativeBrowser, origin?.hostId, origin?.sessionId, origin?.proxyBase, previewRevision, previewUrl, sessionEnded, sessionId, showPreview, terminated, viewId]);
+	}, [canControl, presentation.presenting, clear, hasNativeBrowser, origin?.hostId, origin?.sessionId, origin?.proxyBase, previewRevision, previewUrl, sessionEnded, sessionId, showPreview, terminated, viewId]);
 
 	const destroy = useCallback(() => {
 		const id = viewIdRef.current;
-		if (!id) return;
+		if (!id || !canControl()) return;
 		if (annotationModeRef.current) {
 			void window.ao?.browser.setAnnotationMode({ viewId: id, enabled: false });
 			setAnnotationModeState(false);
@@ -1256,7 +1299,7 @@ export function useBrowserView({
 		setTabsState(EMPTY_TABS_STATE);
 		setFindState(EMPTY_FIND_STATE);
 		setClosedTabs([]);
-	}, [sendHiddenBounds]);
+	}, [canControl, sendHiddenBounds]);
 
 	// Hook state survives a `sessionId` prop change until the reset effect above
 	// commits. Keep navigation, tab, and activity state hidden during that
@@ -1267,40 +1310,75 @@ export function useBrowserView({
 	// already on screen, so the panel stays transparent over it.
 	const switchingTo = !stateBelongsToSession && hasNativeBrowser && !terminated ? nativeViewBySession.get(sessionId) : undefined;
 
-	return {
-		viewId: stateBelongsToSession ? viewId : (switchingTo?.viewId ?? ""),
-		navState: stateBelongsToSession ? navState : (switchingTo?.navState ?? EMPTY_NAV_STATE),
-		slotRef,
-		navigate,
-		goBack: () => (hasNativeBrowser ? withView((id) => window.ao!.browser.goBack(id)) : Promise.resolve()),
-		goForward: () => (hasNativeBrowser ? withView((id) => window.ao!.browser.goForward(id)) : Promise.resolve()),
-		reload: () => (hasNativeBrowser ? withView((id) => window.ao!.browser.reload(id)) : Promise.resolve()),
-		stop: () => (hasNativeBrowser ? withView((id) => window.ao!.browser.stop(id)) : Promise.resolve()),
-		findState: stateBelongsToSession ? findState : EMPTY_FIND_STATE,
-		findOpenRequest: stateBelongsToSession ? findOpenRequest : 0,
-		findInPage,
-		stopFindInPage,
-		tabs: stateBelongsToSession ? tabs : (switchingTo?.tabsState.tabs ?? []),
-		activeTabId: stateBelongsToSession ? tabsState.activeTabId : (switchingTo?.tabsState.activeTabId ?? ""),
-		tabNotice: stateBelongsToSession ? tabNotice : "",
-		selectTab,
-		closeTab,
-		openTab,
-		openLink,
-		reorderTabs,
-		closedTabs: stateBelongsToSession ? closedTabs : [],
-		reopenClosedTab,
-		devtoolsState: stateBelongsToSession ? devtoolsState : EMPTY_DEVTOOLS_STATE,
-		profileState: stateBelongsToSession ? profileState : EMPTY_PROFILE_STATE,
-		openDevTools: () => runDevtools("open"),
-		closeDevTools: () => runDevtools("close"),
-		setDevToolsPlacement: (placement) => runDevtools("setPlacement", placement),
-		agentBrowserActive: stateBelongsToSession && agentBrowserActive,
-		agentBrowserActivity: stateBelongsToSession ? agentBrowserActivity : null,
-		destroy,
-		annotationMode,
-		annotationState,
-		setAnnotationMode,
-		annotationAction,
-	};
+	const modelViewId = stateBelongsToSession ? viewId : (switchingTo?.viewId ?? "");
+	const modelNavState = stateBelongsToSession ? navState : (switchingTo?.navState ?? EMPTY_NAV_STATE);
+	const modelFindState = stateBelongsToSession ? findState : EMPTY_FIND_STATE;
+	const modelFindOpenRequest = stateBelongsToSession ? findOpenRequest : 0;
+	const modelTabs = stateBelongsToSession ? tabs : (switchingTo?.tabsState.tabs ?? EMPTY_TABS);
+	const modelActiveTabId = stateBelongsToSession ? tabsState.activeTabId : (switchingTo?.tabsState.activeTabId ?? "");
+	const modelTabNotice = stateBelongsToSession ? tabNotice : "";
+	const modelClosedTabs = stateBelongsToSession ? closedTabs : EMPTY_CLOSED_TABS;
+	const modelDevtoolsState = stateBelongsToSession ? devtoolsState : EMPTY_DEVTOOLS_STATE;
+	const modelProfileState = stateBelongsToSession ? profileState : EMPTY_PROFILE_STATE;
+	const modelAgentBrowserActive = stateBelongsToSession && agentBrowserActive;
+	const modelAgentBrowserActivity = stateBelongsToSession ? agentBrowserActivity : null;
+	const goBack = useCallback(() => (hasNativeBrowser ? withView((id) => window.ao!.browser.goBack(id)) : Promise.resolve()), [hasNativeBrowser, withView]);
+	const goForward = useCallback(() => (hasNativeBrowser ? withView((id) => window.ao!.browser.goForward(id)) : Promise.resolve()), [hasNativeBrowser, withView]);
+	const reload = useCallback(() => (hasNativeBrowser ? withView((id) => window.ao!.browser.reload(id)) : Promise.resolve()), [hasNativeBrowser, withView]);
+	const stop = useCallback(() => (hasNativeBrowser ? withView((id) => window.ao!.browser.stop(id)) : Promise.resolve()), [hasNativeBrowser, withView]);
+	const openDevTools = useCallback(() => runDevtools("open"), [runDevtools]);
+	const closeDevTools = useCallback(() => runDevtools("close"), [runDevtools]);
+	const setDevToolsPlacement = useCallback((placement: BrowserDevToolsPlacement) => runDevtools("setPlacement", placement), [runDevtools]);
+
+	// One object per distinct state, so the panel and other consumers skip
+	// renders their parent makes for unrelated reasons (a session switch renders
+	// SessionView several times while this state settles once).
+	return useMemo<BrowserViewModel>(
+		() => ({
+			presenting: presentation.presenting,
+			isPresenter,
+			claimPresentation: presentation.claim,
+			viewId: modelViewId,
+			navState: modelNavState,
+			slotRef,
+			navigate,
+			goBack,
+			goForward,
+			reload,
+			stop,
+			findState: modelFindState,
+			findOpenRequest: modelFindOpenRequest,
+			findInPage,
+			stopFindInPage,
+			tabs: modelTabs,
+			activeTabId: modelActiveTabId,
+			tabNotice: modelTabNotice,
+			selectTab,
+			closeTab,
+			openTab,
+			openLink,
+			reorderTabs,
+			closedTabs: modelClosedTabs,
+			reopenClosedTab,
+			devtoolsState: modelDevtoolsState,
+			profileState: modelProfileState,
+			openDevTools,
+			closeDevTools,
+			setDevToolsPlacement,
+			agentBrowserActive: modelAgentBrowserActive,
+			agentBrowserActivity: modelAgentBrowserActivity,
+			destroy,
+			annotationMode,
+			annotationState,
+			setAnnotationMode,
+			annotationAction,
+		}),
+		[
+			presentation.presenting, presentation.claim, isPresenter, modelViewId, modelNavState, slotRef, navigate, goBack, goForward, reload, stop, modelFindState,
+			modelFindOpenRequest, findInPage, stopFindInPage, modelTabs, modelActiveTabId, modelTabNotice, selectTab,
+			closeTab, openTab, openLink, reorderTabs, modelClosedTabs, reopenClosedTab, modelDevtoolsState,
+			modelProfileState, openDevTools, closeDevTools, setDevToolsPlacement, modelAgentBrowserActive,
+			modelAgentBrowserActivity, destroy, annotationMode, annotationState, setAnnotationMode, annotationAction,
+		],
+	);
 }
