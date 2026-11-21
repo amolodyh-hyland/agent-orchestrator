@@ -12,7 +12,7 @@ import { verifySource } from "./noetaxis-windows/verify.mjs";
 import { registryBuildEnv } from "./noetaxis-macos/build.mjs";
 
 const revision = "70436c5e948e287f8a99f152ff0205098b9e8d2c";
-const metadata = { version: "0.13.4-noetaxis.70436c5", source: { repository, revision, tree: "277c12b18291a1f64e7cd01efa15771f386bccfa" }, multica: { repository: "https://github.com/amolodyh-hyland/multica", revision: "4b32bc7710753a6d97277c3833a4d7d19e48b2f7" }, databaseSchema: "20261020093039000", registry: "https://registry.npmjs.org/" };
+const metadata = { version: "0.13.4-noetaxis.70436c5", source: { repository, revision, tree: "277c12b18291a1f64e7cd01efa15771f386bccfa" }, multica: { repository: "https://github.com/amolodyh-hyland/multica", revision: "e80a4e2cfda1cc2a53c9c0e3a79002872b18ea43" }, databaseSchema: "20261020093039000", registry: "https://registry.npmjs.org/" };
 const binaries = [executable, "resources/daemon/ao.exe", "resources/multica-cli/multica.exe", "resources/dictation-helper/ao-dictation.exe", "resources/acp-runtime/node/node.exe", "resources/agent-browser/agent-browser.exe"];
 const assets = ["resources/app.asar", "resources/ao-updates-disabled", "resources/multica-desktop/renderer/index.html", "resources/multica-desktop/preload/index.cjs", "resources/multica-cli/LICENSE", "resources/multica-cli/NOTICE", "resources/agent-browser/LICENSE-agent-browser", "resources/agent-browser/LICENSE-axe-core", "resources/agent-browser/LICENSE-axe-core-THIRD-PARTY", "resources/browser-extension/manifest.json", "resources/browser-extension/background.js", "resources/browser-extension/content.js"];
 async function put(file, content) { await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, content); }

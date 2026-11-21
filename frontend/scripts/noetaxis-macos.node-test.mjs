@@ -407,7 +407,7 @@ test("packaging resource inventory stays covered by prerequisites and Forge nati
 	assert.deepEqual([...inventory.matchAll(/"([^"]+)"/g)].map((match) => match[1]), [
 		"daemon", "browser-extension", "agent-browser", "resources/acp-runtime",
 		"darwin", "update-helper", "wake-helper", "cloudflared", "assets/mac/en.lproj",
-		"darwin", "win32", "dictation-helper", "darwin", "linux", "tmux",
+		"darwin", "win32", "dictation-helper", "darwin", "assets/Assets.car", "darwin", "linux", "tmux",
 		"assets/icon.png", "assets/icon.ico", "assets/trayIconTemplate.png", "assets/trayIconTemplate@2x.png",
 		"assets/trayAwakeIconTemplate.png", "assets/trayAwakeIconTemplate@2x.png", "assets/trayAwakeIcon.LICENSE", "app-update.yml",
 	], "Review any new Forge resource and its producer in the custom build");
@@ -415,7 +415,7 @@ test("packaging resource inventory stays covered by prerequisites and Forge nati
 	for (const helper of ["dictation", "update", "wake"]) {
 		assert.match(prePackage, new RegExp(`scripts/build-${helper}-helper\\.mjs`));
 	}
-	for (const resource of ["assets/mac/en.lproj", "assets/icon.png", "assets/icon.ico", "assets/trayIconTemplate.png", "assets/trayIconTemplate@2x.png", "assets/trayAwakeIconTemplate.png", "assets/trayAwakeIconTemplate@2x.png", "assets/trayAwakeIcon.LICENSE"]) {
+	for (const resource of ["assets/mac/en.lproj", "assets/Assets.car", "assets/icon.png", "assets/icon.ico", "assets/trayIconTemplate.png", "assets/trayIconTemplate@2x.png", "assets/trayAwakeIconTemplate.png", "assets/trayAwakeIconTemplate@2x.png", "assets/trayAwakeIcon.LICENSE"]) {
 		assert.ok(existsSync(path.join(repoRoot, "frontend", resource)), `Static packaging resource missing: ${resource}`);
 	}
 	assert.match(prePackage, /stageMulticaDesktop\(/);

@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { fixtureRoot } from "./noetaxis-macos-fixture-registry.mjs";
 
 export const fixtureRevision = "ab2b4da93000000000000000000000000000000000";
-export const fixtureMulticaRevision = "4b32bc7710753a6d97277c3833a4d7d19e48b2f7";
+export const fixtureMulticaRevision = "e80a4e2cfda1cc2a53c9c0e3a79002872b18ea43";
 const states = new Map();
 
 export function daemonBuildEnv() { return { CGO_ENABLED: "1" }; }
@@ -103,7 +103,7 @@ export async function makeBuildFixture(t, options = {}) {
 	await writeFile(path.join(source, "frontend/package.json"), JSON.stringify({ version: "0.13.4", scripts: options.frontendScripts ?? frontendPackage.scripts }));
 	await mkdir(path.join(source, "backend/internal/storage/sqlite/migrations"), { recursive: true });
 	await writeFile(path.join(source, "backend/internal/storage/sqlite/migrations/190_fixture.sql"), "");
-	await writeFile(path.join(source, "backend/go.mod"), `replace github.com/multica-ai/multica/server => github.com/amolodyh-hyland/multica/server v0.0.0-20261020093039-${fixtureMulticaRevision.slice(0, 12)}\n`);
+	await writeFile(path.join(source, "backend/go.mod"), `replace github.com/multica-ai/multica/server => github.com/amolodyh-hyland/multica/server v0.0.0-20261121024636-${fixtureMulticaRevision.slice(0, 12)}\n`);
 	await mkdir(multica, { recursive: true });
 	await writeFile(path.join(multica, "pnpm-lock.yaml"), options.multicaLock ?? `packages:\n  example@1.0.0:\n    resolution: {tarball: ${registry}example/-/example-1.0.0.tgz}\n`);
 	await writeFile(path.join(multica, ".npmrc"), options.multicaNpmrc ?? "shamefully-hoist=true\n");
