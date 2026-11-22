@@ -436,7 +436,7 @@ func TestFactoryRunReferencesNativePerSHAReviewWithoutDelivery(t *testing.T) {
 	if err := f.db.UpsertReview(f.ctx, native); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.db.InsertReviewRun(f.ctx, domain.ReviewRun{ID: "native-pass", ReviewID: native.ID, SessionID: f.session.ID, Harness: domain.ReviewerCodex, TargetSHA: claim.Facts.HeadSHA, Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, CreatedAt: now}); err != nil {
+	if err := f.db.InsertReviewRun(f.ctx, domain.ReviewRun{ID: "native-pass", ReviewID: native.ID, SessionID: f.session.ID, Harness: domain.ReviewerCodex, TargetSHA: claim.Facts.HeadSHA, Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved, CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 	receipt := &domain.RunReviewReceipt{RepoName: claim.RepoName, ReviewRunID: "native-pass", ReviewerID: native.ID, Independent: true, ReadOnly: true, SHA: claim.Facts.HeadSHA, BeforeFingerprint: claim.Facts.Fingerprint, AfterFingerprint: claim.Facts.Fingerprint, Verdict: "approved", Round: 1, Artifact: f.artifact}
@@ -445,7 +445,7 @@ func TestFactoryRunReferencesNativePerSHAReviewWithoutDelivery(t *testing.T) {
 		t.Fatalf("native receipt: %v %v", detail.Blockers, err)
 	}
 	pass, ok, err := f.db.GetReviewRun(f.ctx, "native-pass")
-	if err != nil || !ok || pass.DeliveredAt != nil || pass.Status != domain.ReviewRunComplete {
+	if err != nil || !ok || pass.DeliveredAt != nil || pass.Status != domain.ReviewRunCompleted {
 		t.Fatalf("record changed native delivery: %+v %v", pass, err)
 	}
 	receipt.ReviewerID = "another-reviewer"

@@ -34,6 +34,7 @@ function Fixture() {
 		<main className="mx-auto max-w-2xl space-y-4 bg-background p-6 text-foreground">
 			<div className="cursor-chat-composer p-3">
 				<ComposerEditor
+					enterSends
 					ref={editor}
 					label="Message"
 					placeholder="Message"

@@ -16,6 +16,8 @@ import type { ClientRect } from "./pane-split";
 export type PaneDropResolution = {
 	/** Viewport box the tab would occupy. */
 	rect: ClientRect;
+	/** A short line shown inside the preview, naming what releasing here does. */
+	label?: string;
 	commit: () => void;
 };
 
@@ -43,6 +45,8 @@ const DETACH_DISTANCE_PX = 14;
 const HOLD_MS = 320;
 /** Movement within this distance still counts as holding still. */
 const HOLD_SLOP_PX = 5;
+/** How far a pane header moves before it lifts. */
+const LIFT_DISTANCE_PX = 4;
 /** Matches the preview's CSS fade so the nodes leave after it. */
 const FADE_MS = 150;
 
@@ -68,6 +72,8 @@ type ActiveDrag = {
 	previewShown: boolean;
 	resolution: PaneDropResolution | null;
 	onDetach?: () => void;
+	/** A pane header lifts on the first real movement, not at the strip's edge. */
+	immediate: boolean;
 	cleanup: () => void;
 };
 
@@ -86,6 +92,7 @@ export function beginPaneTabDrag(
 	key: string,
 	source: HTMLElement,
 	onDetach?: () => void,
+	options?: { immediate?: boolean },
 ): void {
 	if (event.button !== 0 || active) return;
 	const target = [...dropTargets].reverse().find((candidate) => !candidate.containsSource || candidate.containsSource(source));
@@ -112,6 +119,7 @@ export function beginPaneTabDrag(
 		previewShown: false,
 		resolution: null,
 		onDetach,
+		immediate: Boolean(options?.immediate),
 		cleanup: () => {},
 	};
 	const onMove = (moveEvent: PointerEvent) => {
@@ -124,8 +132,9 @@ export function beginPaneTabDrag(
 				window.clearTimeout(drag.holdTimer);
 				drag.holdTimer = null;
 			}
-			const outside =
-				drag.y > drag.strip.bottom + DETACH_DISTANCE_PX || drag.y < drag.strip.top - DETACH_DISTANCE_PX;
+			const outside = drag.immediate
+				? Math.hypot(drag.x - drag.startX, drag.y - drag.startY) > LIFT_DISTANCE_PX
+				: drag.y > drag.strip.bottom + DETACH_DISTANCE_PX || drag.y < drag.strip.top - DETACH_DISTANCE_PX;
 			if (!outside) return;
 			detach(drag);
 		}
@@ -160,7 +169,8 @@ export function beginPaneTabDrag(
 		window.removeEventListener("keydown", onKey, true);
 		window.removeEventListener("blur", onBlur);
 	};
-	drag.holdTimer = window.setTimeout(() => {
+	// A pane header lifts by moving; a press that stays put is just a click.
+	if (!drag.immediate) drag.holdTimer = window.setTimeout(() => {
 		drag.holdTimer = null;
 		if (active !== drag || drag.detached) return;
 		detach(drag);
@@ -174,9 +184,10 @@ function detach(drag: ActiveDrag): void {
 	drag.onDetach?.();
 	// The ghost is a copy of the tab itself at its exact size, measured from
 	// the tab's frame rather than the wrapper the press landed on.
-	const frame = (drag.source.matches("[data-terminal-tab-frame]")
+	const frameSelector = "[data-terminal-tab-frame], [data-pane-drag-chip]";
+	const frame = (drag.source.matches(frameSelector)
 		? drag.source
-		: drag.source.querySelector<HTMLElement>("[data-terminal-tab-frame]")) ?? drag.source;
+		: drag.source.querySelector<HTMLElement>(frameSelector)) ?? drag.source;
 	const box = frame.getBoundingClientRect();
 	drag.grabX = Math.min(Math.max(drag.x - box.left, 0), box.width);
 	drag.grabY = Math.min(Math.max(drag.y - box.top, 0), box.height);
@@ -188,9 +199,9 @@ function detach(drag: ActiveDrag): void {
 	}
 	const ghost = document.createElement("div");
 	ghost.className = "pane-drag-ghost";
-	// Tabs in the floating top bar are styled by that bar; carry it over so
+	// macOS tabs (floating bar or native fullscreen) are pills; carry that over so
 	// the ghost looks like the tab it lifted.
-	if (drag.source.closest(".center-panel-shell--floating-topbar")) ghost.classList.add("center-panel-shell--floating-topbar");
+	if (drag.source.closest(".center-panel-shell--tab-pills")) ghost.classList.add("center-panel-shell--tab-pills");
 	ghost.setAttribute("aria-hidden", "true");
 	ghost.style.width = `${box.width}px`;
 	ghost.style.height = `${box.height}px`;
@@ -236,6 +247,11 @@ function paint(drag: ActiveDrag): void {
 		if (drag.previewShown) preview.removeAttribute("data-visible");
 		drag.previewShown = false;
 		return;
+	}
+	// The label can change while the box stays (a pane header over its own strip).
+	if ((preview.dataset.label ?? "") !== (resolution.label ?? "")) {
+		if (resolution.label) preview.dataset.label = resolution.label;
+		else delete preview.dataset.label;
 	}
 	const { left, top, width, height } = resolution.rect;
 	const next = `${left}|${top}|${width}|${height}`;

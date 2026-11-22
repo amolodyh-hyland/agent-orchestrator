@@ -1,3 +1,4 @@
+import { isExcerptSnapshot, isFlowchartOnlySnapshot, type ChatExcerptSnapshot } from "../../shared/chat-excerpt";
 import { isComposerSkillSelection, selectedTokenPresent, type ComposerSkillSelection } from "./chat-skill-selection";
 import type { ChatFileReference } from "../../shared/chat-file-reference";
 import type { ConversationContentSummary } from "../types/conversation";
@@ -27,6 +28,12 @@ export interface ChatDraftScope {
 }
 
 type ChatDraftScopeInput = string | ChatDraftScope;
+
+/** The new chat page's composer draft; one per host, shared by every project on it. */
+export function newChatDraftScope(hostId?: string): ChatDraftScope {
+	const id = `new-chat:${hostId ?? "local"}`;
+	return { sessionId: id, incarnation: id };
+}
 
 type ChatDraftScopeLease = {
 	schemaVersion: typeof CHAT_DRAFT_SCOPE_SCHEMA_VERSION;
@@ -93,6 +100,7 @@ export interface ChatDraftRetainedAttachment {
 export type ChatDraftDeliveryState = "dispatching" | "accepted";
 
 export interface ChatComposerDelivery {
+	queueOnly?: boolean;
 	skillSelection?: ComposerSkillSelection;
 	/** Absent on legacy frozen receipts, which must keep their original prompt. */
 	fileReferenceFormat?: "quoted-v1";
@@ -114,12 +122,14 @@ export interface ChatComposerDelivery {
 }
 
 export interface ChatDraftExcerptReference {
+ snapshot?: ChatExcerptSnapshot;
 	order?: number;
 	id: string;
 	conversationId: string;
 	messageId: string;
 	revision: number;
 	text: string;
+	comment?: string;
 	role: "user" | "assistant";
 }
 
@@ -188,6 +198,7 @@ export type DraftDeliveryResult<Mutation> =
 	| { ok: false; recovered: boolean; draft: ChatSessionDraft; mutation?: Mutation };
 
 export interface PrepareChatComposerDeliveryInput {
+	queueOnly?: boolean;
 	skillSelection?: ComposerSkillSelection;
 	nativeImages?: boolean;
 	optimistic?: boolean;
@@ -764,7 +775,9 @@ function isExcerptReference(value: unknown): value is ChatDraftExcerptReference 
 		typeof excerpt.conversationId === "string" && excerpt.conversationId.length > 0 &&
 		typeof excerpt.messageId === "string" && excerpt.messageId.length > 0 &&
 		typeof excerpt.revision === "number" && Number.isSafeInteger(excerpt.revision) && excerpt.revision >= 0 &&
-		typeof excerpt.text === "string" && excerpt.text.trim().length > 0 &&
+		typeof excerpt.text === "string" && (excerpt.text.trim().length > 0 || isFlowchartOnlySnapshot(excerpt.snapshot)) &&
+		(excerpt.snapshot === undefined || isExcerptSnapshot(excerpt.snapshot)) &&
+		(excerpt.comment === undefined || typeof excerpt.comment === "string") &&
 		(excerpt.role === "user" || excerpt.role === "assistant")
 	);
 }
@@ -1079,6 +1092,7 @@ export function prepareChatComposerDelivery(
 	const optimistic = input.optimistic && input.kind === "send" && excerpts.length === 0 && fileReferences.length === 0;
 	const mutation: ChatComposerDelivery = {
 		fileReferenceFormat: "quoted-v1",
+		...(input.queueOnly ? { queueOnly: true } : {}),
 		...(input.nativeImages === undefined ? {} : { nativeImages: input.nativeImages }),
 		kind: input.kind,
 		state: "dispatching",
@@ -1532,7 +1546,7 @@ export function writeChatExcerptReferences(
 			...draft,
 			composer: {
 				...draft.composer,
-				revision: draft.composer.revision + 1,
+				revision: draft.composer.delivery && !draft.composer.delivery.draft ? draft.composer.revision : draft.composer.revision + 1,
 				excerpts,
 			},
 		}),
@@ -1684,7 +1698,7 @@ export function clearAcceptedChatComposer(
 				attachments: current.composer.delivery.draft
 					? current.composer.attachments
 					: current.composer.attachments.filter((attachment) => !acceptedAttachmentIds.includes(attachment.id)),
-				excerpts: current.composer.excerpts?.filter(ref => !current.composer.delivery?.excerpts?.some(sent => sent.id === ref.id)),
+				excerpts: current.composer.excerpts?.filter(ref => !current.composer.delivery?.excerpts?.some(sent => sent.id === ref.id && sent.comment === ref.comment)),
 				fileReferences: current.composer.fileReferences?.filter(ref => !current.composer.delivery?.fileReferences?.some(sent => sent.id === ref.id)),
 			},
 		};
@@ -1697,13 +1711,14 @@ export function clearAcceptedChatComposer(
 			}
 			: { ok: false, cleared: false, draft: current };
 	}
+	const sent = current.composer.delivery;
 	const next: ChatSessionDraft = {
 		...current,
 		composer: {
 			revision: current.composer.revision + 1,
 			text: "",
 			attachments: [],
-			excerpts: [],
+			excerpts: sent ? current.composer.excerpts?.filter(ref => !sent.excerpts?.some(item => item.id === ref.id && item.comment === ref.comment)) ?? [] : [],
 			fileReferences: [],
 		},
 	};

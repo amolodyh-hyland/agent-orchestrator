@@ -5,7 +5,17 @@ import { dictationLocale, parseDictationEvent, type DictationAvailability, type 
 
 export function dictationHelperPath(platform: NodeJS.Platform, root: string): string | undefined {
 	if (platform !== "darwin" && platform !== "win32") return undefined;
-	return path.join(root, "dictation-helper", platform === "win32" ? "ao-dictation.exe" : "ao-dictation");
+	return platform === "win32"
+		? path.join(root, "dictation-helper", "ao-dictation.exe")
+		: path.join(root, "dictation-helper", "Orchestrator.app", "Contents", "MacOS", "Orchestrator");
+}
+
+export function parseNativeDictationEvent(value: unknown): DictationEvent | undefined {
+	if (!value || typeof value !== "object" || !("type" in value)) return undefined;
+	if (value.type === "listening") return { type: "recording" };
+	if (value.type === "finishing") return { type: "capture-stopped" };
+	if (value.type === "end" && "text" in value) return parseDictationEvent({ type: "result", text: value.text });
+	return parseDictationEvent(value);
 }
 
 export class NativeDictationEngine implements DictationEngine {
@@ -54,7 +64,7 @@ export class NativeDictationEngine implements DictationEngine {
 				const line = buffer.slice(0, newline);
 				buffer = buffer.slice(newline + 1);
 				let event: DictationEvent | undefined;
-				try { event = parseDictationEvent(JSON.parse(line)); } catch { event = undefined; }
+				try { event = parseNativeDictationEvent(JSON.parse(line)); } catch { event = undefined; }
 				if (!event) { this.finish({ type: "error", error: "failed" }); return; }
 				if (event.type === "recording") {
 					if (this.stopping) continue;
@@ -64,6 +74,9 @@ export class NativeDictationEngine implements DictationEngine {
 					this.stopping = true;
 					this.arm(30_000);
 					this.emit?.(event);
+				} else if (event.type === "text" || event.type === "levels") {
+					if (mode !== "--record") { this.finish({ type: "error", error: "failed" }); return; }
+					if (event.type === "text" || !this.stopping) this.emit?.(event);
 				} else this.finish(event);
 			}
 		});

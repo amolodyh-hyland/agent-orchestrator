@@ -1,6 +1,20 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { daemonBuildEnv } from "./go-build-env.mjs";
+import { buildSourceRevision, daemonBuildEnv } from "./go-build-env.mjs";
+
+describe("source tree build identity", () => {
+	it("keeps an exact tree distinct from the base Git commit", () => {
+		const identity = `tree-${"a".repeat(40)}`;
+		assert.equal(buildSourceRevision(identity, "b5f10dd60eb1\n"), identity);
+		assert.equal(buildSourceRevision(undefined, "b5f10dd60eb1\n"), "b5f10dd60eb1");
+		assert.equal(buildSourceRevision(undefined, undefined), undefined);
+	});
+	for (const value of ["", "a".repeat(40), "tree-short", `tree-${"a".repeat(40)} -X injected=value`, `tree-${"a".repeat(40)}\n`]) {
+		it(`rejects an ambiguous or unsafe override ${JSON.stringify(value)}`, () => {
+			assert.throws(() => buildSourceRevision(value, "base"), /AO_BUILD_SOURCE_REVISION/);
+		});
+	}
+});
 
 describe("daemon cgo build environment", () => {
 	it("overrides inherited cgo=0 and verifies the effective macOS setting", () => {

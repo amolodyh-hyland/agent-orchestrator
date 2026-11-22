@@ -175,7 +175,7 @@ func (s *Service) feedbackProposal(ctx context.Context, detail domain.RunDetail)
 	}
 	if r.ReviewRunID != "" {
 		native, exists, err := s.store.GetReviewRun(ctx, r.ReviewRunID)
-		if err != nil || !exists || native.SessionID != session.ID || native.TargetSHA != r.SHA || (native.Status != domain.ReviewRunComplete && native.Status != domain.ReviewRunDelivered) {
+		if err != nil || !exists || native.SessionID != session.ID || native.TargetSHA != r.SHA || native.Status != domain.ReviewRunCompleted {
 			return domain.RunFeedbackBinding{}, invalid("Native review reference is unavailable or stale")
 		}
 		reviewer, exists, err := s.store.GetReviewByID(ctx, native.ReviewID)

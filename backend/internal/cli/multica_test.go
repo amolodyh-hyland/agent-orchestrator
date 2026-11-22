@@ -222,7 +222,7 @@ func TestMulticaActionsRequireHTTP200(t *testing.T) {
 func TestMulticaDaemonNotRunning(t *testing.T) {
 	setConfigEnv(t)
 	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "multica", "status")
-	if err == nil || !strings.Contains(err.Error(), "AO daemon is not running — start it with `ao start`") {
+	if err == nil || !strings.Contains(err.Error(), "Orchestrator daemon is not running — start it with `ao start`") {
 		t.Fatalf("error = %v, want daemon-not-running diagnostic", err)
 	}
 }

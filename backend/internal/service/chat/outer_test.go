@@ -247,7 +247,9 @@ func TestOuterScheduledReportsStayInertWhileBoundSendsDrainExactlyOnce(t *testin
 	delivery := &reportChatDelivery{h: h}
 	coordinator := reportsvc.NewCoordinator(reportsvc.CoordinatorDeps{Store: h.st, Delivery: delivery, Now: h.now, RetryDelay: time.Second})
 	h.svc.SetReportCoordinator(coordinator)
-	if _, err := coordinator.RunDue(ctx); err != nil {
+	// Refused scheduled delivery is surfaced for retry accounting; it must
+	// still retain inert evidence without submitting an authorized turn.
+	if _, err := coordinator.RunDue(ctx); !errors.Is(err, domain.ErrOuterHeld) {
 		t.Fatal(err)
 	}
 	assertReportState(t, h.st, "outer-incoming-report", domain.ReportPending)
@@ -267,7 +269,7 @@ func TestOuterScheduledReportsStayInertWhileBoundSendsDrainExactlyOnce(t *testin
 		t.Fatal("bound second Send was not queued", second, err)
 	}
 	h.advance(time.Second)
-	if _, err := coordinator.RunDue(ctx); err != nil {
+	if _, err := coordinator.RunDue(ctx); !errors.Is(err, domain.ErrOuterHeld) {
 		t.Fatal(err)
 	}
 	if h.conv.sendCallCount() != 1 {

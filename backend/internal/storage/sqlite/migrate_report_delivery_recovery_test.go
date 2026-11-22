@@ -43,6 +43,23 @@ func createPreReceiptUpgradeConversation(ctx context.Context, db *sql.DB, id str
 	return domain.ConversationRecord{ID: id}, nil
 }
 
+func createPreReceiptUpgradeReport(ctx context.Context, db *sql.DB, r domain.ReportRecord) (domain.ReportRecord, error) {
+	var deadline any
+	if !r.SettlementDeadline.IsZero() {
+		deadline = r.SettlementDeadline
+	}
+	_, err := db.ExecContext(ctx, `INSERT INTO reports (id,session_id,project_id,state,note,message,created_at,available_at,settlement_deadline,repeat_count) VALUES (?,?,?,?,?,?,?,?,?,?)`, r.ID, r.SessionID, r.ProjectID, r.State, r.Note, r.Message, r.CreatedAt, r.AvailableAt, deadline, r.RepeatCount)
+	if err != nil {
+		return r, err
+	}
+	for i, o := range r.Outputs {
+		if _, err := db.ExecContext(ctx, `INSERT INTO report_outputs (report_id,position,kind,reference,label) VALUES (?,?,?,?,?)`, r.ID, i, o.Kind, o.Reference, o.Label); err != nil {
+			return r, err
+		}
+	}
+	return r, nil
+}
+
 func createPreReceiptUpgradeSession(ctx context.Context, db *sql.DB, rec domain.SessionRecord) (domain.SessionRecord, error) {
 	var num int64
 	if err := db.QueryRowContext(ctx, `SELECT COALESCE(MAX(num), 0) + 1 FROM sessions WHERE project_id = ?`, rec.ProjectID).Scan(&num); err != nil {
@@ -84,7 +101,7 @@ func TestReportUpgradeRecoversPreMigrationChatDelivery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = st.CreateReport(ctx, domain.ReportRecord{ID: "legacy-report", SessionID: worker.ID, ProjectID: "upgrade", State: domain.ReportNeedsInput, Note: "retained report", Outputs: []domain.ReportOutput{{Kind: domain.ReportOutputArtifact, Reference: "result"}}, CreatedAt: now, AvailableAt: now, DeliveryState: domain.ReportPending, RepeatCount: 1})
+			_, err = createPreReceiptUpgradeReport(ctx, db, domain.ReportRecord{ID: "legacy-report", SessionID: worker.ID, ProjectID: "upgrade", State: domain.ReportNeedsInput, Note: "retained report", Outputs: []domain.ReportOutput{{Kind: domain.ReportOutputArtifact, Reference: "result"}}, CreatedAt: now, AvailableAt: now, DeliveryState: domain.ReportPending, RepeatCount: 1})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -196,7 +213,7 @@ func TestReportUpgradeHoldsReleasedPendingPiggyback(t *testing.T) {
 				if id == "unattempted-report" {
 					availableAt = now.Add(time.Hour)
 				}
-				report, err := st.CreateReport(ctx, domain.ReportRecord{ID: id, SessionID: worker.ID, ProjectID: "upgrade", State: domain.ReportNeedsInput, Note: "retained " + id, CreatedAt: at, AvailableAt: availableAt, DeliveryState: domain.ReportPending, RepeatCount: 1})
+				report, err := createPreReceiptUpgradeReport(ctx, db, domain.ReportRecord{ID: id, SessionID: worker.ID, ProjectID: "upgrade", State: domain.ReportNeedsInput, Note: "retained " + id, CreatedAt: at, AvailableAt: availableAt, DeliveryState: domain.ReportPending, RepeatCount: 1})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -325,7 +342,7 @@ func TestReportUpgradeKeepsTUIAttemptEligibleWithOtherChatHistory(t *testing.T) 
 			if history == "unrelated" {
 				reportAt = now.Add(-2 * time.Hour)
 			}
-			if _, err := st.CreateReport(ctx, domain.ReportRecord{ID: "tui-report", SessionID: orch.ID, ProjectID: "upgrade", State: domain.ReportNeedsInput, Note: "new TUI report", CreatedAt: reportAt, AvailableAt: reportAt, DeliveryState: domain.ReportPending, RepeatCount: 1}); err != nil {
+			if _, err := createPreReceiptUpgradeReport(ctx, db, domain.ReportRecord{ID: "tui-report", SessionID: orch.ID, ProjectID: "upgrade", State: domain.ReportNeedsInput, Note: "new TUI report", CreatedAt: reportAt, AvailableAt: reportAt, DeliveryState: domain.ReportPending, RepeatCount: 1}); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := db.Exec(`UPDATE reports SET delivery_batch_id='report-batch:tui-report',delivery_attempts=1,last_error='TUI prompt submission timeout' WHERE id='tui-report'`); err != nil {

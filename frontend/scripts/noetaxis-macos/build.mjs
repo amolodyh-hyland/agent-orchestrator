@@ -1,4 +1,5 @@
-import { cp, chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { readdirSync, rmSync } from "node:fs";
 import { spawn } from "node:child_process";
 import ini from "./parsers/ini.cjs";
@@ -13,7 +14,7 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../../..");
 const defaultRegistry = "https://proget.onbase.net/npm/npm";
 const publicRegistry = "https://registry.npmjs.org/";
-const usage = "Usage: build.mjs [--ref <commit-or-tag>] [--base-version <x.y.z>] [--output <directory>] [--public-registry] [--registry <url>]\nDefault: https://proget.onbase.net/npm/npm (company VPN). --public-registry explicitly selects https://registry.npmjs.org/ without company npm credentials. --registry must match the selected mode; no other endpoints are allowed.";
+const usage = "Usage: build.mjs [--ref <commit-or-tag>] [--base-version <x.y.z>] [--output <directory>] [--public-registry] [--registry <url>] [--source-patch <binary-patch> --source-patch-sha256 <hash> --source-tree <git-tree>] [--multica-input <manifest.json> --multica-input-sha256 <hash>]\nSource patches are complete base-relative overlays, verified in a fresh worktree. Their version suffix identifies the full source tree, not a clean commit. Snapshot builds require a matched Multica input manifest; no historical module fallback.\nDefault: https://proget.onbase.net/npm/npm (company VPN). --public-registry explicitly selects https://registry.npmjs.org/ without company npm credentials. --registry must match the selected mode; no other endpoints are allowed.";
 const defaultBaseVersion = "0.13.4";
 const agentBrowserVersion = "0.38.1";
 const multicaModule = "github.com/multica-ai/multica/server";
@@ -72,16 +73,140 @@ export function parseArgs(args) {
 			options.publicRegistry = true;
 			continue;
 		}
-		if (!["--ref", "--output", "--base-version", "--registry"].includes(name) || !args[index + 1]) {
+		if (!["--ref", "--output", "--base-version", "--registry", "--source-patch", "--source-patch-sha256", "--source-tree", "--multica-input", "--multica-input-sha256"].includes(name) || !args[index + 1]) {
 			throw new Error(usage);
 		}
-		const key = { "--ref": "ref", "--output": "output", "--base-version": "baseVersion", "--registry": "registry" }[name];
+		const key = { "--ref": "ref", "--output": "output", "--base-version": "baseVersion", "--registry": "registry",
+			"--source-patch": "sourcePatch", "--source-patch-sha256": "sourcePatchSha256", "--source-tree": "sourceTree",
+			"--multica-input": "multicaInput", "--multica-input-sha256": "multicaInputSha256" }[name];
 		options[key] = args[index + 1];
 		if (key === "registry") explicitRegistry = options[key];
 		index += 1;
 	}
 	if (options.publicRegistry) options.registry = explicitRegistry || publicRegistry;
+	validateSourceOptions(options);
 	return options;
+}
+
+export function validateSourceOptions(options) {
+	const snapshot = [options.sourcePatch, options.sourcePatchSha256, options.sourceTree];
+	if (snapshot.some(Boolean) && !snapshot.every(Boolean)) throw new Error("Source snapshots require --source-patch, --source-patch-sha256 and --source-tree together");
+	if (options.sourceTree && !/^[0-9a-f]{40}$/.test(options.sourceTree)) throw new Error("Source tree must be a full SHA-1 Git tree");
+	for (const hash of [options.sourcePatchSha256, options.multicaInputSha256]) {
+		if (hash && !/^[0-9a-f]{64}$/.test(hash)) throw new Error("Input checksums must be full SHA-256 hashes");
+	}
+	if (Boolean(options.multicaInput) !== Boolean(options.multicaInputSha256)) throw new Error("Matched Multica requires --multica-input and --multica-input-sha256 together");
+	if (options.sourcePatch && !options.multicaInput) throw new Error("Source snapshots require explicit matched Multica inputs");
+}
+
+const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+
+async function verifiedBytes(file, expected, label) {
+	if (typeof file !== "string" || !path.isAbsolute(file) || !(await lstat(file)).isFile()) throw new Error(`${label} must be an absolute regular file`);
+	const bytes = await readFile(file);
+	if (!/^[0-9a-f]{64}$/.test(expected) || sha256(bytes) !== expected) throw new Error(`${label} checksum mismatch`);
+	return bytes;
+}
+
+export async function applySourceSnapshot(sourceWorktree, options, workDir) {
+	validateSourceOptions(options);
+	if (!options.sourcePatch) return undefined;
+	const bytes = await verifiedBytes(path.resolve(options.sourcePatch), options.sourcePatchSha256, "Source patch");
+	const patch = path.join(workDir, "source.patch");
+	await writeFile(patch, bytes, { mode: 0o600 });
+	await run("git", ["apply", "--check", "--index", patch], { cwd: sourceWorktree });
+	await run("git", ["apply", "--index", patch], { cwd: sourceWorktree });
+	const tree = await capture("git", ["write-tree"], { cwd: sourceWorktree });
+	if (tree !== options.sourceTree) throw new Error("Applied source tree does not match the reviewed full tree");
+	return { kind: "staged-tree", tree, patchSha256: options.sourcePatchSha256 };
+}
+
+// Hash immutable exports with Git's tree format, without creating refs or running filters.
+export async function exportedSourceTree(directory) {
+	const root = path.resolve(directory);
+	if (!(await lstat(root)).isDirectory()) throw new Error("Source export must be a real directory");
+	const canonicalRoot = await realpath(root);
+	const objectHash = (type, bytes) => createHash("sha1").update(`${type} ${bytes.length}\0`).update(bytes).digest();
+	async function tree(dir) {
+		const entries = [];
+		for (const name of await readdir(dir)) {
+			if (name === ".git") throw new Error("Source exports must not contain Git metadata");
+			const file = path.join(dir, name);
+			const stat = await lstat(file);
+			let mode, hash;
+			if (stat.isDirectory()) {
+				mode = "40000"; hash = await tree(file);
+				if (hash.equals(objectHash("tree", Buffer.alloc(0)))) continue;
+			}
+			else if (stat.isFile()) { mode = stat.mode & 0o111 ? "100755" : "100644"; hash = objectHash("blob", await readFile(file)); }
+			else if (stat.isSymbolicLink()) {
+				const target = await readlink(file);
+				if (path.isAbsolute(target) || !isWithin(root, path.resolve(dir, target))
+					|| !isWithin(canonicalRoot, await realpath(file))) throw new Error("Source export symlink escapes its root");
+				mode = "120000"; hash = objectHash("blob", Buffer.from(target));
+			} else throw new Error("Unsupported file in source export");
+			entries.push({ name, mode, hash });
+		}
+		entries.sort((a, b) => Buffer.compare(Buffer.from(a.name + (a.mode === "40000" ? "/" : "")), Buffer.from(b.name + (b.mode === "40000" ? "/" : ""))));
+		return objectHash("tree", Buffer.concat(entries.map(({ name, mode, hash }) => Buffer.concat([Buffer.from(`${mode} ${name}\0`), hash]))));
+	}
+	return (await tree(root)).toString("hex");
+}
+
+export function verifyMatchedModfile(source, override) {
+	const withoutBinding = (text) => text.replace(/^replace github\.com\/multica-ai\/multica\/server => .+$/gm, "").replace(/\s+/g, " ").trim();
+	if (withoutBinding(source) !== withoutBinding(override)) throw new Error("Matched backend modfile changes dependencies outside the Multica binding");
+}
+
+export async function stageMatchedMultica(manifestPath, expectedHash, workDir, sourceGoMod) {
+	const bytes = await verifiedBytes(path.resolve(manifestPath), expectedHash, "Multica input manifest");
+	const input = JSON.parse(bytes.toString("utf8"));
+	if (!input || input.version !== 1 || !/^[0-9a-f]{40}$/.test(input.source?.baseRevision)) throw new Error("Unsupported Multica provenance manifest");
+	for (const name of ["source", "server", "desktop", "notices"]) {
+		const entry = input[name];
+		if (!entry || typeof entry.directory !== "string" || !path.isAbsolute(entry.directory) || !/^[0-9a-f]{40}$/.test(entry.tree)
+			|| await exportedSourceTree(entry.directory) !== entry.tree) throw new Error(`Multica ${name} tree mismatch`);
+	}
+	if (await exportedSourceTree(path.join(input.source.directory, "server")) !== input.server.tree) throw new Error("Multica server export does not match the full source");
+	await verifiedBytes(input.source.overlay?.file, input.source.overlay?.sha256, "Multica source overlay");
+	const mod = await verifiedBytes(input.modfile?.file, input.modfile?.sha256, "Backend modfile");
+	const sum = await verifiedBytes(input.sumfile?.file, input.sumfile?.sha256, "Backend sumfile");
+	const cli = await verifiedBytes(input.cli?.file, input.cli?.sha256, "Multica CLI");
+	if (!cli.length || !((await lstat(input.cli.file)).mode & 0o111)) throw new Error("Multica CLI must be a nonempty executable");
+	const moduleText = mod.toString("utf8");
+	const expectedReplace = `replace ${multicaModule} => ${input.server.directory}`;
+	const replacements = moduleText.split(/\r?\n/).filter((line) => /^\s*replace\b/.test(line));
+	if (!/^module github\.com\/aoagents\/agent-orchestrator\/backend\s*$/m.test(moduleText)
+		|| replacements.length !== 1 || replacements[0].trim() !== expectedReplace) throw new Error("Backend modfile must bind only the exact verified Multica server export");
+	if (sourceGoMod !== undefined) verifyMatchedModfile(sourceGoMod, moduleText);
+	if (/\s/.test(input.server.directory) || /\s/.test(workDir)) throw new Error("Matched Go module staging requires paths without whitespace");
+	for (const name of ["LICENSE", "NOTICE"]) {
+		const file = path.join(input.notices.directory, name);
+		if (!(await lstat(file)).isFile() || !(await readFile(file)).length) throw new Error(`Multica ${name} must be a nonempty regular file`);
+	}
+	const serverMod = await readFile(path.join(input.server.directory, "go.mod"), "utf8");
+	if (!new RegExp(`^module ${multicaModule.replaceAll(".", "\\.")}\\s*$`, "m").test(serverMod)) throw new Error("Multica server module identity mismatch");
+	const staged = {};
+	for (const name of ["server", "desktop", "notices"]) {
+		staged[name] = path.join(workDir, `matched-${name}`);
+		await cp(input[name].directory, staged[name], { recursive: true, preserveTimestamps: true, verbatimSymlinks: true });
+		if (await exportedSourceTree(staged[name]) !== input[name].tree) throw new Error(`Multica ${name} changed while staging`);
+	}
+	if (await exportedSourceTree(input.source.directory) !== input.source.tree) throw new Error("Multica full source changed while staging");
+	staged.cli = path.join(workDir, "matched-multica");
+	await writeFile(staged.cli, cli, { mode: 0o755 });
+	staged.modfile = path.join(workDir, "matched.mod");
+	const stagedModule = moduleText.replace(expectedReplace, `replace ${multicaModule} => ${staged.server}`);
+	await writeFile(staged.modfile, stagedModule, { mode: 0o600 });
+	await writeFile(path.join(workDir, "matched.sum"), sum, { mode: 0o600 });
+	return { ...staged, provenance: { ...input, manifestSha256: expectedHash, stagedModfileSha256: sha256(stagedModule) } };
+}
+
+export function matchedBuildEnv(matched, inherited) {
+	return {
+		...inherited, GOWORK: "off", GOFLAGS: `-modfile=${matched.modfile} -mod=readonly`,
+		AO_MULTICA_DESKTOP_OUT: matched.desktop, AO_MULTICA_CLI_BIN: matched.cli, AO_MULTICA_NOTICE_DIR: matched.notices,
+	};
 }
 
 export function signingIdentity(env = process.env) {
@@ -447,6 +572,7 @@ export async function verifyBrowserResources(directory) {
 }
 
 export async function buildNoetaxis(options) {
+	validateSourceOptions(options);
 	const identity = signingIdentity();
 	const registry = validateRegistry(options.registry, options.publicRegistry);
 	const goEnv = daemonBuildEnv({ cwd: path.join(repoRoot, "backend") });
@@ -474,8 +600,9 @@ export async function buildNoetaxis(options) {
 async function buildWithRegistry(options, registry, npmEnv, goEnv, cleanup, identity) {
 	await supportedHost(npmEnv);
 	const commit = await capture("git", ["rev-parse", "--verify", `${options.ref}^{commit}`], { cwd: repoRoot });
-	const version = stampVersion(options.baseVersion, commit);
-	const outputDir = path.resolve(options.output || path.join(defaultOutputRoot, `noetaxis-${commit.slice(0, 7)}`));
+	const sourceRevision = options.sourceTree || commit;
+	const version = stampVersion(options.baseVersion, sourceRevision);
+	const outputDir = path.resolve(options.output || path.join(defaultOutputRoot, `noetaxis-${sourceRevision.slice(0, 7)}`));
 	if (isWithin("/Applications", outputDir)) throw new Error("Build output must be outside /Applications");
 	if (isWithin(repoRoot, outputDir)) throw new Error("Build output must be outside the AO checkout");
 	const outputEntries = await readdir(outputDir).catch((error) => error.code === "ENOENT" ? [] : Promise.reject(error));
@@ -487,8 +614,10 @@ async function buildWithRegistry(options, registry, npmEnv, goEnv, cleanup, iden
 	try {
 		await run("git", ["worktree", "add", "--detach", sourceWorktree, commit], { cwd: repoRoot });
 		worktreeAdded = true;
+		const snapshot = await applySourceSnapshot(sourceWorktree, options, workDir);
 		const goMod = await readFile(path.join(sourceWorktree, "backend/go.mod"), "utf8");
-		const multicaPin = parseMulticaPin(goMod);
+		const matched = options.multicaInput ? await stageMatchedMultica(options.multicaInput, options.multicaInputSha256, workDir, goMod) : undefined;
+		const multicaPin = matched ? undefined : parseMulticaPin(goMod);
 		const frontendDir = path.join(sourceWorktree, "frontend");
 		const prerequisites = packagingSteps(JSON.parse(await readFile(path.join(frontendDir, "package.json"), "utf8")));
 		const productUiDir = path.join(sourceWorktree, "packages/product-ui");
@@ -497,27 +626,27 @@ async function buildWithRegistry(options, registry, npmEnv, goEnv, cleanup, iden
 		await run("npm", ["ci", "--ignore-scripts", "--registry", registry, "--replace-registry-host", npmEnv.npm_config_replace_registry_host], { cwd: frontendDir, env: npmEnv });
 		await run("npm", ["ci", "--ignore-scripts", "--registry", registry, "--replace-registry-host", npmEnv.npm_config_replace_registry_host], { cwd: productUiDir, env: npmEnv });
 		const licenseDir = await seedAgentBrowserLicenses(workDir, npmEnv, frontendDir);
-		await run("git", ["clone", "--filter=blob:none", "--no-checkout", `https://${multicaPin.repository}.git`, multicaDir], { cwd: workDir });
-		await run("git", ["-C", multicaDir, "checkout", "--detach", multicaPin.shortRevision]);
-		await checkMulticaConfiguration(multicaDir, registry);
-		await prepareRegistry(multicaDir, registry, true);
-		const pnpmEnv = registry === defaultRegistry ? { ...npmEnv, ...corepackEnv } : npmEnv;
-		const pnpmCommand = "corepack";
-		await run(pnpmCommand, ["pnpm@10.28.2", "--ignore-pnpmfile", "install", "--frozen-lockfile", "--ignore-scripts", "--filter", "@multica/desktop...", `--registry=${registry}`], {
-			cwd: multicaDir,
-			env: pnpmEnv,
-		});
-		await run(pnpmCommand, ["pnpm@10.28.2", "--config.ignore-pnpmfile=true", "--filter", "@multica/desktop", "exec", "electron-vite", "build"], {
-			cwd: multicaDir,
-			env: npmEnv,
-		});
-		const multicaRevision = await capture("git", ["-C", multicaDir, "rev-parse", "HEAD"]);
-		if (!multicaRevision.startsWith(multicaPin.shortRevision)) throw new Error("Multica checkout does not match backend/go.mod pin");
-		const multicaOut = path.join(multicaDir, "apps/desktop/out");
+		let multicaRevision, multicaOut;
+		if (matched) {
+			multicaRevision = matched.provenance.source.tree;
+			multicaOut = matched.desktop;
+		} else {
+			await run("git", ["clone", "--filter=blob:none", "--no-checkout", `https://${multicaPin.repository}.git`, multicaDir], { cwd: workDir });
+			await run("git", ["-C", multicaDir, "checkout", "--detach", multicaPin.shortRevision]);
+			await checkMulticaConfiguration(multicaDir, registry);
+			await prepareRegistry(multicaDir, registry, true);
+			const pnpmEnv = registry === defaultRegistry ? { ...npmEnv, ...corepackEnv } : npmEnv;
+			await run("corepack", ["pnpm@10.28.2", "--ignore-pnpmfile", "install", "--frozen-lockfile", "--ignore-scripts", "--filter", "@multica/desktop...", `--registry=${registry}`], { cwd: multicaDir, env: pnpmEnv });
+			await run("corepack", ["pnpm@10.28.2", "--config.ignore-pnpmfile=true", "--filter", "@multica/desktop", "exec", "electron-vite", "build"], { cwd: multicaDir, env: npmEnv });
+			multicaRevision = await capture("git", ["-C", multicaDir, "rev-parse", "HEAD"]);
+			if (!multicaRevision.startsWith(multicaPin.shortRevision)) throw new Error("Multica checkout does not match backend/go.mod pin");
+			multicaOut = path.join(multicaDir, "apps/desktop/out");
+		}
 		const buildEnv = {
-			...npmEnv,
+			...(matched ? matchedBuildEnv(matched, npmEnv) : npmEnv),
 			CGO_ENABLED: goEnv.CGO_ENABLED,
 			AO_MULTICA_DESKTOP_OUT: multicaOut,
+			AO_BUILD_SOURCE_REVISION: snapshot ? `tree-${sourceRevision}` : undefined,
 			AO_RELEASE_REPO: "amolodyh-hyland/agent-orchestrator",
 			AO_SCRATCH_SWIFT_CACHE: path.join(workDir, "swift-cache"),
 			AO_AGENT_BROWSER_LICENSE_DIR: licenseDir,
@@ -531,6 +660,14 @@ async function buildWithRegistry(options, registry, npmEnv, goEnv, cleanup, iden
 		const forgeBin = path.join(frontendDir, "node_modules/.bin/electron-forge");
 		await run(forgeBin, ["package", "--platform=darwin", "--arch=arm64"], { cwd: frontendDir, env: buildEnv });
 		cleanup();
+		if (matched) {
+			await verifiedBytes(matched.modfile, matched.provenance.stagedModfileSha256, "Staged backend modfile");
+			await verifiedBytes(path.join(workDir, "matched.sum"), matched.provenance.sumfile.sha256, "Staged backend sumfile");
+			await verifiedBytes(matched.cli, matched.provenance.cli.sha256, "Staged Multica CLI");
+			for (const name of ["server", "desktop", "notices"]) {
+				if (await exportedSourceTree(matched[name]) !== matched.provenance[name].tree) throw new Error(`Staged Multica ${name} changed during the build`);
+			}
+		}
 		const packagedApp = await findAppBundle(forgeOut);
 		if (!packagedApp) throw new Error(`electron-forge did not create ${appName} in ${forgeOut}`);
 		const resources = path.join(packagedApp, "Contents/Resources");
@@ -540,26 +677,39 @@ async function buildWithRegistry(options, registry, npmEnv, goEnv, cleanup, iden
 		}
 		const infoPlist = path.join(packagedApp, "Contents/Info.plist");
 		const databaseSchema = parseDatabaseSchema(sourceWorktree);
-		await plistSet(infoPlist, "NoetaxisSourceRevision", commit);
+		await plistSet(infoPlist, "NoetaxisSourceRevision", sourceRevision);
 		await plistSet(infoPlist, "NoetaxisBuildRef", commit);
+		if (snapshot) {
+			await plistSet(infoPlist, "NoetaxisSourceKind", snapshot.kind);
+			await plistSet(infoPlist, "NoetaxisSourceTree", snapshot.tree);
+			await plistSet(infoPlist, "NoetaxisSourcePatchSHA256", snapshot.patchSha256);
+		}
 		await plistSet(infoPlist, "NoetaxisDatabaseSchema", String(databaseSchema));
 		await plistSet(infoPlist, "NoetaxisMulticaRevision", multicaRevision);
 		if (await plistRead(infoPlist, "CFBundleShortVersionString") !== version || await plistRead(infoPlist, "CFBundleVersion") !== version) {
 			throw new Error("Packaged app does not contain the requested version stamp");
 		}
-		const dictationHelper = path.join(resources, "dictation-helper", "ao-dictation");
-		await run("/usr/bin/codesign", ["--force", "--sign", identity, "--timestamp=none", "--entitlements", path.join(frontendDir, "native/dictation/entitlements.plist"), dictationHelper]);
+		const dictationBundle = path.join(resources, "dictation-helper", "Orchestrator.app");
+		const dictationHelper = path.join(dictationBundle, "Contents", "MacOS", "Orchestrator");
+		if (!(await lstat(dictationHelper)).isFile()) throw new Error("Packaged dictation helper app executable is missing");
+		const dictationEntitlements = path.join(frontendDir, "native/dictation/entitlements.plist");
+		await run("/usr/bin/codesign", ["--force", "--sign", identity, "--timestamp=none", "--entitlements", dictationEntitlements, dictationBundle]);
+		await run("/usr/bin/codesign", ["--verify", "--deep", "--strict", dictationBundle]);
 		await run("/usr/bin/codesign", ["--force", "--deep", "--preserve-metadata=entitlements", "--sign", identity, "--timestamp=none", packagedApp]);
 		await run("/usr/bin/codesign", ["--verify", "--deep", "--strict", packagedApp]);
 		await clearQuarantine(packagedApp);
 		const outputApp = path.join(outputDir, "Applications", "Agent Orchestrator.app");
 		await mkdir(path.dirname(outputApp), { recursive: true });
 		await cp(packagedApp, outputApp, { recursive: true, preserveTimestamps: true, verbatimSymlinks: true });
-		const packaged = await buildPackages({ appPath: outputApp, outputDir, version, revision: commit });
+		const packaged = await buildPackages({ appPath: outputApp, outputDir, version, revision: sourceRevision });
+		const provenance = { ao: { baseRevision: commit, revision: sourceRevision, ...(snapshot || { kind: "commit" }) }, multica: matched?.provenance || { kind: "commit", revision: multicaRevision } };
+		await writeFile(path.join(outputDir, "SOURCE-PROVENANCE.json"), `${JSON.stringify(provenance, null, 2)}\n`, { mode: 0o600 });
 		const buildInfo = [
 			`Version: ${version}`,
-			`AO source revision: ${commit}`,
-			`Multica source revision: ${multicaRevision}`,
+			`AO source revision: ${sourceRevision}${snapshot ? " (staged Git tree, not a commit)" : ""}`,
+			`AO base revision: ${commit}`,
+			...(snapshot ? [`AO source tree: ${snapshot.tree}`, `AO overlay SHA-256: ${snapshot.patchSha256}`] : []),
+			`Multica source revision: ${multicaRevision}${matched ? " (exported source tree)" : ""}`,
 			`Database schema: ${databaseSchema}`,
 			`Registry: ${new URL(registry).host}`,
 			`Signature: ${identity === "-" ? "ad-hoc" : identity}; not notarized`,
@@ -576,9 +726,9 @@ async function buildWithRegistry(options, registry, npmEnv, goEnv, cleanup, iden
 		await writeArtifactChecksums(outputDir);
 		console.log(`Build complete: ${outputDir}`);
 		console.log(`Version: ${version}`);
-		console.log(`AO revision: ${commit}`);
+		console.log(`AO revision: ${sourceRevision}${snapshot ? " (staged tree)" : ""}; base: ${commit}`);
 		console.log(`Multica revision: ${multicaRevision}`);
-		return { outputDir, appPath: outputApp, version, commit, multicaRevision };
+		return { outputDir, appPath: outputApp, version, commit, sourceRevision, multicaRevision };
 	} finally {
 		if (worktreeAdded) {
 			const remove = await commandResult("git", ["worktree", "remove", "--force", sourceWorktree], { cwd: repoRoot, stdio: "ignore" });

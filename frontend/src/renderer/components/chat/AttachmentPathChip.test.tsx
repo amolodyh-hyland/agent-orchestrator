@@ -10,6 +10,14 @@ afterEach(() => vi.restoreAllMocks());
 const path = "/Users/me/Project Files/";
 
 describe("attachment path chip", () => {
+	it("offers edit-time removal while retaining the native path chip", async () => {
+		const remove = vi.fn();
+		render(<AttachmentPathChip path={path} folder onRemove={remove} />);
+		await userEvent.click(screen.getByRole("button", { name: "Remove Project Files" }));
+		expect(remove).toHaveBeenCalledOnce();
+		expect(screen.getByRole("button", { name: path })).toHaveAttribute("title", path);
+	});
+
 	it.each([
 		[path, "Project Files"],
 		["C:\\Users\\me\\Project Files\\", "Project Files"],

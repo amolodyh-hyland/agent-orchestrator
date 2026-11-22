@@ -30,6 +30,7 @@ type Store interface {
 	SetVersionRefresh(ctx context.Context, enabled bool, now time.Time) error
 	SetComputerUse(ctx context.Context, enabled bool, now time.Time) error
 	SetSessionRetentionDays(ctx context.Context, days int, now time.Time) error
+	SetAccountHandoff(ctx context.Context, enabled bool, now time.Time) error
 }
 
 // Snapshot is the current preference set.
@@ -48,6 +49,7 @@ type Snapshot struct {
 	// released is kept before the daemon deletes it (Settings, General). 0, the
 	// default, keeps it.
 	SessionRetentionDays int
+	AccountHandoff       bool
 	UpdatedAt            time.Time
 }
 
@@ -139,6 +141,20 @@ func (s *Service) Get(ctx context.Context) (Snapshot, error) {
 		s.cacheVersionRefresh(snapshot.VersionRefresh)
 	}
 	return snapshot, err
+}
+
+// AccountHandoffEnabled reports the "Move to another account at a usage limit" setting.
+func (s *Service) AccountHandoffEnabled(ctx context.Context) bool {
+	snapshot, err := s.store.GetAppSettings(ctx)
+	return err == nil && snapshot.AccountHandoff
+}
+
+// SetAccountHandoff turns the usage-limit account handoff on or off.
+func (s *Service) SetAccountHandoff(ctx context.Context, enabled bool) (Snapshot, error) {
+	if err := s.store.SetAccountHandoff(ctx, enabled, s.now()); err != nil {
+		return Snapshot{}, err
+	}
+	return s.Get(ctx)
 }
 
 // AgentAssetSources reads global launch defaults from the durable preference row.

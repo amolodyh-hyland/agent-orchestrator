@@ -12,17 +12,39 @@ function setup(props = { disabled: false, scope: "one", locale: "en" }) {
 		onEvent: (callback) => { listener = callback; return unsubscribe; },
 	};
 	const insert = vi.fn();
-	const view = renderHook((input) => useDictation({ ...input, onTranscript: insert, bridge }), { initialProps: props });
+	const partial = vi.fn();
+	const finish = vi.fn();
+	const view = renderHook((input) => useDictation({ ...input, onTranscript: insert, onPartialTranscript: partial, onTranscriptEnd: finish, bridge }), { initialProps: props });
 	const start = async () => {
 		await waitFor(() => expect(view.result.current.availability.available).toBe(true));
 		await act(() => view.result.current.start());
 		return vi.mocked(bridge.start).mock.calls.at(-1)![0];
 	};
 	const emit = (event: DictationUpdate) => act(() => listener(event));
-	return { ...view, bridge, insert, start, emit, unsubscribe };
+	return { ...view, bridge, insert, partial, finish, start, emit, unsubscribe };
 }
 
 describe("composer dictation state", () => {
+	it("keeps streaming text and levels nonterminal and ignores other request IDs", async () => {
+		const s = setup();
+		const id = await s.start();
+		s.emit({ id, type: "recording" });
+		s.emit({ id, type: "text", text: "first wording" });
+		s.emit({ id, type: "levels", values: [0.6, 0.8] });
+		s.emit({ id: "other", type: "text", text: "wrong draft" });
+		expect(s.result.current.phase).toBe("recording");
+		expect(s.result.current.isActive()).toBe(true);
+		expect(s.partial).toHaveBeenCalledExactlyOnceWith("first wording");
+		expect(s.insert).not.toHaveBeenCalled();
+		expect(s.finish).not.toHaveBeenCalled();
+		s.emit({ id, type: "capture-stopped" });
+		s.emit({ id, type: "text", text: "final revision" });
+		expect(s.result.current.phase).toBe("finishing");
+		s.emit({ id, type: "result", text: "final revision" });
+		expect(s.insert).toHaveBeenCalledExactlyOnceWith("final revision");
+		expect(s.finish).toHaveBeenCalledExactlyOnceWith(true);
+	});
+
 	it("waits for recording, stops once, inserts a final transcript once", async () => {
 		const s = setup();
 		const id = await s.start();

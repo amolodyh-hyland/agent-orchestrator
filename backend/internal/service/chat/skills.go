@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -19,6 +21,8 @@ import (
 
 // ErrSkillsUnsupported distinguishes unavailable listing from an empty catalog.
 var ErrSkillsUnsupported = errors.New("chat driver cannot list skills")
+
+const skillsListTimeout = 8 * time.Second
 
 func skillError(reason string) error {
 	return &apierr.Error{Kind: apierr.KindConflict, Code: "CHAT_SKILL_UNAVAILABLE", Message: reason}
@@ -128,6 +132,8 @@ func (c *Controller) loadSkillCatalogLocked(ctx context.Context, reload bool, re
 		out.NextAction = "start_successor_session"
 		return out, nil
 	}
+	listCtx, cancel := context.WithTimeout(ctx, skillsListTimeout)
+	defer cancel()
 	var native []ports.ChatSkill
 	switch {
 	case !supported:
@@ -137,9 +143,9 @@ func (c *Controller) loadSkillCatalogLocked(ctx context.Context, reload bool, re
 		out.Status = "unsupported_provider"
 		out.ReasonCode = "reload_unsupported"
 	case reload:
-		native, err = reloader.ReloadSkills(ctx)
+		native, err = reloader.ReloadSkills(listCtx)
 	default:
-		native, err = lister.ListSkills(ctx)
+		native, err = lister.ListSkills(listCtx)
 	}
 	if err != nil {
 		if errors.Is(err, ports.ErrChatSkillsNotReady) {
@@ -157,6 +163,8 @@ func (c *Controller) loadSkillCatalogLocked(ctx context.Context, reload bool, re
 	if !c.skillIsCurrent(ctx) {
 		return ports.ChatSkillCatalog{}, skillError("stale_controller")
 	}
+	home, _ := os.UserHomeDir()
+	native = withSkillMetadata(native, skillRoots(c.workspacePath, home))
 	for i, row := range native {
 		row.TrustState = "native_unverified"
 		row.Scope = row.Source

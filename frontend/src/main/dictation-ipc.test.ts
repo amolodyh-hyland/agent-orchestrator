@@ -30,6 +30,9 @@ describe("dictation ownership and native boundary", () => {
 		const s = setup();
 		expect(s.command("start")).toEqual({});
 		s.engines[0].emit({ type: "recording" });
+		s.engines[0].emit({ type: "levels", values: [0.5] });
+		s.engines[0].emit({ type: "text", text: "draft" });
+		expect(s.engines[0].cancel).not.toHaveBeenCalled();
 		s.command("stop");
 		expect(s.engines[0].stop).toHaveBeenCalledOnce();
 		s.engines[0].emit({ type: "capture-stopped" });
@@ -40,7 +43,7 @@ describe("dictation ownership and native boundary", () => {
 		expect(s.owner.send).toHaveBeenLastCalledWith(DICTATION_EVENT_CHANNEL, { id: "one", type: "result", text: "draft only" });
 		expect(s.engines[0].cancel).toHaveBeenCalledOnce();
 		s.engines[0].emit({ type: "result", text: "late" });
-		expect(s.owner.send).toHaveBeenCalledTimes(3);
+		expect(s.owner.send).toHaveBeenCalledTimes(5);
 		expect(s.command("start", "two")).toEqual({});
 		s.dispose();
 	});
@@ -59,6 +62,20 @@ describe("dictation ownership and native boundary", () => {
 		expect(s.engines[1].cancel).toHaveBeenCalledOnce();
 	});
 
+	it("finishes capture on a trusted lifecycle stop without cancelling the final result", () => {
+		const s = setup();
+		s.command("start");
+		s.engines[0].emit({ type: "recording" });
+		s.dispose.stop();
+		expect(s.engines[0].stop).toHaveBeenCalledOnce();
+		expect(s.engines[0].cancel).not.toHaveBeenCalled();
+		s.engines[0].emit({ type: "capture-stopped" });
+		s.engines[0].emit({ type: "result", text: "kept after blur" });
+		expect(s.owner.send).toHaveBeenLastCalledWith(DICTATION_EVENT_CHANNEL, { id: "one", type: "result", text: "kept after blur" });
+		expect(s.engines[0].cancel).toHaveBeenCalledOnce();
+		s.dispose();
+	});
+
 	it.each(["destroyed", "render-process-gone", "did-start-navigation"])("cancels on %s and removes listeners", (name) => {
 		const s = setup();
 		s.command("start");
@@ -72,6 +89,7 @@ describe("dictation ownership and native boundary", () => {
 		expect(await s.command("availability")).toEqual({ available: true });
 		expect(() => s.invoke({ ...s.event, senderFrame: {} }, "start", "one", "en-US")).toThrow("Untrusted");
 		expect(() => s.invoke({ ...s.event, sender: { id: 99 } }, "start", "one", "en-US")).toThrow("Untrusted");
+		expect(() => s.command("unknown")).toThrow("Invalid dictation command");
 		expect(s.command("start", "one", "en; command")).toEqual({ error: "unavailable" });
 		s.command("start");
 		s.engines[1].emit({ type: "error", error: "permission" });

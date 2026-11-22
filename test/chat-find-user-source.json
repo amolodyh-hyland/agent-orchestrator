@@ -1,0 +1,77 @@
+[
+  {
+    "name": "inline code and literal Markdown",
+    "source": "😀 **literal** `needle` tail尾",
+    "text": "😀 **literal** `needle` tail尾"
+  },
+  {
+    "name": "fence remains a single raw block",
+    "source": "before\n```js\nneedle\n```\nafter",
+    "text": "before\n```js\nneedle\n```\nafter"
+  },
+  {
+    "name": "worker report suffix",
+    "source": "  needle尾\n\n<ao-worker-reports>\nprivate\n</ao-worker-reports>",
+    "text": "  needle尾"
+  },
+  {
+    "name": "non-trailing report is literal",
+    "source": "needle\n\n<ao-worker-reports>\nprivate\n</ao-worker-reports>\n",
+    "text": "needle\n\n<ao-worker-reports>\nprivate\n</ao-worker-reports>\n"
+  },
+  {
+    "name": "Attached files (read these files in the workspace)",
+    "source": "  needle尾\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-one.PNG\n- .ao/attachments/image-two.webp\n",
+    "text": "  needle尾"
+  },
+  {
+    "name": "Attached files (read these files in the workspace for context)",
+    "source": "  needle尾\n\nAttached files (read these files in the workspace for context):\n- .ao/attachments/attachment-one.PNG\n- .ao/attachments/image-two.webp\n",
+    "text": "  needle尾"
+  },
+  {
+    "name": "Attached images (read these files in the workspace for visual context)",
+    "source": "  needle尾\n\nAttached images (read these files in the workspace for visual context):\n- .ao/attachments/attachment-one.PNG\n- .ao/attachments/image-two.webp\n",
+    "text": "  needle尾"
+  },
+  {
+    "name": "retained absolute folder suffix",
+    "source": "\n\nAttached files (read these files in the workspace):\n- /Users/me/Folder",
+    "text": "\n\nAttached files (read these files in the workspace):\n- /Users/me/Folder"
+  },
+  {
+    "name": "retained nonstaged suffix",
+    "source": "needle\n\nAttached files (read these files in the workspace):\n- notes.txt",
+    "text": "needle\n\nAttached files (read these files in the workspace):\n- notes.txt"
+  },
+  {
+    "name": "extra blank line prevents suffix cleanup",
+    "source": "needle\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-one.pdf\n\n",
+    "text": "needle\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-one.pdf\n\n"
+  },
+  {
+    "name": "inline images preserve surrounding whitespace",
+    "source": "😀 before .ao/attachments/image-one.PNG  after尾",
+    "text": "😀 before   after尾"
+  },
+  {
+    "name": "bounded image paths",
+    "source": "/.ao/attachments/image-one.png .ao/attachments/image-two.pngSuffix .ao/attachments/image-three.PNG",
+    "text": "/.ao/attachments/image-one.png .ao/attachments/image-two.pngSuffix "
+  },
+  {
+    "name": "prefix is case sensitive",
+    "source": ".AO/attachments/image-one.png .ao/ATTACHMENTS/image-two.png .ao/attachments/IMAGE-three.png .ao/attachments/image-four.PnG",
+    "text": ".AO/attachments/image-one.png .ao/ATTACHMENTS/image-two.png .ao/attachments/IMAGE-three.png "
+  },
+  {
+    "name": "cloud literal stays literal",
+    "source": "needle ao-cloud-attachment://id/name.png",
+    "text": "needle ao-cloud-attachment://id/name.png"
+  },
+  {
+    "name": "combined filters",
+    "source": "😀 .ao/attachments/image-one.png needle\n\nAttached files (read these files in the workspace):\n- .ao/attachments/image-one.png\n\n<ao-worker-reports>\nprivate\n</ao-worker-reports>",
+    "text": "😀  needle"
+  }
+]

@@ -501,7 +501,7 @@ describe("ProjectSettingsForm", () => {
 		expect(repoLink).toHaveAttribute("href", "https://github.com/acme/project-one");
 	});
 
-	it("saves Codex effort from the combined default model picker", async () => {
+	it("saves Codex effort from the effort chip beside the model picker", async () => {
 		getMock.mockImplementation(async (path: string) => {
 			if (path === "/api/v1/agents") return agentCatalogResponse;
 			if (path === "/api/v1/agents/{agent}/models") return { data: {
@@ -518,10 +518,11 @@ describe("ProjectSettingsForm", () => {
 		});
 		renderSettings("proj-1", undefined, "agents");
 		const picker = await screen.findByRole("button", { name: "Worker model" });
-		await waitFor(() => expect(picker).toHaveTextContent("GPT Test · High"));
-		expect(screen.queryByRole("button", { name: "Worker Effort" })).not.toBeInTheDocument();
-		await userEvent.click(picker);
-		await userEvent.click(screen.getByRole("menuitem", { name: /Reasoning effort/ }));
+		await waitFor(() => expect(picker).toHaveTextContent("GPT Test"));
+		expect(picker).not.toHaveTextContent("High");
+		const effort = screen.getByRole("button", { name: "Worker Effort" });
+		expect(effort).toHaveTextContent("High");
+		await userEvent.click(effort);
 		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
 		submitSettings();
 		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
@@ -530,7 +531,7 @@ describe("ProjectSettingsForm", () => {
 		);
 	});
 
-	it("saves Claude effort from the combined model picker", async () => {
+	it("saves Claude effort from the effort chip beside the model picker", async () => {
 		getMock.mockImplementation(async (path: string) => {
 			if (path === "/api/v1/agents") return agentCatalogResponse;
 			if (path === "/api/v1/agents/{agent}/models") return { data: {
@@ -547,17 +548,75 @@ describe("ProjectSettingsForm", () => {
 		});
 		renderSettings("proj-1", undefined, "agents");
 		const picker = await screen.findByRole("button", { name: "Worker model" });
-		await waitFor(() => expect(picker).toHaveTextContent("Opus · Medium"));
+		await waitFor(() => expect(picker).toHaveTextContent("Opus"));
 		expect(picker).not.toHaveTextContent("Claude");
+		expect(picker).not.toHaveTextContent("Medium");
 		await userEvent.click(picker);
 		expect(screen.getByRole("menuitem", { name: "Opus" })).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("menuitem", { name: /Reasoning effort/ }));
+		expect(screen.queryByRole("menuitem", { name: /Reasoning effort/ })).not.toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		const effort = screen.getByRole("button", { name: "Worker Effort" });
+		expect(effort).toHaveTextContent("Medium");
+		await userEvent.click(effort);
 		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
 		submitSettings();
 		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
 		expect(putMock.mock.calls[0][1].body.config.worker.agentConfig).toEqual(
 			expect.objectContaining({ model: "claude-opus", effort: "high" }),
 		);
+	});
+
+	it("keeps a saved effort the model no longer lists visible and clearable", async () => {
+		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents") return agentCatalogResponse;
+			if (path === "/api/v1/agents/{agent}/models") return { data: {
+				agent: "claude-code", selectionMode: "catalog", allowCustom: false,
+				models: [{ id: "claude-haiku", label: "Claude Haiku", isDefault: true, efforts: [] }],
+			} };
+			return { data: { status: "ok", project: {
+				id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+				repo: "", defaultBranch: "main", config: {
+					worker: { agent: "claude-code", agentConfig: { model: "claude-haiku", effort: "max" } },
+					orchestrator: { agent: "codex" },
+				},
+			} } };
+		});
+		renderSettings("proj-1", undefined, "agents");
+		await screen.findByText(/Worker model tuning is no longer supported/);
+		const effort = screen.getByRole("button", { name: "Worker Effort" });
+		expect(effort).toHaveTextContent("Max");
+		await userEvent.click(effort);
+		expect(screen.getByRole("menuitem", { name: "Max (unavailable)" })).toHaveAttribute("aria-disabled", "true");
+		await userEvent.click(screen.getByRole("menuitem", { name: "Clear effort" }));
+		await waitFor(() => expect(screen.queryByText(/Worker model tuning is no longer supported/)).not.toBeInTheDocument());
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock.mock.calls[0][1].body.config.worker.agentConfig?.effort).toBeUndefined();
+	});
+
+	it("keeps a saved effort as current when the listed model reports no efforts", async () => {
+		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents") return agentCatalogResponse;
+			if (path === "/api/v1/agents/{agent}/models") return { data: {
+				agent: "claude-code", selectionMode: "catalog", allowCustom: false,
+				models: [{ id: "claude-haiku", label: "Claude Haiku", isDefault: true }],
+			} };
+			return { data: { status: "ok", project: {
+				id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+				repo: "", defaultBranch: "main", config: {
+					worker: { agent: "claude-code", agentConfig: { model: "claude-haiku", effort: "max" } },
+					orchestrator: { agent: "codex" },
+				},
+			} } };
+		});
+		renderSettings("proj-1", undefined, "agents");
+		await waitFor(() => expect(screen.getByRole("button", { name: "Worker model" })).toHaveTextContent("Haiku"));
+		expect(screen.queryByText(/Worker model tuning is no longer supported/)).not.toBeInTheDocument();
+		const effort = screen.getByRole("button", { name: "Worker Effort" });
+		expect(effort).toHaveTextContent("Max");
+		await userEvent.click(effort);
+		expect(screen.getByRole("menuitem", { name: "Current effort: Max" })).toHaveAttribute("aria-disabled", "true");
+		expect(screen.queryByRole("menuitem", { name: "Max (unavailable)" })).not.toBeInTheDocument();
 	});
 
 	it("shows Claude's permission setting and preserves saved permission modes", async () => {
@@ -570,7 +629,7 @@ describe("ProjectSettingsForm", () => {
 		});
 		renderSettings("proj-1", undefined, "agents");
 		const worker = await screen.findByRole("button", { name: "Worker approval" });
-		const orchestrator = screen.getByRole("button", { name: "Orchestrator approval" });
+		const orchestrator = screen.getByRole("button", { name: "Orchestrator agent approval" });
 		// Codex's default no longer means full access, so a saved default must not
 		// read as Bypass permissions.
 		expect(worker).toHaveTextContent("Codex defaults (no override)");
@@ -634,7 +693,7 @@ describe("ProjectSettingsForm", () => {
 		const toggle = await screen.findByRole("switch", { name: "Step down if rejected (Worker approval)" });
 		expect(toggle).toBeChecked();
 		// Claude has no permission ladder to step down, and the read-only reviewer never steps down.
-		expect(screen.queryByRole("switch", { name: "Step down if rejected (Orchestrator approval)" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("switch", { name: "Step down if rejected (Orchestrator agent approval)" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("switch", { name: /Reviewer approval/ })).not.toBeInTheDocument();
 		// The helper text states the safety rules.
 		expect(screen.getByRole("button", { name: /only steps down, never up.*never bypasses managed policy/ })).toBeInTheDocument();
@@ -738,7 +797,7 @@ describe("ProjectSettingsForm", () => {
 		});
 		renderSettings("proj-1", undefined, "agents");
 		expect(await screen.findByRole("switch", { name: "Step down if rejected (Worker approval)" })).not.toBeChecked();
-		expect(screen.getByRole("switch", { name: "Step down if rejected (Orchestrator approval)" })).not.toBeChecked();
+		expect(screen.getByRole("switch", { name: "Step down if rejected (Orchestrator agent approval)" })).not.toBeChecked();
 		submitSettings();
 		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
 		const config = putMock.mock.calls[0][1].body.config;
@@ -801,6 +860,87 @@ describe("ProjectSettingsForm", () => {
 		});
 		renderSettings("proj-1", undefined, "agents");
 		expect(await screen.findByRole("button", { name: "Worker mode" })).toHaveTextContent("Low");
+	});
+
+	function mockAmpWorker(agentConfig: Record<string, string>, models: Array<{ id: string; label: string; isDefault?: boolean }>) {
+		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents" || path === "/api/v1/agents/readiness") return agentCatalogResponse;
+			if (path === "/api/v1/agents/{agent}/models") return { data: { agentId: "amp", selectionMode: "mode", models } };
+			return { data: { status: "ok", project: {
+				id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+				repo: "", defaultBranch: "main", config: {
+					worker: { agent: "amp", agentConfig },
+					orchestrator: { agent: "claude-code" },
+				},
+			} } };
+		});
+	}
+
+	it("shows Amp's model as Auto and saves its marked mode as unset", async () => {
+		mockAmpWorker({ mode: "high", model: "stale-model" }, [
+			{ id: "low", label: "Low", isDefault: true },
+			{ id: "high", label: "High" },
+		]);
+		renderSettings("proj-1", undefined, "agents");
+		const mode = await screen.findByRole("button", { name: "Worker mode" });
+		expect(mode).toHaveTextContent("High");
+		expect(mode.parentElement).toHaveTextContent(/^Auto/);
+		await userEvent.click(mode);
+		expect(screen.getAllByRole("menuitemradio").map((item) => item.textContent)).toEqual(["Low", "High"]);
+		expect(screen.queryByRole("menuitem", { name: "Use agent mode" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		const saved = putMock.mock.calls[0][1].body.config.worker.agentConfig;
+		expect(saved?.mode).toBeUndefined();
+		expect(saved?.model).toBeUndefined();
+	});
+
+	it("names Amp's own default when no mode is marked and can return to it", async () => {
+		mockAmpWorker({ mode: "high" }, [
+			{ id: "low", label: "Low" },
+			{ id: "high", label: "High" },
+		]);
+		renderSettings("proj-1", undefined, "agents");
+		const mode = await screen.findByRole("button", { name: "Worker mode" });
+		expect(mode).toHaveTextContent("High");
+		await userEvent.click(mode);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Use agent mode" }));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Worker mode" })).toHaveTextContent("Agent default"));
+		await userEvent.click(screen.getByRole("button", { name: "Worker mode" }));
+		expect(screen.getByRole("menuitemradio", { name: "Low" })).toHaveAttribute("aria-checked", "false");
+		expect(screen.getByRole("menuitemradio", { name: "High" })).toHaveAttribute("aria-checked", "false");
+		expect(screen.queryByRole("menuitem", { name: "Use agent mode" })).not.toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock.mock.calls[0][1].body.config.worker.agentConfig?.mode).toBeUndefined();
+	});
+
+	it("keeps a Cursor model's effort inside the model menu", async () => {
+		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents" || path === "/api/v1/agents/readiness") return agentCatalogResponse;
+			if (path === "/api/v1/agents/{agent}/models") return { data: {
+				agent: "cursor", selectionMode: "catalog", allowCustom: false,
+				models: [
+					{ id: "claude-opus-4-8-high", label: "Claude Opus 4.8 High", isDefault: true },
+					{ id: "claude-opus-4-8-low", label: "Claude Opus 4.8 Low" },
+				],
+			} };
+			return { data: { status: "ok", project: {
+				id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+				repo: "", defaultBranch: "main", config: {
+					worker: { agent: "cursor", agentConfig: { model: "claude-opus-4-8-high" } },
+					orchestrator: { agent: "claude-code" },
+				},
+			} } };
+		});
+		renderSettings("proj-1", undefined, "agents");
+		const picker = await screen.findByRole("button", { name: "Worker model" });
+		await waitFor(() => expect(picker).toBeEnabled());
+		expect(screen.queryByRole("button", { name: "Worker Effort" })).not.toBeInTheDocument();
+		await userEvent.click(picker);
+		expect(screen.getByRole("menuitem", { name: /Reasoning effort/ })).toBeInTheDocument();
 	});
 
 	it("loads agents fields and saves without dropping hidden workflow config", async () => {
@@ -953,7 +1093,7 @@ describe("ProjectSettingsForm", () => {
 
 		renderSettings("proj-1", undefined, "general");
 
-		const toggle = await screen.findByRole("switch", { name: "Workers request AO review" });
+		const toggle = await screen.findByRole("switch", { name: "Workers request a built-in review" });
 		expect(toggle).not.toBeChecked();
 
 		await userEvent.click(toggle);

@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
 import { useSessionLinkNavigation } from "./use-session-link-navigation";
+import { SessionPanePreviewContext } from "./session-pane-preview";
 
 const mocks = vi.hoisted(() => ({ navigate: vi.fn(), workspace: vi.fn(), cloudProjects: vi.fn(), cloudSessions: vi.fn() }));
 vi.mock("./navigate-to-session", () => ({ useNavigateToSession: () => mocks.navigate }));
@@ -99,6 +100,30 @@ describe("useSessionLinkNavigation", () => {
 			source: "artifact",
 		}));
 		expect(useUiStore.getState().globalToasts).toEqual([]);
+	});
+
+	it("opens another session's artifact in the current pane without changing conversation or leaving a navigation request", () => {
+		const open = vi.fn();
+		useUiStore.setState({ workspaceFileOpenRequest: null });
+		const wrapper = ({ children }: { children: ReactNode }) => <SessionPanePreviewContext.Provider value={open}>{children}</SessionPanePreviewContext.Provider>;
+		const { result } = renderHook(() => useSessionLinkNavigation(), { wrapper });
+		act(() => expect(result.current("ao://sessions/project/terminated/artifacts/plans/my%20plan.md")).toBe(true));
+		expect(open).toHaveBeenCalledWith({ projectId: "project", sessionId: "terminated", path: "plans/my plan.md", hostId: undefined, sourceKind: undefined });
+		expect(mocks.navigate).not.toHaveBeenCalled();
+		expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
+		act(() => result.current("ao://sessions/other-project/other-session"));
+		expect(mocks.navigate).toHaveBeenCalledWith("other-project", "other-session");
+	});
+
+	it("keeps the source host when borrowing a remote artifact with a colliding local session ID", () => {
+		const open = vi.fn();
+		const client = new QueryClient();
+		client.setQueryData(["remote-workspaces", "box-a"], [{ id: "project", sessions: [{ id: "session" }] }]);
+		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}><SessionPanePreviewContext.Provider value={open}>{children}</SessionPanePreviewContext.Provider></QueryClientProvider>;
+		const { result } = renderHook(() => useSessionLinkNavigation("box-a"), { wrapper });
+		act(() => result.current("ao://sessions/project/session/artifacts/report.html"));
+		expect(open).toHaveBeenCalledWith(expect.objectContaining({ hostId: "box-a", sessionId: "session", path: "report.html" }));
+		expect(mocks.navigate).not.toHaveBeenCalled();
 	});
 
 	it.each([

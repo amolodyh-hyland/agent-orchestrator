@@ -2,7 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useOuterView } from "../hooks/useOuter";
 import { setOuterTerminalAuthority } from "../lib/outer-terminal";
 import { OuterNativeButton } from "./OuterNativeButton";
-import { RotateCcw } from "lucide-react";
+import { RotateCcw } from "@/components/app-icons";
 import {
 	createContext,
 	lazy,
@@ -65,6 +65,8 @@ export function preloadXtermTerminal(): void {
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
 import { rememberPaneTerminalGrid } from "../lib/terminal-grid-hint";
 import { Button } from "./ui/button";
+import { EndedShellTerminal } from "./EndedShellTerminal";
+import type { HostId } from "../lib/hosts";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { captureRendererException } from "../lib/telemetry";
 
@@ -686,6 +688,7 @@ export function TerminalCacheProvider({
 			const shell = shells.get(entry.handleId);
 			if (
 				!shell ||
+				shell.endedAt ||
 				shell.createdAt !== entry.generation ||
 				shell.sessionId !== entry.sessionId
 			) {
@@ -823,6 +826,12 @@ export function TerminalPane({
 			: ({ kind: "worker" } satisfies TerminalTarget);
 	const isOptimisticShell =
 		terminalTarget.kind === "shell" && terminalTarget.handleId.startsWith("pending-shell:");
+	const shellHostId = session?.hostId as HostId | undefined;
+	const shellTerminalsQuery = useShellTerminals(shellHostId);
+	const endedShell =
+		terminalTarget.kind === "shell"
+			? shellTerminalsQuery.data?.find((shell) => shell.handleId === terminalTarget.handleId && shell.endedAt)
+			: undefined;
 	const cache = useContext(TerminalCacheContext);
 	// Subscribe to this session's terminal-reset nonce so a restore (which bumps
 	// it) re-renders the pane and recomputes the descriptor/mux key below, forcing
@@ -836,6 +845,9 @@ export function TerminalPane({
 			? terminalTarget.handleId
 			: `${session?.terminalHandleId ?? "empty"}:${session?.terminalGeneration ?? ""}`;
 
+	if (endedShell) {
+		return <EndedShellTerminal hostId={shellHostId} shell={endedShell} />;
+	}
 	if (!window.ao) {
 		// A standalone shell has no agent and no branch, so it previews as a plain
 		// prompt rather than borrowing the session's agent transcript.
@@ -1286,12 +1298,16 @@ function AttachedTerminal({
 				? undefined
 				: session?.provider;
 	const isSessionActive = session ? sessionIsActive(session) : false;
+	// A Cloud session shared from another organization is the sharer's to
+	// restore; a guest's restore would go to this machine's daemon.
+	const sharedCloudSession = session?.cloud?.shared === true;
 	// A standalone shell is never restorable: there is no session row to restore.
 	const canRestoreSession =
 		terminalTarget?.kind !== "reviewer" &&
 		terminalTarget?.kind !== "shell" &&
 		session !== undefined &&
-		!isSessionActive;
+		!isSessionActive &&
+		!sharedCloudSession;
 
 	const handleReady = useCallback((handle: AttachableTerminal) => {
 		setTerminal(handle);
@@ -1440,12 +1456,13 @@ function AttachedTerminal({
 	if (hasVisibleContent || state === "exited" || state === "error") switchingHeldRef.current = undefined;
 	const coverLabel = switchingLabel ?? switchingHeldRef.current;
 	const switchingCover = Boolean(coverLabel) && !hasVisibleContent && state !== "exited" && state !== "error";
-	// A Cloud session's terminated row is explained by the session view's own
-	// Cloud notice, and its socket also closes for a pause, a handoff or a
-	// reviewer whose verdict is still landing, so the strip shows there only
-	// for the exit the control plane recorded: the agent process gone in a
-	// live session.
-	const cloudEnded = Boolean(session?.cloud) && terminalTarget?.kind !== "reviewer" && terminalTarget?.kind !== "shell" && sessionAgentExited(session);
+	// A Cloud session's socket also closes for a pause, a handoff or a reviewer
+	// whose verdict is still landing, so the strip shows there only for an end
+	// the control plane recorded: the agent process gone in a live session, or
+	// the session archived, which Restore brings back through the control plane
+	// as it does locally (for its own organization only: a guest gets no strip).
+	const cloudEnded = Boolean(session?.cloud) && terminalTarget?.kind !== "reviewer" && terminalTarget?.kind !== "shell" &&
+		(sessionAgentExited(session) || (!isSessionActive && !sharedCloudSession));
 	const showEndedState = showEndedStatePreview && (!session?.cloud || cloudEnded) && !isBoxComingUp && !booting && !coverLabel;
 
 	return (
@@ -1459,7 +1476,7 @@ function AttachedTerminal({
 			</div> : null}
 			{showEndedState && (
 				<TerminalEndedStrip
-					canRestore={canRestoreSession && !session?.cloud}
+					canRestore={canRestoreSession}
 					error={restoreError}
 					isRestoring={isRestoring}
 					onRestore={restoreSession}

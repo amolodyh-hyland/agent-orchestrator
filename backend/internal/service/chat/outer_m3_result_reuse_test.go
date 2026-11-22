@@ -227,14 +227,14 @@ func TestOuterM3ReviewResultRotatesThroughNotify(t *testing.T) {
 			submit(token, previousRun, 409)
 			submit(previousToken, previousRun, 409)
 			stale := domain.WithOuterCaller(ctx, previousCaller)
-			if _, err := f.st.UpdateReviewRunResult(stale, previousRun.ID, domain.ReviewRunComplete, domain.VerdictApproved, "exact head reviewed", "", false); !errors.Is(err, domain.ErrOuterHeld) {
+			if _, err := recordM3Result(stale, f.st, previousRun.ID, domain.ReviewRunCompleted, domain.VerdictApproved, "exact head reviewed", "", false); !errors.Is(err, domain.ErrOuterHeld) {
 				t.Fatal("already authenticated revoked context passed the final writer", err)
 			}
 		}
 		if i < 2 {
 			submit(token, run, 200)
 			stored, _, _ := f.st.GetReviewRun(ctx, run.ID)
-			if stored.Status != domain.ReviewRunComplete || stored.Verdict != domain.VerdictApproved || stored.AutoInjectReview {
+			if stored.Status != domain.ReviewRunCompleted || stored.Verdict != domain.VerdictApproved || stored.AutoInjectReview {
 				t.Fatal("Notify result was not recorded without feedback")
 			}
 		} else {
@@ -248,7 +248,7 @@ func TestOuterM3ReviewResultRotatesThroughNotify(t *testing.T) {
 			if _, err := f.st.AuthenticateOuterCaller(ctx, token); !errors.Is(err, domain.ErrOuterHeld) {
 				t.Fatal("cancelled result credential still authenticates", err)
 			}
-			if _, err := f.st.UpdateReviewRunResult(domain.WithOuterCaller(ctx, caller), run.ID, domain.ReviewRunComplete, domain.VerdictApproved, "late", "", false); !errors.Is(err, domain.ErrOuterHeld) {
+			if _, err := recordM3Result(domain.WithOuterCaller(ctx, caller), f.st, run.ID, domain.ReviewRunCompleted, domain.VerdictApproved, "late", "", false); !errors.Is(err, domain.ErrOuterHeld) {
 				t.Fatal("cancelled context passed final writer", err)
 			}
 			verifier := sha256.Sum256([]byte(token))

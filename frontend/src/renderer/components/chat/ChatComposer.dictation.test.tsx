@@ -11,11 +11,13 @@ import { toggleComposerDictation } from "../../lib/composer-shortcuts";
 
 let emit: (event: DictationUpdate) => void;
 beforeEach(() => {
+	const listeners = new Set<(event: DictationUpdate) => void>();
+	emit = (event) => { for (const listener of [...listeners]) listener(event); };
 	vi.spyOn(aoBridge.dictation, "availability").mockResolvedValue({ available: true });
 	vi.spyOn(aoBridge.dictation, "start").mockResolvedValue({});
 	vi.spyOn(aoBridge.dictation, "stop").mockResolvedValue(undefined);
 	vi.spyOn(aoBridge.dictation, "cancel").mockResolvedValue(undefined);
-	vi.spyOn(aoBridge.dictation, "onEvent").mockImplementation((listener) => { emit = listener; return () => undefined; });
+	vi.spyOn(aoBridge.dictation, "onEvent").mockImplementation((listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; });
 });
 afterEach(() => vi.restoreAllMocks());
 

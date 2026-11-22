@@ -1,8 +1,23 @@
+import findUserFixtures from "../../../../../test/chat-find-user-source.json";
 import { describe, expect, it } from "vitest";
-import { attachmentName, isFolderAttachmentPath, isImageAttachmentPath, labelInlineImages, proseBesideImages, removeInlineImagePath, splitInlineImagePaths, stagedAttachmentParts } from "./messageAttachments";
+import { attachmentTypeLabel, formatAttachmentSize, labelInlineImages, proseBesideImages, removeInlineImagePath, splitInlineImagePaths, findUserMessageText, attachmentName, isFolderAttachmentPath, isImageAttachmentPath, stagedAttachmentParts } from "./messageAttachments";
 
 const a = ".ao/attachments/attachment-a.png";
 const b = ".ao/attachments/attachment-b.png";
+
+describe("file chip details", () => {
+	it("reads a type from the file's extension, and none when it has none", () => {
+		expect(attachmentTypeLabel("report.final.pdf")).toBe("PDF");
+		expect(attachmentTypeLabel("Makefile")).toBeUndefined();
+		expect(attachmentTypeLabel("notes.not-an-extension")).toBeUndefined();
+	});
+
+	it("scales a size to the unit that reads best", () => {
+		expect(formatAttachmentSize(300)).toBe("300 B");
+		expect(formatAttachmentSize(2048)).toBe("2.0 KB");
+		expect(formatAttachmentSize(3 * 1024 * 1024)).toBe("3.0 MB");
+	});
+});
 
 describe("folder attachment references", () => {
 	it("keeps trailing whitespace in folder paths", () => {
@@ -63,5 +78,12 @@ describe("removeInlineImagePath", () => {
 	it("leaves text without that image untouched, including a longer path containing it", () => {
 		expect(removeInlineImagePath(`see /wt/${a} and ${b}`, a)).toBe(`see /wt/${a} and ${b}`);
 		expect(removeInlineImagePath("plain words", a)).toBe("plain words");
+	});
+});
+
+
+describe("backend-compatible USER find source", () => {
+	it.each(findUserFixtures)("$name", ({ source, text }) => {
+		expect(findUserMessageText(source)).toBe(text);
 	});
 });

@@ -993,7 +993,7 @@ func TestPromoteQueuedUserAuthoredAutomationTurnIntoTheRunningTurn(t *testing.T)
 	ctx := context.Background()
 	queued, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
 		Text: "<browser_annotations>fix the label</browser_annotations>", ClientMessageID: "queued-annotation",
-		Origin: domain.MessageOriginAutomation, AuthoredByUser: true,
+		Origin: domain.MessageOriginAutomation, AuthoredByUser: true, QueueOnly: true,
 	})
 	if err != nil {
 		t.Fatalf("queue annotation turn: %v", err)

@@ -11,6 +11,9 @@ Start with [architecture.md](architecture.md) for the current backend model and
 See [project-context.md](project-context.md) for repository-free Projects, local
 context links, revision conflicts, and pinned session context.
 
+See [human prompt priority](human-prompt-priority.md) for orchestrator Send,
+explicit Queue, trusted authorship and safe delivery limits.
+
 See [report delivery receipts](report-delivery-receipts.md) for Chat native
 acceptance, recovery and the separate TUI prompt-submission observation.
 
@@ -50,6 +53,8 @@ in [gemini-cli.md](gemini-cli.md).
 | [harnesses/mimo-code.md](harnesses/mimo-code.md)       | MiMo Code TUI setup, permissions, activity hooks, exact restore, and current limits.                                 |
 | [harnesses/deepseek-harness.md](harnesses/deepseek-harness.md) | DeepSeek Harness Chat over ACP, headless task mode, credentials, and current limits.                        |
 | [harnesses/command-code.md](harnesses/command-code.md)   | Command Code TUI setup, activity hooks, Chat over `cmd acp`, exact restore, and current limits.                 |
+| [harnesses/mastra-code.md](harnesses/mastra-code.md)     | Mastra Code TUI setup, isolated profile, login, direct model IDs, exact restore, and current limits.             |
+| [harnesses/stakpak.md](harnesses/stakpak.md)             | Stakpak Agent TUI setup, screen-read activity, permissions, exact restore, and current limits.                  |
 | [harnesses/codex-permissions.md](harnesses/codex-permissions.md) | Codex permission-mode mapping (no-override, approve-for-me, explicit bypass) and the permission fallback for managed policy. |
 | [STATUS.md](STATUS.md)                                 | What is shipped on `main` today and what is still in flight.                                                          |
 | [stack.md](stack.md)                                   | Accepted library/runtime choices, pending stack decisions, and dependencies explicitly avoided for V1.                |

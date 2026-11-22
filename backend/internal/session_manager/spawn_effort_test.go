@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -80,7 +81,7 @@ func TestAppliedSpawnEffort(t *testing.T) {
 func TestSpawn_RejectsExplicitEffortOnUnsupportedHarness(t *testing.T) {
 	m, st, rt, ws, _ := newSpawnEffortFixture(t, domain.ProjectConfig{})
 	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
-		ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessGemini,
+		EffortOverride: true, ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessGemini,
 		AgentConfig: ports.AgentConfig{Effort: "high"},
 	})
 	if !errors.Is(err, ports.ErrUnsupportedEffort) {
@@ -139,7 +140,8 @@ func TestSpawn_CopilotEffortReachesAdapterAndMetadata(t *testing.T) {
 
 	invalidManager, invalidStore, invalidRuntime, invalidWorkspace, _ := newSpawnEffortFixture(t, domain.ProjectConfig{})
 	_, _, _, err = invalidManager.Spawn(ctx, ports.SpawnConfig{
-		ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCopilot,
+		EffortOverride: true,
+		ProjectID:      "mer", Kind: domain.KindWorker, Harness: domain.HarnessCopilot,
 		AgentConfig: ports.AgentConfig{Effort: "ultra"},
 	})
 	if !errors.Is(err, ports.ErrUnsupportedEffort) {
@@ -209,11 +211,21 @@ func TestEffectiveAndRestoredAgentConfigFilterCopilotEffort(t *testing.T) {
 	}
 }
 
+type observedEffortCatalog struct {
+	catalog ports.AgentModelCatalog
+	calls   chan bool
+}
+
+func (c observedEffortCatalog) Models(_ context.Context, _, _ string, refresh bool) (ports.AgentModelCatalog, error) {
+	c.calls <- refresh
+	return c.catalog, nil
+}
+
 func TestSpawn_CodexTUIExplicitEffortUsesCatalog(t *testing.T) {
 	catalog := ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "gpt-5", IsDefault: true, Efforts: []string{"low", "medium", "high"}}}}
-	calls := 0
+	refreshCalls := make(chan bool, 2)
 	m, _, _, _, _ := newSpawnEffortFixture(t, domain.ProjectConfig{})
-	m.modelCatalog = tuningCatalog{catalog: catalog, calls: &calls}
+	m.modelCatalog = observedEffortCatalog{catalog: catalog, calls: refreshCalls}
 	// The Codex CLI validates its own effort, so a level the catalog does not
 	// list launches unvalidated in a terminal instead of failing the spawn.
 	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
@@ -223,11 +235,18 @@ func TestSpawn_CodexTUIExplicitEffortUsesCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn() with unlisted effort error = %v, want unvalidated launch", err)
 	}
-	if calls != 2 {
-		t.Fatalf("catalog calls = %d, want saved lookup plus refresh", calls)
+	for _, want := range []bool{false, true} {
+		select {
+		case got := <-refreshCalls:
+			if got != want {
+				t.Fatalf("refresh=%v, want%v", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("catalog refresh not observed")
+		}
 	}
 
-	calls = 0
+	calls := 0
 	successManager, successStore, _, _, successAgent := newSpawnEffortFixture(t, domain.ProjectConfig{})
 	successManager.modelCatalog = tuningCatalog{catalog: catalog, calls: &calls}
 	successRec, _, _, err := successManager.Spawn(ctx, ports.SpawnConfig{

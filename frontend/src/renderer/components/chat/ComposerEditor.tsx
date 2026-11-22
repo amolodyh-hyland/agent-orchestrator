@@ -21,15 +21,18 @@ import {
 	$createTextNode,
 	CLEAR_HISTORY_COMMAND,
 	COMMAND_PRIORITY_HIGH,
+	COMMAND_PRIORITY_LOW,
 	DecoratorNode,
 	getDOMSelectionFromTarget,
 	HISTORIC_TAG,
 	HISTORY_PUSH_TAG,
-	HISTORY_MERGE_TAG,
+	KEY_BACKSPACE_COMMAND,
 	KEY_ENTER_COMMAND,
 	KEY_ESCAPE_COMMAND,
 	KEY_TAB_COMMAND,
-	KEY_BACKSPACE_COMMAND,
+	SKIP_DOM_SELECTION_TAG,
+	TextNode,
+	HISTORY_MERGE_TAG,
 	KEY_DELETE_COMMAND,
 	KEY_ARROW_LEFT_COMMAND,
 	KEY_ARROW_RIGHT_COMMAND,
@@ -48,6 +51,7 @@ import {
 	type NodeKey,
 	type RangeSelection,
 	type SerializedLexicalNode,
+	type SerializedTextNode,
 	type Spread,
 } from "lexical";
 import {
@@ -65,17 +69,23 @@ import {
 	type JSX,
 	type KeyboardEvent,
 } from "react";
-import { Box, Image as ImageIcon } from "lucide-react";
+import { Box, Image as ImageIcon } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
+import { createDraftFaviconWarmer } from "../../lib/link-preload";
 import { composerFileIcon } from "./composerFileIcon";
+import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
+import { listBackspace, listEnter, listIndent, type LinePrefixEdit } from "./composerLists";
+import { attachmentName, isInlineImagePath, splitAttachmentPaths } from "./messageAttachments";
+import type { ComposerSentToken } from "./sentComposerTokens";
 import { useCodeThemeStyle } from "../../hooks/useCodeThemeStyle";
 import { ComposerSyntaxHighlight } from "./ComposerSyntaxHighlight";
 import { composerCodeRegions, createComposerGraphemeNavigator, isComposerOpenCodeFenceAt } from "./composerMarkdown";
 import { COMPOSER_CODE_LANGUAGE_TAG, ComposerCodeNode, ComposerCodePlaceholderNode, ComposerCodePlugin } from "./ComposerCode";
-import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
-import { attachmentName, isInlineImagePath, splitAttachmentPaths } from "./messageAttachments";
-import { AttachmentPathChip, AttachmentPathMenu } from "./AttachmentPathChip";
+import { AttachmentPathChip, AttachmentPathContext, AttachmentPathMenu } from "./AttachmentPathChip";
+import { ChatPathMenuContext } from "../ChatPathMenu";
+import { addressFileOpenReference, findChatAddresses, type ChatAddressKind } from "../../lib/chat-address";
+import { ChatAddress } from "./ChatAddress";
 
 export type ComposerTrigger = {
 	kind: TriggerKind;
@@ -102,12 +112,21 @@ export type ComposerEditorHandle = {
 	insertText(text: string): void;
 	clear(): void;
 	/** Replaces the text with the caret at its end, or at its start when asked. */
-	setText(text: string, caret?: "start" | "end"): void;
+	setText(text: string, caret?: "start" | "end", options?: { preserveFocus?: boolean }): void;
 	/** Where a collapsed caret sits relative to the whole text; undefined for a range. */
 	caretBoundary(): { atStart: boolean; atEnd: boolean } | undefined;
 	wrapInlineCode(): boolean;
 	wrapCodeBlock(): boolean;
 	insertToken(trigger: ComposerTrigger, value: string): void;
+	/** Removes the typed `/query` or `@query`, for a completion that runs instead of inserting. */
+	removeTrigger(trigger: ComposerTrigger): void;
+	/**
+	 * Shows a dictation transcript at the caret (or the end), replacing the one
+	 * shown before it, so the words appear as they are recognized.
+	 */
+	dictate(text: string): void;
+	/** Ends the dictated run: kept as ordinary text, or removed. */
+	endDictation(keep: boolean): void;
 	/** Inserts a file reference chip at the caret (or the end) that sends `wire`. */
 	insertReference(path: string, display: string, wire: string): void;
 	/**
@@ -130,6 +149,8 @@ export type ComposerEditorHandle = {
 	 */
 	pruneImages(attached: string[]): void;
 	getSnapshot(): ComposerEditorSnapshot;
+	/** The skill and file chips in the text, so the sent message can draw them again. */
+	getTokens(): ComposerSentToken[];
 };
 
 /** What an inline image chip shows for a staged path; the path itself is the wire text. */
@@ -183,13 +204,15 @@ function ComposerAttachmentChip({ path }: { path: string }) {
 	return <AttachmentPathChip path={path} composer folder={attachments.find((item) => item.path === path)?.folder} />;
 }
 
-type TokenKind = "skill" | "file" | "image" | "attachment";
+type TokenKind = "skill" | "file" | "image" | "attachment" | "address-url" | "address-path";
 
 const completionHandledEvents = new WeakSet<Event>();
+const ComposerWorkspacePaths = createContext<readonly string[]>([]);
 const PROGRAMMATIC_TEXT_UPDATE_TAG = "ao:composer-programmatic-text";
 const COMPOSER_MARKDOWN_FORMAT_TAG = "ao:composer-markdown-format";
 const COMPOSER_CODE_BLOCK_STYLE =
 	"background-color: var(--ao-code-background, var(--card)); border-radius: var(--radius-sm); padding-inline: 0.25rem";
+const COMPOSER_ADDRESS_STYLE = "color: var(--color-text-markdown-link); text-decoration: underline";
 
 type SerializedComposerTokenNode = Spread<
 	{
@@ -200,6 +223,59 @@ type SerializedComposerTokenNode = Spread<
 	},
 	SerializedLexicalNode
 >;
+
+/** How long a dictated letter takes to fade in (the `stream-char` animation in styles.css). */
+const DICTATION_FADE_MS = 300;
+/** Letters that arrive together fade in this far apart, left to right. */
+const DICTATION_LETTER_STAGGER_MS = 14;
+
+/** The draft's text sits this far inside the composer's padding on both sides. */
+const COMPOSER_TEXT_INSET = "px-[7px]";
+/**
+ * Reserved on both edges of whichever element scrolls the draft, and on the placeholder
+ * standing in for it. A classic scrollbar then neither reflows the text when it appears
+ * nor pushes the text off-centre; overlay scrollbars reserve nothing.
+ */
+const COMPOSER_SCROLL_GUTTER = "chat-composer-scrollbar [scrollbar-gutter:stable_both-edges]";
+
+/**
+ * One letter of a dictation in progress. A letter fades in once, when it first
+ * appears (the streamed-prose `stream-char` fade), after a delay that staggers
+ * the letters of a word. Revisions change the letter in place, and copies
+ * Lexical makes later (clone, split) never fade, so nothing flashes. The run
+ * becomes plain text once the last fade has finished.
+ */
+class DictationLetterNode extends TextNode {
+	__fadeDelay: number | undefined;
+
+	static getType(): string {
+		return "dictation-letter";
+	}
+
+	static clone(node: DictationLetterNode): DictationLetterNode {
+		return new DictationLetterNode(node.__text, node.__key);
+	}
+
+	static importJSON(serialized: SerializedTextNode): DictationLetterNode {
+		return new DictationLetterNode(serialized.text).updateFromJSON(serialized);
+	}
+
+	constructor(text: string, key?: NodeKey, fadeDelay?: number) {
+		super(text, key);
+		this.__fadeDelay = fadeDelay;
+	}
+
+	createDOM(config: EditorConfig, editor?: LexicalEditor): HTMLElement {
+		const dom = super.createDOM(config, editor);
+		if (this.__fadeDelay !== undefined) {
+			dom.classList.add("stream-char");
+			// Hidden until its turn, then fades in like the rest.
+			dom.style.animationDelay = `${this.__fadeDelay}ms`;
+			dom.style.animationFillMode = "backwards";
+		}
+		return dom;
+	}
+}
 
 class ComposerTokenNode extends DecoratorNode<JSX.Element> {
 	__kind: TokenKind;
@@ -262,8 +338,8 @@ class ComposerTokenNode extends DecoratorNode<JSX.Element> {
 		return true;
 	}
 
-	isKeyboardSelectable(): false {
-		return false;
+	isKeyboardSelectable(): boolean {
+		return this.__kind.startsWith("address-");
 	}
 
 	getTextContent(): string {
@@ -271,6 +347,7 @@ class ComposerTokenNode extends DecoratorNode<JSX.Element> {
 	}
 
 	decorate(): JSX.Element {
+		if (this.__kind === "address-url" || this.__kind === "address-path") return <ComposerAddressChip nodeKey={this.__key} target={this.__wire} kind={this.__kind === "address-url" ? "url" : "path"} />;
 		if (this.__kind === "image") return <ComposerImageChip path={this.__value} />;
 		if (this.__kind === "attachment") return <ComposerAttachmentChip path={this.__value} />;
 		if (this.__kind === "file") return <AttachmentPathChip path={this.__value} display={this.__display} composer />;
@@ -292,6 +369,23 @@ class ComposerTokenNode extends DecoratorNode<JSX.Element> {
 			</span>
 		);
 	}
+}
+
+function ComposerAddressChip({ nodeKey, target, kind }: { nodeKey: string; target: string; kind: ChatAddressKind }) {
+	const [editor] = useLexicalComposerContext();
+	const actions = useContext(AttachmentPathContext);
+	const reference = kind === "path" ? addressFileOpenReference(target) : target;
+	return <ChatPathMenuContext.Provider value={{ sessionId: actions.sessionId, remote: Boolean(actions.remoteHost || actions.hostId) }}><ChatAddress target={target} kind={kind} composer onFileOpen={actions.onOpenFile ? () => actions.onOpenFile!(reference) : undefined} onEdit={() => {
+		if (!editor.isEditable() || editor.isComposing()) return;
+		editor.update(() => {
+			const node = $getNodeByKey(nodeKey);
+			if (!(node instanceof ComposerTokenNode)) return;
+			const text = $createTextNode(node.__wire);
+			node.replace(text);
+			text.select(0, text.getTextContentSize());
+		}, { discrete: true, tag: [COMPOSER_MARKDOWN_FORMAT_TAG, HISTORY_MERGE_TAG] });
+		editor.focus();
+	}} /></ChatPathMenuContext.Provider>;
 }
 
 function $createComposerTokenNode(kind: TokenKind, value: string): ComposerTokenNode {
@@ -316,6 +410,77 @@ function $serializeComposer(): string {
 		.getChildren()
 		.map((child) => child.getTextContent())
 		.join("\n");
+}
+
+/**
+ * What onComplete returns for a choice that runs at once rather than becoming a
+ * chip, such as AO's `/model`: the typed trigger is removed and nothing inserted.
+ */
+export const CONSUME_TRIGGER = Symbol("consume-trigger");
+
+function $removeComposerTrigger(trigger: ComposerTrigger): boolean {
+	const node = $getNodeByKey<LexicalNode>(trigger.nodeKey);
+	if (!$isTextNode(node)) return false;
+	const text = node.getTextContent();
+	const expected = `${trigger.kind === "skill" ? "/" : "@"}${trigger.query}`;
+	if (text.slice(trigger.start, trigger.end) !== expected) return false;
+	const before = text.slice(0, trigger.start);
+	// Drop the space after the trigger too, so no gap is left where it was.
+	const after = text.slice(trigger.end).replace(/^ /, "");
+	node.setTextContent(before + after);
+	node.select(before.length, before.length);
+	return true;
+}
+
+function $composerTokens(): ComposerSentToken[] {
+	return $composerLeaves().flatMap<ComposerSentToken>((node) => node instanceof ComposerTokenNode && (node.__kind === "skill" || node.__kind === "file")
+		? [{ kind: node.__kind, value: node.__value, display: node.__display, wire: node.__wire }] : []);
+}
+
+function $formatComposerPresentation(workspacePaths: readonly string[] = []): void {
+	if ($composerLeaves().some((node) => node instanceof DictationLetterNode)) return;
+	const source = $serializeComposer();
+	if (source.length > 100_000) { $formatComposerMarkdown(); return; }
+	const code = composerCodeRegions(source);
+	const addresses = findChatAddresses(source, workspacePaths).filter((match) => !code.some((range) => match.start < range.end && match.end > range.start)).slice(0, 64);
+	const leaves = $composerLeaves();
+	for (const node of leaves) if ($isTextNode(node) && node.getStyle() === COMPOSER_ADDRESS_STYLE) node.setStyle("");
+	if (!addresses.length && !leaves.some((node) => node instanceof ComposerTokenNode && node.__kind.startsWith("address-"))) { $formatComposerMarkdown(); return; }
+	const selection = $getSelection();
+	const offsets = $isRangeSelection(selection) ? [
+		$documentOffsetForPoint(selection.anchor.getNode(), selection.anchor.offset),
+		$documentOffsetForPoint(selection.focus.getNode(), selection.focus.offset),
+	] : undefined;
+	let offset = 0;
+	const parts: { node: LexicalNode; start: number; end: number }[] = [];
+	const visit = (node: LexicalNode) => {
+		if ($isElementNode(node)) node.getChildren().forEach(visit);
+		else { const end = offset + node.getTextContentSize(); parts.push({ node, start: offset, end }); offset = end; }
+	};
+	$getRoot().getChildren().forEach((node) => { visit(node); offset++; });
+	for (const { node, start, end } of parts) {
+		if (node instanceof ComposerTokenNode && node.__kind.startsWith("address-") && !addresses.some((match) => match.start === start && match.end === end)) node.replace($createTextNode(node.__wire));
+		if (!$isTextNode(node)) continue;
+		const matches = addresses.filter((match) => match.start >= start && match.end <= end);
+		if (!matches.length) continue;
+		const boundaries = [...new Set(matches.flatMap((match) => [match.start - start, match.end - start]))].filter((value) => value > 0 && value < end - start).sort((a, b) => a - b);
+		let position = start;
+		for (const part of boundaries.length ? node.splitText(...boundaries) : [node]) {
+			const match = matches.find((candidate) => candidate.start === position && candidate.end === position + part.getTextContentSize());
+			position += part.getTextContentSize();
+			if (!match) continue;
+			const active = $isRangeSelection(selection) && offsets?.some((value) => value !== undefined && value >= match.start && value <= match.end) && document.activeElement?.getAttribute("role") === "combobox";
+			if (active) part.setStyle(COMPOSER_ADDRESS_STYLE);
+			else part.replace(new ComposerTokenNode(match.kind === "url" ? "address-url" : "address-path", match.target, match.target, match.target));
+		}
+	}
+	if ($isRangeSelection(selection) && offsets?.[0] !== undefined && offsets[1] !== undefined) {
+		const restored = $createRangeSelection();
+		$setSelection(restored);
+		$selectComposerOffset(offsets[0], restored.anchor);
+		$selectComposerOffset(offsets[1], restored.focus);
+	}
+	$formatComposerMarkdown();
 }
 
 const COMPOSER_MARKER_STYLE = "display: none";
@@ -388,6 +553,7 @@ function $selectComposerOffset(offset: number, point: RangeSelection["anchor"], 
 }
 
 function $formatComposerMarkdown(): void {
+	if ($composerLeaves().some((node) => node instanceof DictationLetterNode)) return;
 	const source = $serializeComposer();
 	const regions = composerCodeRegions(source);
 	const selection = $getSelection();
@@ -819,7 +985,7 @@ function $insertComposerToken(trigger: ComposerTrigger, value: string): boolean 
 	return true;
 }
 
-function $replaceEditorText(text: string, attached: string[] = [], caret: "start" | "end" = "end"): void {
+function $replaceEditorText(text: string, attached: string[] = [], caret: "start" | "end" = "end", workspacePaths: readonly string[] = []): void {
 	const root = $getRoot();
 	root.clear();
 	$setSelection($createRangeSelection());
@@ -838,7 +1004,7 @@ function $replaceEditorText(text: string, attached: string[] = [], caret: "start
 	}
 	if (caret === "start") root.selectStart();
 	else root.selectEnd();
-	$formatComposerMarkdown();
+	$formatComposerPresentation(workspacePaths);
 }
 
 /** True when nothing precedes (or follows) the point in the whole document. */
@@ -972,7 +1138,7 @@ function $wrapSelectionWithMarkdown(opening: string, closing: string, codeBlock 
 		selection = $getSelection();
 	}
 	if (!$isRangeSelection(selection)) return false;
-	if (!selection.isCollapsed() && selection.getNodes().some((node) => node instanceof ComposerTokenNode)) return false;
+	if (!selection.isCollapsed() && selection.getNodes().some((node) => node instanceof ComposerTokenNode && !node.__kind.startsWith("address-"))) return false;
 
 	let selectedText = selection.getTextContent();
 	let openingText = opening;
@@ -1037,6 +1203,47 @@ function $caretOffset(): number | undefined {
 	return undefined;
 }
 
+/**
+ * The caret's line as $serializeComposer counts it, with the lines above it.
+ * Only for a collapsed caret in the plain text node the line starts with, since
+ * list keys rewrite the line's start; anything else keeps the default key.
+ */
+function $caretLine() {
+	const selection = $getSelection();
+	if (!$isRangeSelection(selection) || !selection.isCollapsed() || selection.anchor.type !== "text") return undefined;
+	const node = selection.anchor.getNode();
+	if (!$isTextNode(node) || node.getType() !== "text") return undefined;
+	const caret = $caretOffset();
+	if (caret === undefined) return undefined;
+	const text = $serializeComposer();
+	const start = caret === 0 ? 0 : text.lastIndexOf("\n", caret - 1) + 1;
+	const column = caret - start;
+	if (selection.anchor.offset !== column) return undefined;
+	const end = text.indexOf("\n", caret);
+	return {
+		selection,
+		node,
+		column,
+		line: text.slice(start, end < 0 ? undefined : end),
+		previous: start === 0 ? [] : text.slice(0, start - 1).split("\n"),
+	};
+}
+
+/** Rewrites the start of the caret's line as one undo step, keeping the caret on the same text. */
+function $applyLinePrefixEdit(node: TextNode, column: number, edit: LinePrefixEdit): boolean {
+	if (node.getTextContentSize() < edit.remove) return false;
+	$addUpdateTag(HISTORY_PUSH_TAG);
+	const selection = node.select(0, edit.remove);
+	if (edit.insert) selection.insertText(edit.insert);
+	else selection.removeText();
+	const caret = Math.max(column - edit.remove, 0) + edit.insert.length;
+	if (caret === edit.insert.length) return true;
+	const after = $getSelection();
+	const anchor = $isRangeSelection(after) ? after.anchor.getNode() : undefined;
+	if ($isTextNode(anchor)) anchor.select(caret, caret);
+	return true;
+}
+
 function editorSnapshot(): ComposerEditorSnapshot {
 	const text = $serializeComposer();
 	const caret = $caretOffset();
@@ -1093,18 +1300,33 @@ const EditorBridge = forwardRef<
 		compositionState: { current: boolean };
 		compositionEndScheduler: { current: () => void };
 		onChange: (snapshot: ComposerEditorSnapshot) => void;
-		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | undefined;
+		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | typeof CONSUME_TRIGGER | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
 	}
 >(function EditorBridge({ disabled, menuOpen, enterSends, promptSuggestion, onEmptyChange, onDismissSuggestion, attachedImages, compositionState, compositionEndScheduler, onChange, onComplete, onEnter }, ref) {
 	const [editor] = useLexicalComposerContext();
+	const workspacePaths = useContext(ComposerWorkspacePaths);
+	const workspacePathsRef = useRef(workspacePaths);
+	workspacePathsRef.current = workspacePaths;
 	const lastSelection = useRef<RangeSelection | null>(null);
+	const dictation = useRef<{ anchor: NodeKey; keys: NodeKey[]; prefix: string; settled: number } | null>(null);
 	// A range stays intact while the picker/stager is pending. Only acceptance
 	// replaces it, so cancellation is content-neutral and undo restores the range.
 	const attachmentRanges = useRef(new Map<string, { selection: RangeSelection; nodes: LexicalNode[]; valid: boolean }>());
 	const attachmentRangeId = useRef(0);
 
 	useEffect(() => editor.setEditable(!disabled), [disabled, editor]);
+
+	// Links typed or pasted here load their site icons before they are sent.
+	useEffect(() => {
+		const warmer = createDraftFaviconWarmer();
+		warmer.update(editor.getEditorState().read(() => $getRoot().getTextContent()));
+		const unregister = editor.registerTextContentListener((text) => warmer.update(text));
+		return () => {
+			unregister();
+			warmer.dispose();
+		};
+	}, [editor]);
 
 	useImperativeHandle(
 		ref,
@@ -1134,9 +1356,10 @@ const EditorBridge = forwardRef<
 					tag: PROGRAMMATIC_TEXT_UPDATE_TAG,
 				});
 			},
-			setText: (text, caret) => {
+			setText: (text, caret, options) => {
 				editor.update(() => {
-					$replaceEditorText(text, attachedImages(), caret);
+					if (options?.preserveFocus) $addUpdateTag(SKIP_DOM_SELECTION_TAG);
+					$replaceEditorText(text, attachedImages(), caret, workspacePathsRef.current);
 					editor.dispatchCommand(CLEAR_HISTORY_COMMAND, undefined);
 				}, {
 					discrete: true,
@@ -1150,6 +1373,75 @@ const EditorBridge = forwardRef<
 					applied = $wrapSelectionWithMarkdown("`", "`");
 				}, { discrete: true });
 				return applied;
+			},
+			removeTrigger: (trigger) => {
+				editor.update(() => {
+					$removeComposerTrigger(trigger);
+				}, { discrete: true });
+			},
+			dictate: (text) => {
+				const continuing = dictation.current !== null;
+				editor.update(() => {
+					let run = dictation.current;
+					if (!run) {
+						if (!text) return;
+						let selection = $getSelection();
+						if (!$isRangeSelection(selection)) {
+							$getRoot().selectEnd();
+							selection = $getSelection();
+						}
+						if (!$isRangeSelection(selection)) return;
+						const { anchor } = selection;
+						const before = anchor.type === "text" ? anchor.getNode().getTextContent().slice(0, anchor.offset) : "";
+						// Holds the run's place; it stays empty.
+						const anchorNode = new DictationLetterNode("");
+						selection.insertNodes([anchorNode]);
+						run = { anchor: anchorNode.getKey(), keys: [], prefix: before && !/\s$/.test(before) ? " " : "", settled: 0 };
+						dictation.current = run;
+					}
+					const letters = Array.from(run.prefix + text);
+					const nodes = run.keys.map((key) => $getNodeByKey(key)).filter($isTextNode);
+					let last: TextNode | null = $getNodeByKey<TextNode>(run.anchor);
+					if (!last) return;
+					const keys: NodeKey[] = [];
+					let arriving = 0;
+					letters.forEach((letter, index) => {
+						let node = nodes[index];
+						if (node) {
+							// A revised letter changes in place, so it does not flash.
+							if (node.getTextContent() !== letter) node.setTextContent(letter);
+						} else {
+							const delay = arriving++ * DICTATION_LETTER_STAGGER_MS;
+							node = new DictationLetterNode(letter, undefined, delay);
+							last!.insertAfter(node);
+							run!.settled = Math.max(run!.settled, performance.now() + delay + DICTATION_FADE_MS);
+						}
+						last = node;
+						keys.push(node.getKey());
+					});
+					for (const extra of nodes.slice(letters.length)) extra.remove();
+					run.keys = keys;
+					last.selectEnd();
+				}, continuing ? { discrete: true, tag: HISTORY_MERGE_TAG } : { discrete: true });
+			},
+			endDictation: (keep) => {
+				const run = dictation.current;
+				dictation.current = null;
+				if (!run) return;
+				const finish = () => editor.update(() => {
+					const letters = run.keys.map((key) => $getNodeByKey(key)).filter($isTextNode);
+					const anchor = $getNodeByKey(run.anchor);
+					const text = letters.map((letter) => letter.getTextContent()).join("");
+					if (keep && text && anchor) {
+						const plain = $createTextNode(text);
+						anchor.insertAfter(plain);
+						plain.selectEnd();
+					}
+					for (const node of [anchor, ...letters]) node?.remove();
+				}, { discrete: true, tag: HISTORY_MERGE_TAG });
+				// Kept letters become plain text after their fades, so none is cut short.
+				if (keep) window.setTimeout(finish, Math.max(run.settled - performance.now(), 0));
+				else finish();
 			},
 			wrapCodeBlock: () => {
 				if (editor.isComposing()) return false;
@@ -1236,6 +1528,7 @@ const EditorBridge = forwardRef<
 				editor.update(() => $removeImageTokens((candidate) => !attached.includes(candidate)), { discrete: true });
 			},
 			getSnapshot: () => editor.getEditorState().read(editorSnapshot),
+			getTokens: () => editor.getEditorState().read($composerTokens),
 			caretBoundary: () => editor.read(() => $caretBoundary(editor)),
 		}),
 		[attachedImages, editor],
@@ -1256,10 +1549,10 @@ const EditorBridge = forwardRef<
 					disposed || compositionState.current ||
 					(!compositionEnded && editor.isComposing())
 				) return;
-				editor.update(() => $formatComposerMarkdown(), {
+				editor.update(() => $formatComposerPresentation(workspacePathsRef.current), {
 					discrete: true,
 					// Presentation belongs to the edit that triggered recognition.
-					tag: [COMPOSER_MARKDOWN_FORMAT_TAG, HISTORY_MERGE_TAG],
+					tag: [COMPOSER_MARKDOWN_FORMAT_TAG, HISTORY_MERGE_TAG, ...(document.activeElement === editor.getRootElement() ? [] : [SKIP_DOM_SELECTION_TAG])],
 				});
 			});
 		};
@@ -1448,7 +1741,15 @@ const EditorBridge = forwardRef<
 				return true;
 			}
 			const value = onComplete(snapshot, key);
-			if (snapshot.trigger && value) {
+			if (snapshot.trigger && value === CONSUME_TRIGGER) {
+				if (!$removeComposerTrigger(snapshot.trigger)) return false;
+				if (event) {
+					completionHandledEvents.add(event);
+					event.preventDefault();
+				}
+				return true;
+			}
+			if (snapshot.trigger && typeof value === "string" && value) {
 				if (!$insertComposerToken(snapshot.trigger, value)) return false;
 				if (event) {
 					completionHandledEvents.add(event);
@@ -1502,6 +1803,56 @@ const EditorBridge = forwardRef<
 		};
 	}, [compositionState, editor, enterSends, menuOpen, onComplete, onDismissSuggestion, onEnter, promptSuggestion]);
 
+	// Markdown list keys. They run after send and completion above decline the
+	// key, so they only ever replace a plain newline, Tab focus move or Backspace.
+	useEffect(() => {
+		const plainKey = (event: globalThis.KeyboardEvent | null): event is globalThis.KeyboardEvent =>
+			event !== null && !event.defaultPrevented && !event.isComposing && event.keyCode !== 229 &&
+			!editor.isComposing() && !event.metaKey && !event.ctrlKey && !event.altKey;
+		const handled = (event: globalThis.KeyboardEvent) => {
+			event.preventDefault();
+			return true;
+		};
+		const removeEnter = editor.registerCommand(KEY_ENTER_COMMAND, (event) => {
+			if (!plainKey(event)) return false;
+			const caret = $caretLine();
+			const action = caret && listEnter(caret.line, caret.column, caret.previous);
+			if (!caret || !action) {
+				// Shift+Enter inserts a plain newline (PlainTextPlugin has no default handler).
+				if (!event.shiftKey) return false;
+				const selection = $getSelection();
+				if (!$isRangeSelection(selection)) return false;
+				$addUpdateTag(HISTORY_PUSH_TAG);
+				selection.insertRawText("\n");
+				return handled(event);
+			}
+			if (action.kind === "exit") return $applyLinePrefixEdit(caret.node, caret.column, action.edit) && handled(event);
+			$addUpdateTag(HISTORY_PUSH_TAG);
+			caret.selection.insertRawText(action.text);
+			return handled(event);
+		}, COMMAND_PRIORITY_LOW);
+		const removeTab = editor.registerCommand(KEY_TAB_COMMAND, (event) => {
+			if (!plainKey(event)) return false;
+			const caret = $caretLine();
+			const edit = caret && listIndent(caret.line, caret.previous, event.shiftKey);
+			return Boolean(caret && edit && $applyLinePrefixEdit(caret.node, caret.column, edit)) && handled(event);
+		}, COMMAND_PRIORITY_LOW);
+		const removeBackspace = editor.registerCommand(KEY_BACKSPACE_COMMAND, (event) => {
+			if (!plainKey(event) || event.shiftKey) return false;
+			// A marker always ends in a space or tab; skip reading the draft on every other Backspace.
+			const selection = $getSelection();
+			if (!$isRangeSelection(selection) || !/[ \t]/.test(selection.anchor.getNode().getTextContent()[selection.anchor.offset - 1] ?? "")) return false;
+			const caret = $caretLine();
+			const edit = caret && listBackspace(caret.line, caret.column, caret.previous);
+			return Boolean(caret && edit && $applyLinePrefixEdit(caret.node, caret.column, edit)) && handled(event);
+		}, COMMAND_PRIORITY_LOW);
+		return () => {
+			removeEnter();
+			removeTab();
+			removeBackspace();
+		};
+	}, [editor]);
+
 	return null;
 });
 
@@ -1533,9 +1884,12 @@ export const ComposerEditor = forwardRef<
 	ComposerEditorHandle,
 	{
 		disabled?: boolean;
+		/** Takes no input but looks exactly as usual: same text, no dimming. */
+		readOnly?: boolean;
 		enterSends: boolean;
 		/** Hides the text while a send is in flight; the draft is still held for recovery. */
 		concealed?: boolean;
+		dictating?: boolean;
 		label: string;
 		placeholder: string;
 		promptSuggestion?: ComposerPromptSuggestion;
@@ -1544,8 +1898,9 @@ export const ComposerEditor = forwardRef<
 		activeIndex: number;
 		images?: ComposerImage[];
 		attachments?: { path: string; folder?: boolean }[];
+		workspacePaths?: string[];
 		onChange: (snapshot: ComposerEditorSnapshot) => void;
-		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | undefined;
+		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | typeof CONSUME_TRIGGER | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
 		onCompositionChange: (isComposing: boolean) => void;
 		onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
@@ -1554,8 +1909,10 @@ export const ComposerEditor = forwardRef<
 >(function ComposerEditor(
 	{
 		disabled,
+		readOnly = false,
 		enterSends,
 		concealed,
+		dictating,
 		label,
 		placeholder,
 		promptSuggestion,
@@ -1564,6 +1921,7 @@ export const ComposerEditor = forwardRef<
 		activeIndex,
 		images = [],
 		attachments = [],
+		workspacePaths = [],
 		onChange,
 		onComplete,
 		onEnter,
@@ -1577,7 +1935,8 @@ export const ComposerEditor = forwardRef<
 	const suggestionDescriptionId = useId();
 	const [dismissedSuggestionId, setDismissedSuggestionId] = useState<string>();
 	const [empty, setEmpty] = useState(true);
-	const suggestion = empty && !disabled && !concealed && promptSuggestion?.id !== dismissedSuggestionId
+	const locked = Boolean(disabled) || readOnly;
+	const suggestion = empty && !locked && !concealed && !dictating && promptSuggestion?.id !== dismissedSuggestionId
 		? promptSuggestion
 		: undefined;
 	const dismissSuggestion = useCallback(() => {
@@ -1589,8 +1948,8 @@ export const ComposerEditor = forwardRef<
 	const codeStyle = useCodeThemeStyle();
 	const initialConfig = {
 		namespace: "AOChatComposer",
-		nodes: [ComposerTokenNode, ComposerCodeNode, ComposerCodePlaceholderNode],
-		editable: !disabled,
+		nodes: [ComposerTokenNode, ComposerCodeNode, ComposerCodePlaceholderNode, DictationLetterNode],
+		editable: !locked,
 		theme: {
 			paragraph: "m-0",
 			text: {
@@ -1613,10 +1972,12 @@ export const ComposerEditor = forwardRef<
 	const placeholderNode = useCallback(
 		() => (
 			<div className={cn(
-				"py-1 pl-[7px] text-base! leading-relaxed text-muted-foreground",
+				"py-1 text-base! leading-relaxed text-muted-foreground",
+				COMPOSER_TEXT_INSET,
 				suggestion
 					? "min-h-[4.5rem] whitespace-pre-wrap break-words"
-					: "pointer-events-none absolute inset-x-0 top-0",
+					// Same gutter as the field below, so the first typed character lands where the placeholder began.
+					: cn("pointer-events-none absolute inset-x-0 top-0 overflow-hidden", COMPOSER_SCROLL_GUTTER),
 			)}>
 				{suggestion ? <span data-testid="prompt-suggestion">{suggestion.text}</span> : <FadingPlaceholder text={placeholder} />}
 			</div>
@@ -1627,8 +1988,9 @@ export const ComposerEditor = forwardRef<
 	return (
 		<LexicalComposer initialConfig={initialConfig}>
 			<ComposerAttachments.Provider value={attachments}>
+			<ComposerWorkspacePaths.Provider value={workspacePaths}>
 			<ComposerImages.Provider value={images}>
-			<div className={cn("relative", suggestion && "chat-composer-scrollbar max-h-40 overflow-y-auto overscroll-contain")} style={codeStyle}>
+			<div className={cn("relative", suggestion && cn("max-h-40 overflow-y-auto overscroll-contain", COMPOSER_SCROLL_GUTTER))} style={codeStyle}>
 				<PlainTextPlugin
 					contentEditable={
 						<ContentEditable
@@ -1653,6 +2015,7 @@ export const ComposerEditor = forwardRef<
 								onCompositionChange(false);
 								window.setTimeout(() => compositionEndScheduler.current(), 0);
 							}}
+							onBlur={() => compositionEndScheduler.current()}
 							onKeyDown={(event) => {
 								if (!completionHandledEvents.has(event.nativeEvent)) onKeyDown(event);
 							}}
@@ -1661,7 +2024,9 @@ export const ComposerEditor = forwardRef<
 								if (event.defaultPrevented) event.stopPropagation();
 							}}
 							className={cn(
-								"chat-composer-scrollbar max-h-40 has-[.chat-composer-code-block]:max-h-[min(24rem,50vh)] min-h-[4.5rem] w-full overflow-y-auto overscroll-contain bg-transparent py-1 pl-[7px] pr-0 text-base! leading-relaxed text-foreground caret-foreground outline-none selection:bg-foreground selection:text-on-foreground",
+								"chat-composer-scrollbar max-h-40 has-[.chat-composer-code-block]:max-h-[min(24rem,50vh)] min-h-[4.5rem] w-full overflow-y-auto overscroll-contain bg-transparent py-1 text-base! leading-relaxed text-foreground caret-foreground outline-none selection:bg-foreground selection:text-on-foreground",
+								COMPOSER_TEXT_INSET,
+								COMPOSER_SCROLL_GUTTER,
 								suggestion && "absolute inset-0 overflow-visible overscroll-auto",
 								concealed ? "invisible" : disabled && "opacity-50",
 							)}
@@ -1680,7 +2045,7 @@ export const ComposerEditor = forwardRef<
 				<ComposerSyntaxHighlight />
 				<EditorBridge
 					ref={ref}
-					disabled={disabled}
+					disabled={locked}
 					menuOpen={menuOpen}
 					enterSends={enterSends}
 					promptSuggestion={suggestion}
@@ -1695,6 +2060,7 @@ export const ComposerEditor = forwardRef<
 				/>
 			</div>
 			</ComposerImages.Provider>
+			</ComposerWorkspacePaths.Provider>
 			</ComposerAttachments.Provider>
 		</LexicalComposer>
 	);

@@ -19,6 +19,7 @@ import {
 } from "./BrowserPanel";
 import { reorderBrowserTabs } from "../lib/browser-tab-order";
 import { useBrowserView, type BrowserNavState } from "../hooks/useBrowserView";
+import { useBrowserPresentation } from "../hooks/useBrowserPresentation";
 import { useUiStore } from "../stores/ui-store";
 import { aoBridge } from "../lib/bridge";
 import type { WorkspaceSession } from "../types/workspace";
@@ -852,6 +853,17 @@ describe("BrowserPanel", () => {
 		writeText.mockRestore();
 	});
 
+	it("never hands an agent tab's host-local page to the person's browser", async () => {
+		const url = "http://localhost:5173/";
+		hookState.navState = { ...hookState.navState, url };
+		const agentTab = { id: "a1", url, title: "", active: true, remote: { tabId: "R1" } };
+		hookState.tabs = [agentTab];
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={{ ...session, hostId: "h_workbox" }} />);
+
+		await openBrowserControls();
+		expect(screen.getByRole("menuitem", { name: /^Open in (your browser|Chrome)$/ })).toHaveAttribute("data-disabled");
+	});
+
 	it("opens an agent tab's public page in the system browser", async () => {
 		const url = "https://github.com/aoagents/ao";
 		hookState.navState = { ...hookState.navState, url };
@@ -893,6 +905,26 @@ describe("BrowserPanel", () => {
 			expect(useUiStore.getState().globalToast?.title).toBe("Screenshot copied to clipboard"),
 		);
 		expect(useUiStore.getState().globalToast?.placement).toBe("top-center");
+	});
+
+	it("opens the page in the person's own browser from the controls menu", async () => {
+		hookState.navState = { ...hookState.navState, url: "https://shop.test/cart" };
+		vi.spyOn(window.ao!.browser, "openInUserBrowser").mockResolvedValue({ name: "Chrome", chrome: true });
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		await openBrowserControls();
+		await userEvent.click(screen.getByRole("menuitem", { name: /^Open in (your browser|Chrome)$/ }));
+
+		expect(window.ao!.browser.openInUserBrowser).toHaveBeenCalledWith("42:sess-1");
+		await waitFor(() => expect(useUiStore.getState().globalToast?.title).toBe("Opened in Chrome"));
+	});
+
+	it("offers to open a page elsewhere only for ordinary web pages", async () => {
+		hookState.navState = { ...hookState.navState, url: "" };
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		await openBrowserControls();
+		expect(screen.getByRole("menuitem", { name: /^Open in (your browser|Chrome)$/ })).toHaveAttribute("data-disabled");
 	});
 
 	it("disables screenshots until the active tab has a page", async () => {
@@ -1254,8 +1286,14 @@ describe("BrowserPanel", () => {
 
 		expect(firstTab).toHaveAttribute("aria-selected", "false");
 		expect(secondTab).toHaveAttribute("aria-selected", "true");
-		expect(firstTab).toHaveAttribute("data-slot", "tooltip-trigger");
-		expect(screen.getByRole("button", { name: "Close tab First app" })).toHaveAttribute("data-slot", "tooltip-trigger");
+		// The shared tab frame: the full title as the tab's native tooltip, and
+		// the ghost close button at the tab's right edge.
+		expect(firstTab).toHaveAttribute("title", "First app");
+		expect(firstTab.closest("[data-terminal-tab-frame]")).not.toBeNull();
+		expect(firstTab.closest("[data-terminal-tab-frame]")).not.toHaveAttribute("data-active");
+		expect(secondTab.closest("[data-terminal-tab-frame]")).toHaveAttribute("data-active");
+		expect(tabList).toHaveAttribute("data-tab-strip");
+		expect(screen.getByRole("button", { name: "Close tab First app" }).closest("[data-terminal-tab-action]")?.previousElementSibling).toBe(firstTab);
 		await userEvent.click(firstTab);
 		expect(hookState.selectTab).toHaveBeenCalledWith("t1");
 	});
@@ -1269,9 +1307,10 @@ describe("BrowserPanel", () => {
 
 		const overlay = screen.getByTestId("browser-tab-drag-overlay");
 		expect(overlay).toHaveClass("browser-panel__tab--drag-overlay");
+		expect(overlay).toHaveAttribute("data-dragging");
 		expect(overlay).toHaveTextContent("First app");
-		expect(overlay.querySelector(".browser-panel__tab-icon")).not.toBeNull();
-		expect(overlay.querySelector(".browser-panel__tab-close")).not.toBeNull();
+		expect(overlay.querySelector("[data-terminal-tab-frame][data-active]")).not.toBeNull();
+		expect(overlay.querySelector('button[aria-label="Close tab First app"]')).not.toBeNull();
 	});
 
 	it("moves browser tab focus and selection with arrow keys", async () => {
@@ -1304,6 +1343,8 @@ describe("BrowserPanel", () => {
 		await userEvent.click(within(tabList).getByRole("button", { name: "Close tab Second app" }));
 
 		expect(hookState.closeTab).toHaveBeenCalledWith("t2");
+		// Closing an inactive tab does not select it first.
+		expect(hookState.selectTab).not.toHaveBeenCalled();
 	});
 
 	it("allows closing the final browser tab", async () => {
@@ -1326,7 +1367,7 @@ describe("BrowserPanel", () => {
 
 	it("shows the empty tab's close icon in its drag overlay", () => {
 		render(<BrowserTopTabDragOverlay tab={{ id: "t1", url: "about:blank", title: "", active: true }} />);
-		expect(screen.getByTestId("browser-tab-drag-overlay").querySelector(".browser-panel__tab-close")).not.toBeNull();
+		expect(screen.getByTestId("browser-tab-drag-overlay").querySelector('button[aria-label="Close tab New tab"]')).not.toBeNull();
 	});
 
 	it("shows no placeholder tab when empty and still offers the new tab button", async () => {
@@ -1611,16 +1652,16 @@ describe("BrowserPanel", () => {
 		{
 			rejectionCode: "BROWSER_RUNTIME_TOKEN_REJECTED",
 			message:
-				"The AO daemon refused the browser runtime because another AO launch started it. Run `ao stop`, then reopen AO.",
+				"The Orchestrator daemon refused the browser runtime because another Orchestrator launch started it. Run `ao stop`, then reopen Orchestrator.",
 		},
 		{
 			rejectionCode: "BROWSER_RUNTIME_PROTOCOL_MISMATCH",
 			message:
-				"The AO daemon refused the browser runtime because it comes from a different AO version than this app. Run `ao stop`, then reopen AO.",
+				"The Orchestrator daemon refused the browser runtime because it comes from a different Orchestrator version than this app. Run `ao stop`, then reopen Orchestrator.",
 		},
 		// A malformed hello, a code this app doesn't know, or none: no cause is claimed.
-		{ rejectionCode: "BROWSER_RUNTIME_BAD_HELLO", message: "The AO daemon refused the browser runtime. Run `ao stop`, then reopen AO." },
-		{ rejectionCode: undefined, message: "The AO daemon refused the browser runtime. Run `ao stop`, then reopen AO." },
+		{ rejectionCode: "BROWSER_RUNTIME_BAD_HELLO", message: "The Orchestrator daemon refused the browser runtime. Run `ao stop`, then reopen Orchestrator." },
+		{ rejectionCode: undefined, message: "The Orchestrator daemon refused the browser runtime. Run `ao stop`, then reopen Orchestrator." },
 	])(
 		"says why the daemon refused the runtime ($rejectionCode), without a Reconnect that can't help (#6466)",
 		({ rejectionCode, message }) => {
@@ -1693,7 +1734,8 @@ describe("BrowserPanel", () => {
 		expect(screen.getByRole("button", { name: "Send annotations" })).toHaveTextContent("2");
 		expect(screen.getByRole("button", { name: "Send annotations" })).toHaveClass(
 			"browser-panel__annotation-send",
-			"bg-primary",
+			"button-raised",
+			"[--button-color:var(--primary)]",
 			"text-primary-foreground",
 		);
 
@@ -1748,6 +1790,26 @@ describe("BrowserPanel", () => {
 		const body = postMock.mock.calls[0][1].body as { message: string };
 		expect(body.message).toContain("button#save");
 		expect(body.message.length).toBeLessThanOrEqual(4096);
+	});
+
+	it("delivers one annotation when two mounted same-owner panels hand presentation back and forth", async () => {
+		function Panel({ label }: { label: string }) {
+			const lease = useBrowserPresentation(session.id, true);
+			const view = useBrowserView({ sessionId: session.id, active: true, poppedOut: false });
+			const queue = useBrowserAnnotationQueue({ sessionId: session.id, navUrl: "http://localhost:5173/" });
+			return <div data-testid={label}><BrowserPanelView active poppedOut={false} onTogglePopOut={() => undefined} session={session} annotationQueue={queue} browserView={{ ...view, presenting: lease.presenting, isPresenter: lease.isPresenter, claimPresentation: lease.claim }} /></div>;
+		}
+		const regular = render(<Panel label="regular" />);
+		const borrowed = render(<Panel label="borrowed" />);
+		expect(within(screen.getByTestId("regular")).getByRole("button", { name: "Show browser here" })).toBeInTheDocument();
+		act(() => annotationSubmitListeners.forEach((listener) => listener(annotationPayload("Borrowed feedback"))));
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+		expect(postMock.mock.calls[0][1].body).toEqual(expect.objectContaining({ userAuthored: true, message: expect.stringContaining("Borrowed feedback") }));
+		borrowed.unmount();
+		expect(within(screen.getByTestId("regular")).queryByRole("button", { name: "Show browser here" })).not.toBeInTheDocument();
+		act(() => annotationSubmitListeners.forEach((listener) => listener(annotationPayload("Restored feedback"))));
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
+		regular.unmount();
 	});
 
 	it("stages the captured snapshot and references it in the annotation message", async () => {
@@ -2027,7 +2089,7 @@ describe("BrowserPanel", () => {
 	});
 
 	it("shows annotation send errors", async () => {
-		postMock.mockResolvedValue({ error: { message: "AO daemon is not ready." } });
+		postMock.mockResolvedValue({ error: { message: "Orchestrator daemon is not ready." } });
 		hookState.navState = { ...hookState.navState, url: "http://localhost:5173/" };
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 
@@ -2035,12 +2097,12 @@ describe("BrowserPanel", () => {
 			annotationSubmitListeners.forEach((listener) => listener(annotationPayload("Make this button blue.")));
 		});
 
-		expect(await screen.findByText("AO daemon is not ready.")).toBeInTheDocument();
+		expect(await screen.findByText("Orchestrator daemon is not ready.")).toBeInTheDocument();
 	});
 
 	it("keeps a failed annotation queued so the user can retry it", async () => {
 		postMock
-			.mockResolvedValueOnce({ error: { message: "AO daemon is not ready." } })
+			.mockResolvedValueOnce({ error: { message: "Orchestrator daemon is not ready." } })
 			.mockResolvedValueOnce({ data: {} });
 		hookState.navState = { ...hookState.navState, url: "http://localhost:5173/" };
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
@@ -2051,7 +2113,7 @@ describe("BrowserPanel", () => {
 			);
 		});
 
-		expect(await screen.findByText("AO daemon is not ready.")).toBeInTheDocument();
+		expect(await screen.findByText("Orchestrator daemon is not ready.")).toBeInTheDocument();
 		expect(postMock).toHaveBeenCalledTimes(1);
 
 		await userEvent.click(screen.getByRole("button", { name: /retry annotation/i }));

@@ -28,7 +28,8 @@ test("renderer: native Browser holes compose, overlap, resize and remove @T0 @PA
 	const check = async (visible: typeof rects) => {
 		await page.evaluate(async (rectangles) => {
 			// Vite serves the production composition boundary; no copied mask generator.
-			const { publishBrowserHole } = await import(/* @vite-ignore */ "/src/renderer/lib/browser-hole-mask.ts");
+			const moduleUrl = "/src/renderer/lib/browser-hole-mask.ts";
+			const { publishBrowserHole } = await import(/* @vite-ignore */ moduleUrl) as typeof import("../src/renderer/lib/browser-hole-mask");
 			for (let index = 0; index < 4; index++) publishBrowserHole(`fixture-${index}`, rectangles[index] ?? null);
 			const reference = document.getElementById("reference")!;
 			reference.replaceChildren(...rectangles.map(({ x, y, width, height }) => {

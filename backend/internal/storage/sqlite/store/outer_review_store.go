@@ -36,7 +36,7 @@ func validateOuterReview(ctx context.Context, q *gen.Queries, a domain.OuterPlan
 	if spec.Operation == "review.cancel" {
 		count := 0
 		for _, run := range runs {
-			if run.Status != domain.ReviewRunRunning {
+			if !run.Status.IsActive() {
 				continue
 			}
 			if run.ID != spec.Review.RunID || run.PRURL != spec.Review.PRURL || run.TargetSha != spec.Review.HeadSHA || run.Harness != domain.ReviewerCodex {
@@ -57,10 +57,10 @@ func validateOuterReview(ctx context.Context, q *gen.Queries, a domain.OuterPlan
 		return domain.ErrOuterHeld
 	}
 	for _, run := range runs {
-		if run.BatchID == a.ID && run.Harness == domain.ReviewerCodex && run.PRURL == spec.Review.PRURL && run.TargetSha == spec.Review.HeadSHA && run.Status == domain.ReviewRunRunning {
+		if run.BatchID == a.ID && run.Harness == domain.ReviewerCodex && run.PRURL == spec.Review.PRURL && run.TargetSha == spec.Review.HeadSHA && run.Status.IsActive() {
 			continue
 		}
-		if run.Status == domain.ReviewRunRunning || (run.PRURL == spec.Review.PRURL && run.TargetSha == spec.Review.HeadSHA) {
+		if run.Status.IsActive() || (run.PRURL == spec.Review.PRURL && run.TargetSha == spec.Review.HeadSHA) {
 			return domain.ErrOuterHeld
 		}
 	}

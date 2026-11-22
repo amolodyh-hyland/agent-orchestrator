@@ -63,11 +63,11 @@ Loopback only; the routes are blocked on the LAN listener and listed in the Open
 
 ## The pinned Multica dependency
 
-AO's `backend/go.mod` replaces `github.com/multica-ai/multica/server` with `github.com/amolodyh-hyland/multica/server` at a pseudo-version of the commit on the fork's branch `feature/daemonhost-facade`. That branch adds one file, `server/pkg/daemonhost/daemonhost.go`, which re-exports the daemon's types and constructors from the otherwise `internal` package. There is no local path in the replace.
+AO's `backend/go.mod` replaces `github.com/multica-ai/multica/server` with `github.com/amolodyh-hyland/multica/server` at a pseudo-version of a commit merged to the fork's `main` branch (never a feature-branch or local-path commit). That commit carries, on top of upstream Multica, the file `server/pkg/daemonhost/daemonhost.go`, which re-exports the daemon's types and constructors from the otherwise `internal` package. There is no local path in the replace.
 
 Bumping the pin:
 
-1. In a clone of the fork, merge the wanted upstream Multica commit into `feature/daemonhost-facade`, make sure the facade still compiles, and push **that branch only** (no force).
+1. In a clone of the fork, merge the wanted upstream Multica commit through a reviewed fork pull request into `main` (a normal merge commit, no force), make sure the facade still compiles, and wait for that merge to land on the remote.
 2. In `backend/`, run `go list -m -json github.com/amolodyh-hyland/multica/server@<commit>` to get the pseudo-version, then `go mod edit -replace=github.com/multica-ai/multica/server=github.com/amolodyh-hyland/multica/server@<pseudo-version>` and `go mod tidy`.
 3. Prove a clean build: with an empty `GOMODCACHE` and `-mod=readonly`, `go build ./...` must pass; a renamed upstream symbol fails here, which is the intended alarm.
 4. Run the backend tests, then `npm run check:multica-bridge -- --multica <fork checkout>` from `frontend/`.

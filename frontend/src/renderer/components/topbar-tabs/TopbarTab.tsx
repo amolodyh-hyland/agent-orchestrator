@@ -1,4 +1,5 @@
 import { useContext } from "react";
+import { contextMenuKit, dropdownMenuKit, MenuCloseContext, MenuKitContext } from "../menu-model";
 import { SessionPaneContext } from "../session-pane-context";
 import { sameSessionTab, useTabSelectionStore } from "../../stores/tab-selection-store";
 import { STANDALONE_WORKSPACE_ID } from "../../types/workspace";
@@ -77,6 +78,7 @@ export const TopbarTab = memo(function TopbarTab({
 	const renameSession = view.role !== "head" && !view.session?.cloud ? view.session : undefined;
 	const rename = useSessionRename(renameSession, onRenamed);
 	const [isMenuOpen, setIsMenuOpen] = useState(false);
+	const [contextGeneration, setContextGeneration] = useState(0);
 	const isHead = view.role === "head";
 	const isProminent = isHead || view.role === "scratch";
 	const canClose = view.role !== "head";
@@ -286,7 +288,7 @@ export const TopbarTab = memo(function TopbarTab({
 			) : sessionActions?.renderMenu && renderMenu ? (
 				sessionActions.renderMenu(renderMenu({ kind: "dropdown", view, startRename }))
 			) : renderMenu ? (
-				<DropdownMenu onOpenChange={setIsMenuOpen}>
+				<DropdownMenu open={isMenuOpen} onOpenChange={setIsMenuOpen}>
 					<DropdownMenuTrigger asChild>
 						<button
 							aria-label={t("shell.tabs.options")}
@@ -303,12 +305,14 @@ export const TopbarTab = memo(function TopbarTab({
 						</button>
 					</DropdownMenuTrigger>
 					<DropdownMenuContent>
+						<MenuKitContext.Provider value={dropdownMenuKit}><MenuCloseContext.Provider value={() => setIsMenuOpen(false)}>
 						{renderMenu({
 							kind: "dropdown",
 							view,
 							startRename,
 							sessionMenuItems: sessionActions?.menuItems,
 						})}
+					</MenuCloseContext.Provider></MenuKitContext.Provider>
 					</DropdownMenuContent>
 				</DropdownMenu>
 			) : null}
@@ -324,9 +328,13 @@ export const TopbarTab = memo(function TopbarTab({
 
 	if (!renderMenu || switchingInterface) return contents;
 	return (
-		<ContextMenu>
+		<ContextMenu key={contextGeneration}>
 			<ContextMenuTrigger asChild>{contents}</ContextMenuTrigger>
-			<ContextMenuContent>{renderMenu({ kind: "context", view, startRename })}</ContextMenuContent>
+			<ContextMenuContent>
+				<MenuKitContext.Provider value={contextMenuKit}><MenuCloseContext.Provider value={() => setContextGeneration((value) => value + 1)}>
+					{renderMenu({ kind: "context", view, startRename, sessionMenuItems: sessionActions?.menuItems })}
+				</MenuCloseContext.Provider></MenuKitContext.Provider>
+			</ContextMenuContent>
 		</ContextMenu>
 	);
 });

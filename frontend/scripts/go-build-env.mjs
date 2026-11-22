@@ -1,5 +1,13 @@
 import { spawnSync } from "node:child_process";
 
+export function buildSourceRevision(override, gitRevision) {
+	if (override !== undefined) {
+		if (!/^tree-[0-9a-f]{40}$/.test(override)) throw new Error("AO_BUILD_SOURCE_REVISION must identify an exact source tree as tree-<40 lowercase hex characters>");
+		return override;
+	}
+	return gitRevision?.trim() || undefined;
+}
+
 export function daemonBuildEnv({ platform = process.platform, env = process.env, cwd, run = spawnSync } = {}) {
 	if (platform !== "darwin") return env;
 	const buildEnv = { ...env, CGO_ENABLED: "1" };

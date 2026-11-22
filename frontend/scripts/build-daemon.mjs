@@ -3,7 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { meetsMinimumVersion, parseGoVersion, parseMinimumGoVersion } from "./go-version.mjs";
-import { daemonBuildEnv } from "./go-build-env.mjs";
+import { buildSourceRevision, daemonBuildEnv } from "./go-build-env.mjs";
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const frontendRoot = resolve(scriptsDir, "..");
@@ -72,8 +72,9 @@ const commit = spawnSync("git", ["rev-parse", "--short=12", "HEAD"], {
 	encoding: "utf8",
 	windowsHide: true,
 });
-if (commit.status === 0 && commit.stdout.trim()) {
-	ldflags.push(`-X ${cliPackage}.Commit=${commit.stdout.trim()}`);
+const sourceRevision = buildSourceRevision(process.env.AO_BUILD_SOURCE_REVISION, commit.status === 0 ? commit.stdout : undefined);
+if (sourceRevision) {
+	ldflags.push(`-X ${cliPackage}.Commit=${sourceRevision}`);
 }
 // `ao remote-host link` must sign in with the same WorkOS client as this
 // desktop build, or the machine lands in a different AO account.
@@ -97,6 +98,29 @@ if (result.error) {
 if (result.status !== 0) {
 	process.exit(result.status ?? 1);
 }
+
+const host = spawnSync("go", ["build", "-o", join(dirname(buildOutPath), process.platform === "win32" ? "ao-chat-host.exe" : "ao-chat-host"), "./cmd/ao-chat-host"], {
+	cwd: backendRoot,
+	stdio: "inherit",
+	windowsHide: true,
+});
+if (host.error) {
+	console.error(`failed to build chat host: ${host.error.message}`);
+	process.exit(1);
+}
+if (host.status !== 0) process.exit(host.status ?? 1);
+
+const mcpVersion = `-X github.com/aoagents/agent-orchestrator/backend/internal/mcpserver.Version=${process.argv.includes("--dev") ? `${appVersion}-dev` : appVersion}`;
+const mcp = spawnSync("go", ["build", "-ldflags", mcpVersion, "-o", join(dirname(buildOutPath), process.platform === "win32" ? "ao-mcp.exe" : "ao-mcp"), "./cmd/ao-mcp"], {
+	cwd: backendRoot,
+	stdio: "inherit",
+	windowsHide: true,
+});
+if (mcp.error) {
+	console.error(`failed to build ao-mcp: ${mcp.error.message}`);
+	process.exit(1);
+}
+if (mcp.status !== 0) process.exit(mcp.status ?? 1);
 
 if (isWindowsDev) {
 	writeFileSync(windowsDevManifestPath, `${JSON.stringify({ path: buildOutPath }, null, 2)}\n`);
