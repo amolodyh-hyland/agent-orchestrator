@@ -40,6 +40,9 @@ type AgentConfig struct {
 	// requirement that forbids full access). Unset means enabled; false turns it
 	// off so the provider's refusal is reported as is.
 	PermissionFallback *bool `json:"permissionFallback,omitempty"`
+	// TerminateOnPRMerge controls whether sessions auto-terminate when their PR
+	// is merged. Nil falls back to surrounding project/global configuration.
+	TerminateOnPRMerge *bool `json:"terminateOnPrMerge,omitempty"`
 	// Launch carries one session's own launch choices to its adapter. It is
 	// never part of a saved or served project config.
 	Launch AgentLaunchOptions `json:"-"`

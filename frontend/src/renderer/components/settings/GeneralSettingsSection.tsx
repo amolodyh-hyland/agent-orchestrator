@@ -20,6 +20,7 @@ import { Button } from "../ui/button";
 import { ArrowRight } from "@/components/app-icons";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { checkTerminalShellPath, useTerminalShells } from "../../hooks/useTerminalShells";
+import { DataRetentionSection } from "./DataRetentionSection";
 import { DefaultCloudSandboxSection } from "./DefaultCloudSandboxRow";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
 import { MulticaAwarenessSettings } from "./MulticaAwarenessSettings";
@@ -560,6 +561,8 @@ export function GeneralSettingsSection({
 			<AgentAssetSourcesSection />
 			<MulticaAwarenessSettings />
 			<DefaultCloudSandboxSection />
+
+			<DataRetentionSection />
 
 			<SettingsSection title={t("settings.privacy")} grouped>
 				<TelemetryEventsRow />

@@ -310,6 +310,7 @@ var shippedMigrations = map[int64]string{
 	20261117090000000: "20261117090000000_allow_tau_harness.sql",
 	20261118180603285: "20261118180603285_report_unacknowledged_attempts.sql",
 	20261119090000000: "20261119090000000_allow_mastra_code_harness.sql",
+	20261121120000000: "20261121120000000_pr_merge_queue.sql",
 }
 
 // reservedLegacyMigrations is empty now that M3's final sequential exception

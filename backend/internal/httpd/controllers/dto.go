@@ -562,6 +562,13 @@ type ListWorkspaceTreeResponse struct {
 	Truncated bool                 `json:"truncated"`
 }
 
+// ListWorkspaceFilePathsResponse is the body of GET /api/v1/sessions/{sessionId}/workspace/paths.
+type ListWorkspaceFilePathsResponse struct {
+	SessionID domain.SessionID `json:"sessionId"`
+	Paths     []string         `json:"paths"`
+	Truncated bool             `json:"truncated"`
+}
+
 // WorkspaceTreeEntry is one immediate child of a listed directory.
 type WorkspaceTreeEntry struct {
 	Name string                            `json:"name"`
@@ -746,6 +753,9 @@ type SpawnSessionRequest struct {
 	// DisplayNameExplicit says displayName was deliberately chosen, so it wins
 	// over a terminal program's title. Omit it for a name derived from the prompt.
 	DisplayNameExplicit bool `json:"displayNameExplicit,omitempty"`
+	// TerminateOnPRMerge explicitly sets whether this session auto-terminates
+	// when its PR is merged. Nil falls back to project/global defaults.
+	TerminateOnPRMerge *bool `json:"terminateOnPrMerge,omitempty"`
 	// Attachments are files pasted or dropped into the task brief. Each carries
 	// its bytes as standard base64 (no data: URL prefix). The daemon writes them
 	// into the session worktree and appends path references to the prompt.
@@ -1625,6 +1635,12 @@ type SessionPRSummary struct {
 	CIObservedAt     time.Time                    `json:"ciObservedAt,omitempty"`
 	ReviewObservedAt time.Time                    `json:"reviewObservedAt,omitempty"`
 
+	// MergeQueueRequired says the PR's base branch merges through a merge
+	// queue, so Merge adds the PR to the queue. MergeQueue is its place there,
+	// absent while it isn't queued.
+	MergeQueueRequired bool                      `json:"mergeQueueRequired,omitempty"`
+	MergeQueue         *SessionPRMergeQueueEntry `json:"mergeQueue,omitempty"`
+
 	// Description is the PR body as markdown. It is untrusted provider content
 	// and must be sanitized when rendered.
 	Description          string `json:"description,omitempty"`
@@ -1780,6 +1796,40 @@ type ListSessionPRsResponse struct {
 	LinkedPRs []SessionPRReference `json:"linkedPrs"`
 }
 
+// SessionPRMergeQueueEntry is a pull request's place in its base branch's merge
+// queue. Position counts from 1 at the front; EstimatedSecondsToMerge is the
+// provider's estimate, absent when it gives none.
+type SessionPRMergeQueueEntry struct {
+	State                   string     `json:"state" enum:"queued,awaiting_checks,mergeable,unmergeable,locked"`
+	Position                int        `json:"position"`
+	EstimatedSecondsToMerge int        `json:"estimatedSecondsToMerge,omitempty"`
+	EnqueuedAt              *time.Time `json:"enqueuedAt,omitempty"`
+}
+
+func newSessionPRMergeQueueEntry(in *contract.PullRequestMergeQueueEntry) *SessionPRMergeQueueEntry {
+	if in == nil {
+		return nil
+	}
+	return &SessionPRMergeQueueEntry{
+		State:                   in.State,
+		Position:                in.Position,
+		EstimatedSecondsToMerge: in.EstimatedSecondsToMerge,
+		EnqueuedAt:              optionalTime(in.EnqueuedAt),
+	}
+}
+
+func newSessionPRMergeQueueEntryFromDomain(in *domain.MergeQueueEntry) *SessionPRMergeQueueEntry {
+	if in == nil {
+		return nil
+	}
+	return &SessionPRMergeQueueEntry{
+		State:                   string(in.State),
+		Position:                in.Position,
+		EstimatedSecondsToMerge: in.EstimatedSecondsToMerge,
+		EnqueuedAt:              optionalTime(in.EnqueuedAt),
+	}
+}
+
 // NewSessionPRSummary maps the service PR summary model to its HTTP DTO.
 func NewSessionPRSummary(in sessionsvc.PRSummary) SessionPRSummary {
 	return SessionPRSummary{
@@ -1807,6 +1857,9 @@ func NewSessionPRSummary(in sessionsvc.PRSummary) SessionPRSummary {
 		ObservedAt:       in.ObservedAt,
 		CIObservedAt:     in.CIObservedAt,
 		ReviewObservedAt: in.ReviewObservedAt,
+
+		MergeQueueRequired: in.MergeQueueRequired,
+		MergeQueue:         newSessionPRMergeQueueEntry(in.MergeQueue),
 
 		Description:          in.Description,
 		DescriptionTruncated: in.DescriptionTruncated,
@@ -2459,6 +2512,48 @@ type ListCompactSessionUsageResponse struct {
 	Sessions []CompactSessionUsageResponse `json:"sessions"`
 }
 
+// BackgroundTaskResponse is provider-owned background work, not an OS process.
+type BackgroundTaskResponse struct {
+	ID          string     `json:"id"`
+	RunID       string     `json:"runId,omitempty"`
+	Kind        string     `json:"kind" enum:"shell,agent,other"`
+	Description string     `json:"description"`
+	Command     string     `json:"command,omitempty" description:"The shell command line, when the provider reports one. Credentials in it are redacted."`
+	State       string     `json:"state" enum:"running,paused,completed,failed,stopped"`
+	StartedAt   *time.Time `json:"startedAt,omitempty" description:"When the provider started the task, or else when the daemon first observed it."`
+	EndedAt     *time.Time `json:"endedAt,omitempty"`
+	Stoppable   bool       `json:"stoppable,omitempty" description:"True when this provider can stop this running task."`
+}
+
+// BackgroundTaskOutputResponse is one background task's recent output.
+type BackgroundTaskOutputResponse struct {
+	SessionID    domain.SessionID `json:"sessionId"`
+	TaskID       string           `json:"taskId"`
+	Availability string           `json:"availability" enum:"ready,unavailable" description:"unavailable when this provider or session cannot report the task's output; output is then empty."`
+	Output       string           `json:"output" description:"The most recent output: at most the last 200 lines and 64 KB, with terminal escapes and control characters removed."`
+	Truncated    bool             `json:"truncated,omitempty" description:"True when older output was left out or is missing."`
+	Stale        bool             `json:"stale,omitempty" description:"True when the provider stopped sending this task's output, so anything it printed since is missing."`
+}
+
+// BackgroundTaskIDParam names one provider-owned background task.
+type BackgroundTaskIDParam struct {
+	TaskID string `path:"taskId" description:"Provider-scoped background task identifier."`
+}
+
+// BackgroundTasksResponse distinguishes unavailable reporting from no live tasks.
+type BackgroundTasksResponse struct {
+	SessionID            domain.SessionID         `json:"sessionId"`
+	ControllerGeneration string                   `json:"controllerGeneration"`
+	Availability         string                   `json:"availability" enum:"ready,partial,unavailable"`
+	ObservedAt           *time.Time               `json:"observedAt,omitempty"`
+	Tasks                []BackgroundTaskResponse `json:"tasks"`
+}
+
+// ListBackgroundTasksResponse batches readings for already attached providers.
+type ListBackgroundTasksResponse struct {
+	Sessions []BackgroundTasksResponse `json:"sessions"`
+}
+
 // SessionMemoryProcessResponse is one process in a session's runtime tree.
 type SessionMemoryProcessResponse struct {
 	PID        int     `json:"pid"`
@@ -3029,13 +3124,28 @@ type MergePRRequest struct {
 	AllowNoChecks bool `json:"allowNoChecks,omitempty"`
 }
 
-// MergePRResponse is the body of POST /api/v1/prs/{id}/merge (200).
+// MergePRResponse is the body of POST /api/v1/prs/{id}/merge (200). Where the
+// base branch requires a merge queue the PR joins it instead of merging: State
+// stays open and Queue is its place in the queue.
 type MergePRResponse struct {
-	OK             bool           `json:"ok"`
-	PRNumber       int            `json:"prNumber"`
-	Method         string         `json:"method"`
-	State          domain.PRState `json:"state" enum:"merged"`
-	StateChangedAt time.Time      `json:"stateChangedAt"`
+	OK             bool                      `json:"ok"`
+	PRNumber       int                       `json:"prNumber"`
+	Method         string                    `json:"method"`
+	State          domain.PRState            `json:"state" enum:"merged,open"`
+	StateChangedAt time.Time                 `json:"stateChangedAt"`
+	Queue          *SessionPRMergeQueueEntry `json:"queue,omitempty"`
+}
+
+// DequeuePRRequest is the body of POST /api/v1/prs/{id}/dequeue.
+type DequeuePRRequest struct {
+	PRURL string `json:"prUrl" minLength:"1"`
+}
+
+// DequeuePRResponse is the body of POST /api/v1/prs/{id}/dequeue (200).
+type DequeuePRResponse struct {
+	OK        bool      `json:"ok"`
+	PRNumber  int       `json:"prNumber"`
+	ChangedAt time.Time `json:"changedAt"`
 }
 
 // ChangePRStateRequest is the body of POST /api/v1/prs/{id}/state.
@@ -3068,6 +3178,9 @@ type PRStackLayerResponse struct {
 	NoChecks bool `json:"noChecks,omitempty"`
 	// SessionID is the AO session tracking this layer, when one does.
 	SessionID domain.SessionID `json:"sessionId,omitempty"`
+	// BehindParent counts the commits of the open layer below that this layer
+	// lacks: above zero, it needs rebasing onto that layer.
+	BehindParent int `json:"behindParent,omitempty"`
 }
 
 // LoadPRDetailsRequest names the tracked PR whose details to read.
@@ -3247,6 +3360,32 @@ type LinkPreviewResponse struct {
 	FaviconURL  string `json:"faviconUrl,omitempty"`
 	// FaviconDarkURL is the page's icon for a dark color scheme, when it names one.
 	FaviconDarkURL string `json:"faviconDarkUrl,omitempty"`
+}
+
+// PRPreviewQuery selects the GitHub pull request to preview.
+type PRPreviewQuery struct {
+	URL string `query:"url" description:"A github.com pull request URL."`
+}
+
+// PRPreviewResponse is the body of GET /api/v1/pr-preview (200): the state and
+// summary of any GitHub pull request a chat links to, read through the
+// daemon's GitHub account.
+type PRPreviewResponse struct {
+	URL    string `json:"url"`
+	Repo   string `json:"repo" description:"owner/name"`
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	State  string `json:"state" enum:"open,draft,merged,closed"`
+	// Checks is omitted when the pull request has no checks.
+	Checks       string `json:"checks,omitempty" enum:"passing,failing,pending"`
+	Author       string `json:"author,omitempty"`
+	SourceBranch string `json:"sourceBranch,omitempty"`
+	TargetBranch string `json:"targetBranch,omitempty"`
+	Additions    int    `json:"additions"`
+	Deletions    int    `json:"deletions"`
+	ChangedFiles int    `json:"changedFiles"`
+	// StateChangedAt is when it merged or closed, else when it was opened.
+	StateChangedAt *time.Time `json:"stateChangedAt,omitempty"`
 }
 
 // MobileStatusResponse is the body of the Connect Mobile status/enable/disable/
@@ -3713,7 +3852,7 @@ type ConversationConfigOptionResponse struct {
 	Type           string                             `json:"type" enum:"select,boolean"`
 	CurrentValue   string                             `json:"currentValue,omitempty"`
 	CurrentBoolean *bool                              `json:"currentBoolean,omitempty"`
-	Choices        []ConversationConfigChoiceResponse `json:"choices,omitempty"`
+	Choices        []ConversationConfigChoiceResponse `json:"choices"`
 }
 
 // ConversationConfigChoiceResponse is one value in a provider select.
@@ -3816,6 +3955,15 @@ type ConversationTurnSettingsPayload struct {
 	FastMode          bool   `json:"fastMode,omitempty"`
 	PlanMode          bool   `json:"planMode,omitempty"`
 	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,1m"`
+}
+
+// InterruptConversationRequest is the optional body of a chat Stop. TurnID is
+// the conversation turn the user pressed Stop on. With it, a Stop that lands
+// after that turn ended cannot cancel a later turn, and a repeated Stop for a
+// turn that already stopped succeeds without reaching the agent. Without it the
+// in-flight turn is stopped, as older clients expect.
+type InterruptConversationRequest struct {
+	TurnID string `json:"turnId,omitempty"`
 }
 
 // ResolveConversationApprovalRequest answers a pending approval. DecisionID must

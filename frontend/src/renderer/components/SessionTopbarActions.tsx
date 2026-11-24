@@ -142,6 +142,7 @@ export function SessionTopbarActions({
 						{/* The guided tour lights this on a session's page too (GuidedTour). */}
 						<span className="inline-flex" style={noDragStyle} data-tour="orchestrator-header">
 							<Button type="button" size="sm"
+								data-telemetry-id="topbar.open_orchestrator"
 								aria-label={orchestratorReplyLabel(t("shell.openOrchestrator"), orchestratorReply, t)}
 								data-priority="secondary"
 								disabled={isSpawning || isProjectRestarting || isProvisioning}
@@ -249,6 +250,7 @@ export function SessionTopbarActions({
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<Button type="button" size="sm"
+								data-telemetry-id="topbar.open_board"
 								aria-label={t("shell.board")}
 								data-priority="secondary"
 								disabled={startingOrchestrator}
@@ -266,6 +268,7 @@ export function SessionTopbarActions({
 						<TooltipTrigger asChild>
 							<span className="inline-flex" style={noDragStyle}>
 								<Button type="button" size="sm"
+									data-telemetry-id="topbar.new_task"
 									aria-label={t("shell.newTask")}
 									data-priority="primary"
 									disabled={startingOrchestrator || isProjectRestarting || isProvisioning}

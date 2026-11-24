@@ -450,6 +450,9 @@ func (s *Service) EditMessage(
 		branch.ReplayTruncated = replayTruncated
 	}
 	conversation := source.conversation
+	// The snapshot holds the settings the source started with; the picker
+	// reads the replacement's, so give it the ones chosen since (#6759).
+	conversation.Settings = source.Settings()
 	conversation.ActiveBranchID = branchID
 	replacement := s.newReplacementController(id, source, conversation, generation, provider)
 	if err := s.store.CreateAndActivateConversationBranch(
@@ -978,6 +981,7 @@ func (s *Service) activateBranchLocked(ctx context.Context, id domain.SessionID,
 	}
 	generation := s.newID()
 	conversation := source.conversation
+	conversation.Settings = source.Settings() // as for an edit: the live settings
 	conversation.ActiveBranchID = branch.ID
 	replacement := s.newReplacementController(id, source, conversation, generation, provider)
 	if err := s.store.ActivateConversationBranch(operationCtx, id, conversation.ID, branch.ID,
@@ -1019,7 +1023,13 @@ func (s *Service) branchLaunchConfig(
 	if err != nil {
 		return StartConfig{}, nil, fmt.Errorf("chat driver for %s: %w", cfg.Harness, err)
 	}
-	return cloneStartConfig(cfg), driver, nil
+	// The registered config is what the session was spawned with. A provider a
+	// branch launches, or a restored source, continues this conversation, so it
+	// runs with the model, effort and approval mode chosen since, as a
+	// controller rebuilt after a restart does (#6759).
+	launch := cloneStartConfig(cfg)
+	applyConversationSettings(&launch, source.Settings())
+	return launch, driver, nil
 }
 
 func (s *Service) prepareBranchControllerEnv(ctx context.Context, cfg StartConfig) (map[string]string, error) {

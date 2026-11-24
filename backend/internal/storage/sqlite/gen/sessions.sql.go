@@ -1538,12 +1538,13 @@ UPDATE sessions SET
     updated_at = ?16,
     auto_inject_review = ?17,
     auto_inject_ci = ?18,
-    provision_state = ?19,
+    terminate_on_pr_merge = ?19,
+    provision_state = ?20,
     provision_error = '',
-    client_request_id = ?20,
-    client_request_hash = ?21,
+    client_request_id = ?21,
+    client_request_hash = ?22,
     is_task_preparation = 0
-WHERE id = ?22 AND is_task_preparation = 1
+WHERE id = ?23 AND is_task_preparation = 1
 `
 
 type PromoteTaskPreparationParams struct {
@@ -1565,6 +1566,7 @@ type PromoteTaskPreparationParams struct {
 	UpdatedAt           time.Time
 	AutoInjectReview    bool
 	AutoInjectCI        bool
+	TerminateOnPRMerge  bool
 	ProvisionState      domain.SessionProvisionState
 	ClientRequestID     string
 	ClientRequestHash   string
@@ -1593,6 +1595,7 @@ func (q *Queries) PromoteTaskPreparation(ctx context.Context, arg PromoteTaskPre
 		arg.UpdatedAt,
 		arg.AutoInjectReview,
 		arg.AutoInjectCI,
+		arg.TerminateOnPRMerge,
 		arg.ProvisionState,
 		arg.ClientRequestID,
 		arg.ClientRequestHash,
