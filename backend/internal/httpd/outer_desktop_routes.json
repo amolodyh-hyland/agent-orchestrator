@@ -495,6 +495,10 @@
     "operation": "native_only",
     "mode": "held"
   },
+  "POST /api/v1/prs/{id}/dequeue": {
+    "operation": "native_only",
+    "mode": "held"
+  },
   "POST /api/v1/prs/{id}/details": {
     "operation": "native_only",
     "mode": "held"
@@ -622,6 +626,10 @@
   "POST /api/v1/sessions/{sessionId}/attachments": {
     "operation": "session.scoped",
     "mode": "confirm"
+  },
+  "POST /api/v1/sessions/{sessionId}/background-tasks/{taskId}/stop": {
+    "operation": "native_only",
+    "mode": "held"
   },
   "POST /api/v1/sessions/{sessionId}/chat-view": {
     "operation": "session.scoped",

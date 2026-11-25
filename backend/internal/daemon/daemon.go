@@ -634,6 +634,8 @@ func Run(buildVersion string) (retErr error) {
 		}
 		return fmt.Errorf("wire session service: %w", err)
 	}
+	// Bind the session manager to the chat hooks before anything else puts it to use.
+	chatBindings.Sessions(wiredSessMgr)
 	lcStack.StartActivityObserver(wiredSessMgr.SessionRuntimeEnv)
 	// The runtime reaper also observes reviewers serving an in-progress review
 	// run; the review engine reduces each pass into run transitions. Its first
@@ -667,7 +669,6 @@ func Run(buildVersion string) (retErr error) {
 			return roots
 		},
 	})
-	chatBindings.Sessions(wiredSessMgr)
 	sessMgr := wiredSessMgr
 	if switcher, ok := wiredSessMgr.(chatsvc.TerminalProviderSwitcher); ok {
 		chatSvc.SetTerminalProviderSwitcher(switcher)
