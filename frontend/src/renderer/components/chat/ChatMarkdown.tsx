@@ -268,7 +268,6 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 		const addresses: [typeof remarkChatAddresses, { workspacePaths: string[] }] = [remarkChatAddresses, { workspacePaths }];
 		return remarkPlugins ? [...base, addresses, ...remarkPlugins] : [...base, addresses];
 	}, [renderMath, remarkPlugins, workspacePaths]);
-	}, [renderMath, remarkPlugins, workspacePaths]);
 	const settledPlugins = useMemo<NonNullable<Options["rehypePlugins"]>>(
 		() => [...(rehypePlugins ?? []), [rehypeExcerptSource, { offset: 0 }]],
 		[rehypePlugins],
@@ -633,7 +632,8 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node, labelTe
 			? <ChatPathMenu path={normalizeWorkspaceFileReference(href)}>{unavailable}</ChatPathMenu>
 			: unavailable;
 	}
-	if (href && addressKind) {
+	// A pull request link keeps its chip below; the address chip is for everything else.
+	if (href && addressKind && !parsePullRequestLink(href)) {
 		const reference = addressFileOpenReference(href);
 		return <ChatAddress key={href} target={href} kind={addressKind} markdownFindContent={children} onBrowserOpen={onLinkOpen} onFileOpen={openInFiles && onFileOpen ? () => onFileOpen(addressKind === "path" ? reference : openInFiles, workspaceFileReferenceLine(href)) : undefined} />;
 	}
@@ -1018,7 +1018,7 @@ const COMPONENTS: Components = {
 	// Match terminal links: a plain HTTP(S) click uses the session's AO Browser;
 	// Cmd/Ctrl- or Option/Alt-click and non-web schemes use the system browser,
 	// and right-click offers the system browser and copying the address.
-	a: ({ node, ...props }) => <MarkdownLink {...props} href={node?.properties["data-chat-target"] as string | undefined ?? props.href} addressKind={node?.properties["data-chat-address"] as ChatAddressKind | undefined} />,
+	a: ({ node, ...props }) => <MarkdownLink {...props} node={node} href={node?.properties["data-chat-target"] as string | undefined ?? props.href} addressKind={node?.properties["data-chat-address"] as ChatAddressKind | undefined} />,
 
 	img: MarkdownImage,
 };

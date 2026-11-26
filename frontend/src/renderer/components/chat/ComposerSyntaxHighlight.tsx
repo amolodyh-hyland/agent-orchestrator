@@ -2,7 +2,7 @@ import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext
 import { $getRoot, $isElementNode, $isTextNode, type LexicalEditor, type LexicalNode } from "lexical";
 import type { Root, RootContent } from "hast";
 import { useEffect, useId } from "react";
-import { canonicalLanguage, highlightInWorker, type GrammarName } from "../../lib/code-highlight";
+import { canonicalLanguage, highlightAsync, type GrammarName } from "../../lib/code-highlight";
 import { CODE_TOKEN_COLORS, type CodeTokenKind } from "../../lib/code-style";
 import { useUiStore } from "../../stores/ui-store";
 import { ComposerCodeNode } from "./ComposerCode";
@@ -121,7 +121,7 @@ export function ComposerSyntaxHighlight() {
 			const version = revision;
 			try {
 				const regions = codeRegions(editor, blockLanguage, inlineLanguage);
-				const trees = await Promise.all(regions.map((region) => highlightInWorker(region.code, region.language)));
+				const trees = await Promise.all(regions.map((region) => highlightAsync(region.code, region.language)));
 				if (disposed || composing || editor.isComposing() || version !== revision) return;
 				const ranges = new Map<CodeTokenKind, Range[]>();
 				const budget = { remaining: MAX_RANGES };

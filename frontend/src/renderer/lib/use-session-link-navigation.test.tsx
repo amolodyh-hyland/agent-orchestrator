@@ -119,7 +119,7 @@ describe("useSessionLinkNavigation", () => {
 	it("opens another session's artifact in the current pane without changing conversation or leaving a navigation request", () => {
 		const open = vi.fn();
 		useUiStore.setState({ workspaceFileOpenRequest: null });
-		const wrapper = ({ children }: { children: ReactNode }) => <SessionPanePreviewContext.Provider value={open}>{children}</SessionPanePreviewContext.Provider>;
+		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}><SessionPanePreviewContext.Provider value={open}>{children}</SessionPanePreviewContext.Provider></QueryClientProvider>;
 		const { result } = renderHook(() => useSessionLinkNavigation(), { wrapper });
 		act(() => expect(result.current("ao://sessions/project/terminated/artifacts/plans/my%20plan.md")).toBe(true));
 		expect(open).toHaveBeenCalledWith({ projectId: "project", sessionId: "terminated", path: "plans/my plan.md", hostId: undefined, sourceKind: undefined });

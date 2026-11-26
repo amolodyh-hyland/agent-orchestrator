@@ -911,7 +911,9 @@ describe("send keys", () => {
 
 		const preview = screen.getByRole("region", { name: "Markdown preview" });
 		expect(within(preview).getByText("npm test").tagName).toBe("CODE");
-		expect(within(preview).getByText("const x = 1;").closest("pre")).not.toBeNull();
+		// The fence is highlighted on first render, so its text is split across token spans:
+		// assert on the block's own text, not on one text node.
+		expect(preview.querySelector("pre")?.textContent).toContain("const x = 1;");
 	});
 
 	it("refuses to send an empty message: there is no keystroke concept here", async () => {

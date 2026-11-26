@@ -10,7 +10,7 @@ import { findBlocks, findRange, findTextOccurrences, renderedFindBlocks } from "
 import { setApiBaseUrl } from "../../lib/api-client";
 import { renderMermaidDiagram } from "../../lib/mermaid-diagram";
 import { useUiStore } from "../../stores/ui-store";
-import { ActivityTitle, ArtifactPathCode, ChatCodeText, ChatLinkProvider, ChatMarkdown, ChatOpeningRef } from "./ChatMarkdown";
+import { ActivityTitle, ArtifactPathCode, ChatCodeText, ChatLinkProvider, ChatMarkdown } from "./ChatMarkdown";
 import { WorkerUpdateRows } from "./WorkerUpdates";
 import { ChatImageSourceProvider } from "./chat-image-source";
 

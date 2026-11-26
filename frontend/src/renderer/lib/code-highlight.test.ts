@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Element, Root, RootContent } from "hast";
-import { canonicalLanguage, highlightSync, streamingCodeHighlighter, type GrammarName } from "./code-highlight";
+import { canonicalLanguage, highlightAsync, highlightSync, streamingCodeHighlighter, type GrammarName } from "./code-highlight";
 
 function classesIn(tree: Root): string[] {
 	const found: string[] = [];
@@ -79,5 +79,30 @@ describe("streamingCodeHighlighter", () => {
 		const session = streamingCodeHighlighter.createSession!();
 		expect(session.highlightLines!({ code: `const s = "${"x".repeat(1_000_000)}";\n`, language: "ts", meta: "", isIncomplete: true })).toBeNull();
 		session.dispose();
+	});
+});
+
+// The composer paints from `highlightAsync`. These run the real seam (no mock) so its
+// contract is pinned independently of the composer's timing tests: same tree as the
+// synchronous tokenizer, the hljs-* classes the composer maps to colors, and an
+// `undefined` (never a rejection) when there is nothing to paint.
+describe("highlightAsync", () => {
+	it("resolves to the tree highlightSync returns, with the classes the composer reads", async () => {
+		const code = "const answer = 42;\n";
+		const tree = await highlightAsync(code, "typescript");
+		expect(tree).toEqual(highlightSync(code, "typescript"));
+		expect(classesIn(tree!)).toEqual(expect.arrayContaining(["hljs-keyword", "hljs-number"]));
+		expect(JSON.stringify(tree)).toContain("const");
+	});
+
+	it("keeps the source text exactly, line endings included", async () => {
+		const code = "a = 1\r\nb = 2\n";
+		const tree = await highlightAsync(code, "python");
+		const text = (nodes: readonly RootContent[]): string => nodes.map((node) => node.type === "text" ? node.value : node.type === "element" ? text(node.children as RootContent[]) : "").join("");
+		expect(text(tree!.children)).toBe(code);
+	});
+
+	it("resolves undefined, not a rejection, for input past the size cap", async () => {
+		await expect(highlightAsync("x".repeat(1_000_001), "typescript")).resolves.toBeUndefined();
 	});
 });

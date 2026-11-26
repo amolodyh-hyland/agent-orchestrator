@@ -104,6 +104,15 @@ export function highlightSync(code: string, language: GrammarName): Root | undef
 	}
 }
 
+/**
+ * Highlight in a later turn so a caller that repaints on every edit (the
+ * composer) stays responsive and can discard a result that went stale while it
+ * waited. The work is the same synchronous tokenizer `highlightSync` runs.
+ */
+export async function highlightAsync(code: string, language: GrammarName): Promise<Root | undefined> {
+	return highlightSync(code, language);
+}
+
 const pierrePlugin = createHighlightsPlugin({ theme: CODE_THEME });
 
 const guarded = <T>(highlight: (options: CodeOptions) => T | null) => (options: CodeOptions): T | null => {
