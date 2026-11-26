@@ -287,6 +287,9 @@ function toLocalWorkspaceSession(
 type FakeAgentSeam = { snapshot: () => WorkspaceSummary[] };
 
 class DaemonNotReadyError extends Error {
+	get code(): string {
+		return "DAEMON_NOT_READY_ERROR";
+	}
 	constructor() {
 		super("Orchestrator daemon API is not ready");
 		markApiError(this);
@@ -567,6 +570,7 @@ export function toCloudWorkspaceSession(
 			runtimeError: session.runtimeError,
 			startupError: session.startupError,
 			coderWorkspaceUrl: session.coderWorkspaceUrl,
+			...(session.workerEpoch ? { workerEpoch: session.workerEpoch } : {}),
 			...(session.requestedBy ? { requestedBy: session.requestedBy } : {}),
 			...(session.createdByUserId ? { createdByUserId: session.createdByUserId } : {}),
 		},

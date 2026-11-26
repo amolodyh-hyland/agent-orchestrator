@@ -769,6 +769,8 @@ type PR struct {
 	ReviewPartial            bool
 	HeadFromFork             bool
 	HeadIsDefaultBranch      bool
+	MergeQueueRequired       bool
+	MergeQueueEntry          string
 }
 
 type PRCheck struct {

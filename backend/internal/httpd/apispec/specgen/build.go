@@ -229,6 +229,10 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersFactoryRunIDParam":                         "FactoryRunIDParam",
 	"ControllersConversationFindResponse":                  "ConversationFindResponse",
 	"ChatFindOccurrence":                                   "ConversationFindOccurrence",
+	"ControllersBackgroundTaskResponse":                    "BackgroundTaskResponse",
+	"ControllersBackgroundTasksResponse":                   "BackgroundTasksResponse",
+	"ControllersBackgroundTaskOutputResponse":              "BackgroundTaskOutputResponse",
+	"ControllersListBackgroundTasksResponse":               "ListBackgroundTasksResponse",
 	"ControllersTelemetryIdentityResponse":                 "TelemetryIdentityResponse",
 	"ControllersAgentAccountIDParam":                       "AgentAccountIDParam",
 	"ControllersAgentLoginActionRequest":                   "AgentLoginActionRequest",
@@ -554,6 +558,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersWorkspacePathResolutionResponse":          "WorkspacePathResolutionResponse",
 	"ControllersWorkspaceTreeQuery":                       "WorkspaceTreeQuery",
 	"ControllersListWorkspaceTreeResponse":                "ListWorkspaceTreeResponse",
+	"ControllersListWorkspaceFilePathsResponse":           "ListWorkspaceFilePathsResponse",
 	"ControllersWorkspaceTreeEntry":                       "WorkspaceTreeEntry",
 	"ControllersListEditorsResponse":                      "ListEditorsResponse",
 	"ControllersEditorSummary":                            "EditorSummary",
@@ -585,6 +590,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersSessionPRUnresolvedReviewer":              "SessionPRUnresolvedReviewer",
 	"ControllersSessionPRReviewCommentLink":               "SessionPRReviewCommentLink",
 	"ControllersSessionPRMergeabilitySummary":             "SessionPRMergeabilitySummary",
+	"ControllersSessionPRMergeQueueEntry":                 "SessionPRMergeQueueEntry",
 	"ControllersSessionPRConflictFile":                    "SessionPRConflictFile",
 	"ControllersListSessionPRsResponse":                   "ListSessionPRsResponse",
 	"ControllersSetActivityRequest":                       "SetActivityRequest",
@@ -737,6 +743,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersMergePRStackRequest":        "MergePRStackRequest",
 	"ControllersMergePRStackResponse":       "MergePRStackResponse",
 	"ControllersMergePRResponse":            "MergePRResponse",
+	"ControllersDequeuePRRequest":           "DequeuePRRequest",
+	"ControllersDequeuePRResponse":          "DequeuePRResponse",
 	"ControllersResolveCommentsRequest":     "ResolveCommentsRequest",
 	"ControllersResolveCommentsResponse":    "ResolveCommentsResponse",
 	"ControllersChangePRStateRequest":       "ChangePRStateRequest",
@@ -791,6 +799,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersEndpointsResponse":                "EndpointsResponse",
 	"ControllersLinkPreviewQuery":                 "LinkPreviewQuery",
 	"ControllersLinkPreviewResponse":              "LinkPreviewResponse",
+	"ControllersPRPreviewQuery":                   "PRPreviewQuery",
+	"ControllersPRPreviewResponse":                "PRPreviewResponse",
 	"ControllersSessionSearchQuery":               "SessionSearchQuery",
 	"ControllersSessionSearchResponse":            "SessionSearchResponse",
 	"ControllersSessionSearchResult":              "SessionSearchResult",
@@ -973,6 +983,7 @@ func operations() []operation {
 	ops = append(ops, endpointsOperations()...)
 	ops = append(ops, telemetryIdentityOperations()...)
 	ops = append(ops, linkPreviewOperations()...)
+	ops = append(ops, prPreviewOperations()...)
 	ops = append(ops, sessionSearchOperations()...)
 	return ops
 }
@@ -1042,6 +1053,26 @@ func linkPreviewOperations() []operation {
 			pathParams: []any{controllers.LinkPreviewQuery{}},
 			resps: []respUnit{
 				{http.StatusOK, controllers.LinkPreviewResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusBadGateway, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+	}
+}
+
+// prPreviewOperations declares the chat's pull request preview. Must stay 1:1
+// with the routes PRPreviewController.Register mounts (enforced by the parity
+// test).
+func prPreviewOperations() []operation {
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/pr-preview", id: "getPRPreview", tag: "link-preview",
+			summary:    "Read the state and summary of a GitHub pull request a chat links to",
+			pathParams: []any{controllers.PRPreviewQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.PRPreviewResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusBadGateway, envelope.APIError{}},
@@ -1598,6 +1629,30 @@ func shellTerminalOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodGet, path: "/api/v1/sessions/background-tasks", id: "listBackgroundTasks", tag: "conversations",
+			summary:    "List native background work for attached session controllers",
+			pathParams: []any{controllers.ListUsageSessionsQuery{}},
+			resps:      []respUnit{{http.StatusOK, controllers.ListBackgroundTasksResponse{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/background-tasks", id: "getBackgroundTasks", tag: "conversations",
+			summary:    "Inspect native background work without waking the session",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps:      []respUnit{{http.StatusOK, controllers.BackgroundTasksResponse{}}, {http.StatusNotFound, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/background-tasks/{taskId}/stop", id: "stopBackgroundTask", tag: "conversations",
+			summary:    "Stop one native background task without waking the session",
+			pathParams: []any{controllers.SessionIDParam{}, controllers.BackgroundTaskIDParam{}},
+			resps:      []respUnit{{http.StatusNoContent, nil}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/background-tasks/{taskId}/output", id: "getBackgroundTaskOutput", tag: "conversations",
+			summary:    "Read one background task's recent output without waking the session",
+			pathParams: []any{controllers.SessionIDParam{}, controllers.BackgroundTaskIDParam{}},
+			resps:      []respUnit{{http.StatusOK, controllers.BackgroundTaskOutputResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}},
+		},
+		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/chat-view", id: "setSessionChatView", tag: "conversations",
 			summary:    "Keep a viewed chat awake or release its view lease",
 			pathParams: []any{controllers.SessionIDParam{}},
@@ -1977,6 +2032,7 @@ func shellTerminalOperations() []operation {
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/conversation/interrupt", id: "interruptSessionConversationTurn", tag: "conversations",
 			summary:    "Cancel the in-flight turn in a chat session",
 			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.InterruptConversationRequest{}, optionalReqBody: true,
 			resps: []respUnit{
 				{http.StatusNoContent, nil},
 				{http.StatusNotFound, envelope.APIError{}},
@@ -3995,6 +4051,17 @@ func sessionOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/workspace/paths", id: "listSessionWorkspaceFilePaths", tag: "sessions",
+			summary:    "List the visible file paths in a session workspace, without per-file status",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ListWorkspaceFilePathsResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/pr/{prNumber}/files", id: "listSessionPRFiles", tag: "sessions",
 			summary:    "List the exact base-to-head changed files for an associated pull request",
 			pathParams: []any{controllers.SessionIDParam{}, controllers.PRNumberParam{}, controllers.PRFilesQuery{}},
@@ -4584,6 +4651,20 @@ func prOperations() []operation {
 			resps: []respUnit{
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusOK, controllers.MergePRResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusUnprocessableEntity, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/prs/{id}/dequeue", id: "dequeuePR", tag: "prs",
+			summary:    "Remove a pull request from its base branch's merge queue",
+			pathParams: []any{controllers.PRIDParam{}},
+			reqBody:    controllers.DequeuePRRequest{},
+			resps: []respUnit{
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusOK, controllers.DequeuePRResponse{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusUnprocessableEntity, envelope.APIError{}},

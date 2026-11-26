@@ -2,6 +2,7 @@ import { compareNotificationBoundary, compareNotificationText } from "../lib/not
 import { useNotificationBadge } from "../hooks/useNotificationBadge";
 import { getApiBaseUrl } from "../lib/api-client";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "./ui/context-menu";
+import { useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import { AppLink } from "./AppLink";
 import { CloudMark } from "./CloudMark";
 import { useQueryClient } from "@tanstack/react-query";
@@ -358,6 +359,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	const queryClient = useQueryClient();
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [open, setOpen] = useState(false);
+	const markNotificationPick = useTelemetrySurface("notifications_panel", open, { choice: true });
 	const [clearingNotificationIds, setClearingNotificationIds] = useState<Set<string>>(() => new Set());
 	const [restoringSessionId, setRestoringSessionId] = useState<string | undefined>();
 	const [clearingAll, setClearingAll] = useState(false);
@@ -464,9 +466,10 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	});
 
 	const openSessionAndDismiss = useCallback((notification: NotificationDTO, hostId: HostId) => {
+		markNotificationPick();
 		openSession(notification, hostId);
 		setPanelOpen(false);
-	}, [openSession, setPanelOpen]);
+	}, [markNotificationPick, openSession, setPanelOpen]);
 
 	const restoreThenOpen = useCallback(async (
 		sessionId: string,
@@ -482,6 +485,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 				? await restoreSession(sessionId, hostId)
 				: await restoreSession(sessionId);
 			if (result.status === "success") {
+				markNotificationPick();
 				openAfterRestore();
 				setPanelOpen(false);
 				return;
@@ -490,7 +494,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		} finally {
 			setRestoringSessionId(undefined);
 		}
-	}, [restoreSession, restoringSessionId, setPanelOpen, t]);
+	}, [markNotificationPick, restoreSession, restoringSessionId, setPanelOpen, t]);
 
 	const restoreAndOpen = useCallback((notification: NotificationDTO, hostId: HostId) => {
 		const sessionId = notification.target.sessionId || notification.sessionId;
@@ -507,9 +511,10 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	}, [navigateToSession]);
 
 	const openCloudSessionAndDismiss = useCallback((projectId: string, sessionId: string) => {
+		markNotificationPick();
 		openCloudSession(projectId, sessionId);
 		setPanelOpen(false);
-	}, [openCloudSession, setPanelOpen]);
+	}, [markNotificationPick, openCloudSession, setPanelOpen]);
 
 	const restoreCloudAndOpen = useCallback((projectId: string, sessionId: string) => {
 		void restoreThenOpen(sessionId, undefined, cloudRowKey(sessionId), () => openCloudSession(projectId, sessionId));
@@ -690,6 +695,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 				<span className="inline-flex shrink-0" ref={anchorRef}>
 					<PopoverTrigger asChild>
 						<Button type="button" size="icon-sm"
+							data-telemetry-id="topbar.notifications"
 							aria-label={unreadCount > 0 ? t("notify.unreadCount", { count: unreadCount }) : t("notify.bell")}
 							className="relative"
 							style={style}
@@ -712,6 +718,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			<PopoverContent
 				align="end"
 				aria-label={t("notify.title")}
+				data-telemetry-surface="notifications_panel"
 				className="flex max-h-[calc(100dvh-5rem)] w-notification-width max-w-[calc(100vw-1rem)] flex-col overflow-hidden rounded-lg p-0 [&_button]:transition-none [&_a]:transition-none"
 				sideOffset={6}
 			>

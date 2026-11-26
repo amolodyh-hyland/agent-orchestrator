@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useContext, useMemo, useSyncExternalStore } from "react";
+import { useRestoreSession } from "../hooks/useRestoreSession";
 import { SessionPanePreviewContext } from "./session-pane-preview";
 import { useCloudProjectsQuery, useCloudSessionsQuery, remoteWorkspaceQueryKey, toCloudWorkspace, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { useCloudOrg } from "../hooks/useCloudOrg";
@@ -67,6 +68,8 @@ export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cl
 	const openPanePreview = useContext(SessionPanePreviewContext);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
+	const restoreSession = useRestoreSession();
+	const queryClient = useQueryClient();
 	return useCallback((url: string) => {
 		const artifact = parseArtifactLink(url);
 		const target = parseSessionLink(url) ?? artifact;
@@ -98,15 +101,22 @@ export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cl
 			});
 			return false;
 		}
-		// A terminated session's artifacts are still served, so its artifact links still open.
-		if (resolved.isTerminated && !artifact) {
-			showGlobalToast(`Session ${resolved.sessionId} is terminated`, undefined, {
-				placement: "top-center",
-				dismissible: true,
-				durationMs: 5_000,
-				dedupeKey: `session-link:${remoteHostId ? `${remoteHostId}:` : ""}${resolved.projectId}:${resolved.sessionId}`,
+		const mutationKey = ["resume-agent", remoteHostId ?? "local", resolved.sessionId];
+		if (resolved.isTerminated && !artifact && queryClient.isMutating({ mutationKey }) === 0) {
+			void queryClient.getMutationCache().build(queryClient, {
+				mutationKey,
+				mutationFn: async () => {
+					const result = await restoreSession(resolved.sessionId, remoteHostId);
+					if (result.status !== "success") throw new Error(result.message);
+				},
+			}).execute(undefined).catch((error: unknown) => {
+				showGlobalToast(error instanceof Error ? error.message : "Unable to restore session", undefined, {
+					tone: "error",
+					placement: "top-center",
+					dismissible: true,
+					dedupeKey: `session-link:${remoteHostId ? `${remoteHostId}:` : ""}${resolved.projectId}:${resolved.sessionId}`,
+				});
 			});
-			return false;
 		}
 		if (artifact && openPanePreview) {
 			openPanePreview({ projectId: resolved.projectId, sessionId: resolved.sessionId, hostId: remoteHostId, sourceKind, path: artifact.path });
@@ -116,5 +126,5 @@ export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cl
 		if (remoteHostId) navigateToSession(resolved.projectId, resolved.sessionId, remoteHostId);
 		else navigateToSession(resolved.projectId, resolved.sessionId);
 		return true;
-	}, [navigateToSession, openPanePreview, remoteHostId, requestWorkspaceFileOpen, showGlobalToast, source, sourceKind]);
+	}, [navigateToSession, openPanePreview, queryClient, remoteHostId, requestWorkspaceFileOpen, restoreSession, showGlobalToast, source, sourceKind]);
 }

@@ -165,6 +165,10 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/prs/{id}/comments",
 	"/api/v1/prs/{id}/attachment-access",
 	"/api/v1/sessions",
+	"/api/v1/sessions/background-tasks",
+	"/api/v1/sessions/{sessionId}/background-tasks",
+	"/api/v1/sessions/{sessionId}/background-tasks/{taskId}/output",
+	"/api/v1/sessions/{sessionId}/background-tasks/{taskId}/stop",
 	"/api/v1/sessions/{sessionId}",
 	"/api/v1/sessions/{sessionId}/project-context",
 	"/api/v1/sessions/{sessionId}/activity",
@@ -296,6 +300,7 @@ function reportApiError(
 	status?: number,
 	code?: string,
 	requestId?: string,
+	message?: string,
 ): void {
 	const key = `${operation}|${category}|${status ?? ""}`;
 	const now = Date.now();
@@ -309,7 +314,7 @@ function reportApiError(
 		error_code: code,
 	});
 	if (category !== "daemon_unavailable" && !(status !== undefined && status >= 400 && status < 500 && EXPECTED_PROBE_CONFLICTS.has(operation))) {
-		captureApiErrorToSentry(operation, category, status, code, requestId);
+		captureApiErrorToSentry(operation, category, status, code, requestId, message);
 	}
 }
 
@@ -318,9 +323,11 @@ function reportApiError(
 async function reportResponseError(operation: string, response: Response): Promise<void> {
 	let code: string | undefined;
 	let requestId: string | undefined;
+	let message: string | undefined;
 	try {
 		const body = (await response.clone().json()) as Partial<components["schemas"]["APIError"]>;
 		if (typeof body?.code === "string" && body.code !== "") code = body.code;
+		if (typeof body?.message === "string") message = body.message;
 		if (typeof body?.requestId === "string" && body.requestId !== "") requestId = body.requestId;
 	} catch {
 		// Non-JSON or empty body: fall back to status-only classification.
@@ -331,6 +338,7 @@ async function reportResponseError(operation: string, response: Response): Promi
 		response.status,
 		code,
 		requestId,
+		message,
 	);
 }
 

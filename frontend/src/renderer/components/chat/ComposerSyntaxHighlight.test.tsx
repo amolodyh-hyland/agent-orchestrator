@@ -2,33 +2,32 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { $getRoot, $getSelection, $isRangeSelection, CONTROLLED_TEXT_INSERTION_COMMAND, UNDO_COMMAND, type LexicalEditor } from "lexical";
 import { createRef } from "react";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
-import { createEngine } from "../../lib/code-highlight-engine";
-import type { HighlightWorkerRequest } from "../../lib/code-highlight-protocol";
 import { CODE_TOKEN_COLORS } from "../../lib/code-style";
 import { contrastRatio } from "../../lib/theme-color";
 import { THEMES } from "../../lib/theme-palettes";
 import { useUiStore } from "../../stores/ui-store";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 
-const engine = await createEngine();
 const registry = new Map<string, Set<Range>>();
 let holdReplies = false;
 const replies: (() => void)[] = [];
-const requests: HighlightWorkerRequest[] = [];
-class FakeWorker {
-	onmessage: ((event: MessageEvent) => void) | null = null;
-	postMessage(request: HighlightWorkerRequest) {
-		requests.push(request);
-		if (request.kind !== "highlight") return;
-		const reply = () => this.onmessage?.(new MessageEvent("message", { data: { kind: "highlight", id: request.id, tree: engine.highlight(request.language, request.code) } }));
-		if (holdReplies) replies.push(reply);
-		else queueMicrotask(reply);
-	}
-}
+const requests: { code: string; language: string }[] = [];
+// The composer awaits `highlightAsync`; this keeps the real tokenizer underneath and
+// adds the request counter and hold/release control the assertions below rely on.
+vi.mock("../../lib/code-highlight", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../lib/code-highlight")>();
+	return {
+		...actual,
+		highlightAsync: (code: string, language: Parameters<typeof actual.highlightSync>[1]) => {
+			requests.push({ code, language });
+			if (!holdReplies) return Promise.resolve(actual.highlightSync(code, language));
+			return new Promise((resolve) => { replies.push(() => resolve(actual.highlightSync(code, language))); });
+		},
+	};
+});
 beforeAll(() => {
 	vi.stubGlobal("Highlight", class extends Set<Range> {});
 	vi.stubGlobal("CSS", { ...globalThis.CSS, highlights: registry });
-	vi.stubGlobal("Worker", FakeWorker);
 });
 afterEach(() => {
 	holdReplies = false;
@@ -45,8 +44,11 @@ function setup(text: string, label = "Composer") {
 	act(() => { field.focus(); ref.current!.setText(text); });
 	return { ...view, ref, field, editor };
 }
+// The Pierre tokenizer folds a keyword's trailing space into its token ("const "),
+// where the previous engine ended the token at the word. A space has no glyph, so the
+// color on it is invisible; compare the visible text.
 function highlighted(kind: string) {
-	return [...registry].filter(([name]) => name.endsWith(`-${kind}`)).flatMap(([, ranges]) => [...ranges].map((range) => range.toString()));
+	return [...registry].filter(([name]) => name.endsWith(`-${kind}`)).flatMap(([, ranges]) => [...ranges].map((range) => range.toString().trimEnd()));
 }
 
 it("colors default fences and inline code without changing text, caret, undo or redo state", async () => {

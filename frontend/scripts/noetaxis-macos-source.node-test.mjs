@@ -170,7 +170,7 @@ test("matched builder wires only verified module/resources and signs the nested 
 	const input = await matchedFixture(t);
 	const fixture = await makeBuildFixture(t);
 	await writeFile(path.join(fixture.source, "backend/go.mod"), (await readFile(input.input.modfile.file, "utf8"))
-		.replace(input.input.server.directory, "github.com/amolodyh-hyland/multica/server v0.0.0-20261121024636-e80a4e2cfda1"));
+		.replace(input.input.server.directory, "github.com/amolodyh-hyland/multica/server v0.0.0-20261124200444-f1890596a775"));
 	await fixture.run(["--public-registry", "--multica-input", input.file, "--multica-input-sha256", await input.save()]);
 	assert.equal(fixture.calls.some(({ command, args }) => command === "git" && args[0] === "clone"), false);
 	assert.equal(fixture.calls.some(({ command }) => command === "corepack"), false);
@@ -194,7 +194,7 @@ test("full mocked snapshot build stamps the staged tree, actual base and overlay
 	const input = await matchedFixture(t);
 	const fixture = await makeBuildFixture(t);
 	await writeFile(path.join(fixture.source, "backend/go.mod"), (await readFile(input.input.modfile.file, "utf8"))
-		.replace(input.input.server.directory, "github.com/amolodyh-hyland/multica/server v0.0.0-20261121024636-e80a4e2cfda1"));
+		.replace(input.input.server.directory, "github.com/amolodyh-hyland/multica/server v0.0.0-20261124200444-f1890596a775"));
 	git(fixture.source, "init", "--quiet");
 	git(fixture.source, "add", ".");
 	const base = git(fixture.source, "write-tree");
@@ -226,7 +226,7 @@ test("build rejects a staged resource changed after its initial verification", a
 	const input = await matchedFixture(t);
 	const fixture = await makeBuildFixture(t, { mutateMatchedDesktop: true });
 	await writeFile(path.join(fixture.source, "backend/go.mod"), (await readFile(input.input.modfile.file, "utf8"))
-		.replace(input.input.server.directory, "github.com/amolodyh-hyland/multica/server v0.0.0-20261121024636-e80a4e2cfda1"));
+		.replace(input.input.server.directory, "github.com/amolodyh-hyland/multica/server v0.0.0-20261124200444-f1890596a775"));
 	await assert.rejects(fixture.run(["--public-registry", "--multica-input", input.file,
 		"--multica-input-sha256", await input.save()]), /desktop changed during the build/);
 	assert.equal(fixture.calls.some(({ command }) => command === "/usr/bin/codesign"), false);
