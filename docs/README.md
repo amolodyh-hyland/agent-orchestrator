@@ -56,12 +56,17 @@ in [gemini-cli.md](gemini-cli.md).
 | [harnesses/mastra-code.md](harnesses/mastra-code.md)     | Mastra Code TUI setup, isolated profile, login, direct model IDs, exact restore, and current limits.             |
 | [harnesses/stakpak.md](harnesses/stakpak.md)             | Stakpak Agent TUI setup, screen-read activity, permissions, exact restore, and current limits.                  |
 | [harnesses/codex-permissions.md](harnesses/codex-permissions.md) | Codex permission-mode mapping (no-override, approve-for-me, explicit bypass) and the permission fallback for managed policy. |
+| [harnesses/codewhale.md](harnesses/codewhale.md)         | Codewhale TUI setup, supported versions, and current limits.                                                     |
+| [harnesses/omp.md](harnesses/omp.md)                     | OMP TUI and Chat setup, permissions, and current limits.                                                         |
+| [harnesses/openhands.md](harnesses/openhands.md)         | OpenHands CLI TUI setup and current limits.                                                                      |
+| [harnesses/pi.md](harnesses/pi.md)                       | Pi TUI and Chat (through pi-acp) setup, the bypass-permissions requirement, and current limits.                 |
+| [harnesses/model-catalogs.md](harnesses/model-catalogs.md) | How each harness's model list is discovered, refreshed, and shared across pickers.                            |
 | [STATUS.md](STATUS.md)                                 | What is shipped on `main` today and what is still in flight.                                                          |
 | [stack.md](stack.md)                                   | Accepted library/runtime choices, pending stack decisions, and dependencies explicitly avoided for V1.                |
 | [telemetry.md](telemetry.md)                           | User-facing overview of product telemetry, privacy safeguards, and opt-out controls.                                    |
 | [posthog-cost-controls.md](posthog-cost-controls.md)   | PostHog event-name migration, ingestion drop rules, and dashboard queries for reducing telemetry spend.              |
 
-See [startup-cues.md](startup-cues.md) for command cues that gate a new worktree’s opening turn.
+See [startup-cues.md](startup-cues.md) for command cues that gate a new worktree's opening turn.
 
 ## Mental model
 

@@ -136,6 +136,7 @@ export function buildMacAppMenuTemplate(
 					role: "close",
 					accelerator: "Shift+Command+W",
 				},
+				{ role: "pasteAndMatchStyle", accelerator: "Shift+Command+V", visible: false },
 			],
 		},
 		{ role: "editMenu" },

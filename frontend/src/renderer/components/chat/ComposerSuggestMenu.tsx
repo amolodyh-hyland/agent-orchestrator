@@ -18,7 +18,7 @@ import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { Pressable } from "../ui/pressable";
-import { composerFileIcon } from "./composerFileIcon";
+import { WorkspaceEntryIcon } from "../WorkspaceEntryIcon";
 import type { Suggestion, TriggerKind } from "./composerSuggest";
 
 export function ComposerSuggestMenu({
@@ -69,6 +69,7 @@ export function ComposerSuggestMenu({
 	return (
 		<div
 			className="absolute bottom-full left-0 z-overlay mb-1.5 flex w-full max-w-md flex-col overflow-hidden rounded-lg border border-(--color-border-overlay) bg-overlay p-1 text-popover-foreground shadow-(--shadow-popover)"
+			data-composer-suggest-menu=""
 			data-telemetry-surface={kind === "skill" ? "slash_menu" : "mention_menu"}
 			// The composer owns the keyboard; a pointerdown here must not pull focus
 			// out of the textarea on its way to the click.
@@ -86,7 +87,6 @@ export function ComposerSuggestMenu({
 					{items.map((item, index) => {
 						const active = index === highlighted;
 						const badge = displayBadge(item.badge);
-						const Icon = kind === "file" ? composerFileIcon(item.value) : undefined;
 						return (
 							<li key={item.value} data-index={index}>
 								<Pressable
@@ -104,9 +104,7 @@ export function ComposerSuggestMenu({
 											: "bg-transparent hover:bg-interactive-hover hover:text-foreground",
 									)}
 								>
-									{Icon ? (
-										<Icon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-									) : null}
+									{kind === "file" ? <WorkspaceEntryIcon kind="file" name={item.label} /> : null}
 									{/* Name first, then its description or folder on the same line,
 									    so a row stays one line tall. In the `/` menu the name is
 									    what the eye scans for, so it reads bright and its

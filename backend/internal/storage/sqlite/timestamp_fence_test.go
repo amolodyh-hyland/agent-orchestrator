@@ -120,10 +120,13 @@ func TestTimestampRepairTriggerInventory(t *testing.T) {
 	// review_run_worker_notice_pending only fires on status updates. Timestamp
 	// repair preserves notice state (TestTimestampRepairPreservesReviewDoneNotices).
 	// pr_cdc_update also watches the merge queue columns (BOOLEAN and TEXT, never
-	// rewritten by timestamp repair). Reviewed against both parents of the Nov 24 sync:
-	// the fork parent (f1abd60b...) and upstream (8334d7f1...) differ from this digest
-	// only by that trigger; every fork trigger is unchanged.
-	const reviewed = "55311c82732f1edc1bb929527b7d18e2dca22f912a76dd44b3c8cfce6e4d35aa"
+	// rewritten by timestamp repair). sessions_cdc_update also watches role_agent (TEXT, never
+	// rewritten by repair). Reviewed against both parents of the Nov 27 sync, from migrated
+	// databases: the fork parent (bcad65d0, digest 55311c82...) differs from this digest only by
+	// sessions_cdc_update; upstream (6f1dfcd2, digest a7d31ed1...) differs only by the 14
+	// fork triggers it does not have (outer_*, factory_feedback_*, project_context_snapshots_*),
+	// each unchanged from the fork parent. Every trigger both parents share is byte-identical.
+	const reviewed = "f160e75b2eff3707351f0c7b6dfa69985ac3f7894c1862429fd7877bdad9d10f"
 	if got := fmt.Sprintf("%x", hash.Sum(nil)); got != reviewed {
 		t.Fatalf("timestamp trigger inventory changed; review preservation logic before updating fingerprint: %s", got)
 	}

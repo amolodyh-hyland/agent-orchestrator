@@ -138,6 +138,9 @@ export function attachAppShortcuts(
 	// claims the zoom chords ahead of the app's View zoom, even from a framed
 	// page whose keys never reach the viewer itself.
 	isArtifactZoomEngaged: () => boolean = () => false,
+	// Told each chord this handler claims and runs, before the action is sent,
+	// so the shell can count it by id.
+	onPressed: (id: AppShortcutId) => void = () => {},
 ): void {
 	contents.on("before-input-event", (event, input) => {
 		if (input.type !== "keyDown") return;
@@ -183,6 +186,7 @@ export function attachAppShortcuts(
 		) {
 			event.preventDefault();
 			if (focusTarget) target.focus();
+			onPressed("toggle-browser-devtools");
 			onShortcut("toggle-browser-devtools");
 			return;
 		}
@@ -208,6 +212,7 @@ export function attachAppShortcuts(
 		// never a fall-through to the menu's Close item.
 		if (input.isAutoRepeat) return;
 		if (focusTarget) target.focus();
+		onPressed(id);
 		target.send(channel, ...payload);
 	});
 }

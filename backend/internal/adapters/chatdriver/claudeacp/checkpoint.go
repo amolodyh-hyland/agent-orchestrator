@@ -422,8 +422,13 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 				}
 				continue
 			}
-			turns = append(turns, checkpointTurn{promptID: record.PromptID, userID: record.UUID, user: text, notice: notice,
-				carried: notice && record.compactionBoundaryID != "", compactionBoundaryID: record.compactionBoundaryID})
+			turn := checkpointTurn{promptID: record.PromptID, userID: record.UUID, user: text, notice: notice,
+				carried: notice && record.compactionBoundaryID != "", compactionBoundaryID: record.compactionBoundaryID}
+			if !notice && len(turns) > 0 && turns[len(turns)-1].notice && turns[len(turns)-1].promptID == record.PromptID {
+				turns[len(turns)-1] = turn
+				continue
+			}
+			turns = append(turns, turn)
 			continue
 		}
 		if len(turns) == 0 {

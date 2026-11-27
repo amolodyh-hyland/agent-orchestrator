@@ -733,6 +733,7 @@ export function SessionPaneTab({
 		<input
 			aria-label={t("shell.renameSession", { title: renameSession.title })}
 			autoFocus
+			data-field="inline"
 			className={terminalTabRenameInputClassName}
 			maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
 			onBlur={() => void rename.commit()}

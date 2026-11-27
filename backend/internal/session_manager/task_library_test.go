@@ -43,7 +43,7 @@ func TestTaskLibraryChecksBeforeHooksAndFolderTrust(t *testing.T) {
 	selection := &taskSelectionFixture{librarySelectionStub: librarySelectionStub{allowed: true}, events: &events, snapshot: domain.LibrarySnapshot{SnapshotID: "snapshot", Channel: domain.SessionModeTUI, Entries: []domain.LibrarySnapshotEntry{{Required: true, ApprovalID: "approval"}}}}
 	m.SetLibrarySelection(selection)
 	agent := taskAgentFixture{events: &events}
-	if err := m.prepareWorkspace(context.Background(), agent, "task", t.TempDir(), "", "", ports.AgentConfig{}, nil); err == nil {
+	if err := m.prepareWorkspace(context.Background(), agent, "task", t.TempDir(), "", "", ports.AgentConfig{}, nil, workspaceRestoreContext{}); err == nil {
 		t.Fatal("unproved entry allowed")
 	}
 	for _, event := range events {
@@ -53,7 +53,7 @@ func TestTaskLibraryChecksBeforeHooksAndFolderTrust(t *testing.T) {
 	}
 	events = nil
 	selection.snapshot.Entries[0].Required = false
-	if err := m.prepareWorkspace(context.Background(), agent, "task", t.TempDir(), "", "", ports.AgentConfig{}, nil); err != nil {
+	if err := m.prepareWorkspace(context.Background(), agent, "task", t.TempDir(), "", "", ports.AgentConfig{}, nil, workspaceRestoreContext{}); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"selection", "projection", "release", "owned_hooks", "folder_trust"}
@@ -67,7 +67,7 @@ func TestTaskLibraryChecksBeforeHooksAndFolderTrust(t *testing.T) {
 	}
 	events = nil
 	selection.launchErr = errors.New("revoked")
-	if err := m.prepareWorkspace(context.Background(), agent, "task", t.TempDir(), "", "", ports.AgentConfig{}, nil); err == nil || len(events) != 0 {
+	if err := m.prepareWorkspace(context.Background(), agent, "task", t.TempDir(), "", "", ports.AgentConfig{}, nil, workspaceRestoreContext{}); err == nil || len(events) != 0 {
 		t.Fatal("revoked prelaunch reached hooks")
 	}
 }
