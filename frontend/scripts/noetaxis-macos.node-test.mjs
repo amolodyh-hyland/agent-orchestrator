@@ -54,7 +54,10 @@ async function testRoot(t, label, retain = false) {
 	return root;
 }
 
-async function makeApp(appPath, appVersion, sourceRevision = "") {
+// `sign` gives a build with no source revision the ad-hoc signature a real installed app has: rollback
+// verifies the signature of the backup it restores, so a backup of the original app must carry one.
+// Fixtures that exist to prove an unsigned or invalid app is refused leave it off.
+async function makeApp(appPath, appVersion, sourceRevision = "", { sign = false } = {}) {
 	const contents = path.join(appPath, "Contents");
 	const resources = path.join(contents, "Resources");
 	await mkdir(path.join(resources, "daemon"), { recursive: true });
@@ -75,7 +78,7 @@ esac
 	const cliPath = path.join(resources, "daemon/ao");
 	await writeFile(cliPath, cli, { mode: 0o755 });
 	await chmod(cliPath, 0o755);
-	if (sourceRevision) {
+	if (sourceRevision || sign) {
 		const signed = execute("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", "--timestamp=none", appPath]);
 		assert.equal(signed.status, 0, signed.stderr);
 	}
@@ -977,7 +980,7 @@ test("isolated install is dry-runnable, backed up, idempotent, and reversible", 
 	await mkdir(appsDir, { recursive: true });
 	await makeApp(sourceApp, version, revision);
 	await writeManifest(sourceApp, path.join(artifactDir, "MANIFEST.sha256"));
-	await makeApp(targetApp, "0.13.4");
+	await makeApp(targetApp, "0.13.4", "", { sign: true });
 	const database = path.join(aoHome, "data/ao.db");
 	const schema = execute("/usr/bin/sqlite3", [database, "create table goose_db_version (version_id integer, is_applied integer); insert into goose_db_version values (190,1);"]);
 	assert.equal(schema.status, 0, schema.stderr);
@@ -1208,7 +1211,7 @@ esac
 
 test("rollback and the PKG preinstall apply the same background-process preflight", { skip: process.platform !== "darwin" }, async (t) => {
 	const f = await installFixture(t, "noetaxis-background-rollback-test");
-	await makeApp(f.targetApp, "0.13.4");
+	await makeApp(f.targetApp, "0.13.4", "", { sign: true });
 	const installed = execute("/bin/bash", [installScript, "--allow-ao-session", f.sourceApp], { cwd: repoRoot, env: f.env });
 	assert.equal(installed.status, 0, installed.stderr);
 	const daemonBin = await makeFakeBin(f.root, "daemon");
@@ -1253,7 +1256,9 @@ test("rollback and the PKG preinstall apply the same background-process prefligh
 	const pkg = execute("/bin/bash", [path.join(packaged, "preinstall")], { cwd: repoRoot, env });
 	assert.equal(pkg.status, 21, pkg.stderr);
 	assert.match(pkg.stderr, /Resources\/daemon\/ao" stop/);
-	assert.equal(await installedVersion(f.targetApp), "old");
+	// Every refusal above, and the rollback that is blocked (61) because no authenticated quit exists, leaves
+	// the installed app exactly as it was: the new one. Nothing in this test restores the old app.
+	assert.equal(await installedVersion(f.targetApp), "new");
 });
 
 test("schema check reads a WAL database that has no -wal/-shm files and never fails", { skip: process.platform !== "darwin" }, async (t) => {
@@ -1335,7 +1340,7 @@ test("install refuses an app that fails manifest or signature verification and l
 
 test("rollback ignores a backup that has no BACKUP_COMPLETE record", { skip: process.platform !== "darwin" }, async (t) => {
 	const f = await installFixture(t, "noetaxis-incomplete-backup-test");
-	await makeApp(f.targetApp, "0.13.4");
+	await makeApp(f.targetApp, "0.13.4", "", { sign: true });
 	const install = execute("/bin/bash", [installScript, "--allow-ao-session", f.sourceApp], { cwd: repoRoot, env: f.env });
 	assert.equal(install.status, 0, install.stderr);
 	const backupRoot = path.join(f.home, "ao-backups");
@@ -1490,7 +1495,7 @@ test("SIGTERM after the new app is in place keeps it and its completed backup", 
 
 test("good install, interrupted install, then rollback still restores the original app", { skip: process.platform !== "darwin" }, async (t) => {
 	const f = await installFixture(t, "noetaxis-aborted-rollback-test");
-	await makeApp(f.targetApp, "0.13.4");
+	await makeApp(f.targetApp, "0.13.4", "", { sign: true });
 	const first = execute("/bin/bash", [installScript, "--allow-ao-session", f.sourceApp], { cwd: repoRoot, env: f.env });
 	assert.equal(first.status, 0, first.stderr);
 	const secondApp = await makeBuild(f.root, "build-two", "0.13.4-noetaxis.1234567", `1234567${"0".repeat(33)}`);
@@ -1501,6 +1506,18 @@ test("good install, interrupted install, then rollback still restores the origin
 	assert.match(rollback.stdout, /Restored app version: 0\.13\.4/);
 	assert.doesNotMatch(rollback.stdout, /already restored/i);
 	assert.equal(await installedVersion(f.targetApp), "old");
+});
+
+test("rollback refuses a backup whose app is unsigned (exit 42) and leaves the installed app alone", { skip: process.platform !== "darwin" }, async (t) => {
+	const f = await installFixture(t, "noetaxis-unsigned-backup-test");
+	await makeApp(f.targetApp, "0.13.4"); // the original app carries no signature
+	const installed = execute("/bin/bash", [installScript, "--allow-ao-session", f.sourceApp], { cwd: repoRoot, env: f.env });
+	assert.equal(installed.status, 0, installed.stderr);
+	assert.equal(await installedVersion(f.targetApp), "new");
+	const rollback = execute("/bin/bash", [rollbackScript, "--allow-ao-session"], { cwd: repoRoot, env: f.env });
+	assert.equal(rollback.status, 42, rollback.stdout + rollback.stderr);
+	assert.match(rollback.stderr, /Backup app signature verification failed/);
+	assert.equal(await installedVersion(f.targetApp), "new", "a refused rollback must not replace the installed app");
 });
 
 test("a bundled CLI that fails its post-install checks produces labelled warnings, not a failed install", { skip: process.platform !== "darwin" }, async (t) => {
