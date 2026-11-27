@@ -187,6 +187,10 @@
     "operation": "native_only",
     "mode": "confirm"
   },
+  "PATCH /api/v1/settings/commit-attribution": {
+    "operation": "native_only",
+    "mode": "confirm"
+  },
   "PATCH /api/v1/settings/computer-use": {
     "operation": "native_only",
     "mode": "confirm"
@@ -403,6 +407,10 @@
     "operation": "native_only",
     "mode": "confirm"
   },
+  "POST /api/v1/devices/setup": {
+    "operation": "native_only",
+    "mode": "held"
+  },
   "POST /api/v1/import": {
     "operation": "native_only",
     "mode": "confirm"
@@ -526,6 +534,14 @@
   "POST /api/v1/push/devices": {
     "operation": "native_only",
     "mode": "confirm"
+  },
+  "POST /api/v1/remote-host/update": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "POST /api/v1/remote-host/update/check": {
+    "operation": "native_only",
+    "mode": "held"
   },
   "POST /api/v1/reports": {
     "operation": "report.scoped",
@@ -747,6 +763,30 @@
     "operation": "conversation.held",
     "mode": "confirm"
   },
+  "POST /api/v1/sessions/{sessionId}/device/button": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "POST /api/v1/sessions/{sessionId}/device/close": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "POST /api/v1/sessions/{sessionId}/device/install": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "POST /api/v1/sessions/{sessionId}/device/launch": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "POST /api/v1/sessions/{sessionId}/device/open": {
+    "operation": "native_only",
+    "mode": "held"
+  },
+  "POST /api/v1/sessions/{sessionId}/device/quality": {
+    "operation": "native_only",
+    "mode": "held"
+  },
   "POST /api/v1/sessions/{sessionId}/exit-agent": {
     "operation": "exit",
     "mode": "confirm"
@@ -926,6 +966,10 @@
   "PUT /api/v1/awake/settings": {
     "operation": "native_only",
     "mode": "confirm"
+  },
+  "PUT /api/v1/devices/availability": {
+    "operation": "native_only",
+    "mode": "held"
   },
   "PUT /api/v1/github/pat": {
     "operation": "native_only",
