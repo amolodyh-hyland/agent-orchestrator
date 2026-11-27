@@ -102,8 +102,9 @@ trap 'exit 129' HUP
 
 if [[ "${NOETAXIS_ROLLBACK_BOUNDED:-0}" != 1 ]]; then
  rollback_status=0
- rollback_output="$(NOETAXIS_ROLLBACK_BOUNDED=1 NOETAXIS_LOCK_HELD_BY="${NOETAXIS_LOCK_HELD_BY:-$$}" noetaxis_bounded "${NOETAXIS_ROLLBACK_TIMEOUT:-300}" "$0" "${original_args[@]}" 2>&1)" || rollback_status=$?
- printf '%s\n' "$rollback_output"
+ rollback_output="$(NOETAXIS_ROLLBACK_BOUNDED=1 NOETAXIS_LOCK_HELD_BY="${NOETAXIS_LOCK_HELD_BY:-$$}" noetaxis_bounded "${NOETAXIS_ROLLBACK_TIMEOUT:-300}" "$0" ${original_args[@]+"${original_args[@]}"} 2>&1)" || rollback_status=$?
+ # A refusal or failure is a diagnostic: it belongs on stderr, as before the bounded re-exec.
+ if [[ "$rollback_status" -eq 0 ]]; then printf '%s\n' "$rollback_output"; else printf '%s\n' "$rollback_output" >&2; fi
  printf '%s\n' "$rollback_output" >> "$noetaxis_update_log_file"
  if [[ "$rollback_status" -ne 0 ]]; then noetaxis_error "rollback-blocked: exit $rollback_status; inspect rollback-journal.json before retrying; no older app launched"; fi
  exit "$rollback_status"

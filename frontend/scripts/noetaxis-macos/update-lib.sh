@@ -1065,7 +1065,9 @@ noetaxis_update_end_sessions() {
 # The tray item's label is the translated "tray.quit" string of the app's UI locale. These are
 # all of them (frontend/src/renderer/i18n/*.json); a test fails when a locale is added or a
 # string changes without this list following.
-noetaxis_tray_quit_names=("Quit AO Completely" "AO vollständig beenden" "AO を完全に終了" "完全退出 AO" "Sair completamente do AO" "AO 완전히 종료" "Quitter complètement AO" "Salir completamente de AO")
+# The first ten are the current labels (the app says "Orchestrator"); the "AO" labels that follow
+# belong to builds from before that rename, which a legacy update may still be quitting.
+noetaxis_tray_quit_names=("Quit Orchestrator Completely" "Orchestrator vollständig beenden" "Salir completamente de Orchestrator" "Quitter complètement Orchestrator" "Orchestrator 완전히 종료" "Orchestrator を完全に終了" "Sair completamente do Orchestrator" "Полностью выйти из Orchestrator" "完全退出 Orchestrator" "Orchestrator'dan tamamen çıkın" "Quit AO Completely" "AO vollständig beenden" "AO を完全に終了" "完全退出 AO" "Sair completamente do AO" "AO 완전히 종료" "Quitter complètement AO" "Salir completamente de AO")
 
 noetaxis_tray_quit() {
 	local pid="$1" name name_list=""
@@ -1502,7 +1504,7 @@ noetaxis_update_wait_for_health() {
     warned=1
    fi
    if [[ "$update_startup_state" != active ]]; then
-    noetaxis_update_needs_attention "$update_startup_state heartbeat/status; $update_startup_detail"
+    noetaxis_update_needs_attention "$update_startup_state heartbeat/status; $update_startup_detail${update_health_detail:+; health check: $update_health_detail}"
     return 64
    fi
    if [[ "$elapsed" -ge "${NOETAXIS_STARTUP_ATTENTION_SECONDS:-1800}" ]]; then

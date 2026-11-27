@@ -10,6 +10,9 @@ for record in "$HOME"/ao-backups/*/BACKUP_COMPLETE; do
 done
 sim_log "open-saw-backup-complete=$backup_state"
 if sim_has open_fail; then exit 1; fi
+# A launch command that fails for one version only: the new build, not the restored previous app.
+version_for_failure="$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")"
+if /usr/bin/grep -qxF "$version_for_failure" "$SIM/cfg/open_fail_versions" 2>/dev/null; then exit 1; fi
 mode="$(sim_value open_mode)"
 mode="${mode:-healthy}"
 version="$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")"

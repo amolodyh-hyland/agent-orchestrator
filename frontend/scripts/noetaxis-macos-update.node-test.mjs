@@ -943,9 +943,12 @@ test("the lock code never renames or removes a lock it did not create (no takeov
 });
 
 test("the automatic rollback inside an update runs under the update's own lock", darwin, async (t) => {
-	const world = await makeWorld(t, "lock-rollback", { cfg: { unhealthy_versions: `${newVersion}\n` } });
+	// The only automatic rollback left is an explicit launch-command failure of the new app: an app that starts
+	// but never becomes healthy is retained (64) and never rolled back (see the health-deadline tests).
+	const world = await makeWorld(t, "lock-rollback", { cfg: { open_fail_versions: `${newVersion}\n` } });
 	const result = world.update(["--yes"]);
 	assert.equal(result.status, 60, result.stdout + result.stderr);
+	assert.equal(world.installedVersion(), oldVersion, "the previous app was restored");
 	assert.equal(existsSync(path.join(world.home, ".ao-install.lock")), false);
 });
 
@@ -1000,19 +1003,21 @@ test("mutation: acting on a daemon without checking whose it is is caught", darw
 	assert.ok(callIndex(await world.calls(), /session exit-agent s1/) >= 0, "the mutant ends a session through the foreign daemon");
 });
 
-test("a ready daemon of another binary, or with a pid that is not this bundle's daemon, is not healthy: the update rolls back", darwin, async (t) => {
+test("a ready daemon of another binary, or with a pid that is not this bundle's daemon, is not healthy: the update retains the new app (64)", darwin, async (t) => {
 	// The new app starts only its desktop process; a foreign daemon answers ready on the port.
 	const foreign = await makeWorld(t, "health-foreign", { cfg: { open_mode: "app-only", foreign_status_versions: `${newVersion}\n`, foreign_status_exe: "/Users/x/Old/Agent Orchestrator.app/Contents/Resources/daemon/ao", foreign_status_pid: "4242" } });
 	let result = foreign.update(["--yes"]);
-	assert.match(result.stdout, /an old or foreign daemon is serving the port/);
-	assert.ok([60, 61].includes(result.status), `${result.status}`);
-	assert.equal(foreign.installedVersion(), oldVersion, "rolled back instead of accepting the foreign daemon");
+	assert.match(result.stdout + result.stderr, /an old or foreign daemon is serving the port/);
+	// Never healthy, never accepted (not 0), and never rolled back on a health failure alone: the new app is retained (64).
+	assert.equal(result.status, 64, result.stdout + result.stderr);
+	assert.equal(foreign.installedVersion(), newVersion, "the new app is retained instead of accepting the foreign daemon or rolling back");
 	// Right binary path but a pid that is none of this bundle's daemon processes.
 	const wrongPid = await makeWorld(t, "health-pid", { cfg: { open_mode: "app-only", foreign_status_versions: `${newVersion}\n`, foreign_status_exe: "<NEW>", foreign_status_pid: "31337" } });
 	await wrongPid.setCfg("foreign_status_exe", `${wrongPid.targetApp}/Contents/Resources/daemon/ao`);
 	result = wrongPid.update(["--yes"]);
-	assert.match(result.stdout, /pid 31337, which is not a daemon process of/);
-	assert.equal(wrongPid.installedVersion(), oldVersion);
+	assert.match(result.stdout + result.stderr, /pid 31337, which is not a daemon process of/);
+	assert.equal(result.status, 64, result.stdout + result.stderr);
+	assert.equal(wrongPid.installedVersion(), newVersion);
 });
 
 test("mutation: accepting a ready daemon without checking its identity is caught", darwin, async (t) => {
