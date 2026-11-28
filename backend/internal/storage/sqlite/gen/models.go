@@ -192,6 +192,7 @@ type AppSetting struct {
 	AccountHandoff       bool
 	LimitHistory         bool
 	AgentAssetSources    string
+	CommitAttribution    bool
 }
 
 type Automation struct {
@@ -1073,6 +1074,7 @@ type Session struct {
 	DisplayNameExplicit              bool
 	AcceptedDeliveryID               string
 	AcceptedDeliveryLaunchID         string
+	RoleAgent                        string
 }
 
 type SessionAgentAccount struct {
@@ -1120,6 +1122,12 @@ type SessionCleanupFact struct {
 	NextAttemptAt        sql.NullTime
 	FailureCode          string
 	ReportOnly           bool
+}
+
+type SessionCommitAttribution struct {
+	SessionID string
+	CoAuthor  string
+	PRFooter  sql.NullInt64
 }
 
 type SessionFork struct {

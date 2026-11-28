@@ -3,11 +3,13 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings } from "../../hooks/useSettings";
+import { useUiStore } from "../../stores/ui-store";
 
-const { settingsMock, updateRetentionMock, updateAssetsMock } = vi.hoisted(() => ({
+const { settingsMock, updateRetentionMock, updateAssetsMock, updateCommitAttributionMock } = vi.hoisted(() => ({
 	settingsMock: vi.fn(),
 	updateRetentionMock: vi.fn(),
 	updateAssetsMock: vi.fn(),
+	updateCommitAttributionMock: vi.fn(),
 }));
 
 const idle = { update: vi.fn(), saving: false, error: undefined };
@@ -17,6 +19,7 @@ vi.mock("../../hooks/useSettings", () => ({
 	useUpdateVersionRefresh: () => idle,
 	useUpdateAgentAssetSources: () => ({ mutate: updateAssetsMock, isPending: false, error: undefined }),
 	useUpdateSessionRetention: () => ({ update: updateRetentionMock, saving: false, error: undefined }),
+	useUpdateCommitAttribution: () => ({ update: updateCommitAttributionMock, saving: false, error: undefined }),
 }));
 
 vi.mock("../../hooks/useEditorHandoff", () => ({
@@ -100,4 +103,23 @@ it("edits agent sources beside retention without changing the retention preferen
 	expect(updateAssetsMock).toHaveBeenCalledWith(["/live/.claude", "/live/.agents"], expect.any(Object));
 	expect(screen.getByRole("button", { name: "Delete archived sessions" })).toHaveTextContent("After 14 days");
 	expect(updateRetentionMock).not.toHaveBeenCalled();
+});
+describe("Orchestrator attribution beta switch", () => {
+	it("only appears in Developer Mode", () => {
+		settingsMock.mockReturnValue(settings({}));
+		useUiStore.setState({ developerMode: false });
+		renderSection();
+		expect(screen.queryByRole("switch", { name: "Orchestrator attribution (beta)" })).not.toBeInTheDocument();
+	});
+
+	it("reflects the daemon setting and saves a change to it", async () => {
+		updateCommitAttributionMock.mockReset();
+		settingsMock.mockReturnValue(settings({ commitAttribution: false }));
+		useUiStore.setState({ developerMode: true });
+		renderSection();
+		const toggle = screen.getByRole("switch", { name: "Orchestrator attribution (beta)" });
+		expect(toggle).not.toBeChecked();
+		await userEvent.click(toggle);
+		expect(updateCommitAttributionMock).toHaveBeenCalledWith(true);
+	});
 });

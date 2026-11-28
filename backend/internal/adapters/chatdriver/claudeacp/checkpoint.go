@@ -422,8 +422,16 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 				}
 				continue
 			}
-			turns = append(turns, checkpointTurn{promptID: record.PromptID, userID: record.UUID, user: text, notice: notice,
-				carried: notice && record.compactionBoundaryID != "", compactionBoundaryID: record.compactionBoundaryID})
+			turn := checkpointTurn{promptID: record.PromptID, userID: record.UUID, user: text, notice: notice,
+				carried: notice && record.compactionBoundaryID != "", compactionBoundaryID: record.compactionBoundaryID}
+			// A local command typed before a prompt is written ahead of it under the prompt's ID; replay skips
+			// it, so the prompt that follows is that cycle's user boundary. A compaction summary carrying a
+			// prompt ID is not replaced here: only a preserved user UUID may own it (the guard below).
+			if last := len(turns) - 1; !notice && last >= 0 && turns[last].notice && !turns[last].carried && turns[last].promptID == record.PromptID {
+				turns[last] = turn
+				continue
+			}
+			turns = append(turns, turn)
 			continue
 		}
 		if len(turns) == 0 {
