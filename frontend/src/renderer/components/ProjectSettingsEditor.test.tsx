@@ -156,7 +156,8 @@ describe.each([false, true])("shared settings page, Cloud=%s", (cloud) => {
 		const save = vi.fn().mockResolvedValue({});
 		const { onSaveState, setSection } = setup(cloud, save, { ...initialValues, orchestratorAgent: "" }, "agents", true);
 		await userEvent.click(screen.getByRole("button", { name: "Worker approval" }));
-		await userEvent.click(screen.getByRole("menuitem", { name: "Accept edits" }));
+		// The worker is Codex, whose accept-edits mode the fork labels "Ask for approval".
+		await userEvent.click(screen.getByRole("menuitem", { name: "Ask for approval" }));
 		fireEvent.submit(document.getElementById("project-settings-form")!);
 		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "failed", error: "Worker and orchestrator agents are required." })));
 		expect(save).not.toHaveBeenCalled();

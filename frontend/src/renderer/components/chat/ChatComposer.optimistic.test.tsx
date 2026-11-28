@@ -7,6 +7,15 @@ import { placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { TooltipProvider } from "../ui/tooltip";
 import { ChatComposer } from "./ChatComposer";
 
+/** Whether the composer's "Attach file" menu item accepts a file now (the fork opens it from the Add attachment menu). */
+async function attachFileDisabled(): Promise<boolean> {
+	await userEvent.click(screen.getByRole("button", { name: "Add attachment" }));
+	const item = await screen.findByRole("menuitem", { name: "Attach file" });
+	const disabled = item.getAttribute("aria-disabled") === "true";
+	await userEvent.keyboard("{Escape}");
+	return disabled;
+}
+
 function pendingSend() {
 	let resolve!: () => void;
 	let reject!: (error: unknown) => void;
@@ -151,7 +160,7 @@ describe("optimistic message delivery", () => {
 			</TooltipProvider>,
 		);
 		const field = await startSend(pending.onSend, "first message");
-		expect(screen.getByRole("button", { name: "Attach a file" })).toBeEnabled();
+		expect(await attachFileDisabled()).toBe(false);
 		pasteImages(field, "one.png");
 		await screen.findByLabelText("Attaching one.png");
 		pasteImages(field, "two.png");
@@ -238,7 +247,7 @@ describe("optimistic message delivery", () => {
 			await screen.findByLabelText("Remove sent.png");
 		}
 		const field = await startSend(pending.onSend, "first message");
-		expect(screen.getByRole("button", { name: "Attach a file" })).toBeDisabled();
+		expect(await attachFileDisabled()).toBe(true);
 		expect(screen.queryByLabelText("Remove sent.png")).not.toBeInTheDocument();
 		pasteImages(field, "next.png");
 		await act(async () => pending.resolve());

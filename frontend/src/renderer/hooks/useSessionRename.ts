@@ -37,10 +37,10 @@ export function useSessionRename(session?: RenameableSession, onRenamed?: () => 
     }
     setIsEditing(false);
     if (!session) return;
-    const name = draft.trim();
-    if (name && name !== session.title) useTopbarTabsStore.getState().markInteracted(session.id);
     // Starts the rename before any await, so the editor closes onto the new title.
-    await commitSessionRename(queryClient, session, draft, onRenamed ? { refresh: onRenamed } : undefined);
+    const renamed = await commitSessionRename(queryClient, session, draft, onRenamed ? { refresh: onRenamed } : undefined);
+    // The tab persists only once the rename was stored.
+    if (renamed) useTopbarTabsStore.getState().markInteracted(session.id);
   }, [draft, onRenamed, queryClient, session]);
 
   return { begin, cancel, commit, draft, isEditing, setDraft };

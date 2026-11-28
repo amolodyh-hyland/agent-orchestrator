@@ -759,7 +759,8 @@ heatmap and no session replay.
   `UNSUPPORTED_ATTACHMENT_TYPE`, `INVALID_ATTACHMENT_DATA`,
   `ATTACHMENT_TOO_LARGE`, `TOO_MANY_ATTACHMENTS`, `ATTACHMENTS_TOO_LARGE`,
   `SESSION_NOT_FOUND`, `SESSION_MODE_MISMATCH`, `CHAT_CONTROLLER_NOT_READY`,
-  `CHAT_RESUME_FAILED`, `CHAT_INTERFACE_TRANSITION`, `CHAT_OPEN_ELSEWHERE`,
+  `CHAT_INPUT_WAITING`, `CHAT_SKILL_UNAVAILABLE`, `CHAT_RESUME_FAILED`,
+  `CHAT_INTERFACE_TRANSITION`, `CHAT_OPEN_ELSEWHERE`,
   `COMPOSER_LOCKED`, `COMPOSER_LEASE_LOST`, `CHAT_EXCERPT_INVALID`,
   `CHAT_EXCERPT_STALE`, `CHAT_SIDE_UNAVAILABLE`, `CHAT_SIDE_UNSUPPORTED`,
   `CHAT_SIDE_ANCHOR_UNAVAILABLE`, `CHAT_SIDE_INVALID_REQUEST`,
@@ -873,8 +874,8 @@ shortcuts list: `find-in-chat`, `add-selection-to-chat`, `new-session`,
 `split-shell-terminal`, `split-shell-terminal-down`, `close-shell-terminal`,
 `reopen-closed-tab`, `archive-session`, `open-in-editor`,
 `copy-session-path`, `model-picker`, `dictate`, `open-orchestrator`,
-`toggle-sidebar`, `toggle-inspector`, `toggle-terminal`, `toggle-diff`, or
-`toggle-browser-devtools`. A session switch made by a shortcut counts as
+`format-inline-code`, `format-code-block`, `toggle-sidebar`, `toggle-inspector`,
+`toggle-terminal`, `toggle-diff`, `toggle-multica`, or `toggle-browser-devtools`. A session switch made by a shortcut counts as
 `switch_from_shortcut_count`.
 
 ### Definitions

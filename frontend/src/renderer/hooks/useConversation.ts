@@ -2346,7 +2346,7 @@ export function useConversationSkills(sessionId: string | undefined, enabled: bo
 		// resumes polling on success.
 		refetchInterval: (query) => {
 			if (apiErrorCode(query.state.error) === "CHAT_CONTROLLER_NOT_READY") return false;
-			if (query.state.data?.skills.length === 0 && !emptySkillsSettled(firstEmptyAt.current, query.state.dataUpdatedAt)) {
+			if (query.state.data?.skills?.length === 0 && !emptySkillsSettled(firstEmptyAt.current, query.state.dataUpdatedAt)) {
 				return EMPTY_SKILLS_RECHECK_MS;
 			}
 			return SKILLS_POLL_INTERVAL_MS;

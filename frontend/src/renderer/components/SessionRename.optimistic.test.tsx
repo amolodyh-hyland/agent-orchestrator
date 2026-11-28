@@ -4,6 +4,7 @@ import type { ComponentProps, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetOptimisticRenamesForTest } from "../hooks/optimistic-renames";
 import { useWorkspaceQuery, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { useTopbarTabsStore } from "../stores/topbar-tabs-store";
 import { useUiStore } from "../stores/ui-store";
 import { CenterPane } from "./CenterPane";
 import { TooltipProvider } from "./ui/tooltip";
@@ -22,6 +23,12 @@ vi.mock("../lib/api-client", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../lib/api-client")>()),
 	apiClient: { GET: h.getMock },
 	hasTrustedApiBaseUrl: () => true,
+}));
+// The fork's topbar tabs read the route; this test has no router, so the route hooks answer with a fixed one.
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@tanstack/react-router")>()),
+	useNavigate: () => vi.fn(),
+	useParams: () => ({ sessionId: "sess-1" }),
 }));
 vi.mock("../lib/rename-session", () => ({ renameSession: h.renameSessionMock, renameCloudSession: vi.fn() }));
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn().mockResolvedValue(undefined) }));
@@ -115,6 +122,8 @@ function Harness() {
 }
 
 async function renderLoaded() {
+	// The fork lists a session in the topbar once it is active, so open its tab as the app does.
+	useTopbarTabsStore.getState().activateSession({ sessionId: "sess-1", groupId: "proj-1", kind: "task" });
 	queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	render(
 		<QueryClientProvider client={queryClient}>
@@ -134,9 +143,11 @@ function shown() {
 	return { tab: tabLabel(), mirror: screen.getByTestId("mirror").textContent };
 }
 
-/** Double-click the session tab, type, and press Enter — synchronously, as one gesture. */
+/** Press F2 on the session tab (a double-click makes a preview tab persistent here), type, and press Enter — synchronously, as one gesture. */
 function renameTo(name: string) {
-	fireEvent.doubleClick(screen.getByRole("tab", { name: /claude code/i }), { detail: 2 });
+	const tab = screen.getByRole("tab", { name: /claude code/i });
+	tab.focus();
+	fireEvent.keyDown(tab, { key: "F2" });
 	const input = screen.getByRole("textbox", { name: /^Rename / });
 	input.focus();
 	fireEvent.change(input, { target: { value: name } });
@@ -295,7 +306,9 @@ describe("optimistic session rename", () => {
 	it("leaves the title alone on Escape, an unchanged name, or a cleared field", async () => {
 		await renderLoaded();
 
-		fireEvent.doubleClick(screen.getByRole("tab", { name: /claude code/i }), { detail: 2 });
+		const tab = screen.getByRole("tab", { name: /claude code/i });
+		tab.focus();
+		fireEvent.keyDown(tab, { key: "F2" });
 		const input = screen.getByRole("textbox", { name: /^Rename / });
 		fireEvent.change(input, { target: { value: "never sent" } });
 		fireEvent.keyDown(input, { key: "Escape" });

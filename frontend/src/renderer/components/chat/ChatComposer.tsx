@@ -112,7 +112,7 @@ import {
 	type FileAttachmentPayload,
 } from "../../hooks/useFileAttachments";
 import { useTranslation } from "react-i18next";
-import { File, Folder } from "@/components/app-icons";
+import { Folder } from "@/components/app-icons";
 import type { ChatFolderAttachmentError, ChatFolderAttachmentPickerResult } from "../../../shared/chat-folder-attachment";
 import { effectiveShortcutBindings, shortcutBindingLabel, type AppShortcutId } from "../../../shared/shortcuts";
 import { useAppShortcut } from "../../hooks/useAppShortcut";
@@ -153,8 +153,8 @@ import {
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
 import { attachmentPreviewKind, attachmentURL, IMAGE_ATTACHMENT_PATH, proseBesideImages, withAttachmentReferences, removeInlineAttachmentPath } from "./messageAttachments";
-import { AttachmentFileText, AttachmentStrip, AttachmentThumbnail } from "./StagedAttachmentItems";
-import { ComposerPendingTile } from "./ComposerAttachmentTile";
+import { AttachmentFileText, AttachmentStrip } from "./StagedAttachmentItems";
+import { ComposerAttachmentTile, ComposerPendingTile } from "./ComposerAttachmentTile";
 import { rememberAttachmentName } from "../../lib/chat-attachment-names";
 import { noteComposerDropTargetFocus, registerComposerDropTarget, type ComposerDropTarget } from "../../lib/composer-drop-targets";
 import { rememberSentAttachments } from "../../lib/sent-attachment-previews";
@@ -2923,63 +2923,68 @@ export const ChatComposer = memo(function ChatComposer({
 					>
 						{(staged && !stripConcealed) || pendingAttachments.length > 0 ? (
 							<ul className="contents" aria-label="Attached files">
-								{stripAttachments.map(({ file, path, preview }) => {
-									return (
-									<AttachmentPathMenu key={file.id} path={path ?? ""} folder={file.kind === "folder"}>
-									<li
-										key={file.id}
-										className="flex items-center gap-1.5 rounded-md bg-interactive-hover py-0.5 pl-0.5 pr-1"
-									>
-										{preview ? (
-											<AttachmentThumbnail src={preview} name={file.name} />
-										) : (
-											<div className="flex size-6 items-center justify-center rounded-sm bg-surface">
-												{file.kind === "folder"
-													? <Folder aria-hidden="true" className="size-3.5 text-muted-foreground" />
-													: <File aria-hidden="true" className="size-3.5 text-muted-foreground" />}
-											</div>
-										)}
-										{preview ? (
-											<span className="max-w-[120px] truncate text-xs text-muted-foreground" title={file.name}>
-												{file.name}
-											</span>
-										) : (
-											<span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground" title={file.name}>
-												<AttachmentFileText name={file.name} bytes={"bytes" in file ? file.bytes : undefined} nameClassName="max-w-[120px]" />
-											</span>
-										)}
-										{file.kind === "folder" && remoteHost && file.machineName ? (
-											<span className="max-w-[120px] truncate text-[10px] text-passive" title={file.machineName}>
-												{t("chat.composer.folderOnMachine", { machine: file.machineName })}
-											</span>
-										) : null}
-										<Button
-											type="button"
-											variant="destructive-ghost"
-											size="icon-xs"
-											onMouseDown={(event) => {
-												if (event.button === 0) event.preventDefault();
-											}}
-											onClick={() => {
-											if (submitInFlight.current) return;
-											if (path) {
+								{stripAttachments.map(({ file, path, preview, mediaUrl }) => {
+									const removeDisabled = controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing;
+									const removeAttachment = () => {
+										if (submitInFlight.current) return;
+										if (path) {
 											editor.current?.removeAttachment(path);
 											removeAttachmentFromSavedDraft(path);
 										}
-											if (visibleRetainedAttachments.some((attachment) => attachment.id === file.id)) {
-												const next = retainedAttachments.filter((attachment) => attachment.id !== file.id);
-												setRetainedAttachments(next);
-												onQueuedRetainedAttachmentsChange?.(next);
-											} else fileAttachments.remove(file.id);
-											editor.current?.focus();
-											}}
-											disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
-											aria-label={`Remove ${file.name}`}
-										>
-											<X aria-hidden="true" className="size-3" />
-										</Button>
-									</li>
-									</AttachmentPathMenu>
+										if (visibleRetainedAttachments.some((attachment) => attachment.id === file.id)) {
+											const next = retainedAttachments.filter((attachment) => attachment.id !== file.id);
+											setRetainedAttachments(next);
+											onQueuedRetainedAttachmentsChange?.(next);
+										} else fileAttachments.remove(file.id);
+										editor.current?.focus();
+									};
+									// Files and pictures share the tiles of their placeholders, so nothing shifts when a file lands;
+									// the path menu opens from a contextmenu on the tile, which bubbles to the wrapper.
+									if (file.kind !== "folder") return (
+										<AttachmentPathMenu key={file.id} path={path ?? ""}>
+											<span className="contents">
+												<ComposerAttachmentTile
+													name={file.name}
+													bytes={"bytes" in file ? file.bytes : undefined}
+													imageSrc={preview}
+													file={"file" in file ? file.file : undefined}
+													mediaUrl={mediaUrl}
+													removeLabel={`Remove ${file.name}`}
+													removeDisabled={removeDisabled}
+													onRemove={removeAttachment}
+												/>
+											</span>
+										</AttachmentPathMenu>
+									);
+									return (
+										<AttachmentPathMenu key={file.id} path={path ?? ""} folder>
+											<li className="flex items-center gap-1.5 rounded-md bg-interactive-hover py-0.5 pl-0.5 pr-1">
+												<div className="flex size-6 items-center justify-center rounded-sm bg-surface">
+													<Folder aria-hidden="true" className="size-3.5 text-muted-foreground" />
+												</div>
+												<span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground" title={file.name}>
+													<AttachmentFileText name={file.name} bytes={"bytes" in file ? file.bytes : undefined} nameClassName="max-w-[120px]" />
+												</span>
+												{remoteHost && file.machineName ? (
+													<span className="max-w-[120px] truncate text-[10px] text-passive" title={file.machineName}>
+														{t("chat.composer.folderOnMachine", { machine: file.machineName })}
+													</span>
+												) : null}
+												<Button
+													type="button"
+													variant="destructive-ghost"
+													size="icon-xs"
+													onMouseDown={(event) => {
+														if (event.button === 0) event.preventDefault();
+													}}
+													onClick={removeAttachment}
+													disabled={removeDisabled}
+													aria-label={`Remove ${file.name}`}
+												>
+													<X aria-hidden="true" className="size-3" />
+												</Button>
+											</li>
+										</AttachmentPathMenu>
 									);
 								})}
 								{pendingAttachments.map((file) => (

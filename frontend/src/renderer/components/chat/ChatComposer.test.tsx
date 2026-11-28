@@ -126,6 +126,11 @@ function composerWireText(field: HTMLElement): string {
 	return lexicalEditorText(field);
 }
 
+/** What the person typed or pasted as text: the box also holds a path chip for every attached file here. */
+function composerProse(field: HTMLElement): string {
+	return composerWireText(field).replace(/\.ao\/attachments\/\S+ ?/g, "");
+}
+
 function selectComposerText(field: HTMLElement, start: number, end: number): void {
 	const lexical = (field as HTMLElement & { __lexicalEditor?: LexicalEditor }).__lexicalEditor;
 	if (!lexical) throw new Error("Expected a Lexical editor");
@@ -441,7 +446,7 @@ describe("send keys", () => {
 		fireEvent.paste(field, { clipboardData: textClipboard(log) });
 		expect(await screen.findByRole("button", { name: "Remove [12:01] build started ok.txt" })).toBeInTheDocument();
 		expect(stage).toHaveBeenCalledWith([expect.objectContaining({ mimeType: "text/plain", name: "[12:01] build started ok.txt" })], expect.anything());
-		expect(composerWireText(field)).toBe("");
+		expect(composerProse(field)).toBe("");
 
 		fireEvent.paste(field, { clipboardData: textClipboard(log) });
 		expect(await screen.findByRole("button", { name: "Remove [12:01] build started ok 2.txt" })).toBeInTheDocument();
@@ -497,7 +502,7 @@ describe("send keys", () => {
 		await waitFor(() => expect(stage).toHaveBeenCalledTimes(2));
 		stages[1]!([".ao/attachments/attachment-b.txt"]);
 		expect(await screen.findByRole("button", { name: "Remove log.txt" })).toBeInTheDocument();
-		expect(composerWireText(field)).toBe("");
+		expect(composerProse(field)).toBe("");
 	});
 	it("leaves a cancelled long paste out of the box when the image beside it fails", async () => {
 		let fail: (error: Error) => void = () => undefined;
@@ -507,14 +512,14 @@ describe("send keys", () => {
 		await userEvent.click(await screen.findByRole("button", { name: "Cancel attaching a b.txt" }));
 		fail(new Error("disk full"));
 		expect(await screen.findByText(/Nothing was attached/)).toBeInTheDocument();
-		expect(composerWireText(field)).toBe("");
+		expect(composerProse(field)).toBe("");
 	});
 	it("puts a long paste over a Cloud chat's file limit in the box", async () => {
 		const stage = vi.fn();
 		const { field } = renderComposer({ draftSessionId: "composer-cloud-cap", onStageAttachments: stage, cloudAttachments: { maxBytes: 6000 } });
 		fireEvent.paste(field, { clipboardData: textClipboard("x".repeat(7000)) });
 		expect(await screen.findByText(/Each file must be under/)).toBeInTheDocument();
-		await waitFor(() => expect(composerWireText(field)).toBe("x".repeat(7000)));
+		await waitFor(() => expect(composerProse(field)).toBe("x".repeat(7000)));
 		expect(stage).not.toHaveBeenCalled();
 	});
 	it("attaches a long text that comes with an image as a file beside the image", async () => {
@@ -527,16 +532,16 @@ describe("send keys", () => {
 			expect.objectContaining({ mimeType: "image/png", name: "shot.png" }),
 			expect.objectContaining({ mimeType: "text/plain", name: "a b c.txt" }),
 		], expect.anything());
-		expect(composerWireText(field)).toBe("");
+		expect(composerProse(field)).toBe("");
 	});
 	it("leaves a shorter text paste, or one pasted as plain text, to the box", async () => {
 		const stage = vi.fn();
 		const { field } = renderComposer({ draftSessionId: "composer-inline-paste", onStageAttachments: stage });
 		fireEvent.paste(field, { clipboardData: textClipboard("a".repeat(4999)) });
-		await waitFor(() => expect(composerWireText(field)).toBe("a".repeat(4999)));
+		await waitFor(() => expect(composerProse(field)).toBe("a".repeat(4999)));
 		fireEvent.keyDown(field, { key: "◊", code: "KeyV", metaKey: true, altKey: true, shiftKey: true });
 		fireEvent.paste(field, { clipboardData: textClipboard("b".repeat(5000)) });
-		await waitFor(() => expect(composerWireText(field)).toBe("a".repeat(4999) + "b".repeat(5000)));
+		await waitFor(() => expect(composerProse(field)).toBe("a".repeat(4999) + "b".repeat(5000)));
 		fireEvent.keyDown(field, { key: "V", code: "KeyV", ctrlKey: true, shiftKey: true });
 		fireEvent.paste(field, { clipboardData: textClipboard("c".repeat(5000)) });
 		await waitFor(() => expect(composerWireText(field)).toBe("a".repeat(4999) + "b".repeat(5000) + "c".repeat(5000)));
@@ -572,7 +577,7 @@ describe("send keys", () => {
 		fireEvent.paste(field, { clipboardData: clipboardData(names.map((name) => textFile(name))) });
 		expect(await screen.findByRole("button", { name: "Remove f7.txt" })).toBeInTheDocument();
 		fireEvent.paste(field, { clipboardData: textClipboard("d".repeat(5000)) });
-		await waitFor(() => expect(composerWireText(field)).toBe("d".repeat(5000)));
+		await waitFor(() => expect(composerProse(field)).toBe("d".repeat(5000)));
 		expect(stage).toHaveBeenCalledTimes(1);
 	});
 	it("clears the notice about a refused file once the user types on", async () => {
